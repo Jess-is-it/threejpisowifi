@@ -30,7 +30,7 @@ get_primary_ip() {
 echo "[1/6] Installing system dependencies (Docker, UFW, openssl, curl)..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y ca-certificates curl gnupg lsb-release ufw openssl rsync python3
+apt-get install -y ca-certificates curl gnupg lsb-release ufw openssl rsync python3 git
 
 if ! need_cmd docker; then
   apt-get install -y docker.io
@@ -51,7 +51,14 @@ rsync -a --delete \
   --exclude "node_modules" \
   --exclude ".next" \
   --exclude "__pycache__" \
+  --exclude "external/juanfi-base" \
   "${REPO_ROOT}/" "${APP_DIR}/"
+
+echo "[2.5/6] Ensuring JuanFi base is cloned (hardware firmware)..."
+if [[ ! -d "${APP_DIR}/external/juanfi-base/.git" ]]; then
+  # Not required for core RADIUS+wallet runtime, but mandatory for the vendo/coinslot subsystem.
+  (cd "${APP_DIR}" && bash scripts/juanfi/clone.sh) || echo "WARN: Failed to clone JuanFi. You can retry later with: (cd ${APP_DIR} && bash scripts/juanfi/clone.sh)" >&2
+fi
 
 echo "[3/6] Generating .env (only if missing)..."
 ENV_FILE="${APP_DIR}/.env"
