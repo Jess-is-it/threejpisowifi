@@ -26,9 +26,9 @@ centralwifi_authorize {
   }
 
   # Enforce wallet + single-device policy via DB function.
-  if ("%{sql:SELECT cw_radius_is_allowed('%{User-Name}','%{Calling-Station-Id}', 180)}" != "t") {
+  if ("%{sql:SELECT cw_radius_is_allowed('%{User-Name}','%{Calling-Station-Id}', %{env:ACTIVE_SESSION_GRACE_SECONDS})}" != "t") {
     update reply {
-      Reply-Message := "%{sql:SELECT cw_radius_reject_message('%{User-Name}','%{Calling-Station-Id}', 180)}"
+      Reply-Message := "%{sql:SELECT cw_radius_reject_message('%{User-Name}','%{Calling-Station-Id}', %{env:ACTIVE_SESSION_GRACE_SECONDS})}"
     }
     reject
   }

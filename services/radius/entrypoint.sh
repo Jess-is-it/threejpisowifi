@@ -29,6 +29,9 @@ fi
 if [[ -f /etc/freeradius/3.0/clients.conf ]]; then
   render /etc/freeradius/3.0/clients.conf RADIUS_SHARED_SECRET
 fi
+if [[ -f /etc/freeradius/3.0/policy.d/centralwifi ]]; then
+  render /etc/freeradius/3.0/policy.d/centralwifi ACTIVE_SESSION_GRACE_SECONDS
+fi
 
 echo "[radius] waiting for postgres at ${POSTGRES_HOST}:${POSTGRES_PORT}..."
 for i in $(seq 1 120); do
