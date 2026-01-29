@@ -1,0 +1,47 @@
+sql {
+  dialect = "postgresql"
+  driver = "rlm_sql_postgresql"
+
+  server = "%{env:POSTGRES_HOST}"
+  port = "%{env:POSTGRES_PORT}"
+  login = "%{env:POSTGRES_USER}"
+  password = "%{env:POSTGRES_PASSWORD}"
+  radius_db = "%{env:POSTGRES_DB}"
+
+  # Allow E.164 usernames (leading '+') without escaping it to '=2B'.
+  safe_characters = "@abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_+:"
+
+  read_clients = yes
+  client_table = "nas"
+
+  # These tables are only needed if you enable the classic rlm_sql authorize/accounting queries.
+  # We keep them defined so the distro queries.conf parses cleanly, even though this platform
+  # uses custom session + wallet logic in `policy.d/centralwifi`.
+  authcheck_table = "radcheck"
+  authreply_table = "radreply"
+  groupcheck_table = "radgroupcheck"
+  groupreply_table = "radgroupreply"
+  usergroup_table = "radusergroup"
+  acct_table1 = "radacct"
+  acct_table2 = "radacct"
+  postauth_table = "radpostauth"
+
+  group_attribute = "SQL-Group"
+
+  # Use the distro-provided query set for PostgreSQL (now that required variables exist).
+  # It includes a client_query that reads: id, nasname, shortname, type, secret, server.
+  $INCLUDE ${modconfdir}/${.:name}/main/${dialect}/queries.conf
+
+  # Keep accounting in our own schema (sessions + wallets). rlm_sql is still enabled for expansions.
+  # If you want classic radacct tables too, add them as extra migrations and enable accounting queries here.
+
+  pool {
+    start = 1
+    min = 1
+    max = 10
+    spare = 3
+    uses = 0
+    lifetime = 0
+    idle_timeout = 60
+  }
+}

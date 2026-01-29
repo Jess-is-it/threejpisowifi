@@ -1,0 +1,25 @@
+server inner-tunnel {
+  authorize {
+    filter_username
+    suffix
+    eap {
+      ok = return
+    }
+
+    centralwifi_authorize
+
+    pap
+  }
+
+  authenticate {
+    Auth-Type PAP {
+      pap
+    }
+    eap
+  }
+
+  post-auth {
+    centralwifi_post_auth
+  }
+}
+

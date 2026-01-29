@@ -1,0 +1,54 @@
+#
+# Centralized WiFi Roaming Platform
+# - FreeRADIUS is the ONLY authority for access decisions.
+# - Wallet + sessions stored in PostgreSQL.
+#
+
+centralwifi_authorize {
+  # For station-less tests, make sure Calling-Station-Id is always present.
+  if (!&Calling-Station-Id) {
+    update request {
+      Calling-Station-Id := "%{Client-IP-Address}"
+    }
+  }
+
+  # Load password for PAP / EAP-TTLS(PAP). (WPA2-Enterprise clients use EAP-TTLS/PEAP.)
+  update control {
+    # Username is an E.164 phone number; avoid complex escaping and enforce format at the API layer.
+    Cleartext-Password := "%{sql:SELECT radius_password FROM users WHERE username = '%{User-Name}' AND status = 'ACTIVE'}"
+  }
+
+  if (!control:Cleartext-Password) {
+    update reply {
+      Reply-Message := "Unknown user"
+    }
+    reject
+  }
+
+  # Enforce wallet + single-device policy via DB function.
+  if ("%{sql:SELECT cw_radius_is_allowed('%{User-Name}','%{Calling-Station-Id}', 180)}" != "t") {
+    update reply {
+      Reply-Message := "%{sql:SELECT cw_radius_reject_message('%{User-Name}','%{Calling-Station-Id}', 180)}"
+    }
+    reject
+  }
+
+  # Encourage periodic re-auth for TIME plans.
+  update reply {
+    Session-Timeout := "%{sql:SELECT cw_radius_session_timeout_seconds('%{User-Name}')}"
+  }
+}
+
+centralwifi_post_auth {
+  # Create/refresh an active session immediately on Access-Accept to close the auth/accounting race.
+  update control {
+    Tmp-Integer-0 := "%{sql:SELECT cw_radius_touch_session('%{User-Name}','%{Calling-Station-Id}','%{Client-IP-Address}','%{%{Acct-Session-Id}:-}')}"
+  }
+}
+
+centralwifi_accounting {
+  # Map accounting events to our sessions/wallet logic.
+  update control {
+    Tmp-String-0 := "%{sql:SELECT cw_radius_accounting('%{User-Name}','%{Calling-Station-Id}','%{Client-IP-Address}','%{%{Acct-Session-Id}:-}','%{Acct-Status-Type}')}"
+  }
+}

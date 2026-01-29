@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Central WiFi Admin</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg"></div>
+    <div class="wrap">
+      <aside class="nav">
+        <div class="brand">
+          <div class="kicker">CENTRAL WIFI</div>
+          <div class="name">Admin</div>
+        </div>
+        <nav class="links">
+          <a href="#/dashboard" data-route="dashboard">Dashboard</a>
+          <a href="#/users" data-route="users">Users & Wallet</a>
+          <a href="#/sessions" data-route="sessions">Sessions</a>
+          <a href="#/nas" data-route="nas">NAS (RADIUS Clients)</a>
+          <a href="#/devices" data-route="devices">Vendo Devices</a>
+          <a href="#/payments" data-route="payments">Payment Logs</a>
+          <a href="#/sms" data-route="sms">SMS Tool</a>
+        </nav>
+        <div class="navfoot">
+          <button id="btnSignOut" class="btn ghost">Sign out</button>
+          <div class="hint">RADIUS is authoritative. Wallet is SQL truth.</div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="top">
+          <h1 id="pageTitle">Central WiFi Admin</h1>
+          <div class="pill">RADIUS + Wallet</div>
+        </header>
+        <section id="app" class="card"></section>
+      </main>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
+

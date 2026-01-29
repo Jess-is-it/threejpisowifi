@@ -1,0 +1,49 @@
+server default {
+  listen {
+    type = auth
+    ipaddr = *
+    port = 1812
+  }
+
+  listen {
+    type = acct
+    ipaddr = *
+    port = 1813
+  }
+
+  authorize {
+    preprocess
+    chap
+    mschap
+    suffix
+    eap {
+      ok = return
+    }
+
+    centralwifi_authorize
+
+    pap
+  }
+
+  authenticate {
+    Auth-Type PAP {
+      pap
+    }
+    Auth-Type CHAP {
+      chap
+    }
+    Auth-Type MS-CHAP {
+      mschap
+    }
+    eap
+  }
+
+  post-auth {
+    centralwifi_post_auth
+  }
+
+  accounting {
+    centralwifi_accounting
+  }
+}
+

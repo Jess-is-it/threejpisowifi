@@ -1,0 +1,22 @@
+{
+  # Keep logs simple and container-friendly.
+}
+
+{$CW_DOMAIN} {
+  encode zstd gzip
+
+  @health path /healthz
+  respond @health 200
+
+  @api path /api/* /openapi.json /docs /docs/*
+  reverse_proxy @api api:8000
+
+  reverse_proxy admin:80
+
+  header {
+    X-Frame-Options "DENY"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer"
+    Permissions-Policy "geolocation=(), microphone=(), camera=()"
+  }
+}
