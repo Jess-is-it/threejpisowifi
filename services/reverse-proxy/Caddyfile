@@ -8,11 +8,11 @@
   @health path /healthz
   respond @health 200
 
-  @api path /api/* /openapi.json /docs /docs/*
-  reverse_proxy @api api:8000
-
   @ops path /api/v1/ops/*
   reverse_proxy @ops ops:9000
+
+  @api path /api/* /openapi.json /docs /docs/*
+  reverse_proxy @api api:8000
 
   reverse_proxy admin:80
 
