@@ -94,6 +94,22 @@ services:
       retries: 30
     restart: unless-stopped
 
+  portal:
+    build:
+      context: ./services/portal
+    env_file: ${CW_ENV_FILE:-.env}
+    depends_on:
+      api:
+        condition: service_healthy
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/healthz >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
   reverse-proxy:
     image: caddy:2.8-alpine
     env_file: ${CW_ENV_FILE:-.env}
@@ -101,6 +117,8 @@ services:
       api:
         condition: service_healthy
       admin:
+        condition: service_healthy
+      portal:
         condition: service_healthy
     ports:
       - "80:80"

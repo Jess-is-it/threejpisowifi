@@ -32,10 +32,23 @@ def require_admin(
     return payload
 
 
+def require_user(
+    creds: HTTPAuthorizationCredentials | None = Depends(bearer),
+) -> dict:
+    if not creds or not creds.credentials:
+        raise HTTPException(status_code=401, detail="Missing bearer token")
+    try:
+        payload = decode_token(creds.credentials)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if payload.get("role") != "user":
+        raise HTTPException(status_code=403, detail="Forbidden")
+    return payload
+
+
 def get_client_ip(request: Request) -> str:
     # Reverse proxy passes X-Forwarded-For; keep first IP.
     xff = request.headers.get("x-forwarded-for")
     if xff:
         return xff.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
-

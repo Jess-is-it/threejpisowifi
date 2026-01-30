@@ -106,6 +106,11 @@ DEVICE_TOKEN_ENC_KEY=${DEVICE_TOKEN_ENC_KEY}
 
 SMS_PROVIDER=mock
 PAYMENT_PROVIDER=mock
+
+# Optional: allow auth even with no credit and place clients into a restricted VLAN
+# to show the /portal top-up page. Requires AP/controller + network config.
+WALLED_GARDEN_ON_NO_CREDIT=0
+WALLED_GARDEN_VLAN_ID=0
 EOF
   chmod 600 "${ENV_FILE}"
 fi
@@ -131,6 +136,7 @@ echo "[6/6] Waiting for services to become healthy..."
 # Avoid `docker compose ps --format json` portability issues across compose versions.
 timeout 300 bash -lc 'until docker compose exec -T api curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; do sleep 2; done'
 timeout 300 bash -lc 'until docker compose exec -T admin curl -fsS http://127.0.0.1/healthz >/dev/null 2>&1; do sleep 2; done'
+timeout 300 bash -lc 'until docker compose exec -T portal curl -fsS http://127.0.0.1/healthz >/dev/null 2>&1; do sleep 2; done'
 timeout 300 bash -lc 'until docker compose exec -T radius pgrep freeradius >/dev/null 2>&1; do sleep 2; done'
 timeout 300 bash -lc 'until curl -fsS http://127.0.0.1/healthz >/dev/null 2>&1; do sleep 2; done'
 
@@ -141,6 +147,7 @@ BASE_URL="${CW_PUBLIC_BASE_URL:-http://${IP:-127.0.0.1}}"
 echo
 echo "Centralized WiFi Roaming Platform is running."
 echo "Admin UI: ${BASE_URL}/"
+echo "Portal:   ${BASE_URL}/portal"
 echo "API:      ${BASE_URL}/api/"
 echo
 echo "Default admin credentials:"

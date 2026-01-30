@@ -128,6 +128,7 @@ function layoutApp(active, inner) {
             ${link("payments", "Payment Logs")}
             ${link("sms", "SMS Tool")}
             ${link("audit-logs", "Audit Logs")}
+            <a href="/portal" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50">Top-Up Portal</a>
           </nav>
         </aside>
 
@@ -430,6 +431,98 @@ async function viewSetupWizard() {
             done["domain"] = true;
           } catch (e2) {
             $("#wizDomainErr").innerHTML = errBox(e2.message);
+          }
+        });
+      },
+    },
+    {
+      id: "portal",
+      title: "Top-Up Portal (End-User)",
+      priority: "RECOMMENDED",
+      body: () =>
+        `
+          ${callout(
+            "info",
+            "What the portal is",
+            `
+              The portal is a user-facing page for:
+              <ul class="list-disc pl-5 text-sm mt-2">
+                <li>Requesting WiFi credentials via SMS</li>
+                <li>Checking wallet status</li>
+                <li>Buying time plans (mock payment by default)</li>
+              </ul>
+              <div class="mt-2 text-sm">Portal URL: <span class="font-mono">${escapeHtml(String(info.cw_public_base_url || "").replace(/\\/$/, ""))}/portal</span></div>
+            `
+          )}
+          ${callout(
+            "warn",
+            "How the portal is shown when a user has no credit",
+            `
+              With pure WPA2-Enterprise, clients with no credit are normally <b>rejected</b> (no web page can be shown).
+              To get an automatic “top-up page” experience, use one of these approaches:
+              <ol class="list-decimal pl-5 text-sm mt-2">
+                <li><b>Recommended:</b> create a separate open/PSK SSID (e.g. <span class="font-mono">CentralWiFi-TopUp</span>) with Omada captive portal pointing to <span class="font-mono">/portal</span>.</li>
+                <li><b>Advanced:</b> enable <b>Walled Garden mode</b> below so RADIUS assigns a restricted VLAN when wallet is empty.</li>
+              </ol>
+            `
+          )}
+          <div class="mt-4 p-4 rounded-xl border border-slate-200">
+            <div class="text-xs tracking-widest font-semibold text-slate-500 mb-3">WALLED GARDEN (ADVANCED)</div>
+            <form id="wizGardenForm" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div class="md:col-span-2">
+                <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-900">
+                  <input id="wizGardenEnabled" type="checkbox" class="w-4 h-4 text-emerald-600 bg-slate-50 border-slate-300 rounded focus:ring-emerald-500" />
+                  Enable walled garden when wallet has no active plan
+                </label>
+                <div class="mt-2 text-xs text-slate-500">
+                  Requires Omada/AP support for RADIUS VLAN assignment and a network/VLAN policy that only allows the portal.
+                </div>
+              </div>
+              ${input("wizGardenVlan", "Walled garden VLAN ID", "number", "0")}
+              <div class="md:col-span-3 flex gap-2">
+                ${btn("Apply")}
+              </div>
+              <div id="wizGardenErr" class="md:col-span-3"></div>
+            </form>
+          </div>
+          <div class="mt-4" id="wizGardenOut"></div>
+        `,
+      afterRender: async () => {
+        $("#wizGardenOut").innerHTML = "<div class='text-slate-600 text-sm'>Loading…</div>";
+        try {
+          const env = await apiFetch("/api/v1/ops/env");
+          const v = (env && env.values) || {};
+          const enabled = String(v.WALLED_GARDEN_ON_NO_CREDIT || "0") === "1";
+          $("#wizGardenEnabled").checked = enabled;
+          $("#wizGardenVlan").value = String(v.WALLED_GARDEN_VLAN_ID || "0");
+          $("#wizGardenOut").innerHTML = callout(
+            "info",
+            "Current config",
+            `<div class="text-sm">Enabled: ${pill(enabled ? "1" : "0")} VLAN: ${pill(String(v.WALLED_GARDEN_VLAN_ID || "0"))}</div>`
+          );
+        } catch (e) {
+          $("#wizGardenOut").innerHTML = errBox(e.message);
+        }
+
+        $("#wizGardenForm").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          $("#wizGardenErr").innerHTML = "";
+          $("#wizGardenOut").innerHTML = "";
+          try {
+            const enabled = $("#wizGardenEnabled").checked ? "1" : "0";
+            const vlan = String(Number($("#wizGardenVlan").value || "0"));
+            const res = await apiFetch("/api/v1/ops/env", {
+              method: "PUT",
+              body: JSON.stringify({ updates: { WALLED_GARDEN_ON_NO_CREDIT: enabled, WALLED_GARDEN_VLAN_ID: vlan } }),
+            });
+            $("#wizGardenOut").innerHTML = callout(
+              "ok",
+              "Applied",
+              `Saved to .env and restarted services. Enabled: ${pill(enabled)} VLAN: ${pill(vlan)}`
+            );
+            done["portal"] = true;
+          } catch (e2) {
+            $("#wizGardenErr").innerHTML = errBox(e2.message);
           }
         });
       },

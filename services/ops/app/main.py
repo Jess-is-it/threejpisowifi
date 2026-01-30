@@ -82,6 +82,10 @@ def _render_caddyfile(site: str) -> str:
   @ops path /api/v1/ops/*
   reverse_proxy @ops ops:9000
 
+  handle_path /portal* {{
+    reverse_proxy portal:80
+  }}
+
   @api path /api/* /openapi.json /docs /docs/*
   reverse_proxy @api api:8000
 
@@ -220,6 +224,10 @@ class RadiusTestIn(BaseModel):
     nas_ip: str = Field("127.0.0.1", description="NAS IP attribute for the packet.")
 
 
+class EnvUpdateIn(BaseModel):
+    updates: dict[str, str] = Field(default_factory=dict)
+
+
 app = FastAPI(title="Central WiFi Ops", version="1.0.0")
 
 
@@ -282,6 +290,64 @@ def set_domain(payload: DomainIn, authorization: str | None = Header(default=Non
     restarts = _restart_services(["api", "admin"])
 
     return {"ok": True, "site": site, "env_written": env_written, "restarts": restarts}
+
+
+@app.get("/api/v1/ops/env")
+def get_env(authorization: str | None = Header(default=None, alias="Authorization")):
+    _require_admin(authorization)
+    # Only expose a small allowlist of operator-tunable keys.
+    allow = {
+        "CW_PUBLIC_BASE_URL",
+        "CW_DOMAIN",
+        "WALLED_GARDEN_ON_NO_CREDIT",
+        "WALLED_GARDEN_VLAN_ID",
+        "SMS_PROVIDER",
+        "PAYMENT_PROVIDER",
+    }
+    try:
+        with open("/host/.env", "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except Exception:
+        raise HTTPException(status_code=500, detail="Cannot read /host/.env")
+
+    out: dict[str, str] = {}
+    for line in lines:
+        m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line.strip())
+        if not m:
+            continue
+        k = m.group(1)
+        if k in allow:
+            out[k] = m.group(2)
+    return {"values": out}
+
+
+@app.put("/api/v1/ops/env")
+def put_env(payload: EnvUpdateIn, authorization: str | None = Header(default=None, alias="Authorization")):
+    _require_admin(authorization)
+    allow = {
+        "CW_PUBLIC_BASE_URL",
+        "CW_DOMAIN",
+        "WALLED_GARDEN_ON_NO_CREDIT",
+        "WALLED_GARDEN_VLAN_ID",
+        "SMS_PROVIDER",
+        "PAYMENT_PROVIDER",
+    }
+    updates: dict[str, str] = {}
+    for k, v in (payload.updates or {}).items():
+        if k not in allow:
+            continue
+        updates[k] = str(v)
+
+    if not updates:
+        return {"ok": True, "env_written": False, "restarts": {}}
+
+    env_written = _envfile_set("/host/.env", updates)
+    # Restart only what needs it.
+    restart = []
+    if any(k.startswith("WALLED_GARDEN_") or k in {"CW_DOMAIN", "CW_PUBLIC_BASE_URL"} for k in updates.keys()):
+        restart += ["radius", "api", "admin"]
+    restarts = _restart_services(sorted(set(restart)))
+    return {"ok": True, "env_written": env_written, "restarts": restarts}
 
 
 @app.post("/api/v1/ops/radius/test")
