@@ -124,7 +124,8 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./services/reverse-proxy/Caddyfile:/etc/caddy/Caddyfile
+      # Mount directory (not file) to avoid bind-mount inode issues on deploy rsync.
+      - ./services/reverse-proxy:/etc/caddy
       - caddy_data:/data
       - caddy_config:/config
     healthcheck:
