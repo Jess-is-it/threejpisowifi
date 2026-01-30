@@ -205,6 +205,10 @@ async function loadWalletPane(u) {
             <div style="font-size:22px;font-weight:900">${w.is_unlimited ? "YES" : "NO"}</div>
           </div>
         </div>
+        <div class="card" style="box-shadow:none">
+          <div class="kicker">VALID UNTIL (DATE PLAN)</div>
+          <div class="mono">${escapeHtml(String(w.valid_until_ts ?? "-"))}</div>
+        </div>
 
         <form id="creditForm" class="grid2">
           <div class="field">
@@ -215,9 +219,19 @@ async function loadWalletPane(u) {
             <button class="btn" type="submit">Credit</button>
           </div>
         </form>
+        <form id="extendForm" class="grid2">
+          <div class="field">
+            <label>EXTEND VALID UNTIL (SECONDS)</label>
+            <input id="extendSeconds" value="86400" />
+          </div>
+          <div style="display:flex;align-items:end">
+            <button class="btn" type="submit">Extend</button>
+          </div>
+        </form>
         <div id="walletErr"></div>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button id="btnResetPw" class="btn ghost" type="button">Reset WiFi Password</button>
+          <button id="btnUnlimited" class="btn ghost" type="button">Set Unlimited</button>
           <button id="btnSuspend" class="btn danger" type="button">Suspend User</button>
         </div>
       </div>
@@ -238,11 +252,40 @@ async function loadWalletPane(u) {
       }
     });
 
+    $("#extendForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      $("#walletErr").innerHTML = "";
+      const extendSeconds = Number($("#extendSeconds").value);
+      try {
+        await apiFetch("/api/v1/admin/wallet/credit", {
+          method: "POST",
+          body: JSON.stringify({ user_id: u.id, source: "ADMIN", extend_valid_until_seconds: extendSeconds }),
+        });
+        await loadWalletPane(u);
+      } catch (e2) {
+        $("#walletErr").innerHTML = errBox(e2.message);
+      }
+    });
+
     $("#btnResetPw").addEventListener("click", async () => {
       $("#walletErr").innerHTML = "";
       try {
         const res = await apiFetch(`/api/v1/admin/users/${u.id}/reset-password`, { method: "POST" });
         alert(`New WiFi credentials:\n${res.username}\n${res.new_password}`);
+      } catch (e2) {
+        $("#walletErr").innerHTML = errBox(e2.message);
+      }
+    });
+
+    $("#btnUnlimited").addEventListener("click", async () => {
+      if (!confirm("Set this wallet to UNLIMITED?")) return;
+      $("#walletErr").innerHTML = "";
+      try {
+        await apiFetch("/api/v1/admin/wallet/credit", {
+          method: "POST",
+          body: JSON.stringify({ user_id: u.id, source: "ADMIN", set_unlimited: true }),
+        });
+        await loadWalletPane(u);
       } catch (e2) {
         $("#walletErr").innerHTML = errBox(e2.message);
       }
