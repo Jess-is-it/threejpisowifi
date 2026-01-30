@@ -451,7 +451,7 @@ async function viewSetupWizard() {
                 <li>Checking wallet status</li>
                 <li>Buying time plans (mock payment by default)</li>
               </ul>
-              <div class="mt-2 text-sm">Portal URL: <span class="font-mono">${escapeHtml(String(info.cw_public_base_url || "").replace(/\\/$/, ""))}/portal</span></div>
+              <div class="mt-2 text-sm">Portal URL: <span class="font-mono">${escapeHtml(String(info.cw_public_base_url || "").replace(/\/$/, ""))}/portal</span></div>
             `
           )}
           ${callout(
