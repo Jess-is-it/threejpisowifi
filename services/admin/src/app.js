@@ -23,7 +23,8 @@ function routeGet() {
   const m = h.match(/^#\/([a-z-]+)/);
   const r = m ? m[1] : "";
   if (r) return r;
-  return tokenGet() ? "dashboard" : "login";
+  // Default landing page is always the login screen.
+  return "login";
 }
 function routeGo(r) {
   window.location.hash = `#/${r}`;
@@ -172,7 +173,17 @@ function table(headers, rowsHtml) {
 }
 
 async function viewLogin() {
+  const already = !!tokenGet();
   root.innerHTML = layoutLogin(`
+    ${already ? `
+      <div class="mb-4 p-3 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 text-sm">
+        You are already signed in on this browser. You can continue to the dashboard or sign in again.
+        <div class="mt-3 flex gap-2">
+          <button id="btnContinue" class="text-white bg-slate-900 hover:bg-black font-semibold rounded-lg text-sm px-4 py-2.5">Continue</button>
+          <button id="btnClear" class="text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 font-semibold rounded-lg text-sm px-4 py-2.5">Sign out</button>
+        </div>
+      </div>
+    ` : ``}
     <form id="loginForm" class="space-y-4">
       ${input("loginUser", "Username", "text", "admin")}
       ${input("loginPass", "Password", "password", "")}
@@ -185,6 +196,15 @@ async function viewLogin() {
       </div>
     </form>
   `);
+
+  const c = $("#btnContinue");
+  if (c) c.onclick = () => routeGo("dashboard");
+  const clr = $("#btnClear");
+  if (clr) clr.onclick = () => {
+    tokenClear();
+    // Reload the login view to remove the "already signed in" banner.
+    viewLogin();
+  };
 
   $("#loginForm").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -805,10 +825,6 @@ async function render() {
     routeGo("login");
     return;
   }
-  if (authed && r === "login") {
-    routeGo("dashboard");
-    return;
-  }
 
   // Wire sign-out after each render (button only exists in authed layout).
   const signOut = () => {
@@ -901,4 +917,3 @@ window.addEventListener("unhandledrejection", (ev) => {
 });
 
 render();
-
