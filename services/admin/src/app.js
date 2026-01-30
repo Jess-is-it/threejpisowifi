@@ -110,6 +110,7 @@ function layoutApp(active, inner) {
         <aside class="bg-white border border-slate-200 rounded-xl p-3 h-fit">
           <div class="text-xs font-semibold text-slate-500 tracking-widest px-2 py-2">NAVIGATION</div>
           <nav class="grid gap-1">
+            ${link("setup", "Setup Wizard")}
             ${link("dashboard", "Dashboard")}
             ${link("users", "Users & Wallet")}
             ${link("transactions", "Transactions")}
@@ -217,11 +218,562 @@ async function viewLogin() {
         body: JSON.stringify({ username, password }),
       });
       tokenSet(res.token);
-      routeGo("dashboard");
+      // First-time admins should land in the setup wizard; returning admins can go straight to dashboard.
+      try {
+        const setup = await apiFetch("/api/v1/admin/system/setup");
+        routeGo(setup && setup.completed ? "dashboard" : "setup");
+      } catch {
+        routeGo("setup");
+      }
     } catch (e2) {
       $("#loginErr").innerHTML = errBox(e2.message);
     }
   });
+}
+
+function pill(text) {
+  return `<span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold border border-slate-200 bg-slate-50 text-slate-700">${escapeHtml(text)}</span>`;
+}
+
+function callout(kind, title, bodyHtml) {
+  const styles =
+    kind === "danger"
+      ? "border-red-200 bg-red-50 text-red-900"
+      : kind === "warn"
+        ? "border-amber-200 bg-amber-50 text-amber-900"
+        : kind === "ok"
+          ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+          : "border-slate-200 bg-slate-50 text-slate-900";
+  return `
+    <div class="p-4 rounded-xl border ${styles}">
+      <div class="font-bold">${escapeHtml(title)}</div>
+      <div class="mt-2 text-sm leading-6">${bodyHtml}</div>
+    </div>
+  `;
+}
+
+function codeBlock(text) {
+  return `<pre class="mt-2 p-3 rounded-lg bg-slate-900 text-slate-100 text-xs overflow-x-auto"><code>${escapeHtml(text)}</code></pre>`;
+}
+
+async function viewSetupWizard() {
+  root.innerHTML = layoutApp("setup", `${pageTitle("Setup Wizard")}<div class="text-slate-600 text-sm">Loading…</div>`);
+
+  let info = null;
+  let setup = { completed: false, completed_at: null, state: {} };
+  try {
+    [info, setup] = await Promise.all([apiFetch("/api/v1/admin/system/info"), apiFetch("/api/v1/admin/system/setup")]);
+  } catch (e) {
+    root.innerHTML = layoutApp("setup", `${pageTitle("Setup Wizard")}${errBox(e.message)}`);
+    const b = $("#btnSignOut");
+    if (b) b.onclick = () => {
+      tokenClear();
+      routeGo("login");
+    };
+    return;
+  }
+
+  const state = setup.state || {};
+  const current = Number(state.current_step ?? 0);
+  const done = state.done || {};
+
+  const steps = [
+    {
+      id: "welcome",
+      title: "Welcome & How It Works",
+      priority: "REQUIRED",
+      body: () =>
+        `
+          ${callout(
+            "info",
+            "Architecture in 60 seconds",
+            `
+              <ul class="list-disc pl-5">
+                <li><b>FreeRADIUS</b> is the only authority for WiFi access (WPA2-Enterprise / 802.1X).</li>
+                <li><b>PostgreSQL</b> is the source of truth for users, wallets, sessions, and accounting.</li>
+                <li>Users authenticate using <b>E.164 phone</b> as username (e.g. <span class="font-mono">+15551234567</span>).</li>
+                <li>Single-device enforcement: if a user has an active session, a new device is rejected.</li>
+              </ul>
+            `
+          )}
+          ${callout(
+            "warn",
+            "What you must do before real WiFi clients can connect",
+            `
+              <ol class="list-decimal pl-5">
+                <li>Add your NAS/APs as RADIUS clients (shared secret).</li>
+                <li>Configure Omada SSID security to WPA2-Enterprise and point it at this RADIUS server.</li>
+                <li>Create a user and credit their wallet (time/date/unlimited).</li>
+              </ol>
+            `
+          )}
+        `,
+    },
+    {
+      id: "prereq",
+      title: "Server & Network Prerequisites",
+      priority: "REQUIRED",
+      body: () =>
+        `
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            ${callout(
+              "info",
+              "Your current server settings",
+              `
+                <div class="text-sm">
+                  <div><span class="font-semibold">Base URL:</span> <span class="font-mono">${escapeHtml(info.cw_public_base_url)}</span></div>
+                  <div class="mt-1"><span class="font-semibold">RADIUS ports:</span> UDP ${info.radius.auth_port_udp} (auth), UDP ${info.radius.acct_port_udp} (acct)</div>
+                  <div class="mt-1"><span class="font-semibold">Session grace:</span> ${info.active_session_grace_seconds}s</div>
+                </div>
+              `
+            )}
+            ${callout(
+              "warn",
+              "Firewall & reachability checklist",
+              `
+                <ul class="list-disc pl-5 text-sm">
+                  <li>Open <b>80/tcp</b> and <b>443/tcp</b> for the Admin UI / API.</li>
+                  <li>Open <b>1812/udp</b> and <b>1813/udp</b> from every Omada site/device.</li>
+                  <li>Ensure APs can route to this server IP (no double-NAT surprises).</li>
+                </ul>
+              `
+            )}
+          </div>
+          ${callout(
+            "info",
+            "Tip: Use a real domain + HTTPS later",
+            `For production, set DNS to this server and update <span class="font-mono">CW_DOMAIN</span> + <span class="font-mono">CW_PUBLIC_BASE_URL</span> in <span class="font-mono">/opt/centralwifi/app/.env</span>, then run <span class="font-mono">cd /opt/centralwifi/app && docker compose up -d</span>.`
+          )}
+        `,
+    },
+    {
+      id: "radius",
+      title: "Add NAS / RADIUS Clients (Omada APs)",
+      priority: "REQUIRED",
+      body: () =>
+        `
+          ${callout(
+            "info",
+            "RADIUS shared secret",
+            `Use this shared secret in Omada and when adding NAS entries here: <span class="font-mono break-all">${escapeHtml(info.radius.shared_secret)}</span>`
+          )}
+          <div class="mt-4 p-4 rounded-xl border border-slate-200">
+            <div class="text-xs tracking-widest font-semibold text-slate-500 mb-3">ADD NAS</div>
+            <form id="wizNasForm" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              ${input("wizNasName", "Name", "text", "omada-site-1")}
+              ${input("wizNasIp", "IP", "text", "192.168.1.2")}
+              ${input("wizNasSecret", "Shared secret", "text", info.radius.shared_secret)}
+              <div id="wizNasErr" class="md:col-span-3"></div>
+              <div class="md:col-span-3">${btn("Add NAS")}</div>
+            </form>
+          </div>
+          <div class="mt-4" id="wizNasList"></div>
+          ${callout(
+            "warn",
+            "Omada settings you must apply",
+            `
+              <ul class="list-disc pl-5 text-sm">
+                <li>SSID security: <b>WPA2-Enterprise</b> (802.1X).</li>
+                <li>RADIUS server: this server IP, port ${info.radius.auth_port_udp}, shared secret above.</li>
+                <li>Accounting: enabled to port ${info.radius.acct_port_udp} (Interim updates recommended).</li>
+              </ul>
+              <div class="mt-2 text-sm">See <span class="font-mono">docs/OMADA_SETUP.md</span> for the exact screens.</div>
+            `
+          )}
+        `,
+      afterRender: async () => {
+        const renderList = async () => {
+          const rows = await apiFetch("/api/v1/admin/nas");
+          const tbody = rows
+            .map(
+              (n) => `
+              <tr class="border-t border-slate-100">
+                <td class="px-4 py-3">${escapeHtml(n.name)}</td>
+                <td class="px-4 py-3 font-mono text-xs">${escapeHtml(n.ip)}</td>
+                <td class="px-4 py-3 font-mono text-xs break-all">${escapeHtml(n.secret)}</td>
+              </tr>
+            `
+            )
+            .join("");
+          $("#wizNasList").innerHTML = table(["Name", "IP", "Secret"], tbody || `<tr><td class="px-4 py-3" colspan="3">No NAS yet</td></tr>`);
+        };
+        await renderList();
+
+        $("#wizNasForm").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          $("#wizNasErr").innerHTML = "";
+          try {
+            await apiFetch("/api/v1/admin/nas", {
+              method: "POST",
+              body: JSON.stringify({
+                name: $("#wizNasName").value.trim(),
+                ip: $("#wizNasIp").value.trim(),
+                secret: $("#wizNasSecret").value,
+              }),
+            });
+            await renderList();
+          } catch (e2) {
+            $("#wizNasErr").innerHTML = errBox(e2.message);
+          }
+        });
+      },
+    },
+    {
+      id: "plans",
+      title: "Plans & Pricing",
+      priority: "RECOMMENDED",
+      body: () =>
+        `
+          ${callout(
+            "info",
+            "Why plans matter",
+            `Plans standardize pricing and duration. You can still credit wallets manually any time.`
+          )}
+          ${callout(
+            "warn",
+            "Recommended starter plans",
+            `
+              <ul class="list-disc pl-5 text-sm">
+                <li>TIME: 1 hour (3600s)</li>
+                <li>TIME: 1 day (86400s)</li>
+                <li>UNLIMITED (for VIP / staff)</li>
+                <li>DATE: valid until a date/time (use wallet “valid until” extension)</li>
+              </ul>
+            `
+          )}
+          <div class="mt-4" id="wizPlans"></div>
+        `,
+      afterRender: async () => {
+        const rows = await apiFetch("/api/v1/admin/plans");
+        const tbody = rows
+          .map(
+            (p) => `
+            <tr class="border-t border-slate-100">
+              <td class="px-4 py-3 font-mono text-xs">${p.id}</td>
+              <td class="px-4 py-3">${escapeHtml(p.type)}</td>
+              <td class="px-4 py-3 font-mono text-xs">${p.duration_seconds ?? "-"}</td>
+              <td class="px-4 py-3 font-mono text-xs">${p.price}</td>
+            </tr>
+          `
+          )
+          .join("");
+        $("#wizPlans").innerHTML = table(["ID", "Type", "Duration", "Price"], tbody || `<tr><td class="px-4 py-3" colspan="4">No plans yet (OK)</td></tr>`);
+      },
+    },
+    {
+      id: "test-user",
+      title: "Create a Test User + Credit Wallet",
+      priority: "REQUIRED",
+      body: () =>
+        `
+          ${callout(
+            "info",
+            "What this step enables",
+            `After this, you can authenticate via RADIUS and confirm Access-Accept/Reject rules (including single-device enforcement).`
+          )}
+          <div class="mt-4 p-4 rounded-xl border border-slate-200">
+            <div class="text-xs tracking-widest font-semibold text-slate-500 mb-3">CREATE TEST USER</div>
+            <form id="wizUserForm" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              ${input("wizUserPhone", "Phone (E.164)", "text", "+15551234567")}
+              ${input("wizUserSeconds", "Initial credit (seconds)", "number", "3600")}
+              <div class="flex items-end">${btn("Create + Credit", "w-full")}</div>
+              <div id="wizUserErr" class="md:col-span-3"></div>
+            </form>
+          </div>
+          <div class="mt-4" id="wizUserOut"></div>
+          ${callout(
+            "info",
+            "RADIUS test example (run on server)",
+            `Inside <span class="font-mono">/opt/centralwifi/app</span>, you can run:`
+          )}
+          ${codeBlock(
+            `docker compose exec -T radius bash -lc "printf 'User-Name = +15551234567\\nUser-Password = <WIFI_PASSWORD>\\nCalling-Station-Id = AA-BB-CC-DD-EE-FF\\n' | radclient -x 127.0.0.1:1812 auth '${info.radius.shared_secret}'"`
+          )}
+        `,
+      afterRender: async () => {
+        $("#wizUserForm").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          $("#wizUserErr").innerHTML = "";
+          $("#wizUserOut").innerHTML = "";
+          const phone = $("#wizUserPhone").value.trim();
+          const seconds = Number($("#wizUserSeconds").value);
+          try {
+            const u = await apiFetch("/api/v1/admin/users", { method: "POST", body: JSON.stringify({ phone }) });
+            const reset = await apiFetch(`/api/v1/admin/users/${u.id}/reset-password`, { method: "POST" });
+            await apiFetch("/api/v1/admin/wallet/credit", {
+              method: "POST",
+              body: JSON.stringify({ user_id: u.id, source: "ADMIN", amount_seconds: seconds }),
+            });
+            $("#wizUserOut").innerHTML = callout(
+              "ok",
+              "Test user created",
+              `
+                <div class="text-sm">
+                  <div><span class="font-semibold">Username:</span> <span class="font-mono">${escapeHtml(reset.username)}</span></div>
+                  <div class="mt-1"><span class="font-semibold">WiFi password:</span> <span class="font-mono">${escapeHtml(reset.new_password)}</span></div>
+                  <div class="mt-1"><span class="font-semibold">Wallet credited:</span> ${seconds} seconds</div>
+                </div>
+              `
+            );
+          } catch (e2) {
+            $("#wizUserErr").innerHTML = errBox(e2.message);
+          }
+        });
+      },
+    },
+    {
+      id: "vendo",
+      title: "Vendo (JuanFi) Integration",
+      priority: "OPTIONAL",
+      body: () =>
+        `
+          ${callout(
+            "info",
+            "When to do this",
+            `Do this only if you are deploying coin vendo machines. The rest of the WiFi system works without it.`
+          )}
+          ${callout(
+            "warn",
+            "Security model (important)",
+            `Each vendo device has a one-time token. Firmware signs credit events using HMAC-SHA256; the backend validates signature + nonce idempotency.`
+          )}
+          <div class="mt-4 p-4 rounded-xl border border-slate-200">
+            <div class="text-xs tracking-widest font-semibold text-slate-500 mb-3">REGISTER VENDO DEVICE</div>
+            <form id="wizDevForm" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              ${input("wizDevId", "Device ID", "text", "vendo-001")}
+              ${input("wizDevUser", "Wallet user id (optional)", "text", "")}
+              <div id="wizDevErr" class="md:col-span-2"></div>
+              <div class="md:col-span-2">${btn("Create device (shows token once)")}</div>
+            </form>
+          </div>
+          <div class="mt-4" id="wizDevOut"></div>
+          ${callout("info", "Docs", `See <span class="font-mono">docs/VENDO_INTEGRATION.md</span> for firmware flashing and payload details.`)}
+        `,
+      afterRender: async () => {
+        $("#wizDevForm").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          $("#wizDevErr").innerHTML = "";
+          $("#wizDevOut").innerHTML = "";
+          try {
+            const res = await apiFetch("/api/v1/admin/devices", {
+              method: "POST",
+              body: JSON.stringify({
+                device_id: $("#wizDevId").value.trim(),
+                wallet_user_id: $("#wizDevUser").value.trim() ? Number($("#wizDevUser").value.trim()) : null,
+              }),
+            });
+            $("#wizDevOut").innerHTML = callout(
+              "ok",
+              "Device created",
+              `Save this token in the firmware (shown once): <span class="font-mono break-all">${escapeHtml(res.device_token)}</span>`
+            );
+          } catch (e2) {
+            $("#wizDevErr").innerHTML = errBox(e2.message);
+          }
+        });
+      },
+    },
+    {
+      id: "integrations",
+      title: "SMS + Payments (Optional for now)",
+      priority: "OPTIONAL",
+      body: () =>
+        `
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            ${callout(
+              "info",
+              "SMS delivery",
+              `
+                <div class="text-sm">Current provider: ${pill(info.sms_provider)}</div>
+                <div class="mt-2 text-sm text-slate-700">Default is mock (logs to database). You can test it in <b>SMS Tool</b>.</div>
+                <div class="mt-2 text-sm">Docs: <span class="font-mono">docs/SMS.md</span></div>
+              `
+            )}
+            ${callout(
+              "info",
+              "Payments gateway",
+              `
+                <div class="text-sm">Current provider: ${pill(info.payment_provider)}</div>
+                <div class="mt-2 text-sm text-slate-700">Default is mock webhook. Real gateway adapters can be configured later.</div>
+                <div class="mt-2 text-sm">Docs: <span class="font-mono">docs/PAYMENT.md</span></div>
+              `
+            )}
+          </div>
+        `,
+    },
+    {
+      id: "finish",
+      title: "Finish & Test",
+      priority: "REQUIRED",
+      body: () =>
+        `
+          ${setup.completed ? callout("ok", "Setup marked complete", `Completed at: <span class="font-mono">${escapeHtml(String(setup.completed_at || ""))}</span>`) : ""}
+          ${callout(
+            "warn",
+            "Ready-to-test checklist",
+            `
+              <ol class="list-decimal pl-5 text-sm">
+                <li>NAS added in this UI and Omada points to the same shared secret.</li>
+                <li>SSID is WPA2-Enterprise and accounting is enabled.</li>
+                <li>At least one user has wallet credit (time/date/unlimited).</li>
+                <li>Connect with one device → should work; second device → should reject.</li>
+              </ol>
+            `
+          )}
+          ${callout(
+            "info",
+            "If you want to re-run the wizard later",
+            `Use “Edit mode” (keep changes) or “Reset wizard” (does not delete data; only resets the completion flag).`
+          )}
+          <div class="mt-4 flex flex-wrap gap-2">
+            <button id="btnCompleteSetup" class="text-white bg-emerald-600 hover:bg-emerald-700 font-semibold rounded-lg text-sm px-4 py-2.5">Mark setup complete</button>
+            <button id="btnEditSetup" class="text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 font-semibold rounded-lg text-sm px-4 py-2.5">Edit mode (re-run wizard)</button>
+            <button id="btnResetSetup" class="text-white bg-red-600 hover:bg-red-700 font-semibold rounded-lg text-sm px-4 py-2.5">Reset wizard</button>
+          </div>
+        `,
+      afterRender: async () => {
+        const complete = $("#btnCompleteSetup");
+        complete.onclick = async () => {
+          await apiFetch("/api/v1/admin/system/setup/complete", { method: "POST" });
+          await apiFetch("/api/v1/admin/system/setup", { method: "GET" });
+          alert("Setup marked complete. You can now use the dashboard.");
+          routeGo("dashboard");
+        };
+        const edit = $("#btnEditSetup");
+        edit.onclick = async () => {
+          // No-op: wizard is always editable; keep completion flag.
+          alert("Edit mode: navigate steps and update settings. You can always return here from the sidebar.");
+        };
+        const reset = $("#btnResetSetup");
+        reset.onclick = async () => {
+          if (!confirm("Reset setup wizard completion flag? (Does NOT delete users/NAS/plans.)")) return;
+          await apiFetch("/api/v1/admin/system/setup/reset", { method: "POST" });
+          alert("Wizard reset. It will appear after next login.");
+        };
+      },
+    },
+  ];
+
+  const clamp = (n) => Math.max(0, Math.min(steps.length - 1, n));
+  let idx = clamp(current);
+
+  const saveState = async (partial) => {
+    const next = {
+      ...state,
+      ...partial,
+      current_step: idx,
+      done: { ...(state.done || {}), ...(partial.done || {}) },
+    };
+    await apiFetch("/api/v1/admin/system/setup", { method: "PUT", body: JSON.stringify({ state: next }) });
+  };
+
+  const renderStep = async () => {
+    const s = steps[idx];
+    const badge =
+      s.priority === "REQUIRED"
+        ? `<span class="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-red-50 text-red-700 border border-red-200">REQUIRED</span>`
+        : s.priority === "RECOMMENDED"
+          ? `<span class="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">RECOMMENDED</span>`
+          : `<span class="ml-2 inline-flex items-center px-2 py-1 rounded-full text-xs font-semibold bg-slate-50 text-slate-700 border border-slate-200">OPTIONAL</span>`;
+
+    const left = `
+      <div class="space-y-2">
+        <div class="text-xs tracking-widest font-semibold text-slate-500">STEPS</div>
+        <ol class="space-y-1">
+          ${steps
+            .map((x, i) => {
+              const isActive = i === idx;
+              const isDone = !!done[x.id];
+              return `
+                <li>
+                  <button data-step="${i}" class="w-full text-left px-3 py-2 rounded-lg text-sm ${
+                    isActive ? "bg-slate-100 text-slate-900" : "hover:bg-slate-50 text-slate-700"
+                  }">
+                    <div class="flex items-center justify-between gap-2">
+                      <span>${escapeHtml(x.title)}</span>
+                      <span class="text-xs ${isDone ? "text-emerald-700" : "text-slate-400"}">${isDone ? "DONE" : ""}</span>
+                    </div>
+                  </button>
+                </li>
+              `;
+            })
+            .join("")}
+        </ol>
+      </div>
+    `;
+
+    const content = `
+      ${pageTitle("Setup Wizard")}
+      ${setup.completed ? callout("ok", "Already configured", `This system was previously marked as setup complete. You can re-run steps in edit mode anytime.`) : ""}
+      <div class="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
+        <aside class="bg-white border border-slate-200 rounded-xl p-4">${left}</aside>
+        <section class="space-y-4">
+          <div class="flex items-center justify-between gap-3">
+            <div class="text-xl font-bold text-slate-900">${escapeHtml(s.title)} ${badge}</div>
+            <div class="text-sm text-slate-500">${idx + 1} / ${steps.length}</div>
+          </div>
+          <div class="space-y-4">${s.body()}</div>
+          <div class="pt-2 flex flex-wrap gap-2 justify-between">
+            <div class="flex gap-2">
+              <button id="btnPrev" class="text-slate-800 bg-white hover:bg-slate-50 border border-slate-200 font-semibold rounded-lg text-sm px-4 py-2.5" ${
+                idx === 0 ? "disabled" : ""
+              }>Back</button>
+              <button id="btnNext" class="text-white bg-slate-900 hover:bg-black font-semibold rounded-lg text-sm px-4 py-2.5">${
+                idx === steps.length - 1 ? "Go to Dashboard" : "Next"
+              }</button>
+            </div>
+            <div class="flex gap-2">
+              <button id="btnMarkDone" class="text-white bg-emerald-600 hover:bg-emerald-700 font-semibold rounded-lg text-sm px-4 py-2.5">Mark step done</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    `;
+
+    root.innerHTML = layoutApp("setup", content);
+    const signOut = $("#btnSignOut");
+    if (signOut) signOut.onclick = () => {
+      tokenClear();
+      routeGo("login");
+    };
+
+    root.querySelectorAll("button[data-step]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        idx = clamp(Number(b.dataset.step));
+        await saveState({ current_step: idx });
+        await renderStep();
+      });
+    });
+
+    $("#btnPrev").onclick = async () => {
+      idx = clamp(idx - 1);
+      await saveState({ current_step: idx });
+      await renderStep();
+    };
+    $("#btnNext").onclick = async () => {
+      if (idx === steps.length - 1) {
+        routeGo("dashboard");
+        return;
+      }
+      idx = clamp(idx + 1);
+      await saveState({ current_step: idx });
+      await renderStep();
+    };
+    $("#btnMarkDone").onclick = async () => {
+      done[s.id] = true;
+      await saveState({ done });
+      alert("Marked done.");
+      if (idx < steps.length - 1) {
+        idx = clamp(idx + 1);
+        await saveState({ current_step: idx });
+        await renderStep();
+      }
+    };
+
+    if (s.afterRender) await s.afterRender();
+  };
+
+  await renderStep();
 }
 
 async function viewDashboard() {
@@ -833,6 +1385,15 @@ async function render() {
   };
 
   if (r === "login") return viewLogin();
+  if (r === "setup") {
+    await viewSetupWizard();
+    const b = $("#btnSignOut");
+    if (b) b.onclick = () => {
+      tokenClear();
+      routeGo("login");
+    };
+    return;
+  }
   if (r === "dashboard") {
     await viewDashboard();
     const b = $("#btnSignOut");

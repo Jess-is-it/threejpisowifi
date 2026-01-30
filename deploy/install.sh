@@ -121,6 +121,10 @@ ufw --force enable >/dev/null 2>&1 || true
 echo "[5/6] Starting stack with Docker Compose..."
 cd "${APP_DIR}"
 docker compose build --pull
+# Bring up database/cache first, then apply migrations, then start the full stack.
+docker compose up -d postgres redis
+timeout 120 bash -lc 'until docker compose exec -T postgres pg_isready -U centralwifi -d centralwifi >/dev/null 2>&1; do sleep 2; done'
+docker compose run --rm migrate
 docker compose up -d
 
 echo "[6/6] Waiting for services to become healthy..."

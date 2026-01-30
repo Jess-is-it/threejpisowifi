@@ -27,6 +27,7 @@ from app.db.models import (
     UserStatus,
     Wallet,
     WebhookLog,
+    SystemSetting,
 )
 from app.providers.crypto import random_token_urlsafe
 from app.providers.tokenbox import TokenBox
@@ -35,6 +36,21 @@ from app.security.passwords import hash_password, verify_password
 from app.core.config import settings
 
 router = APIRouter()
+
+def _setting_get(db: Session, key: str, default: str = "") -> str:
+    row = db.query(SystemSetting).filter(SystemSetting.key == key).one_or_none()
+    return row.value if row else default
+
+
+def _setting_set(db: Session, key: str, value: str) -> None:
+    row = db.query(SystemSetting).filter(SystemSetting.key == key).one_or_none()
+    if row:
+        row.value = value
+        db.add(row)
+        db.commit()
+        return
+    db.add(SystemSetting(key=key, value=value))
+    db.commit()
 
 
 def _audit(db: Session, actor: str, action: str, object_type: str, object_id: str, details: dict[str, Any]) -> None:
@@ -478,3 +494,67 @@ def list_audit_logs(_: dict = Depends(require_admin), db: Session = Depends(get_
         }
         for a in rows
     ]
+
+
+@router.get("/system/info")
+def system_info(_: dict = Depends(require_admin)):
+    # Admin-only helper for the setup wizard and operator visibility.
+    return {
+        "cw_public_base_url": settings.cw_public_base_url,
+        "jwt_issuer": settings.jwt_issuer,
+        "active_session_grace_seconds": int(settings.active_session_grace_seconds),
+        "radius": {
+            "auth_port_udp": 1812,
+            "acct_port_udp": 1813,
+            "shared_secret": settings.radius_shared_secret,
+        },
+        "sms_provider": settings.sms_provider,
+        "payment_provider": settings.payment_provider,
+        "vendo": {
+            "seconds_per_coin": int(settings.vendo_seconds_per_coin),
+            "event_tolerance_seconds": int(settings.vendo_event_tolerance_seconds),
+        },
+    }
+
+
+@router.get("/system/setup")
+def get_setup_state(_: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    completed = _setting_get(db, "setup_completed", "false").lower() == "true"
+    completed_at = _setting_get(db, "setup_completed_at", "")
+    state_raw = _setting_get(db, "setup_state", "{}")
+    try:
+        state = json.loads(state_raw or "{}")
+    except Exception:
+        state = {}
+    return {"completed": completed, "completed_at": completed_at or None, "state": state}
+
+
+class SetupStateIn(BaseModel):
+    state: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.put("/system/setup")
+def put_setup_state(payload: SetupStateIn, auth: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    _setting_set(db, "setup_state", json.dumps(payload.state or {}, separators=(",", ":")))
+    _audit(db, auth["username"], "UPDATE", "system_setup", "setup_state", {"keys": list((payload.state or {}).keys())})
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/system/setup/complete")
+def complete_setup(auth: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    now = datetime.now(timezone.utc).isoformat()
+    _setting_set(db, "setup_completed", "true")
+    _setting_set(db, "setup_completed_at", now)
+    _audit(db, auth["username"], "COMPLETE", "system_setup", "setup", {"at": now})
+    db.commit()
+    return {"ok": True, "completed_at": now}
+
+
+@router.post("/system/setup/reset")
+def reset_setup(auth: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    _setting_set(db, "setup_completed", "false")
+    _setting_set(db, "setup_completed_at", "")
+    _audit(db, auth["username"], "RESET", "system_setup", "setup", {})
+    db.commit()
+    return {"ok": True}
