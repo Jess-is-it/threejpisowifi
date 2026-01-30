@@ -4,6 +4,18 @@ const $ = (sel) => document.querySelector(sel);
 const app = $("#app");
 const title = $("#pageTitle");
 
+// If the SPA crashes (syntax/runtime), surface the error in the UI instead of a blank page.
+window.addEventListener("error", (ev) => {
+  try {
+    if (app) app.innerHTML = errBox(ev?.error?.message || ev?.message || "Unknown error");
+  } catch {}
+});
+window.addEventListener("unhandledrejection", (ev) => {
+  try {
+    if (app) app.innerHTML = errBox(ev?.reason?.message || String(ev?.reason || "Unhandled rejection"));
+  } catch {}
+});
+
 function tokenGet() {
   return window.localStorage.getItem("cw_admin_token");
 }
