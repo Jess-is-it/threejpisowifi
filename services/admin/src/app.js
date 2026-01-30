@@ -4,6 +4,12 @@ const root = document.getElementById("appRoot");
 
 const $ = (sel, el = document) => el.querySelector(sel);
 
+// If an older admin UI registered a service worker, it can keep serving stale assets.
+// Unregister proactively so upgrades take effect immediately.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.getRegistrations().then((regs) => regs.forEach((r) => r.unregister())).catch(() => {});
+}
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
 }
@@ -565,14 +571,29 @@ async function viewSetupWizard() {
           <div class="mt-4" id="wizUserOut"></div>
           ${callout(
             "info",
-            "RADIUS test example (run on server)",
-            `Inside <span class="font-mono">/opt/centralwifi/app</span>, you can run:`
+            "Test RADIUS (no CLI)",
+            `
+              This sends a simple PAP auth request using <span class="font-mono">radclient</span> inside the RADIUS container.
+              It helps validate wallet rules + single-device enforcement quickly.
+            `
           )}
-          ${codeBlock(
-            `docker compose exec -T radius bash -lc "printf 'User-Name = +15551234567\\nUser-Password = <WIFI_PASSWORD>\\nCalling-Station-Id = AA-BB-CC-DD-EE-FF\\n' | radclient -x 127.0.0.1:1812 auth '${info.radius.shared_secret}'"`
-          )}
+          <div class="mt-3 p-4 rounded-xl border border-slate-200">
+            <div class="text-xs tracking-widest font-semibold text-slate-500 mb-3">RADIUS TEST</div>
+            <form id="wizRadiusTestForm" class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              ${input("wizRadUser", "Username", "text", "+15551234567")}
+              ${input("wizRadPass", "Password", "text", "")}
+              ${input("wizRadMac", "Calling-Station-Id (MAC)", "text", "AA-BB-CC-DD-EE-FF")}
+              <div class="md:col-span-3 flex gap-2">
+                ${btn("Run Test")}
+              </div>
+              <div id="wizRadErr" class="md:col-span-3"></div>
+            </form>
+          </div>
+          <div class="mt-3" id="wizRadOut"></div>
         `,
       afterRender: async () => {
+        let lastCreds = null;
+
         $("#wizUserForm").addEventListener("submit", async (e) => {
           e.preventDefault();
           $("#wizUserErr").innerHTML = "";
@@ -586,6 +607,9 @@ async function viewSetupWizard() {
               method: "POST",
               body: JSON.stringify({ user_id: u.id, source: "ADMIN", amount_seconds: seconds }),
             });
+            lastCreds = { username: reset.username, password: reset.new_password };
+            $("#wizRadUser").value = reset.username;
+            $("#wizRadPass").value = reset.new_password;
             $("#wizUserOut").innerHTML = callout(
               "ok",
               "Test user created",
@@ -599,6 +623,29 @@ async function viewSetupWizard() {
             );
           } catch (e2) {
             $("#wizUserErr").innerHTML = errBox(e2.message);
+          }
+        });
+
+        $("#wizRadiusTestForm").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          $("#wizRadErr").innerHTML = "";
+          $("#wizRadOut").innerHTML = "";
+          const username = $("#wizRadUser").value.trim();
+          const password = $("#wizRadPass").value.trim();
+          const calling_station_id = $("#wizRadMac").value.trim();
+          try {
+            const res = await apiFetch("/api/v1/ops/radius/test", {
+              method: "POST",
+              body: JSON.stringify({ username, password, calling_station_id, nas_ip: "127.0.0.1" }),
+            });
+            $("#wizRadOut").innerHTML = callout(
+              res.verdict === "ACCEPT" ? "ok" : res.verdict === "REJECT" ? "warn" : "info",
+              `Result: ${escapeHtml(res.verdict)}`,
+              `<div class="text-xs text-slate-700">Raw output:</div>${codeBlock(res.output || "")}`
+            );
+            done["radius_test"] = true;
+          } catch (e2) {
+            $("#wizRadErr").innerHTML = errBox(e2.message);
           }
         });
       },

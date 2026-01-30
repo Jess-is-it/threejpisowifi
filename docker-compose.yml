@@ -127,6 +127,8 @@ services:
         condition: service_started
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Allow ops to update env-driven settings (e.g., CW_PUBLIC_BASE_URL) without SSH/CLI.
+      - ./.env:/host/.env
     expose:
       - "9000"
     healthcheck:
