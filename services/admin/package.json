@@ -1,0 +1,19 @@
+{
+  "name": "centralwifi-admin",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "build:css": "tailwindcss -i ./src/styles.css -o ./dist/styles.css --minify",
+    "build:assets": "mkdir -p dist && cp -r src/index.html src/app.js dist/",
+    "build": "npm run build:css && npm run build:assets"
+  },
+  "dependencies": {
+    "flowbite": "2.5.2"
+  },
+  "devDependencies": {
+    "autoprefixer": "10.4.20",
+    "postcss": "8.4.41",
+    "tailwindcss": "3.4.10"
+  }
+}
+
