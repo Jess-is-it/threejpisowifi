@@ -128,7 +128,7 @@ function layoutApp(active, inner) {
             ${link("payments", "Payment Logs")}
             ${link("sms", "SMS Tool")}
             ${link("audit-logs", "Audit Logs")}
-            <a href="/portal" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50">Top-Up Portal</a>
+            <a href="/portal/" class="flex items-center px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-50">Top-Up Portal</a>
           </nav>
         </aside>
 

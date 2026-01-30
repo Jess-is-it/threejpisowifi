@@ -4,8 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Central WiFi Portal</title>
-    <!-- IMPORTANT: assets are relative because this app is served behind /portal via reverse proxy. -->
-    <link rel="stylesheet" href="styles.css" />
+    <!-- IMPORTANT: assets are served under /portal, so use absolute /portal/* paths
+         to work whether the browser opens /portal or /portal/. -->
+    <link rel="stylesheet" href="/portal/styles.css" />
   </head>
   <body class="min-h-screen bg-slate-50">
     <div id="appRoot" class="min-h-screen"></div>
@@ -14,8 +15,7 @@
         JavaScript is required for the portal.
       </div>
     </noscript>
-    <script src="app.js"></script>
-    <script src="flowbite.min.js"></script>
+    <script src="/portal/app.js"></script>
+    <script src="/portal/flowbite.min.js"></script>
   </body>
  </html>
-

@@ -15,6 +15,7 @@
   reverse_proxy @api api:8000
 
   # End-user top-up portal (served behind /portal).
+  redir /portal /portal/ 308
   handle_path /portal* {
     reverse_proxy portal:80
   }

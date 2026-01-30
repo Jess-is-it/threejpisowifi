@@ -82,6 +82,7 @@ def _render_caddyfile(site: str) -> str:
   @ops path /api/v1/ops/*
   reverse_proxy @ops ops:9000
 
+  redir /portal /portal/ 308
   handle_path /portal* {{
     reverse_proxy portal:80
   }}
