@@ -383,7 +383,7 @@ async function viewSetupWizard() {
                   <option value="http">HTTP only (testing)</option>
                 </select>
               </div>
-              ${input("wizPublicUrl", "Public Base URL (informational)", "text", "", "https://example.com")}
+              ${input("wizPublicUrl", "Public Base URL", "text", "", "https://example.com")}
               <div class="flex items-end">${btn("Apply", "w-full")}</div>
               <div id="wizDomainErr" class="md:col-span-2"></div>
             </form>
