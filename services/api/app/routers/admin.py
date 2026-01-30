@@ -16,7 +16,10 @@ from app.db.models import (
     AuditLog,
     Device,
     DeviceStatus,
+    DeviceEvent,
     NAS,
+    Plan,
+    PlanType,
     Session as DbSession,
     Transaction,
     TransactionSource,
@@ -332,6 +335,132 @@ def list_webhooks(_: dict = Depends(require_admin), db: Session = Depends(get_db
         }
         for w in rows
     ]
+
+@router.get("/transactions")
+def list_transactions(
+    _: dict = Depends(require_admin),
+    db: Session = Depends(get_db),
+    user_id: int | None = None,
+    limit: int = 200,
+):
+    limit = max(1, min(int(limit), 500))
+    q = db.query(Transaction).order_by(Transaction.id.desc())
+    if user_id is not None:
+        q = q.filter(Transaction.user_id == int(user_id))
+    rows = q.limit(limit).all()
+    return [
+        {
+            "id": t.id,
+            "user_id": t.user_id,
+            "source": t.source.value,
+            "amount_seconds": t.amount_seconds,
+            "amount_money": float(t.amount_money),
+            "ref": t.ref,
+            "created_at": t.created_at,
+        }
+        for t in rows
+    ]
+
+
+class PlanIn(BaseModel):
+    type: PlanType
+    duration_seconds: int | None = None
+    price: float = 0
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+@router.get("/plans")
+def list_plans(_: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    rows = db.query(Plan).order_by(Plan.id.asc()).limit(500).all()
+    return [
+        {
+            "id": p.id,
+            "type": p.type.value,
+            "duration_seconds": p.duration_seconds,
+            "price": float(p.price),
+            "metadata": json.loads(p.metadata_json or "{}"),
+        }
+        for p in rows
+    ]
+
+
+@router.post("/plans")
+def create_plan(payload: PlanIn, auth: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    if payload.type == PlanType.TIME and (not payload.duration_seconds or payload.duration_seconds <= 0):
+        raise HTTPException(status_code=400, detail="TIME plans require duration_seconds > 0")
+    if payload.type == PlanType.DATE and payload.duration_seconds:
+        raise HTTPException(status_code=400, detail="DATE plans should not set duration_seconds")
+    if payload.type == PlanType.UNLIMITED and payload.duration_seconds:
+        raise HTTPException(status_code=400, detail="UNLIMITED plans should not set duration_seconds")
+
+    p = Plan(
+        type=payload.type,
+        duration_seconds=payload.duration_seconds,
+        price=float(payload.price),
+        metadata_json=json.dumps(payload.metadata, separators=(",", ":")),
+    )
+    db.add(p)
+    db.commit()
+    _audit(db, auth["username"], "CREATE", "plan", str(p.id), {"type": payload.type.value})
+    db.commit()
+    return {"ok": True, "id": p.id}
+
+
+@router.put("/plans/{plan_id}")
+def update_plan(plan_id: int, payload: PlanIn, auth: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    p = db.query(Plan).filter(Plan.id == plan_id).one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    p.type = payload.type
+    p.duration_seconds = payload.duration_seconds
+    p.price = float(payload.price)
+    p.metadata_json = json.dumps(payload.metadata, separators=(",", ":"))
+    db.commit()
+    _audit(db, auth["username"], "UPDATE", "plan", str(p.id), {"type": payload.type.value})
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/plans/{plan_id}")
+def delete_plan(plan_id: int, auth: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    p = db.query(Plan).filter(Plan.id == plan_id).one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    db.delete(p)
+    db.commit()
+    _audit(db, auth["username"], "DELETE", "plan", str(plan_id), {})
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/device-events")
+def list_device_events(_: dict = Depends(require_admin), db: Session = Depends(get_db), limit: int = 200):
+    limit = max(1, min(int(limit), 500))
+    rows = db.query(DeviceEvent).order_by(DeviceEvent.id.desc()).limit(limit).all()
+    return [
+        {
+            "id": e.id,
+            "device_id": e.device_id,
+            "timestamp": e.timestamp,
+            "nonce": e.nonce,
+            "raw": e.raw,
+            "created_at": e.created_at,
+        }
+        for e in rows
+    ]
+
+
+@router.post("/sessions/{session_id}/terminate")
+def terminate_session(session_id: int, auth: dict = Depends(require_admin), db: Session = Depends(get_db)):
+    s = db.query(DbSession).filter(DbSession.id == session_id).one_or_none()
+    if not s:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if s.stop is not None:
+        return {"ok": True, "already_stopped": True}
+    s.stop = datetime.now(timezone.utc)
+    _audit(db, auth["username"], "TERMINATE", "session", str(s.id), {"user_id": s.user_id, "calling_station_id": s.calling_station_id})
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/audit-logs")

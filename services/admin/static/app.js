@@ -271,12 +271,224 @@ async function viewSessions() {
     const rows = await apiFetch("/api/v1/admin/sessions");
     app.innerHTML = html`
       <table class="table">
-        <thead><tr><th>USER</th><th>MAC</th><th>NAS</th><th>LAST UPDATE</th></tr></thead>
+        <thead><tr><th>USER</th><th>MAC</th><th>NAS</th><th>LAST UPDATE</th><th></th></tr></thead>
         <tbody>
           ${rows
             .map(
               (s) =>
-                `<tr><td>${s.user_id}</td><td class="mono">${escapeHtml(s.calling_station_id)}</td><td>${s.nas_id ?? "-"}</td><td>${escapeHtml(String(s.last_update))}</td></tr>`
+                `<tr>
+                  <td>${s.user_id}</td>
+                  <td class="mono">${escapeHtml(s.calling_station_id)}</td>
+                  <td>${s.nas_id ?? "-"}</td>
+                  <td>${escapeHtml(String(s.last_update))}</td>
+                  <td style="text-align:right">
+                    <button class="btn danger" data-action="terminate" data-id="${s.id}" type="button">Terminate</button>
+                  </td>
+                </tr>`
+            )
+            .join("")}
+        </tbody>
+      </table>
+      <div class="muted" style="margin-top:10px">
+        Note: Terminate marks the session stopped in the central DB; immediate disconnect depends on NAS CoA/Disconnect support.
+      </div>
+    `;
+    app.querySelectorAll("button[data-action='terminate']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.dataset.id);
+        if (!confirm(`Terminate session ${id}?`)) return;
+        try {
+          await apiFetch(`/api/v1/admin/sessions/${id}/terminate`, { method: "POST" });
+          await viewSessions();
+        } catch (e2) {
+          alert(e2.message);
+        }
+      });
+    });
+  } catch (e) {
+    app.innerHTML = errBox(e.message);
+  }
+}
+
+async function viewTransactions() {
+  title.textContent = "Transactions";
+  setActiveNav("transactions");
+  app.innerHTML = "<div class='muted'>Loading...</div>";
+  try {
+    const rows = await apiFetch("/api/v1/admin/transactions?limit=200");
+    app.innerHTML = html`
+      <table class="table">
+        <thead><tr><th>ID</th><th>USER</th><th>SOURCE</th><th>SECONDS</th><th>MONEY</th><th>REF</th><th>CREATED</th></tr></thead>
+        <tbody>
+          ${rows
+            .map(
+              (t) =>
+                `<tr>
+                  <td class="mono">${t.id}</td>
+                  <td>${t.user_id}</td>
+                  <td>${escapeHtml(t.source)}</td>
+                  <td class="mono">${t.amount_seconds}</td>
+                  <td class="mono">${t.amount_money}</td>
+                  <td class="mono">${escapeHtml(t.ref || "")}</td>
+                  <td>${escapeHtml(String(t.created_at))}</td>
+                </tr>`
+            )
+            .join("")}
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    app.innerHTML = errBox(e.message);
+  }
+}
+
+async function viewPlans() {
+  title.textContent = "Plans & Pricing";
+  setActiveNav("plans");
+  app.innerHTML = "<div class='muted'>Loading...</div>";
+  try {
+    const rows = await apiFetch("/api/v1/admin/plans");
+    app.innerHTML = html`
+      <div class="row">
+        <form id="planForm" class="grid2">
+          <div class="field">
+            <label>TYPE</label>
+            <select id="planType">
+              <option value="TIME">TIME</option>
+              <option value="DATE">DATE</option>
+              <option value="UNLIMITED">UNLIMITED</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>DURATION SECONDS (TIME ONLY)</label>
+            <input id="planDuration" value="3600" />
+          </div>
+          <div class="field">
+            <label>PRICE</label>
+            <input id="planPrice" value="10" />
+          </div>
+          <div class="field">
+            <label>METADATA (JSON)</label>
+            <input id="planMeta" value="{}" />
+          </div>
+          <div style="display:flex;align-items:end">
+            <button class="btn" type="submit">Create Plan</button>
+          </div>
+        </form>
+        <div id="planErr"></div>
+        <table class="table">
+          <thead><tr><th>ID</th><th>TYPE</th><th>DURATION</th><th>PRICE</th><th>METADATA</th><th></th></tr></thead>
+          <tbody>
+            ${rows
+              .map(
+                (p) =>
+                  `<tr>
+                    <td class="mono">${p.id}</td>
+                    <td>${escapeHtml(p.type)}</td>
+                    <td class="mono">${p.duration_seconds ?? "-"}</td>
+                    <td class="mono">${p.price}</td>
+                    <td><pre class="mono" style="white-space:pre-wrap;margin:0">${escapeHtml(JSON.stringify(p.metadata || {}, null, 2))}</pre></td>
+                    <td style="text-align:right"><button class="btn danger" data-action="del" data-id="${p.id}" type="button">Delete</button></td>
+                  </tr>`
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    $("#planForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      $("#planErr").innerHTML = "";
+      const type = $("#planType").value;
+      const durationSeconds = $("#planDuration").value.trim() ? Number($("#planDuration").value.trim()) : null;
+      const price = Number($("#planPrice").value);
+      let meta = {};
+      try {
+        meta = JSON.parse($("#planMeta").value || "{}");
+      } catch {
+        $("#planErr").innerHTML = errBox("Invalid metadata JSON");
+        return;
+      }
+      try {
+        await apiFetch("/api/v1/admin/plans", {
+          method: "POST",
+          body: JSON.stringify({ type, duration_seconds: durationSeconds, price, metadata: meta }),
+        });
+        await viewPlans();
+      } catch (e2) {
+        $("#planErr").innerHTML = errBox(e2.message);
+      }
+    });
+
+    app.querySelectorAll("button[data-action='del']").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = Number(btn.dataset.id);
+        if (!confirm(`Delete plan ${id}?`)) return;
+        try {
+          await apiFetch(`/api/v1/admin/plans/${id}`, { method: "DELETE" });
+          await viewPlans();
+        } catch (e2) {
+          alert(e2.message);
+        }
+      });
+    });
+  } catch (e) {
+    app.innerHTML = errBox(e.message);
+  }
+}
+
+async function viewVendoEvents() {
+  title.textContent = "Vendo Events";
+  setActiveNav("vendo-events");
+  app.innerHTML = "<div class='muted'>Loading...</div>";
+  try {
+    const rows = await apiFetch("/api/v1/admin/device-events?limit=200");
+    app.innerHTML = html`
+      <table class="table">
+        <thead><tr><th>ID</th><th>DEVICE</th><th>NONCE</th><th>TIMESTAMP</th><th>RAW</th><th>CREATED</th></tr></thead>
+        <tbody>
+          ${rows
+            .map(
+              (e) =>
+                `<tr>
+                  <td class="mono">${e.id}</td>
+                  <td class="mono">${escapeHtml(e.device_id)}</td>
+                  <td class="mono">${escapeHtml(e.nonce)}</td>
+                  <td>${escapeHtml(String(e.timestamp))}</td>
+                  <td><pre class="mono" style="white-space:pre-wrap;margin:0">${escapeHtml(e.raw)}</pre></td>
+                  <td>${escapeHtml(String(e.created_at))}</td>
+                </tr>`
+            )
+            .join("")}
+        </tbody>
+      </table>
+    `;
+  } catch (e) {
+    app.innerHTML = errBox(e.message);
+  }
+}
+
+async function viewAuditLogs() {
+  title.textContent = "Audit Logs";
+  setActiveNav("audit-logs");
+  app.innerHTML = "<div class='muted'>Loading...</div>";
+  try {
+    const rows = await apiFetch("/api/v1/admin/audit-logs");
+    app.innerHTML = html`
+      <table class="table">
+        <thead><tr><th>WHEN</th><th>ACTOR</th><th>ACTION</th><th>OBJECT</th><th>DETAILS</th></tr></thead>
+        <tbody>
+          ${rows
+            .map(
+              (a) =>
+                `<tr>
+                  <td>${escapeHtml(String(a.created_at))}</td>
+                  <td class="mono">${escapeHtml(a.actor)}</td>
+                  <td>${escapeHtml(a.action)}</td>
+                  <td class="mono">${escapeHtml(a.object_type)}:${escapeHtml(a.object_id)}</td>
+                  <td><pre class="mono" style="white-space:pre-wrap;margin:0">${escapeHtml(a.details)}</pre></td>
+                </tr>`
             )
             .join("")}
         </tbody>
@@ -465,11 +677,15 @@ async function render() {
   if (r === "login") return viewLogin();
   if (r === "dashboard") return viewDashboard();
   if (r === "users") return viewUsers();
+  if (r === "transactions") return viewTransactions();
+  if (r === "plans") return viewPlans();
   if (r === "sessions") return viewSessions();
   if (r === "nas") return viewNAS();
   if (r === "devices") return viewDevices();
+  if (r === "vendo-events") return viewVendoEvents();
   if (r === "payments") return viewPayments();
   if (r === "sms") return viewSMS();
+  if (r === "audit-logs") return viewAuditLogs();
 
   window.location.hash = "#/dashboard";
 }
