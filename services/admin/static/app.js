@@ -48,7 +48,8 @@ function escapeHtml(s) {
 
 function route() {
   const h = window.location.hash || "#/dashboard";
-  const m = h.match(/^#\\/([a-z-]+)/);
+  // Hash routes look like `#/users`. In a JS regex literal, `/` must be escaped as `\/`.
+  const m = h.match(/^#\/([a-z-]+)/);
   return m ? m[1] : "dashboard";
 }
 
@@ -475,4 +476,3 @@ async function render() {
 
 window.addEventListener("hashchange", render);
 render();
-
