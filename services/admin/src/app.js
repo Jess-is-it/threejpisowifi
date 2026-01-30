@@ -276,6 +276,10 @@ async function viewSetupWizard() {
   const state = setup.state || {};
   const current = Number(state.current_step ?? 0);
   const done = state.done || {};
+  const serverHost = String(info.cw_public_base_url || "")
+    .replace("https://", "")
+    .replace("http://", "")
+    .split("/")[0];
 
   const steps = [
     {
@@ -339,12 +343,90 @@ async function viewSetupWizard() {
               `
             )}
           </div>
+        `,
+    },
+    {
+      id: "domain",
+      title: "Domain & HTTPS (No CLI)",
+      priority: "RECOMMENDED",
+      body: () =>
+        `
           ${callout(
             "info",
-            "Tip: Use a real domain + HTTPS later",
-            `For production, set DNS to this server and update <span class="font-mono">CW_DOMAIN</span> + <span class="font-mono">CW_PUBLIC_BASE_URL</span> in <span class="font-mono">/opt/centralwifi/app/.env</span>, then run <span class="font-mono">cd /opt/centralwifi/app && docker compose up -d</span>.`
+            "Goal",
+            `Switch from IP-based access (<span class="font-mono">http://${escapeHtml(String(info.cw_public_base_url || ""))}</span>) to a real domain and HTTPS without using the server CLI.`
+          )}
+          ${callout(
+            "warn",
+            "You still must set DNS (outside this app)",
+            `
+	              Create an <b>A record</b> pointing your domain to this server IP.
+	              <div class="mt-2">Example:</div>
+	              ${codeBlock(`centralwifi.example.com  A  ${serverHost}`)}
+	              After DNS propagates, click “Apply HTTPS” below.
+	            `
+	          )}
+          <div class="mt-4 p-4 rounded-xl border border-slate-200">
+            <div class="text-xs tracking-widest font-semibold text-slate-500 mb-3">CONFIGURE</div>
+            <form id="wizDomainForm" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              ${input("wizDomainName", "Domain (example.com)", "text", "")}
+              <div>
+                <label class="block mb-2 text-sm font-medium text-slate-900">Mode</label>
+                <select id="wizDomainMode" class="bg-slate-50 border border-slate-300 text-slate-900 text-sm rounded-lg focus:ring-emerald-500 focus:border-emerald-500 block w-full p-2.5">
+                  <option value="https">HTTPS (recommended)</option>
+                  <option value="http">HTTP only (testing)</option>
+                </select>
+              </div>
+              ${input("wizPublicUrl", "Public Base URL (informational)", "text", "", "https://example.com")}
+              <div class="flex items-end">${btn("Apply", "w-full")}</div>
+              <div id="wizDomainErr" class="md:col-span-2"></div>
+            </form>
+          </div>
+          <div class="mt-4" id="wizDomainOut"></div>
+          ${callout(
+            "info",
+            "What happens when you click Apply",
+            `
+              <ul class="list-disc pl-5 text-sm">
+                <li>The reverse proxy (Caddy) configuration is updated and reloaded automatically.</li>
+                <li>Caddy will attempt to issue a TLS certificate in HTTPS mode.</li>
+                <li>If DNS is not correct yet, HTTPS provisioning will fail; you can retry later.</li>
+              </ul>
+            `
           )}
         `,
+      afterRender: async () => {
+        $("#wizDomainOut").innerHTML = "<div class='text-slate-600 text-sm'>Loading current proxy config…</div>";
+        try {
+          const cur = await apiFetch("/api/v1/ops/domain");
+          $("#wizDomainOut").innerHTML = callout(
+            "info",
+            "Current reverse-proxy site label",
+            `<span class="font-mono">${escapeHtml(cur.site || "(unknown)")}</span>`
+          );
+        } catch (e) {
+          $("#wizDomainOut").innerHTML = errBox(e.message);
+        }
+
+        $("#wizDomainForm").addEventListener("submit", async (e) => {
+          e.preventDefault();
+          $("#wizDomainErr").innerHTML = "";
+          $("#wizDomainOut").innerHTML = "";
+          try {
+            const domain = $("#wizDomainName").value.trim();
+            const mode = $("#wizDomainMode").value;
+            const public_base_url = $("#wizPublicUrl").value.trim() || (mode === "https" ? `https://${domain}` : `http://${domain}`);
+            const res = await apiFetch("/api/v1/ops/domain", {
+              method: "PUT",
+              body: JSON.stringify({ domain, mode, public_base_url }),
+            });
+            $("#wizDomainOut").innerHTML = callout("ok", "Applied", `Reverse proxy updated: <span class="font-mono">${escapeHtml(res.site)}</span>`);
+            done["domain"] = true;
+          } catch (e2) {
+            $("#wizDomainErr").innerHTML = errBox(e2.message);
+          }
+        });
+      },
     },
     {
       id: "radius",
