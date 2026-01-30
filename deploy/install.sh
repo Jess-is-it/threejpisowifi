@@ -122,7 +122,11 @@ docker compose build --pull
 docker compose up -d
 
 echo "[6/6] Waiting for services to become healthy..."
-timeout 300 bash -lc 'until docker compose ps --format json | python3 - <<\"PY\"\nimport json,sys\nrows=json.load(sys.stdin)\n# Some compose versions don't expose full health; fall back to \"running\".\nok=True\nfor r in rows:\n  st=r.get(\"State\",\"\")\n  if \"running\" not in st.lower():\n    ok=False\nprint(\"ok\" if ok else \"wait\")\nPY\n | grep -q ok; do sleep 2; done'
+# Avoid `docker compose ps --format json` portability issues across compose versions.
+timeout 300 bash -lc 'until docker compose exec -T api curl -fsS http://127.0.0.1:8000/healthz >/dev/null 2>&1; do sleep 2; done'
+timeout 300 bash -lc 'until docker compose exec -T admin curl -fsS http://127.0.0.1/healthz >/dev/null 2>&1; do sleep 2; done'
+timeout 300 bash -lc 'until docker compose exec -T radius pgrep freeradius >/dev/null 2>&1; do sleep 2; done'
+timeout 300 bash -lc 'until curl -fsS http://127.0.0.1/healthz >/dev/null 2>&1; do sleep 2; done'
 
 source "${ENV_FILE}"
 IP="$(get_primary_ip)"
