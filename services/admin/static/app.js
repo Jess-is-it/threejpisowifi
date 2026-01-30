@@ -33,6 +33,11 @@ async function apiFetch(path, init) {
   if (t) headers.set("Authorization", `Bearer ${t}`);
   const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      // Token expired/invalid; force a clean re-login flow.
+      tokenClear();
+      window.location.hash = "#/login";
+    }
     let body = {};
     try { body = await res.json(); } catch {}
     throw new Error(body.detail || `HTTP ${res.status}`);
