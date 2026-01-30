@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "build:css": "tailwindcss -i ./src/styles.css -o ./dist/styles.css --minify",
-    "build:assets": "mkdir -p dist && cp -r src/index.html src/app.js dist/",
+    "build:assets": "mkdir -p dist && cp -r src/index.html src/app.js dist/ && cp -r node_modules/flowbite/dist/flowbite.min.js dist/",
     "build": "npm run build:css && npm run build:assets"
   },
   "dependencies": {
@@ -16,4 +16,3 @@
     "tailwindcss": "3.4.10"
   }
 }
-
