@@ -62,7 +62,6 @@ After top-up, users connect to the WPA2-Enterprise SSID using:
 
 If your Omada/AP supports VLAN assignment via RADIUS:
 
-- Set `WALLED_GARDEN_ON_NO_CREDIT=1`
-- Set `WALLED_GARDEN_VLAN_ID=<your_vlan_id>`
+- Admin UI -> Setup Wizard -> **Top-Up Portal** -> enable **Walled Garden mode** and set VLAN ID
 
 Then create a restricted VLAN/network policy that only allows access to the portal and required API endpoints.

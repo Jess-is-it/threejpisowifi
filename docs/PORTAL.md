@@ -34,8 +34,7 @@ Flow:
 
 If your AP/controller supports VLAN assignment via RADIUS attributes, you can enable:
 
-- `WALLED_GARDEN_ON_NO_CREDIT=1`
-- `WALLED_GARDEN_VLAN_ID=<your_vlan_id>`
+- Admin UI -> Setup Wizard -> **Top-Up Portal** -> enable **Walled Garden mode**
 
 This causes RADIUS to:
 - `ALLOW` users with credit normally
@@ -47,4 +46,3 @@ You must then configure your network/firewall so that this VLAN can only reach:
 - optional payment endpoints
 
 Note: VLAN enforcement is done by your network/AP/controller, not by this server.
-

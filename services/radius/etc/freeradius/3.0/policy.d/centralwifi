@@ -25,40 +25,36 @@ centralwifi_authorize {
     reject
   }
 
-  # Determine access policy:
-  # - ALLOW  -> full access (wallet valid)
-  # - GARDEN -> walled garden only (optional), used to show /portal for top-up
-  # - REJECT -> reject auth
-  update control {
-    Tmp-String-1 := "%{sql:SELECT cw_radius_policy('%{User-Name}','%{Calling-Station-Id}', %{env:ACTIVE_SESSION_GRACE_SECONDS}, %{%{env:WALLED_GARDEN_ON_NO_CREDIT}:-0})}"
-  }
-
-  if (control:Tmp-String-1 == "REJECT") {
-    update reply {
-      Reply-Message := "%{sql:SELECT cw_radius_reject_message('%{User-Name}','%{Calling-Station-Id}', %{env:ACTIVE_SESSION_GRACE_SECONDS})}"
+  # Enforce wallet + single-device policy via DB function.
+  #
+  # Optional: if WALLED_GARDEN_ON_NO_CREDIT=1 and the reject reason is "No active plan",
+  # accept the user into a restricted VLAN so they can reach /portal to top up.
+  if ("%{sql:SELECT cw_radius_is_allowed('%{User-Name}','%{Calling-Station-Id}', %{env:ACTIVE_SESSION_GRACE_SECONDS})}" != "t") {
+    update control {
+      Tmp-String-1 := "%{sql:SELECT cw_radius_reject_message('%{User-Name}','%{Calling-Station-Id}', %{env:ACTIVE_SESSION_GRACE_SECONDS})}"
+      Tmp-String-2 := "%{sql:SELECT COALESCE((SELECT value FROM system_settings WHERE key = 'walled_garden_on_no_credit'),'0')}"
     }
-    reject
-  }
 
-  if (control:Tmp-String-1 == "GARDEN") {
-    # Assign a VLAN for a restricted network (walled garden) if your AP/controller supports it.
-    #
-    # You must configure the network to only allow access to the portal/API you want.
-    update reply {
-      Tunnel-Type := VLAN
-      Tunnel-Medium-Type := IEEE-802
-      Tunnel-Private-Group-Id := "%{%{env:WALLED_GARDEN_VLAN_ID}:-0}"
-      Filter-Id := "WALLED_GARDEN"
-      Reply-Message := "No active plan (walled garden). Open /portal to top up."
-      Session-Timeout := 300
+    if (control:Tmp-String-2 == "1" && control:Tmp-String-1 == "No active plan") {
+      update reply {
+        Tunnel-Type := VLAN
+        Tunnel-Medium-Type := IEEE-802
+        Tunnel-Private-Group-Id := "%{sql:SELECT COALESCE((SELECT value FROM system_settings WHERE key = 'walled_garden_vlan_id'),'0')}"
+        Filter-Id := "WALLED_GARDEN"
+        Reply-Message := "No active plan (walled garden). Open /portal to top up."
+        Session-Timeout := 300
+      }
+    } else {
+      update reply {
+        Reply-Message := "%{control:Tmp-String-1}"
+      }
+      reject
     }
   }
 
-  if (control:Tmp-String-1 == "ALLOW") {
-    # Encourage periodic re-auth for TIME plans.
-    update reply {
-      Session-Timeout := "%{sql:SELECT cw_radius_session_timeout_seconds('%{User-Name}')}"
-    }
+  # Encourage periodic re-auth for TIME plans.
+  update reply {
+    Session-Timeout := "%{sql:SELECT cw_radius_session_timeout_seconds('%{User-Name}')}"
   }
 }
 

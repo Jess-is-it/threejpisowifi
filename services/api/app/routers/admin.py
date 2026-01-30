@@ -558,3 +558,38 @@ def reset_setup(auth: dict = Depends(require_admin), db: Session = Depends(get_d
     _audit(db, auth["username"], "RESET", "system_setup", "setup", {})
     db.commit()
     return {"ok": True}
+
+
+class FeaturesOut(BaseModel):
+    walled_garden_on_no_credit: bool
+    walled_garden_vlan_id: int
+    portal_url: str
+
+
+@router.get("/system/features", response_model=FeaturesOut)
+def get_features(_: dict = Depends(require_admin), db: Session = Depends(get_db)) -> FeaturesOut:
+    wg = _setting_get(db, "walled_garden_on_no_credit", "0").strip()
+    vlan = _setting_get(db, "walled_garden_vlan_id", "0").strip()
+    try:
+        vlan_i = int(vlan or "0")
+    except Exception:
+        vlan_i = 0
+    portal_url = settings.cw_public_base_url.rstrip("/") + "/portal"
+    return FeaturesOut(walled_garden_on_no_credit=(wg == "1" or wg.lower() == "true"), walled_garden_vlan_id=vlan_i, portal_url=portal_url)
+
+
+class FeaturesIn(BaseModel):
+    walled_garden_on_no_credit: bool = False
+    walled_garden_vlan_id: int = 0
+
+
+@router.put("/system/features", response_model=FeaturesOut)
+def put_features(payload: FeaturesIn, auth: dict = Depends(require_admin), db: Session = Depends(get_db)) -> FeaturesOut:
+    on = "1" if bool(payload.walled_garden_on_no_credit) else "0"
+    vlan = str(max(0, int(payload.walled_garden_vlan_id or 0)))
+    _setting_set(db, "walled_garden_on_no_credit", on)
+    _setting_set(db, "walled_garden_vlan_id", vlan)
+    _audit(db, auth["username"], "UPDATE", "system_features", "walled_garden", {"on": on, "vlan": vlan})
+    db.commit()
+    portal_url = settings.cw_public_base_url.rstrip("/") + "/portal"
+    return FeaturesOut(walled_garden_on_no_credit=(on == "1"), walled_garden_vlan_id=int(vlan), portal_url=portal_url)

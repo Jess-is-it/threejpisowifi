@@ -490,15 +490,14 @@ async function viewSetupWizard() {
       afterRender: async () => {
         $("#wizGardenOut").innerHTML = "<div class='text-slate-600 text-sm'>Loading…</div>";
         try {
-          const env = await apiFetch("/api/v1/ops/env");
-          const v = (env && env.values) || {};
-          const enabled = String(v.WALLED_GARDEN_ON_NO_CREDIT || "0") === "1";
+          const feat = await apiFetch("/api/v1/admin/system/features");
+          const enabled = !!feat.walled_garden_on_no_credit;
           $("#wizGardenEnabled").checked = enabled;
-          $("#wizGardenVlan").value = String(v.WALLED_GARDEN_VLAN_ID || "0");
+          $("#wizGardenVlan").value = String(feat.walled_garden_vlan_id || "0");
           $("#wizGardenOut").innerHTML = callout(
             "info",
             "Current config",
-            `<div class="text-sm">Enabled: ${pill(enabled ? "1" : "0")} VLAN: ${pill(String(v.WALLED_GARDEN_VLAN_ID || "0"))}</div>`
+            `<div class="text-sm">Enabled: ${pill(enabled ? "1" : "0")} VLAN: ${pill(String(feat.walled_garden_vlan_id || "0"))}</div>`
           );
         } catch (e) {
           $("#wizGardenOut").innerHTML = errBox(e.message);
@@ -509,16 +508,16 @@ async function viewSetupWizard() {
           $("#wizGardenErr").innerHTML = "";
           $("#wizGardenOut").innerHTML = "";
           try {
-            const enabled = $("#wizGardenEnabled").checked ? "1" : "0";
-            const vlan = String(Number($("#wizGardenVlan").value || "0"));
-            const res = await apiFetch("/api/v1/ops/env", {
+            const enabled = $("#wizGardenEnabled").checked;
+            const vlan = Number($("#wizGardenVlan").value || "0");
+            await apiFetch("/api/v1/admin/system/features", {
               method: "PUT",
-              body: JSON.stringify({ updates: { WALLED_GARDEN_ON_NO_CREDIT: enabled, WALLED_GARDEN_VLAN_ID: vlan } }),
+              body: JSON.stringify({ walled_garden_on_no_credit: enabled, walled_garden_vlan_id: vlan }),
             });
             $("#wizGardenOut").innerHTML = callout(
               "ok",
               "Applied",
-              `Saved to .env and restarted services. Enabled: ${pill(enabled)} VLAN: ${pill(vlan)}`
+              `Saved to database (RADIUS reads it live). Enabled: ${pill(enabled ? "1" : "0")} VLAN: ${pill(String(vlan))}`
             );
             done["portal"] = true;
           } catch (e2) {
