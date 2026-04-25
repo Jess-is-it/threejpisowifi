@@ -169,6 +169,7 @@ compose() {
 
 start_services() {
   compose up -d --build postgres redis
+  compose build api
   compose run --rm api python -m app.migrate
   compose run --rm api python -m app.seed_admin "${ADMIN_USERNAME}" "${ADMIN_PASSWORD}"
   compose up -d --build
@@ -199,6 +200,7 @@ run_update() {
   sync_code
   generate_env
   compose up -d --build postgres redis
+  compose build api
   compose run --rm api python -m app.migrate
   compose up -d --build
   "${INSTALL_DIR}/deploy/healthcheck.sh" "${TARGET_ENV}" || {
