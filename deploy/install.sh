@@ -133,7 +133,7 @@ generate_env() {
     return
   fi
   local postgres_password jwt_secret radius_secret
-  postgres_password="$(openssl rand -base64 36 | tr -d '\n')"
+  postgres_password="$(openssl rand -hex 24)"
   jwt_secret="$(openssl rand -hex 48)"
   radius_secret="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)"
   cat > "${env_file}" <<EOF
