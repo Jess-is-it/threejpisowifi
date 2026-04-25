@@ -1,0 +1,15 @@
+exec radius_auth {
+    wait = yes
+    program = "/opt/radius/radius_auth.py '%{User-Name}' '%{User-Password}' '%{Packet-Src-IP-Address}' '%{NAS-Identifier}' '%{Calling-Station-Id}'"
+    input_pairs = request
+    output_pairs = reply
+    shell_escape = yes
+}
+
+exec radius_acct {
+    wait = yes
+    program = "/opt/radius/radius_acct.py '%{User-Name}' '%{Acct-Status-Type}' '%{Packet-Src-IP-Address}' '%{NAS-Identifier}' '%{Calling-Station-Id}' '%{Framed-IP-Address}' '%{Acct-Session-Id}' '%{Acct-Input-Octets}' '%{Acct-Output-Octets}'"
+    input_pairs = request
+    output_pairs = reply
+    shell_escape = yes
+}

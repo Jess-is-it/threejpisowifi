@@ -1,0 +1,11 @@
+client localhost {
+    ipaddr = 127.0.0.1
+    secret = testing123
+}
+
+client docker_and_lan_lab {
+    ipaddr = 0.0.0.0
+    netmask = 0
+    secret = __RADIUS_DEFAULT_SECRET__
+    require_message_authenticator = no
+}

@@ -1,0 +1,8 @@
+services:
+  proxy:
+    ports:
+      - "80:80/tcp"
+  radius:
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"

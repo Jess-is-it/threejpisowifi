@@ -5,3 +5,10 @@
 .profile
 .ssh/
 .sudo_as_admin_successful
+tailwindadmin-reactjs-v-1-0-3.zip
+.env
+*.log
+__pycache__/
+node_modules/
+dist/
+.venv/

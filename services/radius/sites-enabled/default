@@ -1,0 +1,37 @@
+server default {
+    listen {
+        type = auth
+        ipaddr = *
+        port = 1812
+    }
+
+    listen {
+        type = acct
+        ipaddr = *
+        port = 1813
+    }
+
+    authorize {
+        preprocess
+        radius_auth
+        if (ok) {
+            update control {
+                Auth-Type := Accept
+            }
+        }
+        else {
+            reject
+        }
+    }
+
+    authenticate {
+        Auth-Type Accept {
+            accept
+        }
+    }
+
+    accounting {
+        radius_acct
+        ok
+    }
+}
