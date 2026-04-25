@@ -220,7 +220,7 @@ def list_nas(admin=Depends(current_admin)):
 
 @app.post("/api/nas-clients")
 def create_nas(payload: NasCreate, admin=Depends(current_admin)):
-    secret = payload.secret or secrets.token_urlsafe(24)
+    secret = payload.secret or os.getenv("RADIUS_DEFAULT_SECRET") or secrets.token_urlsafe(24)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(

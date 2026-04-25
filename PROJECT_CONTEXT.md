@@ -135,7 +135,7 @@ An admin creates a test user, adds manual time balance, creates a NAS/router/AP 
 - Phase 1 tests PAP-style `radtest` credentials.
 - Admin passwords and user passwords are hashed in application tables.
 - `radcheck` stores RADIUS-compatible test credentials for standard tooling compatibility.
-- RADIUS client records are stored in PostgreSQL; Phase 1 deployments use the generated environment shared secret for broad lab compatibility unless the service is restarted after client changes.
+- RADIUS client records are stored in PostgreSQL; Phase 1 NAS creation defaults to the generated environment shared secret so manual `radtest` works immediately.
 
 ## 21. Parked features
 Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, controller API automation, WireGuard automation, tunnel automation, production captive portal flow, advanced staff roles, and HA clustering are parked until the owner explicitly requests them.

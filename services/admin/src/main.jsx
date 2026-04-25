@@ -186,7 +186,7 @@ function NasClients({ refresh }) {
           <input placeholder="Type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} />
           <button className="primary">Add client</button>
         </form>
-        {secret && <p className="success">Generated shared secret: <code>{secret}</code>. Save it now.</p>}
+        {secret && <p className="success">Shared secret for Phase 1 testing: <code>{secret}</code>. Save it now.</p>}
       </Panel>
       <Panel title="Configuration Guidance">
         <p>Set your router/AP RADIUS server IP to this Ubuntu server. Use the environment auth/accounting ports and the shared secret shown when you create the client.</p>
