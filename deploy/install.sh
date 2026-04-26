@@ -26,6 +26,7 @@ env_config() {
       POSTGRES_DB="centralwifi_prod"
       POSTGRES_VOLUME="centralwifi_prod_postgres_data"
       REDIS_VOLUME="centralwifi_prod_redis_data"
+      UPLOADS_VOLUME="centralwifi_prod_uploads_data"
       WEB_HTTP_PORT="80"
       WEB_HTTPS_PORT="443"
       RADIUS_AUTH_PORT="1812"
@@ -39,6 +40,7 @@ env_config() {
       POSTGRES_DB="centralwifi_staging"
       POSTGRES_VOLUME="centralwifi_staging_postgres_data"
       REDIS_VOLUME="centralwifi_staging_redis_data"
+      UPLOADS_VOLUME="centralwifi_staging_uploads_data"
       WEB_HTTP_PORT="8080"
       WEB_HTTPS_PORT="8443"
       RADIUS_AUTH_PORT="11812"
@@ -151,6 +153,7 @@ JWT_EXPIRE_MINUTES=720
 ACTIVE_SESSION_GRACE_SECONDS=180
 POSTGRES_VOLUME=${POSTGRES_VOLUME}
 REDIS_VOLUME=${REDIS_VOLUME}
+UPLOADS_VOLUME=${UPLOADS_VOLUME}
 WEB_HTTP_PORT=${WEB_HTTP_PORT}
 WEB_HTTPS_PORT=${WEB_HTTPS_PORT}
 RADIUS_AUTH_PORT=${RADIUS_AUTH_PORT}

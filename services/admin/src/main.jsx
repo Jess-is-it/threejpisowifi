@@ -4,7 +4,12 @@ import '@tabler/core/dist/css/tabler.min.css';
 import {
   IconActivity,
   IconAlertTriangle,
+  IconCash,
+  IconChevronDown,
+  IconChevronUp,
+  IconClock,
   IconCloudUpload,
+  IconCpu,
   IconDashboard,
   IconDatabase,
   IconDeviceFloppy,
@@ -16,6 +21,7 @@ import {
   IconRouter,
   IconSettings,
   IconShieldLock,
+  IconServer,
   IconUser,
   IconUserCog,
   IconUserPlus,
@@ -51,6 +57,23 @@ function publicRequest(path) {
   });
 }
 
+function uploadRequest(path, field, file) {
+  const token = localStorage.getItem('centralwifi_token');
+  const body = new FormData();
+  body.append(field, file);
+  return fetch(`${API}${path}`, {
+    method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    },
+    body
+  }).then(async (res) => {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'Upload failed');
+    return data;
+  });
+}
+
 function fmt(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
@@ -60,6 +83,16 @@ function fmt(value) {
 
 function IconWrap({ children }) {
   return <span className="nav-link-icon d-md-none d-lg-inline-block">{children}</span>;
+}
+
+function formatUptime(seconds = 0) {
+  const total = Number(seconds) || 0;
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 }
 
 function Login({ onLogin, branding }) {
@@ -399,12 +432,14 @@ function ProfilePage({ onSaved }) {
 }
 
 function SystemSettingsPage({ refresh }) {
-  const tabs = ['Branding', 'Access', 'System Update', 'Backup', 'Danger'];
-  const [tab, setTab] = useState('Branding');
+  const tabs = ['General', 'Access', 'System Update', 'Backup', 'Danger'];
+  const [tab, setTab] = useState('General');
   const [settings, setSettings] = useState(null);
   const [admins, setAdmins] = useState([]);
   const [newAdmin, setNewAdmin] = useState({ username: '', password: '', full_name: '', email: '', role: 'admin' });
   const [danger, setDanger] = useState({ action: 'clear_auth_logs', confirmation: '', current_password: '' });
+  const [companyLogo, setCompanyLogo] = useState(null);
+  const [browserLogo, setBrowserLogo] = useState(null);
   const [message, setMessage] = useState('');
 
   async function load() {
@@ -418,6 +453,32 @@ function SystemSettingsPage({ refresh }) {
     e.preventDefault();
     await request('/system/settings', { method: 'PATCH', body: JSON.stringify(settings) });
     setMessage('Settings saved.');
+    refresh();
+  }
+
+  async function uploadLogo(e, type) {
+    e.preventDefault();
+    const file = type === 'company' ? companyLogo : browserLogo;
+    if (!file) {
+      setMessage('Choose a file first.');
+      return;
+    }
+    const data = await uploadRequest(
+      type === 'company' ? '/system/branding/company-logo' : '/system/branding/browser-logo',
+      type === 'company' ? 'company_logo' : 'browser_logo',
+      file
+    );
+    setSettings({
+      ...settings,
+      branding: {
+        ...settings.branding,
+        company_logo_url: data.company_logo_url,
+        browser_logo_url: data.browser_logo_url
+      }
+    });
+    if (type === 'company') setCompanyLogo(null);
+    if (type === 'browser') setBrowserLogo(null);
+    setMessage(type === 'company' ? 'Company logo uploaded.' : 'Browser page logo uploaded.');
     refresh();
   }
 
@@ -442,16 +503,66 @@ function SystemSettingsPage({ refresh }) {
         {tabs.map((item) => <li className="nav-item" key={item}><button className={`nav-link ${tab === item ? 'active' : ''}`} onClick={() => setTab(item)}>{item}</button></li>)}
       </ul>
 
-      {tab === 'Branding' && (
+      {tab === 'General' && (
         <Card title="Branding">
-          <form onSubmit={saveSettings}>
-            <div className="row g-3">
-              <div className="col-md-6"><label className="form-label">System Display Name</label><input className="form-control" value={settings.branding?.display_name || ''} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, display_name: e.target.value } })} /></div>
-              <div className="col-md-6"><label className="form-label">Portal Subtitle</label><input className="form-control" value={settings.branding?.portal_subtitle || ''} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, portal_subtitle: e.target.value } })} /></div>
-              <div className="col-md-3"><label className="form-label">Accent Color</label><input className="form-control form-control-color" type="color" value={settings.branding?.accent_color || '#206bc4'} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, accent_color: e.target.value } })} /></div>
+          <div className="row g-4">
+            <div className="col-12 col-lg-6">
+              <form onSubmit={(e) => uploadLogo(e, 'company')}>
+                <label className="form-label">Company Logo <span className="info" title="Displayed in the left navigation header. Image files only.">i</span></label>
+                <input className="form-control" type="file" accept="image/*" onChange={(e) => setCompanyLogo(e.target.files?.[0] || null)} />
+                <div className="text-muted small mt-1">Recommended: transparent PNG, height 32-40px.</div>
+                <div className="mt-3 d-flex align-items-center gap-3 flex-wrap">
+                  <button type="submit" className="btn btn-primary"><IconCloudUpload size={18} className="me-2" />Upload Company Logo</button>
+                  {settings.branding?.company_logo_url ? (
+                    <div className="border rounded p-2 d-inline-block bg-white">
+                      <img src={settings.branding.company_logo_url} alt="Company Logo" className="company-logo-preview" />
+                    </div>
+                  ) : <div className="text-muted small">No logo uploaded yet.</div>}
+                </div>
+              </form>
             </div>
-            <div className="mt-3"><button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Branding</button></div>
-          </form>
+
+            <div className="col-12 col-lg-6">
+              <form onSubmit={(e) => uploadLogo(e, 'browser')}>
+                <label className="form-label">Browser Page Logo <span className="info" title="Used as the browser tab icon. PNG/JPG/WebP/GIF/ICO supported.">i</span></label>
+                <input className="form-control" type="file" accept="image/*,.ico" onChange={(e) => setBrowserLogo(e.target.files?.[0] || null)} />
+                <div className="text-muted small mt-1">Recommended: square icon (e.g. 64x64 or 128x128 PNG).</div>
+                <div className="mt-3 d-flex align-items-center gap-3 flex-wrap">
+                  <button type="submit" className="btn btn-primary"><IconCloudUpload size={18} className="me-2" />Upload Browser Logo</button>
+                  {settings.branding?.browser_logo_url ? (
+                    <div className="border rounded p-2 d-inline-block bg-white">
+                      <img src={settings.branding.browser_logo_url} alt="Browser Logo" className="browser-logo-preview" />
+                    </div>
+                  ) : <div className="text-muted small">No browser logo uploaded yet.</div>}
+                </div>
+              </form>
+            </div>
+
+            <div className="col-12">
+              <form onSubmit={saveSettings}>
+                <label className="form-label">System Display Name <span className="info" title="Used throughout the admin portal.">i</span></label>
+                <div className="row g-2 align-items-end">
+                  <div className="col-12 col-lg">
+                    <input className="form-control" value={settings.branding?.display_name || ''} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, display_name: e.target.value } })} />
+                  </div>
+                  <div className="col-12 col-lg-auto">
+                    <button type="submit" className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Display Name</button>
+                  </div>
+                </div>
+                <div className="text-muted small mt-1">Example: this changes portal labels and page titles.</div>
+              </form>
+            </div>
+
+            <div className="col-12">
+              <form onSubmit={saveSettings}>
+                <div className="row g-3 align-items-end">
+                  <div className="col-md-6"><label className="form-label">Portal Subtitle</label><input className="form-control" value={settings.branding?.portal_subtitle || ''} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, portal_subtitle: e.target.value } })} /></div>
+                  <div className="col-md-3"><label className="form-label">Accent Color</label><input className="form-control form-control-color" type="color" value={settings.branding?.accent_color || '#206bc4'} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, accent_color: e.target.value } })} /></div>
+                  <div className="col-md-3"><button type="submit" className="btn btn-primary w-100"><IconDeviceFloppy size={18} className="me-2" />Save Branding</button></div>
+                </div>
+              </form>
+            </div>
+          </div>
         </Card>
       )}
 
@@ -519,25 +630,42 @@ function UpdatePanel() {
 }
 
 const nav = [
-  { page: 'Dashboard', icon: IconDashboard },
-  { page: 'Users', icon: IconUsers },
-  { page: 'User Detail', icon: IconUser },
-  { page: 'Wallet / Manual Top-Up', icon: IconWallet },
-  { page: 'Sessions', icon: IconHistory },
-  { page: 'NAS / Router / AP Clients', icon: IconRouter },
-  { page: 'RADIUS Test Guide', icon: IconWifi },
-  { page: 'System Settings', icon: IconSettings },
-  { page: 'Logs', icon: IconListDetails }
+  { page: 'Dashboard', icon: IconDashboard, tone: 'blue' },
+  { page: 'Users', icon: IconUsers, tone: 'azure' },
+  { page: 'User Detail', icon: IconUser, tone: 'cyan' },
+  { page: 'Wallet / Manual Top-Up', icon: IconCash, tone: 'green' },
+  { page: 'Sessions', icon: IconHistory, tone: 'orange' },
+  { page: 'NAS / Router / AP Clients', icon: IconRouter, tone: 'purple' },
+  { page: 'RADIUS Test Guide', icon: IconWifi, tone: 'teal' },
+  { page: 'System Settings', icon: IconSettings, tone: 'secondary' },
+  { page: 'Logs', icon: IconListDetails, tone: 'yellow' }
 ];
+
+const profilePages = {
+  'View Profile': { icon: IconId, tone: 'blue' },
+  'Change Password': { icon: IconKey, tone: 'blue' }
+};
+
+function pageMeta(page) {
+  return nav.find((item) => item.page === page) || profilePages[page] || { icon: IconShieldLock, tone: 'blue' };
+}
 
 function Sidebar({ page, setPage, me, logout, branding }) {
   const [open, setOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const setActivePage = (nextPage) => {
+    setPage(nextPage);
+    setOpen(false);
+    setProfileOpen(false);
+  };
   return (
     <aside className="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
       <div className="container-fluid">
         <button className="navbar-toggler" type="button" onClick={() => setOpen(!open)}><span className="navbar-toggler-icon" /></button>
         <h1 className="navbar-brand navbar-brand-autodark">
-          <button className="brand-button" onClick={() => setPage('Dashboard')}>{branding.display_name}</button>
+          <button className="brand-button" onClick={() => setActivePage('Dashboard')}>
+            {branding.company_logo_url ? <img src={branding.company_logo_url} className="navbar-brand-logo" alt="Company Logo" /> : branding.display_name}
+          </button>
         </h1>
         <div className={`collapse navbar-collapse d-lg-flex flex-lg-column ${open ? 'show' : ''}`} id="sidebar-menu">
           <ul className="navbar-nav pt-lg-3">
@@ -545,7 +673,7 @@ function Sidebar({ page, setPage, me, logout, branding }) {
               const Icon = item.icon;
               return (
                 <li className="nav-item" key={item.page}>
-                  <button className={`nav-link ${page === item.page ? 'active' : ''}`} onClick={() => { setPage(item.page); setOpen(false); }}>
+                  <button className={`nav-link ${page === item.page ? 'active' : ''}`} onClick={() => setActivePage(item.page)}>
                     <IconWrap><Icon size={20} /></IconWrap>
                     <span className="nav-link-title">{item.page}</span>
                   </button>
@@ -555,19 +683,22 @@ function Sidebar({ page, setPage, me, logout, branding }) {
           </ul>
           <div className="sidebar-user mt-auto">
             <div className="dropdown">
-              <button className="sidebar-user-trigger" type="button">
+              <button className="sidebar-user-trigger" type="button" aria-expanded={profileOpen} onClick={() => setProfileOpen(!profileOpen)}>
                 <span className="avatar avatar-sm bg-blue-lt text-blue"><IconUser size={18} /></span>
                 <span className="sidebar-user-text">
                   <span className="sidebar-user-name">{me?.full_name || me?.username || 'Admin'}</span>
                   <span className="sidebar-user-role">{me?.role || 'admin'}</span>
                 </span>
+                <span className="sidebar-user-chevron">{profileOpen ? <IconChevronDown size={18} /> : <IconChevronUp size={18} />}</span>
               </button>
-              <div className="sidebar-user-menu">
-                <button className="dropdown-item" onClick={() => setPage('View Profile')}><IconId size={18} className="me-2" />View Profile</button>
-                <button className="dropdown-item" onClick={() => setPage('Change Password')}><IconKey size={18} className="me-2" />Change Password</button>
-                <div className="dropdown-divider" />
-                <button className="dropdown-item text-danger" onClick={logout}><IconLogout size={18} className="me-2" />Logout</button>
-              </div>
+              {profileOpen && (
+                <div className="sidebar-user-menu">
+                  <button className="dropdown-item" onClick={() => setActivePage('View Profile')}><IconId size={18} className="me-2" />View Profile</button>
+                  <button className="dropdown-item" onClick={() => setActivePage('Change Password')}><IconKey size={18} className="me-2" />Change Password</button>
+                  <div className="dropdown-divider" />
+                  <button className="dropdown-item text-danger" onClick={logout}><IconLogout size={18} className="me-2" />Logout</button>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -576,19 +707,23 @@ function Sidebar({ page, setPage, me, logout, branding }) {
   );
 }
 
-function Header({ page, dashboard }) {
+function Header({ page, dashboard, resources }) {
+  const meta = pageMeta(page);
+  const PageIcon = meta.icon;
+  const ramAllocated = resources?.ram_used_incl_cache_pct;
   return (
     <header className="navbar navbar-expand-md navbar-light d-print-none sticky-top">
       <div className="container-xl">
         <div className="d-flex w-100 align-items-center">
           <div className="d-flex align-items-center gap-2">
-            <span className="badge bg-blue-lt text-blue header-icon-badge"><IconShieldLock size={18} /></span>
+            <span className={`badge bg-${meta.tone}-lt text-${meta.tone} header-icon-badge`}><PageIcon size={18} /></span>
             <div className="h3 m-0">{page}</div>
           </div>
           <div className="sys-metrics d-none d-lg-flex ms-auto gap-4">
-            <div className="sys-metric text-muted"><IconActivity size={18} /><span>ENV {(dashboard?.environment || 'staging').toUpperCase()}</span></div>
-            <div className="sys-metric text-muted"><IconDatabase size={18} /><span>DB {dashboard?.health?.database ? 'OK' : 'ERR'}</span></div>
-            <div className="sys-metric text-muted"><IconCloudUpload size={18} /><span>API {dashboard ? 'OK' : '...'}</span></div>
+            <div className="sys-metric text-muted"><IconCpu size={18} /><span>CPU {resources?.cpu_pct ?? 0}%</span></div>
+            <div className="sys-metric text-muted"><IconServer size={18} /><span>RAM {resources?.ram_pressure_pct ?? 0}%{ramAllocated !== undefined ? ` · Alloc ${ramAllocated}%` : ''}</span></div>
+            <div className="sys-metric text-muted"><IconDatabase size={18} /><span>DISK {resources?.disk_pct ?? 0}%</span></div>
+            <div className="sys-metric text-muted"><IconClock size={18} /><span>UPTIME {formatUptime(resources?.uptime_seconds)}</span></div>
           </div>
         </div>
       </div>
@@ -601,7 +736,8 @@ function App() {
   const [page, setPage] = useState('Dashboard');
   const [dashboard, setDashboard] = useState(null);
   const [me, setMe] = useState(null);
-  const [branding, setBranding] = useState({ display_name: '3JCentralPisowifi', portal_subtitle: 'Source of Truth + Manual RADIUS Test MVP', accent_color: '#206bc4' });
+  const [resources, setResources] = useState(null);
+  const [branding, setBranding] = useState({ display_name: '3JCentralPisowifi', portal_subtitle: 'Source of Truth + Manual RADIUS Test MVP', accent_color: '#206bc4', company_logo_url: null, browser_logo_url: null });
 
   async function refresh() {
     if (localStorage.getItem('centralwifi_token')) {
@@ -614,6 +750,34 @@ function App() {
   useEffect(() => { publicRequest('/public/branding').then(setBranding).catch(() => {}); }, []);
   useEffect(() => { if (authed) refresh().catch(() => setAuthed(false)); }, [authed]);
   useEffect(() => { document.documentElement.style.setProperty('--tblr-primary', branding.accent_color || '#206bc4'); }, [branding]);
+  useEffect(() => {
+    if (!branding.browser_logo_url) return;
+    let link = document.querySelector("link[rel='icon']");
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = branding.browser_logo_url;
+  }, [branding.browser_logo_url]);
+  useEffect(() => {
+    if (!authed) return undefined;
+    let mounted = true;
+    const loadResources = async () => {
+      try {
+        const data = await request('/system/resources');
+        if (mounted) setResources(data);
+      } catch (_err) {
+        if (mounted) setResources(null);
+      }
+    };
+    loadResources();
+    const timer = window.setInterval(loadResources, 15000);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
+  }, [authed]);
   if (!authed) return <Login onLogin={() => setAuthed(true)} branding={branding} />;
 
   const logout = () => {
@@ -625,7 +789,7 @@ function App() {
     <div className="page">
       <Sidebar page={page} setPage={setPage} me={me} logout={logout} branding={branding} />
       <div className="page-wrapper">
-        <Header page={page} dashboard={dashboard} />
+        <Header page={page} dashboard={dashboard} resources={resources} />
         <div className="page-body">
           <div className="container-xl">
             {page === 'Dashboard' && <Dashboard data={dashboard} />}

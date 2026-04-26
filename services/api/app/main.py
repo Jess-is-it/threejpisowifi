@@ -1,11 +1,15 @@
 import os
 import secrets
+import shutil
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import redis
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
@@ -20,6 +24,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/app/uploads"))
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/api/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 
 class LoginRequest(BaseModel):
@@ -141,6 +149,55 @@ def public_branding():
         "display_name": branding.get("display_name", "3JCentralPisowifi"),
         "portal_subtitle": branding.get("portal_subtitle", "Source of Truth + Manual RADIUS Test MVP"),
         "accent_color": branding.get("accent_color", "#206bc4"),
+        "company_logo_url": branding.get("company_logo_url"),
+        "browser_logo_url": branding.get("browser_logo_url"),
+    }
+
+
+def read_cpu_ticks():
+    parts = Path("/proc/stat").read_text().splitlines()[0].split()[1:]
+    values = [int(part) for part in parts]
+    idle = values[3] + (values[4] if len(values) > 4 else 0)
+    return sum(values), idle
+
+
+def format_pct(value):
+    return round(float(value), 1)
+
+
+@app.get("/api/system/resources")
+def system_resources(admin=Depends(current_admin)):
+    total_a, idle_a = read_cpu_ticks()
+    time.sleep(0.1)
+    total_b, idle_b = read_cpu_ticks()
+    total_delta = max(total_b - total_a, 1)
+    idle_delta = max(idle_b - idle_a, 0)
+    cpu_pct = format_pct((1 - (idle_delta / total_delta)) * 100)
+
+    mem = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, value = line.split(":", 1)
+        mem[key] = int(value.strip().split()[0])
+    total_kb = mem.get("MemTotal", 0)
+    available_kb = mem.get("MemAvailable", 0)
+    free_kb = mem.get("MemFree", 0)
+    cached_kb = mem.get("Cached", 0) + mem.get("SReclaimable", 0)
+    ram_pressure_pct = format_pct(((total_kb - available_kb) / total_kb) * 100) if total_kb else 0
+    ram_used_incl_cache_pct = format_pct(((total_kb - free_kb) / total_kb) * 100) if total_kb else 0
+
+    disk = shutil.disk_usage("/")
+    uptime_seconds = float(Path("/proc/uptime").read_text().split()[0])
+    return {
+        "cpu_pct": cpu_pct,
+        "ram_pct": ram_pressure_pct,
+        "ram_pressure_pct": ram_pressure_pct,
+        "ram_used_incl_cache_pct": ram_used_incl_cache_pct,
+        "ram_total_kb": total_kb,
+        "ram_available_kb": available_kb,
+        "ram_cached_kb": cached_kb,
+        "ram_free_kb": free_kb,
+        "disk_pct": format_pct((disk.used / disk.total) * 100),
+        "uptime_seconds": int(uptime_seconds),
     }
 
 
@@ -399,6 +456,49 @@ def update_system_settings(payload: SystemSettingsUpdate, admin=Depends(current_
             )
     audit(admin["id"], "update_system_settings", "system", "system", merged)
     return system_settings_payload()
+
+
+def save_branding_file(file: UploadFile, key: str):
+    allowed_types = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+        "image/x-icon": ".ico",
+        "image/vnd.microsoft.icon": ".ico",
+    }
+    suffix = allowed_types.get(file.content_type or "")
+    if not suffix:
+        filename_suffix = Path(file.filename or "").suffix.lower()
+        if filename_suffix in {".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico"}:
+            suffix = ".jpg" if filename_suffix == ".jpeg" else filename_suffix
+    if not suffix:
+        raise HTTPException(status_code=400, detail="Upload an image file: PNG, JPG, WebP, GIF, or ICO")
+
+    path = UPLOAD_DIR / f"{key}{suffix}"
+    with path.open("wb") as out:
+        shutil.copyfileobj(file.file, out)
+    return f"/api/uploads/{path.name}"
+
+
+@app.post("/api/system/branding/company-logo")
+def upload_company_logo(company_logo: UploadFile = File(...), admin=Depends(current_admin)):
+    logo_url = save_branding_file(company_logo, "company-logo")
+    current = system_settings_payload()
+    branding = {**current.get("branding", {}), "company_logo_url": logo_url}
+    update_system_settings(SystemSettingsUpdate(branding=branding), admin)
+    audit(admin["id"], "upload_company_logo", "system", "branding", {"company_logo_url": logo_url})
+    return public_branding()
+
+
+@app.post("/api/system/branding/browser-logo")
+def upload_browser_logo(browser_logo: UploadFile = File(...), admin=Depends(current_admin)):
+    logo_url = save_branding_file(browser_logo, "browser-logo")
+    current = system_settings_payload()
+    branding = {**current.get("branding", {}), "browser_logo_url": logo_url}
+    update_system_settings(SystemSettingsUpdate(branding=branding), admin)
+    audit(admin["id"], "upload_browser_logo", "system", "branding", {"browser_logo_url": logo_url})
+    return public_branding()
 
 
 @app.get("/api/system/access/admins")

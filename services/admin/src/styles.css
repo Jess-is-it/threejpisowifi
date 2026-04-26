@@ -43,14 +43,19 @@ pre code {
   background: var(--admin-page-bg);
 }
 
+.page {
+  --tblr-navbar-width: 20rem;
+}
+
 .navbar-vertical {
   background: var(--admin-sidebar);
+  width: var(--tblr-navbar-width);
 }
 
 .navbar-vertical .navbar-brand {
   min-height: 4.25rem;
-  justify-content: center;
-  padding-inline: 1rem;
+  justify-content: flex-start;
+  padding-inline: 1.4rem;
 }
 
 .brand-button {
@@ -64,6 +69,13 @@ pre code {
   font: inherit;
   font-weight: 800;
   letter-spacing: -0.02em;
+}
+
+.navbar-brand-logo {
+  width: auto;
+  max-width: 15.5rem;
+  height: 2.7rem;
+  object-fit: contain;
 }
 
 button.nav-link {
@@ -120,6 +132,7 @@ button.nav-link {
 .sidebar-user-text {
   display: grid;
   min-width: 0;
+  flex: 1;
 }
 
 .sidebar-user-name {
@@ -133,6 +146,11 @@ button.nav-link {
   color: rgba(255, 255, 255, 0.58);
   font-size: 0.75rem;
   text-transform: uppercase;
+}
+
+.sidebar-user-chevron {
+  color: rgba(255, 255, 255, 0.58);
+  line-height: 1;
 }
 
 .sidebar-user-menu {
@@ -181,6 +199,34 @@ button.nav-link {
   justify-content: center;
   border-radius: 0.75rem;
   padding: 0;
+}
+
+.info {
+  display: inline-flex;
+  width: 1.15rem;
+  height: 1.15rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-left: 0.35rem;
+}
+
+.company-logo-preview {
+  display: block;
+  width: auto;
+  height: 40px;
+  max-width: 220px;
+}
+
+.browser-logo-preview {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
 }
 
 .hero-card {

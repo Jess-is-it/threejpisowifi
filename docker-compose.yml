@@ -33,6 +33,8 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    volumes:
+      - uploads_data:/app/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,3 +80,5 @@ volumes:
     name: ${POSTGRES_VOLUME}
   redis_data:
     name: ${REDIS_VOLUME}
+  uploads_data:
+    name: ${UPLOADS_VOLUME}

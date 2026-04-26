@@ -78,7 +78,7 @@ Production runs from `/opt/3jcentralpisowifi-production` using `/opt/3jcentralpi
 Staging runs from `/opt/3jcentralpisowifi-staging` using `/opt/3jcentralpisowifi-staging/.env`. It tracks `staging` and exposes the Admin Portal at `http://SERVER-IP:8080/admin`.
 
 ## 11. Technical architecture
-Nginx reverse proxy routes `/admin` to the React admin portal and `/api` to FastAPI. FastAPI manages source-of-truth data in PostgreSQL and uses Redis for health/cache readiness. FreeRADIUS handles UDP RADIUS auth/accounting and calls local helper scripts that enforce rules using PostgreSQL.
+Nginx reverse proxy routes `/admin` to the React admin portal and `/api` to FastAPI. FastAPI manages source-of-truth data in PostgreSQL, serves uploaded branding assets from an environment-specific Docker volume, and uses Redis for health/cache readiness. FreeRADIUS handles UDP RADIUS auth/accounting and calls local helper scripts that enforce rules using PostgreSQL.
 
 ## 12. Source of truth explanation
 PostgreSQL is the only source of truth for admins, users, wallets, NAS/router/AP clients, transactions, sessions, audit logs, and auth logs. Network devices are clients of the RADIUS service and must not become the user database.
@@ -122,8 +122,8 @@ Staging:
 
 UI direction:
 - Admin Portal uses installed/imported Tabler UI packages, not the removed temporary template.
-- Admin Portal follows the project owner's previous common UI order for shared admin features: dark vertical sidebar, sticky top header with simple metrics, card-based pages, profile/password access in the sidebar account area, and tabbed System Settings.
-- System Settings tab order is Branding, Access, System Update, Backup, Danger.
+- Admin Portal follows the project owner's previous common UI order for shared admin features: dark vertical sidebar, sticky top header with CPU/RAM/DISK/UPTIME metrics, card-based pages, profile/password/logout behind a sidebar account dropdown, and tabbed System Settings.
+- System Settings tab order is General, Access, System Update, Backup, Danger. The General tab contains Branding, including Company Logo, Browser Page Logo, System Display Name, Portal Subtitle, and Accent Color.
 - Do not copy old-system product names.
 - Keep the UI focused on Phase 1 workflows instead of importing unrelated old-system modules.
 
@@ -169,6 +169,7 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
+- 2026-04-26: Added Branding logo uploads, browser favicon upload, environment-isolated uploads Docker volume, CPU/RAM/DISK/UPTIME top metrics, wider sidebar, page-specific top badge icons, and click-only profile dropdown behavior.
 - 2026-04-26: Installed real Tabler dependencies (`@tabler/core`, `@tabler/icons-react`), removed the previous icon/template dependency path, and rebuilt the Admin Portal on Tabler classes while preserving new 3JCentralPisowifi naming.
 - 2026-04-26: Removed the previous third-party admin template direction, adopted the owner's old-system UI language without old naming, and added common profile, password, access, backup, danger, and system update surfaces.
 - 2026-04-26: Restyled the Admin Portal to follow a template-style dashboard layout while preserving the Phase 1 API-backed workflows.
