@@ -204,23 +204,6 @@ function Dashboard({ data }) {
   const health = data?.health || {};
   return (
     <div className="row row-cards">
-      <div className="col-12">
-        <div className="card hero-card">
-          <div className="card-body">
-            <div className="d-flex align-items-start justify-content-between gap-3 flex-wrap">
-              <div>
-                <div className="text-blue fw-bold text-uppercase small">Phase 1</div>
-                <h2 className="mb-1">{(data?.environment || 'staging').toUpperCase()} Source of Truth</h2>
-                <div className="text-muted">Manual RADIUS testing, users, balance, NAS clients, sessions, logs, and system settings.</div>
-              </div>
-              <div className="d-flex gap-2 flex-wrap">
-                <span className={`badge ${health.database ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>Database {health.database ? 'Online' : 'Offline'}</span>
-                <span className={`badge ${health.redis ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>Redis {health.redis ? 'Online' : 'Offline'}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
       <KpiCard icon={IconDatabase} label="Database" value={health.database ? 'Online' : 'Offline'} tone="green" />
       <KpiCard icon={IconWifi} label="RADIUS" value="Managed" tone="blue" />
       <KpiCard icon={IconUsers} label="Users" value={stats.total_users || 0} tone="purple" />
@@ -650,7 +633,7 @@ function pageMeta(page) {
   return nav.find((item) => item.page === page) || profilePages[page] || { icon: IconShieldLock, tone: 'blue' };
 }
 
-function Sidebar({ page, setPage, me, logout, branding }) {
+function Sidebar({ page, setPage, me, logout, branding, collapsed }) {
   const [open, setOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const setActivePage = (nextPage) => {
@@ -664,7 +647,7 @@ function Sidebar({ page, setPage, me, logout, branding }) {
         <button className="navbar-toggler" type="button" onClick={() => setOpen(!open)}><span className="navbar-toggler-icon" /></button>
         <h1 className="navbar-brand navbar-brand-autodark">
           <button className="brand-button" onClick={() => setActivePage('Dashboard')}>
-            {branding.company_logo_url ? <img src={branding.company_logo_url} className="navbar-brand-logo" alt="Company Logo" /> : branding.display_name}
+            {collapsed ? <span className="brand-compact"><IconShieldLock size={22} /></span> : (branding.company_logo_url ? <img src={branding.company_logo_url} className="navbar-brand-logo" alt="Company Logo" /> : branding.display_name)}
           </button>
         </h1>
         <div className={`collapse navbar-collapse d-lg-flex flex-lg-column ${open ? 'show' : ''}`} id="sidebar-menu">
@@ -683,7 +666,7 @@ function Sidebar({ page, setPage, me, logout, branding }) {
           </ul>
           <div className="sidebar-user mt-auto">
             <div className="dropdown">
-              <button className="sidebar-user-trigger" type="button" aria-expanded={profileOpen} onClick={() => setProfileOpen(!profileOpen)}>
+              <button className="sidebar-user-trigger" type="button" aria-expanded={!collapsed && profileOpen} onClick={() => !collapsed && setProfileOpen(!profileOpen)}>
                 <span className="avatar avatar-sm bg-blue-lt text-blue"><IconUser size={18} /></span>
                 <span className="sidebar-user-text">
                   <span className="sidebar-user-name">{me?.full_name || me?.username || 'Admin'}</span>
@@ -691,7 +674,7 @@ function Sidebar({ page, setPage, me, logout, branding }) {
                 </span>
                 <span className="sidebar-user-chevron">{profileOpen ? <IconChevronDown size={18} /> : <IconChevronUp size={18} />}</span>
               </button>
-              {profileOpen && (
+              {!collapsed && profileOpen && (
                 <div className="sidebar-user-menu">
                   <button className="dropdown-item" onClick={() => setActivePage('View Profile')}><IconId size={18} className="me-2" />View Profile</button>
                   <button className="dropdown-item" onClick={() => setActivePage('Change Password')}><IconKey size={18} className="me-2" />Change Password</button>
@@ -707,7 +690,7 @@ function Sidebar({ page, setPage, me, logout, branding }) {
   );
 }
 
-function Header({ page, dashboard, resources }) {
+function Header({ page, dashboard, resources, onToggleSidebar, sidebarCollapsed }) {
   const meta = pageMeta(page);
   const PageIcon = meta.icon;
   const ramAllocated = resources?.ram_used_incl_cache_pct;
@@ -715,10 +698,10 @@ function Header({ page, dashboard, resources }) {
     <header className="navbar navbar-expand-md navbar-light d-print-none sticky-top">
       <div className="container-xl">
         <div className="d-flex w-100 align-items-center">
-          <div className="topnav-title">
+          <button className="topnav-title" type="button" onClick={onToggleSidebar} aria-pressed={sidebarCollapsed} title={sidebarCollapsed ? 'Expand side navigation' : 'Collapse side navigation'}>
             <span className={`badge bg-${meta.tone}-lt text-${meta.tone} header-icon-badge`}><PageIcon size={18} /></span>
             <div className="h3 m-0">{page}</div>
-          </div>
+          </button>
           <div className="sys-metrics d-none d-lg-flex ms-auto gap-4">
             <div className="sys-metric text-muted"><IconCpu size={18} /><span>CPU {resources?.cpu_pct ?? 0}%</span></div>
             <div className="sys-metric text-muted"><IconServer size={18} /><span>RAM {resources?.ram_pressure_pct ?? 0}%{ramAllocated !== undefined ? ` · Alloc ${ramAllocated}%` : ''}</span></div>
@@ -737,6 +720,7 @@ function App() {
   const [dashboard, setDashboard] = useState(null);
   const [me, setMe] = useState(null);
   const [resources, setResources] = useState(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [branding, setBranding] = useState({ display_name: '3JCentralPisowifi', portal_subtitle: 'Source of Truth + Manual RADIUS Test MVP', accent_color: '#206bc4', company_logo_url: null, browser_logo_url: null });
 
   async function refresh() {
@@ -786,10 +770,10 @@ function App() {
   };
 
   return (
-    <div className="page">
-      <Sidebar page={page} setPage={setPage} me={me} logout={logout} branding={branding} />
+    <div className={`page ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <Sidebar page={page} setPage={setPage} me={me} logout={logout} branding={branding} collapsed={sidebarCollapsed} />
       <div className="page-wrapper">
-        <Header page={page} dashboard={dashboard} resources={resources} />
+        <Header page={page} dashboard={dashboard} resources={resources} onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)} sidebarCollapsed={sidebarCollapsed} />
         <div className="page-body">
           <div className="container-xl">
             {page === 'Dashboard' && <Dashboard data={dashboard} />}

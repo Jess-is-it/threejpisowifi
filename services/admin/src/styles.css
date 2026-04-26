@@ -47,6 +47,11 @@ pre code {
 .page {
   --tblr-navbar-width: 20rem;
   overflow-x: hidden;
+  transition: --tblr-navbar-width 0.18s ease;
+}
+
+.page.sidebar-collapsed {
+  --tblr-navbar-width: 5.25rem;
 }
 
 .navbar-vertical {
@@ -54,6 +59,7 @@ pre code {
   width: var(--tblr-navbar-width);
   height: 100vh;
   overflow: hidden;
+  transition: width 0.18s ease;
 }
 
 .navbar-vertical .navbar-brand {
@@ -74,6 +80,20 @@ pre code {
   font: inherit;
   font-weight: 800;
   letter-spacing: -0.02em;
+}
+
+.brand-compact {
+  display: inline-flex;
+  width: 2.4rem;
+  height: 2.4rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 0.95rem;
+  font-weight: 900;
+  letter-spacing: -0.08em;
 }
 
 .navbar-brand-logo {
@@ -97,6 +117,7 @@ button.nav-link {
   min-height: 2.7rem;
   padding-block: 0.55rem;
   overflow: visible;
+  transition: width 0.18s ease, background 0.15s ease;
 }
 
 .navbar-vertical .nav-link.active,
@@ -230,6 +251,15 @@ button.nav-link {
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+}
+
+.topnav-title:hover .header-icon-badge,
+.topnav-title:focus-visible .header-icon-badge {
+  box-shadow: 0 0 0 3px rgba(32, 107, 196, 0.12);
 }
 
 .topnav-title .h3 {
@@ -296,6 +326,47 @@ button.nav-link {
 
 .hero-card .text-muted {
   color: #cbd5e1 !important;
+}
+
+.sidebar-collapsed .navbar-vertical .container-fluid {
+  padding-inline: 0.55rem;
+}
+
+.sidebar-collapsed .navbar-vertical .navbar-brand {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+.sidebar-collapsed .brand-button {
+  justify-content: center;
+}
+
+.sidebar-collapsed .navbar-vertical .nav-link {
+  width: 3.35rem;
+  justify-content: center;
+  margin-inline: auto;
+  padding-inline: 0;
+}
+
+.sidebar-collapsed .navbar-vertical .nav-link-icon {
+  margin: 0 !important;
+}
+
+.sidebar-collapsed .navbar-vertical .nav-link-title,
+.sidebar-collapsed .sidebar-user-text,
+.sidebar-collapsed .sidebar-user-chevron {
+  display: none;
+}
+
+.sidebar-collapsed .sidebar-user {
+  padding-inline: 0;
+}
+
+.sidebar-collapsed .sidebar-user-trigger {
+  width: 3.35rem;
+  justify-content: center;
+  margin-inline: auto;
+  padding-inline: 0;
 }
 
 .table-sticky-wrap {
