@@ -45,7 +45,7 @@ pre code {
 }
 
 .page {
-  --tblr-navbar-width: 20rem;
+  --tblr-navbar-width: 17.5rem;
   overflow-x: hidden;
   transition: --tblr-navbar-width 0.18s ease;
 }
@@ -108,7 +108,7 @@ pre code {
 
 .navbar-brand-logo {
   width: auto;
-  max-width: 15.5rem;
+  max-width: calc(15.5rem - 24px);
   height: 2.7rem;
   object-fit: contain;
 }
