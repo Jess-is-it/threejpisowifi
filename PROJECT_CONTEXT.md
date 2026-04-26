@@ -168,6 +168,7 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
+- 2026-04-26: Added short and expandable long explanatory guidance to the NAS / Router / AP Clients page.
 - 2026-04-26: Removed the User Detail page from navigation, added URL-aware Admin Portal routes under `/admin/<page>`, and rebuilt the Users page with Optical-style tabs, search, table layout, pagination, and Create/Manage user modals.
 - 2026-04-26: Reduced expanded side panel width by 40px and reduced the company logo max display width by 24px.
 - 2026-04-26: Added top navigation title/badge click behavior to collapse and expand the side navigation, with collapsed mode shrinking the side panel and showing icons only; removed the Phase 1 hero section from the dashboard.

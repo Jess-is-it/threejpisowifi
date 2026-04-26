@@ -523,6 +523,7 @@ function NasClients({ refresh }) {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ name: '', nas_ip: '', shortname: '', type: 'other', notes: '' });
   const [secret, setSecret] = useState('');
+  const [showExplanation, setShowExplanation] = useState(false);
   async function load() { setRows(await request('/nas-clients')); }
   useEffect(() => { load(); }, []);
   async function create(e) {
@@ -535,6 +536,29 @@ function NasClients({ refresh }) {
 
   return (
     <div className="row row-cards">
+      <div className="col-12">
+        <div className="alert alert-info nas-note">
+          <div className="d-flex align-items-start gap-2">
+            <span className="badge bg-blue-lt text-blue header-icon-badge flex-shrink-0"><IconRouter size={18} /></span>
+            <div>
+              <div className="fw-semibold mb-1">NAS / Router / AP Clients</div>
+              <div>Add the routers, access points, or controllers that are allowed to check customer access with 3JCentralPisowifi. These are trusted devices, not WiFi users. The shared secret must match on both this system and the device.</div>
+              <button className="btn btn-sm btn-outline-primary mt-2" type="button" onClick={() => setShowExplanation(!showExplanation)}>
+                {showExplanation ? 'Close explanation' : 'Read more'}
+              </button>
+              {showExplanation && (
+                <div className="nas-note-long mt-3">
+                  <h4>What is this page for?</h4>
+                  <p>This page is where you add the routers, access points, or controllers that are allowed to ask this system if a WiFi customer can connect.</p>
+                  <p>Think of each device here as a trusted “gatekeeper” at a branch or substation. When a customer tries to connect to WiFi, that device asks 3JCentralPisowifi: “Should this customer be allowed online?”</p>
+                  <p>Only devices added here will be trusted by the system. If a router or access point is not listed here, it may not be able to authenticate customers.</p>
+                  <p className="mb-0">The Shared Secret is the private key between this system and the router/access point. It must match on both sides. Keep it safe and do not share it publicly.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
       <div className="col-12">
         <Card title="Add NAS / Router / AP Client">
           <form onSubmit={create}>

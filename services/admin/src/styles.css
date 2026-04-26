@@ -486,6 +486,20 @@ button.nav-link {
   text-overflow: clip !important;
 }
 
+.nas-note {
+  margin-bottom: 0;
+}
+
+.nas-note-long {
+  max-width: 58rem;
+  border-left: 3px solid var(--tblr-primary);
+  padding-left: 1rem;
+}
+
+.nas-note-long h4 {
+  margin-bottom: 0.5rem;
+}
+
 .modal {
   background: rgba(15, 23, 42, 0.08);
 }
