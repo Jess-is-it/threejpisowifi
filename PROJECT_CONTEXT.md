@@ -169,7 +169,7 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
-- 2026-04-26: Added top navigation title/badge click behavior to collapse and expand the side navigation, with collapsed mode showing icons only; removed the Phase 1 hero section from the dashboard.
+- 2026-04-26: Added top navigation title/badge click behavior to collapse and expand the side navigation, with collapsed mode shrinking the side panel and showing icons only; removed the Phase 1 hero section from the dashboard.
 - 2026-04-26: Adjusted Tabler sidebar sizing to avoid sidebar scrollbars, fixed active nav highlight clipping, and aligned top navigation/content spacing to a 48px left offset from the side panel.
 - 2026-04-26: Added Branding logo uploads, browser favicon upload, environment-isolated uploads Docker volume, CPU/RAM/DISK/UPTIME top metrics, wider sidebar, page-specific top badge icons, and click-only profile dropdown behavior.
 - 2026-04-26: Installed real Tabler dependencies (`@tabler/core`, `@tabler/icons-react`), removed the previous icon/template dependency path, and rebuilt the Admin Portal on Tabler classes while preserving new 3JCentralPisowifi naming.

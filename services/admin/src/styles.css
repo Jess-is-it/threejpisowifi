@@ -62,6 +62,16 @@ pre code {
   transition: width 0.18s ease;
 }
 
+.navbar-vertical.navbar-expand-lg {
+  width: var(--tblr-navbar-width);
+  overflow: hidden;
+}
+
+.navbar-expand-lg.navbar-vertical ~ .page-wrapper {
+  margin-left: var(--tblr-navbar-width);
+  transition: margin-left 0.18s ease;
+}
+
 .navbar-vertical .navbar-brand {
   min-height: 4rem;
   justify-content: flex-start;
@@ -135,6 +145,10 @@ button.nav-link {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+  padding-inline: 0.75rem;
+}
+
+.navbar-vertical.navbar-expand-lg > .container-fluid {
   padding-inline: 0.75rem;
 }
 
@@ -329,6 +343,18 @@ button.nav-link {
 }
 
 .sidebar-collapsed .navbar-vertical .container-fluid {
+  padding-inline: 0.55rem;
+}
+
+.sidebar-collapsed .navbar-vertical.navbar-expand-lg {
+  width: var(--tblr-navbar-width);
+}
+
+.sidebar-collapsed .navbar-expand-lg.navbar-vertical ~ .page-wrapper {
+  margin-left: var(--tblr-navbar-width);
+}
+
+.sidebar-collapsed .navbar-vertical.navbar-expand-lg > .container-fluid {
   padding-inline: 0.55rem;
 }
 
