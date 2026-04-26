@@ -121,8 +121,9 @@ Staging:
 - Audit Logs
 
 UI direction:
-- Admin Portal should follow the TailwindAdmin React template style: white fixed sidebar, sticky top header, grouped navigation, rounded dashboard cards, clean table panels, and clear environment labeling.
-- Keep the UI focused on Phase 1 workflows instead of importing unrelated template demo pages.
+- Admin Portal should use the project owner's existing system UI language as reference: dark vertical sidebar, sticky top header with simple metrics, card-based pages, tabbed System Settings, and plain operational labels.
+- Do not use the previous third-party admin template or copy old-system product names.
+- Keep the UI focused on Phase 1 workflows instead of importing unrelated old-system modules.
 
 ## 17. RADIUS behavior
 Access-Accept requires an active user, valid password, usable balance or valid-until or unlimited flag, and no active session inside `ACTIVE_SESSION_GRACE_SECONDS`. Access-Reject is returned for unknown users, invalid passwords, disabled users, no balance/expired access, or active single-device conflict. Accounting Start, Interim-Update, and Stop update the sessions table; Interim-Update decrements time balance without allowing negative balance.
@@ -166,5 +167,6 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
-- 2026-04-26: Restyled the Admin Portal to follow the TailwindAdmin React template layout and visual system while preserving the Phase 1 API-backed workflows.
+- 2026-04-26: Removed the previous third-party admin template direction, adopted the owner's old-system UI language without old naming, and added common profile, password, access, backup, danger, and system update surfaces.
+- 2026-04-26: Restyled the Admin Portal to follow a template-style dashboard layout while preserving the Phase 1 API-backed workflows.
 - 2026-04-25: Created Phase 1 foundation with Docker Compose production/staging overlays, FastAPI API, React admin portal, PostgreSQL schema, FreeRADIUS helper scripts, installer/updater scripts, and documentation.

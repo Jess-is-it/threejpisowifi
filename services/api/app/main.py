@@ -27,6 +27,17 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+    confirm_password: str = Field(min_length=8)
+
+
 class UserCreate(BaseModel):
     username: str
     password: str = Field(min_length=8)
@@ -53,6 +64,34 @@ class NasCreate(BaseModel):
     secret: Optional[str] = None
     type: str = "other"
     notes: Optional[str] = None
+
+
+class SystemSettingsUpdate(BaseModel):
+    branding: Optional[dict] = None
+    access: Optional[dict] = None
+    backup: Optional[dict] = None
+
+
+class AdminCreate(BaseModel):
+    username: str
+    password: str = Field(min_length=8)
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    role: str = "admin"
+
+
+class AdminUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    status: Optional[str] = None
+    password: Optional[str] = Field(default=None, min_length=8)
+
+
+class DangerAction(BaseModel):
+    action: str
+    confirmation: str
+    current_password: str
 
 
 def audit(actor_id: str, action: str, target_type: str = None, target_id: str = None, details: dict = None):
@@ -87,10 +126,42 @@ def health():
 
 @app.post("/api/auth/login")
 def login(payload: LoginRequest):
-    admin = fetch_one("SELECT id, username, password_hash, role, status FROM admins WHERE username = %s", (payload.username,))
+    admin = fetch_one("SELECT id, username, password_hash, role, status, full_name, email FROM admins WHERE username = %s", (payload.username,))
     if not admin or admin["status"] != "active" or not verify_password(payload.password, admin["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
-    return {"token": create_token(admin), "admin": {"username": admin["username"], "role": admin["role"]}}
+    return {"token": create_token(admin), "admin": {"username": admin["username"], "role": admin["role"], "full_name": admin["full_name"], "email": admin["email"]}}
+
+
+@app.get("/api/me")
+def me(admin=Depends(current_admin)):
+    profile = fetch_one("SELECT id, username, role, status, full_name, email, created_at, updated_at FROM admins WHERE id = %s", (admin["id"],))
+    return profile
+
+
+@app.patch("/api/me")
+def update_me(payload: ProfileUpdate, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE admins SET full_name = COALESCE(%s, full_name), email = COALESCE(%s, email), updated_at = now() WHERE id = %s",
+                (payload.full_name, payload.email, admin["id"]),
+            )
+    audit(admin["id"], "update_profile", "admin", str(admin["id"]), payload.model_dump(exclude_none=True))
+    return {"status": "ok"}
+
+
+@app.post("/api/me/change-password")
+def change_password(payload: ChangePasswordRequest, admin=Depends(current_admin)):
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(status_code=400, detail="New passwords do not match")
+    row = fetch_one("SELECT password_hash FROM admins WHERE id = %s", (admin["id"],))
+    if not row or not verify_password(payload.current_password, row["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE admins SET password_hash = %s, updated_at = now() WHERE id = %s", (hash_password(payload.new_password), admin["id"]))
+    audit(admin["id"], "change_password", "admin", str(admin["id"]))
+    return {"status": "ok"}
 
 
 @app.get("/api/dashboard")
@@ -275,3 +346,152 @@ def settings(admin=Depends(current_admin)):
         "radius_auth_port": int(os.getenv("RADIUS_AUTH_PORT", "1812")),
         "radius_accounting_port": int(os.getenv("RADIUS_ACCT_PORT", "1813")),
     }
+
+
+def system_settings_payload():
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'system'")
+    value = row["value"] if row else {}
+    return {
+        "branding": value.get("branding", {}),
+        "access": value.get("access", {}),
+        "backup": value.get("backup", {}),
+        "environment": os.getenv("APP_ENV", "unknown"),
+        "install_dir": os.getenv("INSTALL_DIR", ""),
+        "compose_project_name": os.getenv("COMPOSE_PROJECT_NAME", ""),
+        "database_name": os.getenv("POSTGRES_DB", ""),
+    }
+
+
+@app.get("/api/system/settings")
+def get_system_settings(admin=Depends(current_admin)):
+    return system_settings_payload()
+
+
+@app.patch("/api/system/settings")
+def update_system_settings(payload: SystemSettingsUpdate, admin=Depends(current_admin)):
+    current = system_settings_payload()
+    merged = {
+        "branding": {**current.get("branding", {}), **(payload.branding or {})},
+        "access": {**current.get("access", {}), **(payload.access or {})},
+        "backup": {**current.get("backup", {}), **(payload.backup or {})},
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES ('system', %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (Json(merged),),
+            )
+    audit(admin["id"], "update_system_settings", "system", "system", merged)
+    return system_settings_payload()
+
+
+@app.get("/api/system/access/admins")
+def list_admins(admin=Depends(current_admin)):
+    return fetch_all("SELECT id, username, full_name, email, role, status, created_at, updated_at FROM admins ORDER BY created_at DESC")
+
+
+@app.post("/api/system/access/admins")
+def create_admin(payload: AdminCreate, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO admins(username, password_hash, role, status, full_name, email)
+                VALUES (%s, %s, %s, 'active', %s, %s)
+                RETURNING id
+                """,
+                (payload.username, hash_password(payload.password), payload.role, payload.full_name, payload.email),
+            )
+            admin_id = cur.fetchone()["id"]
+    audit(admin["id"], "create_admin", "admin", str(admin_id), {"username": payload.username, "role": payload.role})
+    return {"id": admin_id}
+
+
+@app.patch("/api/system/access/admins/{admin_id}")
+def update_admin(admin_id: str, payload: AdminUpdate, admin=Depends(current_admin)):
+    if admin_id == str(admin["id"]) and payload.status and payload.status != "active":
+        raise HTTPException(status_code=400, detail="You cannot disable your own active admin account")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM admins WHERE id = %s", (admin_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Admin not found")
+            if payload.full_name is not None:
+                cur.execute("UPDATE admins SET full_name = %s, updated_at = now() WHERE id = %s", (payload.full_name, admin_id))
+            if payload.email is not None:
+                cur.execute("UPDATE admins SET email = %s, updated_at = now() WHERE id = %s", (payload.email, admin_id))
+            if payload.role is not None:
+                cur.execute("UPDATE admins SET role = %s, updated_at = now() WHERE id = %s", (payload.role, admin_id))
+            if payload.status is not None:
+                cur.execute("UPDATE admins SET status = %s, updated_at = now() WHERE id = %s", (payload.status, admin_id))
+            if payload.password:
+                cur.execute("UPDATE admins SET password_hash = %s, updated_at = now() WHERE id = %s", (hash_password(payload.password), admin_id))
+    audit(admin["id"], "update_admin", "admin", admin_id, payload.model_dump(exclude_none=True))
+    return {"status": "ok"}
+
+
+@app.get("/api/system/backup")
+def backup_status(admin=Depends(current_admin)):
+    env = os.getenv("APP_ENV", "staging")
+    install_dir = os.getenv("INSTALL_DIR", "")
+    return {
+        "environment": env,
+        "install_dir": install_dir,
+        "backup_command": f"sudo {install_dir}/deploy/backup.sh {env}" if install_dir else "",
+        "restore_command": f"sudo {install_dir}/deploy/restore.sh {env} <backup-dir>" if install_dir else "",
+        "note": "Backups run from the Ubuntu host so database dumps and .env files are stored outside containers.",
+    }
+
+
+@app.post("/api/system/backup/request")
+def request_backup(admin=Depends(current_admin)):
+    payload = backup_status(admin)
+    audit(admin["id"], "request_backup", "system", os.getenv("APP_ENV", "unknown"), payload)
+    return payload
+
+
+@app.get("/api/system/update")
+def update_status(admin=Depends(current_admin)):
+    env = os.getenv("APP_ENV", "staging")
+    branch = "master" if env == "production" else "staging"
+    install_dir = os.getenv("INSTALL_DIR", "")
+    return {
+        "environment": env,
+        "branch": branch,
+        "install_dir": install_dir,
+        "update_command": f"sudo {install_dir}/deploy/install.sh update {env}" if install_dir else "",
+        "one_line_update": f"curl -fsSL https://raw.githubusercontent.com/Jess-is-it/threejpisowifi/{branch}/deploy/install.sh | sudo bash -s -- update {env}",
+    }
+
+
+@app.post("/api/system/update/request")
+def request_update(admin=Depends(current_admin)):
+    payload = update_status(admin)
+    audit(admin["id"], "request_update", "system", os.getenv("APP_ENV", "unknown"), payload)
+    return payload
+
+
+@app.post("/api/system/danger")
+def danger_action(payload: DangerAction, admin=Depends(current_admin)):
+    row = fetch_one("SELECT password_hash FROM admins WHERE id = %s", (admin["id"],))
+    if not row or not verify_password(payload.current_password, row["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    actions = {
+        "clear_auth_logs": ("CLEAR AUTH LOGS", "DELETE FROM radius_auth_logs"),
+        "clear_sessions": ("CLEAR SESSIONS", "DELETE FROM sessions"),
+    }
+    if payload.action not in actions:
+        raise HTTPException(status_code=400, detail="Unsupported danger action")
+    expected, query = actions[payload.action]
+    if payload.confirmation != expected:
+        raise HTTPException(status_code=400, detail=f"Type {expected} to confirm")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query)
+    audit(admin["id"], payload.action, "system", "danger")
+    return {"status": "ok", "action": payload.action}

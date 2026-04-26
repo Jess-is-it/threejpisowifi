@@ -2,27 +2,28 @@ import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity,
-  Bell,
+  AlertTriangle,
+  Archive,
   BookOpen,
-  CircleAlert,
-  CircleCheck,
   ClipboardList,
   Database,
+  Download,
   History,
   KeyRound,
   LayoutDashboard,
+  Lock,
   LogOut,
-  Menu,
   Radio,
+  RefreshCcw,
   Router,
-  Search,
-  Server,
-  Settings as SettingsIcon,
-  ShieldCheck,
+  Save,
+  Settings,
+  Shield,
+  User,
+  UserCog,
   UserPlus,
   Users,
-  Wallet,
-  Wifi
+  Wallet
 } from 'lucide-react';
 import './styles.css';
 
@@ -44,7 +45,7 @@ function request(path, options = {}) {
   });
 }
 
-function formatValue(value) {
+function fmt(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (typeof value === 'object') return JSON.stringify(value);
@@ -68,95 +69,63 @@ function Login({ onLogin }) {
   }
 
   return (
-    <main className="auth-page">
-      <section className="auth-art">
-        <span className="brand-mark">3J</span>
-        <p className="eyebrow">Phase 1 Admin Portal</p>
-        <h1>Central WiFi control, built for manual RADIUS testing.</h1>
-        <p className="muted">
-          Manage users, manual balance, NAS / Router / AP clients, sessions, and auth logs from
-          one source-of-truth portal.
-        </p>
-      </section>
-
-      <section className="auth-card">
-        <div>
-          <p className="eyebrow">Sign in</p>
-          <h2>Welcome back</h2>
-          <p className="muted">Use the admin account created during install.</p>
+    <main className="login-page">
+      <div className="login-bg" />
+      <section className="login-shell">
+        <div className="login-copy">
+          <span className="logo-mark">3J</span>
+          <h1>3JCentralPisowifi</h1>
+          <p>Source of Truth + Manual RADIUS Test MVP</p>
         </div>
-        <form onSubmit={submit} className="stack">
-          <label>
-            Username
-            <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-          </label>
-          <label>
-            Password
-            <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
-          </label>
-          {error && <p className="error">{error}</p>}
-          <button className="primary" type="submit">
-            <KeyRound size={17} /> Log in
-          </button>
+        <form className="login-card" onSubmit={submit}>
+          <p className="kicker">Admin access</p>
+          <h2>Sign in</h2>
+          <label>Username<input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></label>
+          <label>Password<input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></label>
+          {error && <div className="alert danger">{error}</div>}
+          <button className="btn primary" type="submit"><KeyRound size={16} /> Sign in</button>
         </form>
       </section>
     </main>
   );
 }
 
-function MetricCard({ icon: Icon, label, value, tone = 'blue', hint }) {
+function Card({ title, subtitle, children, footer }) {
   return (
-    <article className={`metric-card tone-${tone}`}>
-      <div className="metric-icon"><Icon size={22} /></div>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-        {hint && <small>{hint}</small>}
-      </div>
-    </article>
-  );
-}
-
-function Panel({ title, subtitle, action, children, className = '' }) {
-  return (
-    <section className={`panel ${className}`}>
-      <div className="panel-heading">
+    <section className="card">
+      <div className="card-header">
         <div>
-          <h2>{title}</h2>
-          {subtitle && <p className="muted">{subtitle}</p>}
+          <h3>{title}</h3>
+          {subtitle && <p>{subtitle}</p>}
         </div>
-        {action}
       </div>
-      {children}
+      <div className="card-body">{children}</div>
+      {footer && <div className="card-footer">{footer}</div>}
     </section>
   );
 }
 
-function StatusPill({ ok, children }) {
-  return (
-    <span className={`status-pill ${ok ? 'ok' : 'bad'}`}>
-      {ok ? <CircleCheck size={14} /> : <CircleAlert size={14} />}
-      {children}
-    </span>
-  );
-}
-
 function Table({ rows, columns }) {
-  if (!rows.length) return <p className="empty-state">No records yet.</p>;
+  if (!rows.length) return <div className="empty">No records yet.</div>;
   return (
     <div className="table-wrap">
       <table>
-        <thead>
-          <tr>{columns.map((c) => <th key={c}>{c.replaceAll('_', ' ')}</th>)}</tr>
-        </thead>
+        <thead><tr>{columns.map((c) => <th key={c}>{c.replaceAll('_', ' ')}</th>)}</tr></thead>
         <tbody>
-          {rows.map((row, i) => (
-            <tr key={i}>
-              {columns.map((c) => <td key={c}>{formatValue(row[c])}</td>)}
-            </tr>
+          {rows.map((row, idx) => (
+            <tr key={idx}>{columns.map((c) => <td key={c}>{fmt(row[c])}</td>)}</tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function Stat({ icon: Icon, label, value, tone = 'blue' }) {
+  return (
+    <div className={`stat ${tone}`}>
+      <span><Icon size={18} /></span>
+      <div><p>{label}</p><strong>{value}</strong></div>
     </div>
   );
 }
@@ -165,40 +134,29 @@ function Dashboard({ data }) {
   const stats = data?.stats || {};
   const health = data?.health || {};
   return (
-    <section className="stack">
-      <div className="welcome-panel">
+    <div className="stack">
+      <div className="hero-card">
         <div>
-          <p className="eyebrow">Source of Truth + Manual RADIUS Test MVP</p>
-          <h1>{(data?.environment || 'staging').toUpperCase()} Control Center</h1>
-          <p>Keep Phase 1 focused: create test users, add manual balance, configure RADIUS clients, and verify sessions.</p>
+          <p className="kicker">Phase 1</p>
+          <h2>{(data?.environment || 'staging').toUpperCase()} Source of Truth</h2>
+          <p>Use this portal to manually test RADIUS users, balance, NAS clients, sessions, and audit trails.</p>
         </div>
-        <div className="welcome-health">
-          <StatusPill ok={health.database}>Database {health.database ? 'Online' : 'Offline'}</StatusPill>
-          <StatusPill ok={health.redis}>Redis {health.redis ? 'Online' : 'Offline'}</StatusPill>
+        <div className="hero-badges">
+          <span className={health.database ? 'badge green' : 'badge red'}>Database {health.database ? 'Online' : 'Offline'}</span>
+          <span className={health.redis ? 'badge green' : 'badge red'}>Redis {health.redis ? 'Online' : 'Offline'}</span>
         </div>
       </div>
-
-      <div className="metric-grid">
-        <MetricCard icon={Server} label="Environment" value={(data?.environment || 'unknown').toUpperCase()} tone="blue" />
-        <MetricCard icon={Database} label="Database Status" value={health.database ? 'Online' : 'Offline'} tone="green" />
-        <MetricCard icon={Radio} label="FreeRADIUS Status" value="Managed" tone="purple" hint="Docker service" />
-        <MetricCard icon={Users} label="Total Users" value={stats.total_users || 0} tone="orange" />
-        <MetricCard icon={Router} label="NAS / Router / AP Clients" value={stats.nas_clients || 0} tone="cyan" />
-        <MetricCard icon={Activity} label="Active Sessions" value={stats.active_sessions || 0} tone="red" />
+      <div className="stats-grid">
+        <Stat icon={Database} label="Database" value={health.database ? 'Online' : 'Offline'} tone="green" />
+        <Stat icon={Radio} label="RADIUS" value="Managed" tone="blue" />
+        <Stat icon={Users} label="Users" value={stats.total_users || 0} tone="indigo" />
+        <Stat icon={Router} label="NAS / Router / AP" value={stats.nas_clients || 0} tone="orange" />
+        <Stat icon={Activity} label="Active Sessions" value={stats.active_sessions || 0} tone="red" />
       </div>
-
-      <div className="content-grid">
-        <Panel title="Recent Auth Results" subtitle="Latest Access-Accept and Access-Reject outcomes" className="wide">
-          <Table rows={data?.recent_auth || []} columns={['username', 'nas_ip', 'calling_station_id', 'result', 'reply_message', 'created_at']} />
-        </Panel>
-        <Panel title="RADIUS Ports" subtitle="Use these values for staging tests">
-          <div className="port-list">
-            <div><span>Authentication</span><strong>{health.radius_ports?.auth || 11812}/udp</strong></div>
-            <div><span>Accounting</span><strong>{health.radius_ports?.accounting || 11813}/udp</strong></div>
-          </div>
-        </Panel>
-      </div>
-    </section>
+      <Card title="Recent Auth Results" subtitle="Latest manual RADIUS authentication outcomes">
+        <Table rows={data?.recent_auth || []} columns={['username', 'nas_ip', 'calling_station_id', 'result', 'reply_message', 'created_at']} />
+      </Card>
+    </div>
   );
 }
 
@@ -215,8 +173,7 @@ function UsersPage({ refresh }) {
     e.preventDefault();
     await request('/users', { method: 'POST', body: JSON.stringify(form) });
     setForm({ username: '', password: '', phone_number: '' });
-    await load();
-    refresh();
+    await load(); refresh();
   }
 
   async function addBalance(e) {
@@ -231,8 +188,7 @@ function UsersPage({ refresh }) {
       })
     });
     setTopup({ user_id: '', hours: 1, valid_until: '', is_unlimited: false, note: '' });
-    await load();
-    refresh();
+    await load(); refresh();
   }
 
   async function updateUser(e) {
@@ -241,54 +197,49 @@ function UsersPage({ refresh }) {
     if (manage.password) body.password = manage.password;
     await request(`/users/${manage.user_id}`, { method: 'PATCH', body: JSON.stringify(body) });
     setManage({ user_id: '', status: 'active', password: '' });
-    await load();
-    refresh();
+    await load(); refresh();
   }
 
   return (
-    <section className="stack">
-      <div className="content-grid">
-        <Panel title="Create User" subtitle="Create a test login for radtest or a router/AP client">
+    <div className="stack">
+      <div className="grid-2">
+        <Card title="Create User" subtitle="Create a test user for manual RADIUS authentication">
           <form className="form-grid" onSubmit={create}>
             <input placeholder="Username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
-            <input placeholder="Password (8+ chars)" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+            <input placeholder="Password" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
             <input placeholder="Phone number (optional)" value={form.phone_number} onChange={(e) => setForm({ ...form, phone_number: e.target.value })} />
-            <button className="primary" type="submit"><UserPlus size={17} /> Create user</button>
+            <button className="btn primary" type="submit"><UserPlus size={16} /> Create User</button>
           </form>
-        </Panel>
-
-        <Panel title="Manual Balance" subtitle="Add time, valid-until, or unlimited access">
+        </Card>
+        <Card title="Wallet / Manual Top-Up" subtitle="Add balance, valid-until, or unlimited access">
           <form className="form-grid" onSubmit={addBalance}>
             <select value={topup.user_id} onChange={(e) => setTopup({ ...topup, user_id: e.target.value })}>
               <option value="">Select user</option>{users.map((u) => <option key={u.id} value={u.id}>{u.username}</option>)}
             </select>
             <input type="number" min="1" value={topup.hours} onChange={(e) => setTopup({ ...topup, hours: e.target.value })} />
             <input type="datetime-local" value={topup.valid_until} onChange={(e) => setTopup({ ...topup, valid_until: e.target.value })} />
-            <label className="inline-check"><input type="checkbox" checked={topup.is_unlimited} onChange={(e) => setTopup({ ...topup, is_unlimited: e.target.checked })} /> Unlimited</label>
+            <label className="check"><input type="checkbox" checked={topup.is_unlimited} onChange={(e) => setTopup({ ...topup, is_unlimited: e.target.checked })} /> Unlimited</label>
             <input placeholder="Admin note" value={topup.note} onChange={(e) => setTopup({ ...topup, note: e.target.value })} />
-            <button className="primary" type="submit"><Wallet size={17} /> Add balance</button>
+            <button className="btn primary" type="submit"><Wallet size={16} /> Add Balance</button>
           </form>
-        </Panel>
+        </Card>
       </div>
-
-      <Panel title="Edit / Disable / Reset Password" subtitle="Keep Phase 1 user changes explicit and auditable">
+      <Card title="Edit / Disable / Reset Password" subtitle="Basic Phase 1 user maintenance">
         <form className="form-row" onSubmit={updateUser}>
           <select value={manage.user_id} onChange={(e) => setManage({ ...manage, user_id: e.target.value })}>
             <option value="">Select user</option>{users.map((u) => <option key={u.id} value={u.id}>{u.username}</option>)}
           </select>
           <select value={manage.status} onChange={(e) => setManage({ ...manage, status: e.target.value })}>
-            <option value="active">Active</option>
-            <option value="disabled">Disabled</option>
+            <option value="active">Active</option><option value="disabled">Disabled</option>
           </select>
           <input placeholder="New password (optional)" type="password" value={manage.password} onChange={(e) => setManage({ ...manage, password: e.target.value })} />
-          <button className="primary" type="submit">Update user</button>
+          <button className="btn primary" type="submit">Save User</button>
         </form>
-      </Panel>
-
-      <Panel title="Users" subtitle="Manual Balance, Time Remaining, Valid Until, and Unlimited are shown here">
+      </Card>
+      <Card title="Users">
         <Table rows={users} columns={['username', 'phone_number', 'status', 'time_remaining_seconds', 'valid_until', 'is_unlimited', 'created_at']} />
-      </Panel>
-    </section>
+      </Card>
+    </div>
   );
 }
 
@@ -296,136 +247,243 @@ function NasClients({ refresh }) {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ name: '', nas_ip: '', shortname: '', type: 'other', notes: '' });
   const [secret, setSecret] = useState('');
-
   async function load() { setRows(await request('/nas-clients')); }
   useEffect(() => { load(); }, []);
-
   async function create(e) {
     e.preventDefault();
     const data = await request('/nas-clients', { method: 'POST', body: JSON.stringify(form) });
     setSecret(data.secret);
     setForm({ name: '', nas_ip: '', shortname: '', type: 'other', notes: '' });
-    await load();
-    refresh();
+    await load(); refresh();
   }
-
   return (
-    <section className="stack">
-      <Panel title="Add NAS / Router / AP Client" subtitle="Use plain labels for routers, APs, and test RADIUS clients">
+    <div className="stack">
+      <Card title="Add NAS / Router / AP Client">
         <form className="form-row" onSubmit={create}>
           <input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           <input placeholder="IP address" value={form.nas_ip} onChange={(e) => setForm({ ...form, nas_ip: e.target.value })} />
           <input placeholder="Shortname" value={form.shortname} onChange={(e) => setForm({ ...form, shortname: e.target.value })} />
           <input placeholder="Type" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} />
-          <button className="primary" type="submit"><Router size={17} /> Add client</button>
+          <button className="btn primary" type="submit"><Router size={16} /> Add Client</button>
         </form>
-        {secret && <p className="success">Shared secret for Phase 1 testing: <code>{secret}</code>. Save it now.</p>}
-      </Panel>
-
-      <Panel title="Configuration Guidance" subtitle="MikroTik, Omada standalone AP, hostapd, and radtest use these same fields">
-        <div className="guide-card">
-          <Wifi />
-          <p>Set your router/AP RADIUS server IP to this Ubuntu server. Use staging ports `11812/11813` and the shared secret shown when you create the client.</p>
-        </div>
-      </Panel>
-
-      <Panel title="NAS / Router / AP Clients">
+        {secret && <div className="alert info">Shared secret for Phase 1 testing: <code>{secret}</code></div>}
+      </Card>
+      <Card title="Configuration Guidance">
+        <p className="muted">Set your router/AP RADIUS server IP to this Ubuntu server. Use staging ports <code>11812</code> and <code>11813</code> plus the shared secret.</p>
+      </Card>
+      <Card title="NAS / Router / AP Clients">
         <Table rows={rows} columns={['name', 'nas_ip', 'shortname', 'type', 'status', 'notes', 'created_at']} />
-      </Panel>
-    </section>
+      </Card>
+    </div>
   );
 }
 
 function SimplePage({ title, endpoint, columns, children }) {
   const [rows, setRows] = useState([]);
   useEffect(() => { request(endpoint).then((data) => setRows(Array.isArray(data) ? data : [])); }, [endpoint]);
-  return <Panel title={title}>{children}<Table rows={rows} columns={columns} /></Panel>;
+  return <Card title={title}>{children}<Table rows={rows} columns={columns} /></Card>;
 }
 
-function Settings() {
-  const [data, setData] = useState({});
-  useEffect(() => { request('/settings').then(setData); }, []);
-  return <Panel title="Settings" subtitle="Environment settings from the API"><pre>{JSON.stringify(data, null, 2)}</pre></Panel>;
-}
+function ProfilePage({ onSaved }) {
+  const [profile, setProfile] = useState({});
+  const [passwords, setPasswords] = useState({ current_password: '', new_password: '', confirm_password: '' });
+  const [message, setMessage] = useState('');
+  useEffect(() => { request('/me').then(setProfile); }, []);
 
-const navigationGroups = [
-  {
-    heading: 'Home',
-    items: [
-      { name: 'Dashboard', icon: LayoutDashboard },
-      { name: 'System Health', icon: Activity }
-    ]
-  },
-  {
-    heading: 'Management',
-    items: [
-      { name: 'Users', icon: Users },
-      { name: 'User Detail', icon: UserPlus },
-      { name: 'Wallet / Manual Top-Up', icon: Wallet },
-      { name: 'NAS / Router / AP Clients', icon: Router }
-    ]
-  },
-  {
-    heading: 'RADIUS',
-    items: [
-      { name: 'Sessions', icon: History },
-      { name: 'RADIUS Test Guide', icon: Radio },
-      { name: 'Audit Logs', icon: ClipboardList },
-      { name: 'Settings', icon: SettingsIcon }
-    ]
+  async function saveProfile(e) {
+    e.preventDefault();
+    await request('/me', { method: 'PATCH', body: JSON.stringify({ full_name: profile.full_name, email: profile.email }) });
+    setMessage('Profile saved.');
+    onSaved();
   }
+
+  async function changePassword(e) {
+    e.preventDefault();
+    await request('/me/change-password', { method: 'POST', body: JSON.stringify(passwords) });
+    setPasswords({ current_password: '', new_password: '', confirm_password: '' });
+    setMessage('Password changed.');
+  }
+
+  return (
+    <div className="grid-2">
+      <Card title="View Profile" subtitle="Admin account details">
+        {message && <div className="alert info">{message}</div>}
+        <form className="form-grid" onSubmit={saveProfile}>
+          <input value={profile.username || ''} readOnly />
+          <input placeholder="Full name" value={profile.full_name || ''} onChange={(e) => setProfile({ ...profile, full_name: e.target.value })} />
+          <input placeholder="Email" value={profile.email || ''} onChange={(e) => setProfile({ ...profile, email: e.target.value })} />
+          <input value={profile.role || ''} readOnly />
+          <button className="btn primary" type="submit"><Save size={16} /> Save Profile</button>
+        </form>
+      </Card>
+      <Card title="Change Password" subtitle="Confirm your current password before saving">
+        <form className="form-grid" onSubmit={changePassword}>
+          <input type="password" placeholder="Current password" value={passwords.current_password} onChange={(e) => setPasswords({ ...passwords, current_password: e.target.value })} />
+          <input type="password" placeholder="New password" value={passwords.new_password} onChange={(e) => setPasswords({ ...passwords, new_password: e.target.value })} />
+          <input type="password" placeholder="Confirm new password" value={passwords.confirm_password} onChange={(e) => setPasswords({ ...passwords, confirm_password: e.target.value })} />
+          <button className="btn primary" type="submit"><Lock size={16} /> Save Password</button>
+        </form>
+      </Card>
+    </div>
+  );
+}
+
+function SystemSettingsPage({ refresh }) {
+  const tabs = ['Branding', 'Access', 'Backup', 'Danger', 'System Update'];
+  const [tab, setTab] = useState('Branding');
+  const [settings, setSettings] = useState(null);
+  const [admins, setAdmins] = useState([]);
+  const [newAdmin, setNewAdmin] = useState({ username: '', password: '', full_name: '', email: '', role: 'admin' });
+  const [danger, setDanger] = useState({ action: 'clear_auth_logs', confirmation: '', current_password: '' });
+  const [message, setMessage] = useState('');
+
+  async function load() {
+    setSettings(await request('/system/settings'));
+    setAdmins(await request('/system/access/admins'));
+  }
+  useEffect(() => { load(); }, []);
+  if (!settings) return <div className="empty">Loading settings...</div>;
+
+  async function saveSettings(e) {
+    e.preventDefault();
+    await request('/system/settings', { method: 'PATCH', body: JSON.stringify(settings) });
+    setMessage('Settings saved.');
+    refresh();
+  }
+
+  async function createAdmin(e) {
+    e.preventDefault();
+    await request('/system/access/admins', { method: 'POST', body: JSON.stringify(newAdmin) });
+    setNewAdmin({ username: '', password: '', full_name: '', email: '', role: 'admin' });
+    await load();
+  }
+
+  async function runDanger(e) {
+    e.preventDefault();
+    await request('/system/danger', { method: 'POST', body: JSON.stringify(danger) });
+    setDanger({ action: 'clear_auth_logs', confirmation: '', current_password: '' });
+    setMessage('Danger action completed.');
+  }
+
+  return (
+    <div className="stack">
+      {message && <div className="alert info">{message}</div>}
+      <div className="tabs">{tabs.map((t) => <button key={t} className={tab === t ? 'active' : ''} onClick={() => setTab(t)}>{t}</button>)}</div>
+
+      {tab === 'Branding' && (
+        <Card title="Branding" subtitle="New project naming and portal labels">
+          <form className="form-grid" onSubmit={saveSettings}>
+            <input value={settings.branding?.display_name || ''} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, display_name: e.target.value } })} />
+            <input value={settings.branding?.portal_subtitle || ''} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, portal_subtitle: e.target.value } })} />
+            <input type="color" value={settings.branding?.accent_color || '#206bc4'} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, accent_color: e.target.value } })} />
+            <button className="btn primary" type="submit"><Save size={16} /> Save Branding</button>
+          </form>
+        </Card>
+      )}
+
+      {tab === 'Access' && (
+        <div className="stack">
+          <Card title="Create Admin" subtitle="Basic admin access management for Phase 1">
+            <form className="form-row" onSubmit={createAdmin}>
+              <input placeholder="Username" value={newAdmin.username} onChange={(e) => setNewAdmin({ ...newAdmin, username: e.target.value })} />
+              <input placeholder="Password" type="password" value={newAdmin.password} onChange={(e) => setNewAdmin({ ...newAdmin, password: e.target.value })} />
+              <input placeholder="Full name" value={newAdmin.full_name} onChange={(e) => setNewAdmin({ ...newAdmin, full_name: e.target.value })} />
+              <input placeholder="Email" value={newAdmin.email} onChange={(e) => setNewAdmin({ ...newAdmin, email: e.target.value })} />
+              <button className="btn primary" type="submit"><UserCog size={16} /> Add Admin</button>
+            </form>
+          </Card>
+          <Card title="Admins">
+            <Table rows={admins} columns={['username', 'full_name', 'email', 'role', 'status', 'created_at']} />
+          </Card>
+        </div>
+      )}
+
+      {tab === 'Backup' && <BackupPanel />}
+      {tab === 'System Update' && <UpdatePanel />}
+
+      {tab === 'Danger' && (
+        <Card title="Danger" subtitle="Password-confirmed destructive maintenance actions">
+          <form className="form-grid" onSubmit={runDanger}>
+            <select value={danger.action} onChange={(e) => setDanger({ ...danger, action: e.target.value })}>
+              <option value="clear_auth_logs">Clear authentication logs</option>
+              <option value="clear_sessions">Clear session records</option>
+            </select>
+            <input placeholder={danger.action === 'clear_sessions' ? 'Type CLEAR SESSIONS' : 'Type CLEAR AUTH LOGS'} value={danger.confirmation} onChange={(e) => setDanger({ ...danger, confirmation: e.target.value })} />
+            <input type="password" placeholder="Current admin password" value={danger.current_password} onChange={(e) => setDanger({ ...danger, current_password: e.target.value })} />
+            <button className="btn danger" type="submit"><AlertTriangle size={16} /> Run Danger Action</button>
+          </form>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+function BackupPanel() {
+  const [data, setData] = useState(null);
+  useEffect(() => { request('/system/backup').then(setData); }, []);
+  if (!data) return null;
+  return (
+    <Card title="Backup" subtitle="Run backups from the Ubuntu host">
+      <div className="command-list">
+        <label>Backup command<code>{data.backup_command}</code></label>
+        <label>Restore command<code>{data.restore_command}</code></label>
+      </div>
+      <p className="muted">{data.note}</p>
+    </Card>
+  );
+}
+
+function UpdatePanel() {
+  const [data, setData] = useState(null);
+  useEffect(() => { request('/system/update').then(setData); }, []);
+  if (!data) return null;
+  return (
+    <Card title="System Update" subtitle="Use staging updates before production">
+      <div className="command-list">
+        <label>Local update<code>{data.update_command}</code></label>
+        <label>One-line update<code>{data.one_line_update}</code></label>
+      </div>
+      <p className="muted">Environment: {data.environment}. Branch: {data.branch}.</p>
+    </Card>
+  );
+}
+
+const nav = [
+  { page: 'Dashboard', icon: LayoutDashboard },
+  { page: 'Users', icon: Users },
+  { page: 'Sessions', icon: History },
+  { page: 'NAS / Router / AP Clients', icon: Router },
+  { page: 'RADIUS Test Guide', icon: Radio },
+  { page: 'System Health', icon: Activity },
+  { page: 'System Settings', icon: Settings },
+  { page: 'Audit Logs', icon: ClipboardList }
 ];
 
-function Sidebar({ page, setPage, environment, logout }) {
+function Sidebar({ page, setPage, me, logout }) {
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <span className="brand-mark small">3J</span>
-        <div>
-          <h1>3JCentral</h1>
-          <p>Pisowifi Admin</p>
-        </div>
+      <div className="brand"><span className="logo-mark small">3J</span><strong>CentralPisowifi</strong></div>
+      <nav>{nav.map((item) => {
+        const Icon = item.icon;
+        return <button key={item.page} className={page === item.page ? 'active' : ''} onClick={() => setPage(item.page)}><Icon size={18} /> {item.page}</button>;
+      })}</nav>
+      <div className="sidebar-user">
+        <button onClick={() => setPage('View Profile')}><User size={18} /><span>{me?.full_name || me?.username || 'Admin'}<small>{me?.role || 'admin'}</small></span></button>
+        <button onClick={() => setPage('Change Password')}><KeyRound size={18} /> Change Password</button>
+        <button className="logout" onClick={logout}><LogOut size={18} /> Logout</button>
       </div>
-      <span className="env-badge">{environment.toUpperCase()}</span>
-      <nav>
-        {navigationGroups.map((group) => (
-          <div className="nav-group" key={group.heading}>
-            <h5>{group.heading}</h5>
-            {group.items.map((item) => {
-              const Icon = item.icon;
-              return (
-                <button key={item.name} className={page === item.name ? 'active' : ''} onClick={() => setPage(item.name)}>
-                  <Icon size={18} />
-                  <span>{item.name}</span>
-                </button>
-              );
-            })}
-          </div>
-        ))}
-      </nav>
-      <button className="logout-card" onClick={logout}>
-        <LogOut size={18} />
-        <span>Logout</span>
-      </button>
     </aside>
   );
 }
 
-function Header({ page, dashboard, toggleMobile }) {
+function Header({ page, dashboard }) {
   return (
     <header className="topbar">
-      <button className="icon-button mobile-menu" onClick={toggleMobile}><Menu size={20} /></button>
-      <div>
-        <p className="eyebrow">Phase 1</p>
-        <h1>{page}</h1>
-      </div>
-      <div className="topbar-actions">
-        <div className="search-box"><Search size={17} /><span>Search is parked for Phase 1</span></div>
-        <button className="icon-button"><Bell size={18} /></button>
-        <div className="profile-chip">
-          <ShieldCheck size={17} />
-          <span>{(dashboard?.environment || 'staging').toUpperCase()}</span>
-        </div>
+      <div><p className="kicker">3JCentralPisowifi</p><h1>{page}</h1></div>
+      <div className="sys-metrics">
+        <span>ENV {(dashboard?.environment || 'staging').toUpperCase()}</span>
+        <span>DB {dashboard?.health?.database ? 'OK' : 'ERR'}</span>
+        <span>API {dashboard ? 'OK' : '...'}</span>
       </div>
     </header>
   );
@@ -435,12 +493,14 @@ function App() {
   const [authed, setAuthed] = useState(Boolean(localStorage.getItem('centralwifi_token')));
   const [page, setPage] = useState('Dashboard');
   const [dashboard, setDashboard] = useState(null);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [me, setMe] = useState(null);
 
   async function refresh() {
-    if (localStorage.getItem('centralwifi_token')) setDashboard(await request('/dashboard'));
+    if (localStorage.getItem('centralwifi_token')) {
+      setDashboard(await request('/dashboard'));
+      setMe(await request('/me'));
+    }
   }
-
   useEffect(() => { if (authed) refresh().catch(() => setAuthed(false)); }, [authed]);
   if (!authed) return <Login onLogin={() => setAuthed(true)} />;
 
@@ -450,34 +510,20 @@ function App() {
   };
 
   return (
-    <main className={`app-shell ${mobileOpen ? 'sidebar-open' : ''}`}>
-      <Sidebar
-        page={page}
-        setPage={(next) => { setPage(next); setMobileOpen(false); }}
-        environment={dashboard?.environment || 'staging'}
-        logout={logout}
-      />
-      <section className="content">
-        <Header page={page} dashboard={dashboard} toggleMobile={() => setMobileOpen(!mobileOpen)} />
-        <div className="page-content">
+    <main className="page">
+      <Sidebar page={page} setPage={setPage} me={me} logout={logout} />
+      <section className="page-wrapper">
+        <Header page={page} dashboard={dashboard} />
+        <div className="page-body">
           {page === 'Dashboard' && <Dashboard data={dashboard} />}
-          {['Users', 'User Detail', 'Wallet / Manual Top-Up'].includes(page) && <UsersPage refresh={refresh} />}
+          {page === 'Users' && <UsersPage refresh={refresh} />}
           {page === 'NAS / Router / AP Clients' && <NasClients refresh={refresh} />}
           {page === 'Sessions' && <SimplePage title="Sessions" endpoint="/sessions" columns={['username', 'calling_station_id', 'nas_ip', 'framed_ip_address', 'start_time', 'last_update_time', 'stop_time', 'status']} />}
-          {page === 'RADIUS Test Guide' && (
-            <Panel title="Manual RADIUS Test" subtitle="Use staging port 11812 unless testing production">
-              <div className="guide-card">
-                <BookOpen />
-                <div>
-                  <p>Use radtest with a test user, password, server IP, port, and shared secret.</p>
-                  <code>radtest testuser password SERVER-IP:11812 0 shared-secret</code>
-                </div>
-              </div>
-            </Panel>
-          )}
+          {page === 'RADIUS Test Guide' && <Card title="Manual RADIUS Test"><p className="muted">Use radtest with a test user, password, server IP, port, and shared secret.</p><code>radtest testuser password SERVER-IP:11812 0 shared-secret</code></Card>}
           {page === 'System Health' && <Dashboard data={dashboard} />}
-          {page === 'Settings' && <Settings />}
           {page === 'Audit Logs' && <SimplePage title="Audit Logs" endpoint="/audit-logs" columns={['action', 'target_type', 'target_id', 'details', 'created_at']} />}
+          {page === 'System Settings' && <SystemSettingsPage refresh={refresh} />}
+          {['View Profile', 'Change Password'].includes(page) && <ProfilePage onSaved={refresh} />}
         </div>
       </section>
     </main>
