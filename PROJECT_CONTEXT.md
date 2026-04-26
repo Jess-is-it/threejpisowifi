@@ -90,7 +90,7 @@ PostgreSQL is the only source of truth for admins, users, wallets, NAS/router/AP
 - PostgreSQL
 - Redis
 - FreeRADIUS 3.x
-- React and Tailwind CSS
+- React with Tabler UI (`@tabler/core`) and Tabler Icons (`@tabler/icons-react`)
 - Nginx
 
 ## 14. One-line install commands
@@ -121,8 +121,10 @@ Staging:
 - Audit Logs
 
 UI direction:
-- Admin Portal should use the project owner's existing system UI language as reference: dark vertical sidebar, sticky top header with simple metrics, card-based pages, tabbed System Settings, and plain operational labels.
-- Do not use the previous third-party admin template or copy old-system product names.
+- Admin Portal uses installed/imported Tabler UI packages, not the removed temporary template.
+- Admin Portal follows the project owner's previous common UI order for shared admin features: dark vertical sidebar, sticky top header with simple metrics, card-based pages, profile/password access in the sidebar account area, and tabbed System Settings.
+- System Settings tab order is Branding, Access, System Update, Backup, Danger.
+- Do not copy old-system product names.
 - Keep the UI focused on Phase 1 workflows instead of importing unrelated old-system modules.
 
 ## 17. RADIUS behavior
@@ -167,6 +169,7 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
+- 2026-04-26: Installed real Tabler dependencies (`@tabler/core`, `@tabler/icons-react`), removed the previous icon/template dependency path, and rebuilt the Admin Portal on Tabler classes while preserving new 3JCentralPisowifi naming.
 - 2026-04-26: Removed the previous third-party admin template direction, adopted the owner's old-system UI language without old naming, and added common profile, password, access, backup, danger, and system update surfaces.
 - 2026-04-26: Restyled the Admin Portal to follow a template-style dashboard layout while preserving the Phase 1 API-backed workflows.
 - 2026-04-25: Created Phase 1 foundation with Docker Compose production/staging overlays, FastAPI API, React admin portal, PostgreSQL schema, FreeRADIUS helper scripts, installer/updater scripts, and documentation.
