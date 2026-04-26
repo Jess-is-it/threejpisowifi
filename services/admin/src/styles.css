@@ -415,6 +415,99 @@ button.nav-link {
   text-align: center;
 }
 
+.users-card .card-body {
+  padding: 1rem 1rem 0.9rem;
+}
+
+.users-tabs {
+  align-items: center;
+}
+
+.users-search-item {
+  min-width: min(22rem, 100%);
+}
+
+.users-table-wrap {
+  overflow-x: hidden;
+}
+
+.users-table {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.users-table > :not(caption) > * > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.users-cell-truncate {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.users-table .user-col-username {
+  width: 15rem;
+}
+
+.users-table .user-col-phone {
+  width: 10rem;
+}
+
+.users-table .user-col-status {
+  width: 7rem;
+}
+
+.users-table .user-col-balance {
+  width: 9rem;
+}
+
+.users-table .user-col-valid {
+  width: 13rem;
+}
+
+.users-table .user-col-access {
+  width: 9rem;
+}
+
+.users-table .user-col-created {
+  width: 13rem;
+}
+
+.users-table .user-col-actions {
+  width: 7rem;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+
+.modal {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+body:has(.modal.show) {
+  overflow: hidden;
+}
+
+@media (max-width: 1400px) {
+  .users-table .user-col-created,
+  .users-table .user-col-valid {
+    display: none;
+  }
+}
+
+@media (max-width: 1100px) {
+  .users-table .user-col-phone,
+  .users-table .user-col-access {
+    display: none;
+  }
+}
+
 .auto-dismiss-alert {
   margin-bottom: 1rem;
 }

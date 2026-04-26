@@ -19,6 +19,7 @@ import {
   IconListDetails,
   IconLogout,
   IconRouter,
+  IconSearch,
   IconSettings,
   IconShieldLock,
   IconServer,
@@ -93,6 +94,55 @@ function formatUptime(seconds = 0) {
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+function slugify(page) {
+  return page.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'dashboard';
+}
+
+const routePages = {
+  '': 'Dashboard',
+  dashboard: 'Dashboard',
+  users: 'Users',
+  'wallet-manual-top-up': 'Wallet / Manual Top-Up',
+  sessions: 'Sessions',
+  'nas-router-ap-clients': 'NAS / Router / AP Clients',
+  'radius-test-guide': 'RADIUS Test Guide',
+  'system-settings': 'System Settings',
+  logs: 'Logs',
+  'view-profile': 'View Profile',
+  'change-password': 'Change Password',
+  'user-detail': 'Users'
+};
+
+function pageFromLocation() {
+  const path = window.location.pathname.replace(/\/+$/, '');
+  const slug = path.replace(/^\/admin\/?/, '');
+  return routePages[slug] || 'Dashboard';
+}
+
+function routeForPage(page) {
+  return `/admin/${slugify(page)}`;
+}
+
+function formatSeconds(seconds) {
+  const total = Number(seconds || 0);
+  if (total <= 0) return '0m';
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function hasValidUntil(user) {
+  if (!user.valid_until) return false;
+  return new Date(user.valid_until).getTime() > Date.now();
+}
+
+function needsBalance(user) {
+  return user.status === 'active' && !user.is_unlimited && Number(user.time_remaining_seconds || 0) <= 0 && !hasValidUntil(user);
 }
 
 function Login({ onLogin, branding }) {
@@ -221,8 +271,13 @@ function Dashboard({ data }) {
 function UsersPage({ refresh }) {
   const [users, setUsers] = useState([]);
   const [form, setForm] = useState({ username: '', password: '', phone_number: '' });
-  const [topup, setTopup] = useState({ user_id: '', hours: 1, valid_until: '', is_unlimited: false, note: '' });
   const [manage, setManage] = useState({ user_id: '', status: 'active', password: '' });
+  const [tab, setTab] = useState('all');
+  const [query, setQuery] = useState('');
+  const [pageNo, setPageNo] = useState(1);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+  const pageSize = 25;
 
   async function load() { setUsers(await request('/users')); }
   useEffect(() => { load(); }, []);
@@ -231,8 +286,193 @@ function UsersPage({ refresh }) {
     e.preventDefault();
     await request('/users', { method: 'POST', body: JSON.stringify(form) });
     setForm({ username: '', password: '', phone_number: '' });
+    setCreateOpen(false);
     await load(); refresh();
   }
+
+  async function updateUser(e) {
+    e.preventDefault();
+    const body = { status: manage.status };
+    if (manage.password) body.password = manage.password;
+    await request(`/users/${manage.user_id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    setManage({ user_id: '', status: 'active', password: '' });
+    setManageOpen(false);
+    await load(); refresh();
+  }
+
+  function openManage(user) {
+    setManage({ user_id: user.id, status: user.status || 'active', password: '' });
+    setManageOpen(true);
+  }
+
+  const counts = {
+    all: users.length,
+    active: users.filter((user) => user.status === 'active').length,
+    disabled: users.filter((user) => user.status === 'disabled').length,
+    balance: users.filter(needsBalance).length
+  };
+  const filtered = users.filter((user) => {
+    const text = `${user.username || ''} ${user.phone_number || ''} ${user.status || ''}`.toLowerCase();
+    const matchesSearch = !query.trim() || text.includes(query.trim().toLowerCase());
+    const matchesTab = tab === 'all'
+      || (tab === 'active' && user.status === 'active')
+      || (tab === 'disabled' && user.status === 'disabled')
+      || (tab === 'balance' && needsBalance(user));
+    return matchesSearch && matchesTab;
+  });
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(pageNo, totalPages);
+  const visibleRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+
+  return (
+    <>
+      <div className="card users-card">
+        <div className="card-body">
+          <div className="d-flex flex-wrap align-items-center justify-content-between mb-3 gap-2">
+            <div>
+              <h4 className="mb-1">Users <span className="badge bg-azure-lt">{filtered.length}</span></h4>
+              <div className="text-muted small">Create, search, disable, and reset Phase 1 RADIUS test users.</div>
+            </div>
+            <div className="d-flex flex-wrap gap-2 align-items-center">
+              <span className="badge bg-blue-lt">Total: {counts.all}</span>
+              <span className="badge bg-green-lt">Active: {counts.active}</span>
+              <span className="badge bg-red-lt">Disabled: {counts.disabled}</span>
+              <span className="badge bg-yellow-lt">Needs Balance: {counts.balance}</span>
+              <button className="btn btn-primary" type="button" onClick={() => setCreateOpen(true)}><IconUserPlus size={18} className="me-2" />Create User</button>
+            </div>
+          </div>
+
+          <ul className="nav nav-tabs users-tabs">
+            {[
+              ['all', 'All Users', 'blue', counts.all],
+              ['active', 'Active', 'green', counts.active],
+              ['disabled', 'Disabled', 'red', counts.disabled],
+              ['balance', 'Needs Balance', 'yellow', counts.balance]
+            ].map(([key, label, tone, count]) => (
+              <li className="nav-item" key={key}>
+                <button className={`nav-link ${tab === key ? 'active' : ''}`} onClick={() => { setTab(key); setPageNo(1); }}>
+                  {label} <span className={`badge bg-${tone}-lt ms-1`}>{count}</span>
+                </button>
+              </li>
+            ))}
+            <li className="nav-item ms-auto users-search-item">
+              <div className="px-2 py-2">
+                <div className="input-icon">
+                  <input className="form-control form-control-sm" value={query} onChange={(e) => { setQuery(e.target.value); setPageNo(1); }} placeholder="Search" />
+                  <span className="input-icon-addon"><IconSearch size={16} /></span>
+                </div>
+              </div>
+            </li>
+          </ul>
+
+          <div className="tab-content pt-3">
+            <div className="rto-table-shell">
+              <div className="rto-table-wrap users-table-wrap">
+                <table className="table table-vcenter rto-table users-table">
+                  <thead>
+                    <tr>
+                      <th className="user-col-username">Username</th>
+                      <th className="user-col-phone">Phone</th>
+                      <th className="user-col-status">Status</th>
+                      <th className="user-col-balance">Time Remaining</th>
+                      <th className="user-col-valid">Valid Until</th>
+                      <th className="user-col-access">Access</th>
+                      <th className="user-col-created">Created</th>
+                      <th className="text-end user-col-actions">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleRows.map((user) => (
+                      <tr key={user.id} className={needsBalance(user) ? 'table-warning' : ''}>
+                        <td className="user-col-username"><span className="users-cell-truncate" title={user.username}>{user.username}</span></td>
+                        <td className="user-col-phone"><span className="users-cell-truncate" title={user.phone_number || ''}>{user.phone_number || 'n/a'}</span></td>
+                        <td className="user-col-status"><span className={`badge ${user.status === 'active' ? 'bg-green-lt' : 'bg-red-lt'}`}>{user.status}</span></td>
+                        <td className="user-col-balance">{formatSeconds(user.time_remaining_seconds)}</td>
+                        <td className="user-col-valid"><span className="users-cell-truncate" title={user.valid_until || ''}>{user.valid_until || 'n/a'}</span></td>
+                        <td className="user-col-access">{user.is_unlimited ? <span className="badge bg-blue-lt">Unlimited</span> : needsBalance(user) ? <span className="badge bg-yellow-lt">Needs Balance</span> : <span className="badge bg-green-lt">Limited</span>}</td>
+                        <td className="user-col-created"><span className="users-cell-truncate" title={user.created_at || ''}>{user.created_at || ''}</span></td>
+                        <td className="text-end user-col-actions"><button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openManage(user)}>Manage</button></td>
+                      </tr>
+                    ))}
+                    {!visibleRows.length && (
+                      <tr><td colSpan="8" className="text-muted p-3">No users found for the selected filter.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="d-flex flex-wrap align-items-center justify-content-between mt-2 gap-2">
+              <div className="text-muted small">Showing {filtered.length ? ((safePage - 1) * pageSize) + 1 : 0}-{Math.min(safePage * pageSize, filtered.length)} of {filtered.length}</div>
+              <div className="d-flex align-items-center gap-2">
+                <span className="text-muted small">Page {safePage} of {totalPages}</span>
+                <ul className="pagination pagination-sm mb-0">
+                  <li className={`page-item ${safePage <= 1 ? 'disabled' : ''}`}><button className="page-link" onClick={() => setPageNo(Math.max(1, safePage - 1))}>Prev</button></li>
+                  <li className={`page-item ${safePage >= totalPages ? 'disabled' : ''}`}><button className="page-link" onClick={() => setPageNo(Math.min(totalPages, safePage + 1))}>Next</button></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {createOpen && (
+        <Modal title="Create User" onClose={() => setCreateOpen(false)}>
+          <form onSubmit={create}>
+            <div className="row g-3">
+              <div className="col-md-6"><label className="form-label">Username</label><input className="form-control" required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></div>
+              <div className="col-md-6"><label className="form-label">Password</label><input className="form-control" required type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
+              <div className="col-12"><label className="form-label">Phone Number</label><input className="form-control" value={form.phone_number} onChange={(e) => setForm({ ...form, phone_number: e.target.value })} /></div>
+            </div>
+            <div className="modal-footer px-0 pb-0"><button type="button" className="btn" onClick={() => setCreateOpen(false)}>Cancel</button><button className="btn btn-primary"><IconUserPlus size={18} className="me-2" />Create User</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {manageOpen && (
+        <Modal title="Manage User" onClose={() => setManageOpen(false)}>
+          <form onSubmit={updateUser}>
+            <div className="row g-3">
+              <div className="col-12">
+                <label className="form-label">User</label>
+                <select className="form-select" value={manage.user_id} onChange={(e) => setManage({ ...manage, user_id: e.target.value })}>
+                  <option value="">Select user</option>{users.map((user) => <option key={user.id} value={user.id}>{user.username}</option>)}
+                </select>
+              </div>
+              <div className="col-md-6"><label className="form-label">Status</label><select className="form-select" value={manage.status} onChange={(e) => setManage({ ...manage, status: e.target.value })}><option value="active">Active</option><option value="disabled">Disabled</option></select></div>
+              <div className="col-md-6"><label className="form-label">New Password</label><input className="form-control" type="password" value={manage.password} onChange={(e) => setManage({ ...manage, password: e.target.value })} /></div>
+            </div>
+            <div className="modal-footer px-0 pb-0"><button type="button" className="btn" onClick={() => setManageOpen(false)}>Cancel</button><button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save User</button></div>
+          </form>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function Modal({ title, children, onClose }) {
+  return (
+    <>
+      <div className="modal modal-blur fade show d-block" tabIndex="-1" role="dialog">
+        <div className="modal-dialog modal-lg modal-dialog-centered">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h5 className="modal-title">{title}</h5>
+              <button type="button" className="btn-close" aria-label="Close" onClick={onClose} />
+            </div>
+            <div className="modal-body">{children}</div>
+          </div>
+        </div>
+      </div>
+      <div className="modal-backdrop fade show" onClick={onClose} />
+    </>
+  );
+}
+
+function WalletPage({ refresh }) {
+  const [users, setUsers] = useState([]);
+  const [topup, setTopup] = useState({ user_id: '', hours: 1, valid_until: '', is_unlimited: false, note: '' });
+  async function load() { setUsers(await request('/users')); }
+  useEffect(() => { load(); }, []);
 
   async function addBalance(e) {
     e.preventDefault();
@@ -249,42 +489,21 @@ function UsersPage({ refresh }) {
     await load(); refresh();
   }
 
-  async function updateUser(e) {
-    e.preventDefault();
-    const body = { status: manage.status };
-    if (manage.password) body.password = manage.password;
-    await request(`/users/${manage.user_id}`, { method: 'PATCH', body: JSON.stringify(body) });
-    setManage({ user_id: '', status: 'active', password: '' });
-    await load(); refresh();
-  }
-
   return (
     <div className="row row-cards">
-      <div className="col-12 col-lg-6">
-        <Card title="Create User" subtitle="Create a test account for manual RADIUS authentication">
-          <form onSubmit={create}>
-            <div className="row g-3">
-              <div className="col-md-6"><label className="form-label">Username</label><input className="form-control" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} /></div>
-              <div className="col-md-6"><label className="form-label">Password</label><input className="form-control" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} /></div>
-              <div className="col-12"><label className="form-label">Phone Number</label><input className="form-control" value={form.phone_number} onChange={(e) => setForm({ ...form, phone_number: e.target.value })} /></div>
-            </div>
-            <div className="mt-3"><button className="btn btn-primary"><IconUserPlus size={18} className="me-2" />Create User</button></div>
-          </form>
-        </Card>
-      </div>
-      <div className="col-12 col-lg-6">
+      <div className="col-12">
         <Card title="Wallet / Manual Top-Up" subtitle="Add time balance, valid-until, or unlimited access">
           <form onSubmit={addBalance}>
             <div className="row g-3">
-              <div className="col-md-6">
+              <div className="col-md-4">
                 <label className="form-label">User</label>
-                <select className="form-select" value={topup.user_id} onChange={(e) => setTopup({ ...topup, user_id: e.target.value })}>
+                <select className="form-select" required value={topup.user_id} onChange={(e) => setTopup({ ...topup, user_id: e.target.value })}>
                   <option value="">Select user</option>{users.map((user) => <option key={user.id} value={user.id}>{user.username}</option>)}
                 </select>
               </div>
-              <div className="col-md-6"><label className="form-label">Hours</label><input className="form-control" type="number" min="1" value={topup.hours} onChange={(e) => setTopup({ ...topup, hours: e.target.value })} /></div>
-              <div className="col-md-6"><label className="form-label">Valid Until</label><input className="form-control" type="datetime-local" value={topup.valid_until} onChange={(e) => setTopup({ ...topup, valid_until: e.target.value })} /></div>
-              <div className="col-md-6 d-flex align-items-end"><label className="form-check mb-2"><input className="form-check-input" type="checkbox" checked={topup.is_unlimited} onChange={(e) => setTopup({ ...topup, is_unlimited: e.target.checked })} /><span className="form-check-label">Unlimited</span></label></div>
+              <div className="col-md-2"><label className="form-label">Hours</label><input className="form-control" type="number" min="1" value={topup.hours} onChange={(e) => setTopup({ ...topup, hours: e.target.value })} /></div>
+              <div className="col-md-3"><label className="form-label">Valid Until</label><input className="form-control" type="datetime-local" value={topup.valid_until} onChange={(e) => setTopup({ ...topup, valid_until: e.target.value })} /></div>
+              <div className="col-md-3 d-flex align-items-end"><label className="form-check mb-2"><input className="form-check-input" type="checkbox" checked={topup.is_unlimited} onChange={(e) => setTopup({ ...topup, is_unlimited: e.target.checked })} /><span className="form-check-label">Unlimited</span></label></div>
               <div className="col-12"><label className="form-label">Admin Note</label><input className="form-control" value={topup.note} onChange={(e) => setTopup({ ...topup, note: e.target.value })} /></div>
             </div>
             <div className="mt-3"><button className="btn btn-primary"><IconWallet size={18} className="me-2" />Add Balance</button></div>
@@ -292,25 +511,8 @@ function UsersPage({ refresh }) {
         </Card>
       </div>
       <div className="col-12">
-        <Card title="Edit / Disable / Reset Password" subtitle="Basic Phase 1 user maintenance">
-          <form onSubmit={updateUser}>
-            <div className="row g-3 align-items-end">
-              <div className="col-md-4">
-                <label className="form-label">User</label>
-                <select className="form-select" value={manage.user_id} onChange={(e) => setManage({ ...manage, user_id: e.target.value })}>
-                  <option value="">Select user</option>{users.map((user) => <option key={user.id} value={user.id}>{user.username}</option>)}
-                </select>
-              </div>
-              <div className="col-md-3"><label className="form-label">Status</label><select className="form-select" value={manage.status} onChange={(e) => setManage({ ...manage, status: e.target.value })}><option value="active">Active</option><option value="disabled">Disabled</option></select></div>
-              <div className="col-md-3"><label className="form-label">New Password</label><input className="form-control" type="password" value={manage.password} onChange={(e) => setManage({ ...manage, password: e.target.value })} /></div>
-              <div className="col-md-2"><button className="btn btn-primary w-100">Save User</button></div>
-            </div>
-          </form>
-        </Card>
-      </div>
-      <div className="col-12">
-        <Card title="Users">
-          <Table rows={users} columns={['username', 'phone_number', 'status', 'time_remaining_seconds', 'valid_until', 'is_unlimited', 'created_at']} />
+        <Card title="Current User Balances">
+          <Table rows={users} columns={['username', 'status', 'time_remaining_seconds', 'valid_until', 'is_unlimited']} />
         </Card>
       </div>
     </div>
@@ -615,7 +817,6 @@ function UpdatePanel() {
 const nav = [
   { page: 'Dashboard', icon: IconDashboard, tone: 'blue' },
   { page: 'Users', icon: IconUsers, tone: 'azure' },
-  { page: 'User Detail', icon: IconUser, tone: 'cyan' },
   { page: 'Wallet / Manual Top-Up', icon: IconCash, tone: 'green' },
   { page: 'Sessions', icon: IconHistory, tone: 'orange' },
   { page: 'NAS / Router / AP Clients', icon: IconRouter, tone: 'purple' },
@@ -716,7 +917,7 @@ function Header({ page, dashboard, resources, onToggleSidebar, sidebarCollapsed 
 
 function App() {
   const [authed, setAuthed] = useState(Boolean(localStorage.getItem('centralwifi_token')));
-  const [page, setPage] = useState('Dashboard');
+  const [page, setPage] = useState(() => pageFromLocation());
   const [dashboard, setDashboard] = useState(null);
   const [me, setMe] = useState(null);
   const [resources, setResources] = useState(null);
@@ -731,7 +932,23 @@ function App() {
     }
   }
 
+  function navigatePage(nextPage, replace = false) {
+    setPage(nextPage);
+    const nextPath = routeForPage(nextPage);
+    if (window.location.pathname !== nextPath) {
+      window.history[replace ? 'replaceState' : 'pushState']({ page: nextPage }, '', nextPath);
+    }
+  }
+
   useEffect(() => { publicRequest('/public/branding').then(setBranding).catch(() => {}); }, []);
+  useEffect(() => {
+    if (window.location.pathname === '/admin/' || window.location.pathname === '/admin') {
+      window.history.replaceState({ page }, '', routeForPage(page));
+    }
+    const onPopState = () => setPage(pageFromLocation());
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
   useEffect(() => { if (authed) refresh().catch(() => setAuthed(false)); }, [authed]);
   useEffect(() => { document.documentElement.style.setProperty('--tblr-primary', branding.accent_color || '#206bc4'); }, [branding]);
   useEffect(() => {
@@ -771,13 +988,14 @@ function App() {
 
   return (
     <div className={`page ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-      <Sidebar page={page} setPage={setPage} me={me} logout={logout} branding={branding} collapsed={sidebarCollapsed} />
+      <Sidebar page={page} setPage={navigatePage} me={me} logout={logout} branding={branding} collapsed={sidebarCollapsed} />
       <div className="page-wrapper">
         <Header page={page} dashboard={dashboard} resources={resources} onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)} sidebarCollapsed={sidebarCollapsed} />
         <div className="page-body">
           <div className="container-xl">
             {page === 'Dashboard' && <Dashboard data={dashboard} />}
-            {['Users', 'User Detail', 'Wallet / Manual Top-Up'].includes(page) && <UsersPage refresh={refresh} />}
+            {page === 'Users' && <UsersPage refresh={refresh} />}
+            {page === 'Wallet / Manual Top-Up' && <WalletPage refresh={refresh} />}
             {page === 'NAS / Router / AP Clients' && <NasClients refresh={refresh} />}
             {page === 'Sessions' && <SimplePage title="Sessions" endpoint="/sessions" columns={['username', 'calling_station_id', 'nas_ip', 'framed_ip_address', 'start_time', 'last_update_time', 'stop_time', 'status']} />}
             {page === 'RADIUS Test Guide' && <Card title="Manual RADIUS Test"><div className="text-muted mb-3">Use radtest with a test user, password, server IP, port, and shared secret.</div><pre><code>radtest testuser password SERVER-IP:11812 0 shared-secret</code></pre></Card>}
