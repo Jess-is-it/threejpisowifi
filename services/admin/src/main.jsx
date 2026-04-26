@@ -145,6 +145,13 @@ function needsBalance(user) {
   return user.status === 'active' && !user.is_unlimited && Number(user.time_remaining_seconds || 0) <= 0 && !hasValidUntil(user);
 }
 
+function generateSharedSecret() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const values = new Uint32Array(24);
+  window.crypto.getRandomValues(values);
+  return Array.from(values, (value) => chars[value % chars.length]).join('');
+}
+
 function Login({ onLogin, branding }) {
   const [form, setForm] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
@@ -521,7 +528,8 @@ function WalletPage({ refresh }) {
 
 function NasClients({ refresh }) {
   const [rows, setRows] = useState([]);
-  const [form, setForm] = useState({ name: '', nas_ip: '', shortname: '', type: 'other', notes: '' });
+  const [form, setForm] = useState({ name: '', nas_ip: '', shortname: '', secret: generateSharedSecret(), type: 'other', notes: '' });
+  const [autoGenerateSecret, setAutoGenerateSecret] = useState(true);
   const [secret, setSecret] = useState('');
   const [showExplanation, setShowExplanation] = useState(false);
   async function load() { setRows(await request('/nas-clients')); }
@@ -530,7 +538,7 @@ function NasClients({ refresh }) {
     e.preventDefault();
     const data = await request('/nas-clients', { method: 'POST', body: JSON.stringify(form) });
     setSecret(data.secret);
-    setForm({ name: '', nas_ip: '', shortname: '', type: 'other', notes: '' });
+    setForm({ name: '', nas_ip: '', shortname: '', secret: autoGenerateSecret ? generateSharedSecret() : '', type: 'other', notes: '' });
     await load(); refresh();
   }
 
@@ -543,7 +551,7 @@ function NasClients({ refresh }) {
             <div>
               <div className="fw-semibold mb-1">NAS / Router / AP Clients</div>
               <div>Add the routers, access points, or controllers that are allowed to check customer access with 3JCentralPisowifi. These are trusted devices, not WiFi users. The shared secret must match on both this system and the device.</div>
-              <button className="btn btn-sm btn-outline-primary mt-2" type="button" onClick={() => setShowExplanation(!showExplanation)}>
+              <button className="nas-readmore mt-2" type="button" onClick={() => setShowExplanation(!showExplanation)}>
                 {showExplanation ? 'Close explanation' : 'Read more'}
               </button>
               {showExplanation && (
@@ -567,6 +575,8 @@ function NasClients({ refresh }) {
               <div className="col-md-3"><label className="form-label">IP Address</label><input className="form-control" value={form.nas_ip} onChange={(e) => setForm({ ...form, nas_ip: e.target.value })} /></div>
               <div className="col-md-2"><label className="form-label">Shortname</label><input className="form-control" value={form.shortname} onChange={(e) => setForm({ ...form, shortname: e.target.value })} /></div>
               <div className="col-md-2"><label className="form-label">Type</label><input className="form-control" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} /></div>
+              <div className="col-md-2"><label className="form-label">Auto Generate</label><label className="form-check mb-2"><input className="form-check-input" type="checkbox" checked={autoGenerateSecret} onChange={(e) => { const checked = e.target.checked; setAutoGenerateSecret(checked); setForm({ ...form, secret: checked ? generateSharedSecret() : '' }); }} /><span className="form-check-label">Shared secret</span></label></div>
+              <div className="col-md-10"><label className="form-label">Shared Secret</label><input className="form-control" required value={form.secret} readOnly={autoGenerateSecret} onChange={(e) => setForm({ ...form, secret: e.target.value })} /></div>
               <div className="col-md-2"><button className="btn btn-primary w-100"><IconRouter size={18} className="me-2" />Add</button></div>
             </div>
           </form>
@@ -580,7 +590,7 @@ function NasClients({ refresh }) {
       </div>
       <div className="col-12">
         <Card title="NAS / Router / AP Clients">
-          <Table rows={rows} columns={['name', 'nas_ip', 'shortname', 'type', 'status', 'notes', 'created_at']} />
+          <Table rows={rows} columns={['name', 'nas_ip', 'shortname', 'secret', 'type', 'status', 'notes', 'created_at']} />
         </Card>
       </div>
     </div>

@@ -168,6 +168,7 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
+- 2026-04-26: Updated NAS page read-more control to a seamless underlined text link and added visible shared secret creation/listing with auto-generate support.
 - 2026-04-26: Added short and expandable long explanatory guidance to the NAS / Router / AP Clients page.
 - 2026-04-26: Removed the User Detail page from navigation, added URL-aware Admin Portal routes under `/admin/<page>`, and rebuilt the Users page with Optical-style tabs, search, table layout, pagination, and Create/Manage user modals.
 - 2026-04-26: Reduced expanded side panel width by 40px and reduced the company logo max display width by 24px.

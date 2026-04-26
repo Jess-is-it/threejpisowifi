@@ -490,6 +490,22 @@ button.nav-link {
   margin-bottom: 0;
 }
 
+.nas-readmore {
+  display: inline;
+  border: 0;
+  background: transparent;
+  color: var(--tblr-muted);
+  font-weight: 600;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.nas-readmore:hover,
+.nas-readmore:focus-visible {
+  color: var(--tblr-muted);
+  text-decoration: underline;
+}
+
 .nas-note-long {
   max-width: 58rem;
   border-left: 3px solid var(--tblr-primary);

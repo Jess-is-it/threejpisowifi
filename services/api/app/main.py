@@ -355,7 +355,7 @@ def list_sessions(admin=Depends(current_admin)):
 
 @app.get("/api/nas-clients")
 def list_nas(admin=Depends(current_admin)):
-    return fetch_all("SELECT id, name, nas_ip::text, shortname, type, status, notes, created_at, updated_at FROM nas_clients ORDER BY created_at DESC")
+    return fetch_all("SELECT id, name, nas_ip::text, shortname, secret, type, status, notes, created_at, updated_at FROM nas_clients ORDER BY created_at DESC")
 
 
 @app.post("/api/nas-clients")
