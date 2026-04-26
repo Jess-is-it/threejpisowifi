@@ -132,6 +132,18 @@ def login(payload: LoginRequest):
     return {"token": create_token(admin), "admin": {"username": admin["username"], "role": admin["role"], "full_name": admin["full_name"], "email": admin["email"]}}
 
 
+@app.get("/api/public/branding")
+def public_branding():
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'system'")
+    value = row["value"] if row else {}
+    branding = value.get("branding", {})
+    return {
+        "display_name": branding.get("display_name", "3JCentralPisowifi"),
+        "portal_subtitle": branding.get("portal_subtitle", "Source of Truth + Manual RADIUS Test MVP"),
+        "accent_color": branding.get("accent_color", "#206bc4"),
+    }
+
+
 @app.get("/api/me")
 def me(admin=Depends(current_admin)):
     profile = fetch_one("SELECT id, username, role, status, full_name, email, created_at, updated_at FROM admins WHERE id = %s", (admin["id"],))

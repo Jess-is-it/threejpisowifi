@@ -45,6 +45,14 @@ function request(path, options = {}) {
   });
 }
 
+function publicRequest(path) {
+  return fetch(`${API}${path}`).then(async (res) => {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'Request failed');
+    return data;
+  });
+}
+
 function fmt(value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
@@ -52,7 +60,7 @@ function fmt(value) {
   return String(value);
 }
 
-function Login({ onLogin }) {
+function Login({ onLogin, branding }) {
   const [form, setForm] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
 
@@ -74,8 +82,8 @@ function Login({ onLogin }) {
       <section className="login-shell">
         <div className="login-copy">
           <span className="logo-mark">3J</span>
-          <h1>3JCentralPisowifi</h1>
-          <p>Source of Truth + Manual RADIUS Test MVP</p>
+          <h1>{branding.display_name}</h1>
+          <p>{branding.portal_subtitle}</p>
         </div>
         <form className="login-card" onSubmit={submit}>
           <p className="kicker">Admin access</p>
@@ -494,15 +502,19 @@ function App() {
   const [page, setPage] = useState('Dashboard');
   const [dashboard, setDashboard] = useState(null);
   const [me, setMe] = useState(null);
+  const [branding, setBranding] = useState({ display_name: '3JCentralPisowifi', portal_subtitle: 'Source of Truth + Manual RADIUS Test MVP', accent_color: '#206bc4' });
 
   async function refresh() {
     if (localStorage.getItem('centralwifi_token')) {
       setDashboard(await request('/dashboard'));
       setMe(await request('/me'));
+      setBranding(await publicRequest('/public/branding'));
     }
   }
   useEffect(() => { if (authed) refresh().catch(() => setAuthed(false)); }, [authed]);
-  if (!authed) return <Login onLogin={() => setAuthed(true)} />;
+  useEffect(() => { publicRequest('/public/branding').then(setBranding).catch(() => {}); }, []);
+  useEffect(() => { document.documentElement.style.setProperty('--primary', branding.accent_color || '#206bc4'); }, [branding]);
+  if (!authed) return <Login onLogin={() => setAuthed(true)} branding={branding} />;
 
   const logout = () => {
     localStorage.removeItem('centralwifi_token');
