@@ -13,6 +13,7 @@ body,
 
 body {
   background: var(--admin-page-bg);
+  overflow-x: hidden;
 }
 
 button {
@@ -45,17 +46,21 @@ pre code {
 
 .page {
   --tblr-navbar-width: 20rem;
+  overflow-x: hidden;
 }
 
 .navbar-vertical {
   background: var(--admin-sidebar);
   width: var(--tblr-navbar-width);
+  height: 100vh;
+  overflow: hidden;
 }
 
 .navbar-vertical .navbar-brand {
-  min-height: 4.25rem;
+  min-height: 4rem;
   justify-content: flex-start;
   padding-inline: 1.4rem;
+  flex: 0 0 auto;
 }
 
 .brand-button {
@@ -87,7 +92,9 @@ button.nav-link {
 
 .navbar-vertical .nav-link {
   border-radius: 0.625rem;
-  margin-inline: 0.5rem;
+  margin-inline: 0.45rem;
+  min-height: 2.7rem;
+  padding-block: 0.55rem;
 }
 
 .navbar-vertical .nav-link.active,
@@ -100,16 +107,36 @@ button.nav-link {
 }
 
 .navbar-vertical .container-fluid {
-  min-height: 100vh;
+  display: flex;
+  height: 100vh;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  padding-inline: 0.75rem;
 }
 
 .navbar-vertical .navbar-collapse {
-  min-height: calc(100vh - 4.25rem);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.navbar-vertical .navbar-nav {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  padding-top: 0.65rem !important;
+}
+
+.page-wrapper {
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .sidebar-user {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
-  padding: 1rem 0.75rem 1.25rem;
+  flex: 0 0 auto;
+  padding: 0.8rem 0.75rem 0.9rem;
 }
 
 .sidebar-user .dropdown {
@@ -125,7 +152,7 @@ button.nav-link {
   border-radius: 0.75rem;
   background: rgba(255, 255, 255, 0.06);
   color: #fff;
-  padding: 0.75rem;
+  padding: 0.65rem 0.75rem;
   text-align: left;
 }
 
@@ -184,6 +211,31 @@ button.nav-link {
   backdrop-filter: blur(10px);
 }
 
+.navbar-light.sticky-top .container-xl,
+.page-body .container-xl {
+  width: 100%;
+  max-width: none;
+  padding-left: 56px;
+  padding-right: 24px;
+}
+
+.navbar-light.sticky-top {
+  min-height: 4.25rem;
+}
+
+.topnav-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.topnav-title .h3 {
+  color: #374151;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
 .sys-metric {
   display: inline-flex;
   align-items: center;
@@ -193,12 +245,17 @@ button.nav-link {
 
 .header-icon-badge {
   display: inline-flex;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 2.8rem;
+  height: 2.8rem;
   align-items: center;
   justify-content: center;
   border-radius: 0.75rem;
   padding: 0;
+}
+
+.header-icon-badge svg {
+  width: 1.25rem;
+  height: 1.25rem;
 }
 
 .info {
@@ -337,9 +394,22 @@ button.nav-link {
 }
 
 @media (max-width: 991.98px) {
+  .navbar-vertical {
+    height: auto;
+    overflow: visible;
+  }
+
   .navbar-vertical .container-fluid,
   .navbar-vertical .navbar-collapse {
+    height: auto;
     min-height: auto;
+    overflow: visible;
+  }
+
+  .navbar-light.sticky-top .container-xl,
+  .page-body .container-xl {
+    padding-left: 1rem;
+    padding-right: 1rem;
   }
 
   .sidebar-user {

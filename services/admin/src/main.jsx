@@ -715,7 +715,7 @@ function Header({ page, dashboard, resources }) {
     <header className="navbar navbar-expand-md navbar-light d-print-none sticky-top">
       <div className="container-xl">
         <div className="d-flex w-100 align-items-center">
-          <div className="d-flex align-items-center gap-2">
+          <div className="topnav-title">
             <span className={`badge bg-${meta.tone}-lt text-${meta.tone} header-icon-badge`}><PageIcon size={18} /></span>
             <div className="h3 m-0">{page}</div>
           </div>

@@ -169,6 +169,7 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
+- 2026-04-26: Adjusted Tabler sidebar sizing to avoid sidebar scrollbars and aligned top navigation/content spacing to a 56px left offset from the side panel.
 - 2026-04-26: Added Branding logo uploads, browser favicon upload, environment-isolated uploads Docker volume, CPU/RAM/DISK/UPTIME top metrics, wider sidebar, page-specific top badge icons, and click-only profile dropdown behavior.
 - 2026-04-26: Installed real Tabler dependencies (`@tabler/core`, `@tabler/icons-react`), removed the previous icon/template dependency path, and rebuilt the Admin Portal on Tabler classes while preserving new 3JCentralPisowifi naming.
 - 2026-04-26: Removed the previous third-party admin template direction, adopted the owner's old-system UI language without old naming, and added common profile, password, access, backup, danger, and system update surfaces.
