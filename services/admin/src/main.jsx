@@ -13,6 +13,7 @@ import {
   IconDashboard,
   IconDatabase,
   IconDeviceFloppy,
+  IconEdit,
   IconHistory,
   IconId,
   IconKey,
@@ -530,6 +531,7 @@ function NasClients({ refresh }) {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState({ name: '', nas_ip: '', shortname: '', secret: generateSharedSecret(), type: 'other', notes: '' });
   const [autoGenerateSecret, setAutoGenerateSecret] = useState(true);
+  const [editForm, setEditForm] = useState(null);
   const [secret, setSecret] = useState('');
   const [showExplanation, setShowExplanation] = useState(false);
   async function load() { setRows(await request('/nas-clients')); }
@@ -541,59 +543,135 @@ function NasClients({ refresh }) {
     setForm({ name: '', nas_ip: '', shortname: '', secret: autoGenerateSecret ? generateSharedSecret() : '', type: 'other', notes: '' });
     await load(); refresh();
   }
+  function openEdit(row) {
+    setEditForm({
+      id: row.id,
+      name: row.name || '',
+      nas_ip: row.nas_ip || '',
+      shortname: row.shortname || '',
+      secret: row.secret || '',
+      type: row.type || 'other',
+      status: row.status || 'active',
+      notes: row.notes || ''
+    });
+  }
+  async function saveEdit(e) {
+    e.preventDefault();
+    await request(`/nas-clients/${editForm.id}`, { method: 'PATCH', body: JSON.stringify(editForm) });
+    setEditForm(null);
+    await load(); refresh();
+  }
 
   return (
-    <div className="row row-cards">
-      <div className="col-12">
-        <div className="alert alert-info nas-note">
-          <div className="d-flex align-items-start gap-2">
-            <span className="badge bg-blue-lt text-blue header-icon-badge flex-shrink-0"><IconRouter size={18} /></span>
-            <div>
-              <div className="fw-semibold mb-1">NAS / Router / AP Clients</div>
-              <div>Add the routers, access points, or controllers that are allowed to check customer access with 3JCentralPisowifi. These are trusted devices, not WiFi users. The shared secret must match on both this system and the device.</div>
-              <button className="nas-readmore mt-2" type="button" onClick={() => setShowExplanation(!showExplanation)}>
-                {showExplanation ? 'Close explanation' : 'Read more'}
-              </button>
-              {showExplanation && (
-                <div className="nas-note-long mt-3">
-                  <h4>What is this page for?</h4>
-                  <p>This page is where you add the routers, access points, or controllers that are allowed to ask this system if a WiFi customer can connect.</p>
-                  <p>Think of each device here as a trusted “gatekeeper” at a branch or substation. When a customer tries to connect to WiFi, that device asks 3JCentralPisowifi: “Should this customer be allowed online?”</p>
-                  <p>Only devices added here will be trusted by the system. If a router or access point is not listed here, it may not be able to authenticate customers.</p>
-                  <p className="mb-0">The Shared Secret is the private key between this system and the router/access point. It must match on both sides. Keep it safe and do not share it publicly.</p>
-                </div>
-              )}
+    <>
+      <div className="row row-cards">
+        <div className="col-12">
+          <div className="alert alert-info nas-note">
+            <div className="d-flex align-items-start gap-2">
+              <span className="badge bg-blue-lt text-blue header-icon-badge flex-shrink-0"><IconRouter size={18} /></span>
+              <div>
+                <div className="fw-semibold mb-1">NAS / Router / AP Clients</div>
+                <div>Add the routers, access points, or controllers that are allowed to check customer access with 3JCentralPisowifi. These are trusted devices, not WiFi users. The shared secret must match on both this system and the device.</div>
+                <button className="nas-readmore mt-2" type="button" onClick={() => setShowExplanation(!showExplanation)}>
+                  {showExplanation ? 'Close explanation' : 'Read more'}
+                </button>
+                {showExplanation && (
+                  <div className="nas-note-long mt-3">
+                    <h4>What is this page for?</h4>
+                    <p>This page is where you add the routers, access points, or controllers that are allowed to ask this system if a WiFi customer can connect.</p>
+                    <p>Think of each device here as a trusted “gatekeeper” at a branch or substation. When a customer tries to connect to WiFi, that device asks 3JCentralPisowifi: “Should this customer be allowed online?”</p>
+                    <p>Only devices added here will be trusted by the system. If a router or access point is not listed here, it may not be able to authenticate customers.</p>
+                    <p className="mb-0">The Shared Secret is the private key between this system and the router/access point. It must match on both sides. Keep it safe and do not share it publicly.</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
+        <div className="col-12">
+          <Card title="Add NAS / Router / AP Client">
+            <form onSubmit={create}>
+              <div className="row g-3 align-items-end">
+                <div className="col-md-3"><label className="form-label">Name</label><input className="form-control" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+                <div className="col-md-3"><label className="form-label">IP Address</label><input className="form-control" value={form.nas_ip} onChange={(e) => setForm({ ...form, nas_ip: e.target.value })} /></div>
+                <div className="col-md-2"><label className="form-label">Shortname</label><input className="form-control" value={form.shortname} onChange={(e) => setForm({ ...form, shortname: e.target.value })} /></div>
+                <div className="col-md-2"><label className="form-label">Type</label><input className="form-control" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} /></div>
+                <div className="col-md-2"><label className="form-label">Auto Generate</label><label className="form-check mb-2"><input className="form-check-input" type="checkbox" checked={autoGenerateSecret} onChange={(e) => { const checked = e.target.checked; setAutoGenerateSecret(checked); setForm({ ...form, secret: checked ? generateSharedSecret() : '' }); }} /><span className="form-check-label">Shared secret</span></label></div>
+                <div className="col-md-10"><label className="form-label">Shared Secret</label><input className="form-control" required value={form.secret} readOnly={autoGenerateSecret} onChange={(e) => setForm({ ...form, secret: e.target.value })} /></div>
+                <div className="col-md-2"><button className="btn btn-primary w-100"><IconRouter size={18} className="me-2" />Add</button></div>
+              </div>
+            </form>
+            {secret && <div className="alert alert-info mt-3">Shared secret for Phase 1 testing: <code>{secret}</code></div>}
+          </Card>
+        </div>
+        <div className="col-12">
+          <Card title="Configuration Guidance">
+            <div className="text-muted">Set your router/AP RADIUS server IP to this Ubuntu server. Use staging ports <code>11812</code> and <code>11813</code> plus the shared secret.</div>
+          </Card>
+        </div>
+        <div className="col-12">
+          <Card title="NAS / Router / AP Clients">
+            {!rows.length ? <div className="empty">No records yet.</div> : (
+              <div className="table-responsive table-sticky-wrap">
+                <table className="table card-table table-vcenter text-nowrap">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>IP Address</th>
+                      <th>Shortname</th>
+                      <th>Shared Secret</th>
+                      <th>Type</th>
+                      <th>Status</th>
+                      <th>Notes</th>
+                      <th>Created At</th>
+                      <th className="text-end">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((row) => (
+                      <tr key={row.id}>
+                        <td>{fmt(row.name)}</td>
+                        <td>{fmt(row.nas_ip)}</td>
+                        <td>{fmt(row.shortname)}</td>
+                        <td><code>{fmt(row.secret)}</code></td>
+                        <td>{fmt(row.type)}</td>
+                        <td>{fmt(row.status)}</td>
+                        <td>{fmt(row.notes)}</td>
+                        <td>{fmt(row.created_at)}</td>
+                        <td className="text-end">
+                          <button className="badge bg-blue-lt text-blue border-0 nas-action-badge" type="button" onClick={() => openEdit(row)}>
+                            <IconEdit size={15} className="me-1" />Edit
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        </div>
       </div>
-      <div className="col-12">
-        <Card title="Add NAS / Router / AP Client">
-          <form onSubmit={create}>
-            <div className="row g-3 align-items-end">
-              <div className="col-md-3"><label className="form-label">Name</label><input className="form-control" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
-              <div className="col-md-3"><label className="form-label">IP Address</label><input className="form-control" value={form.nas_ip} onChange={(e) => setForm({ ...form, nas_ip: e.target.value })} /></div>
-              <div className="col-md-2"><label className="form-label">Shortname</label><input className="form-control" value={form.shortname} onChange={(e) => setForm({ ...form, shortname: e.target.value })} /></div>
-              <div className="col-md-2"><label className="form-label">Type</label><input className="form-control" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} /></div>
-              <div className="col-md-2"><label className="form-label">Auto Generate</label><label className="form-check mb-2"><input className="form-check-input" type="checkbox" checked={autoGenerateSecret} onChange={(e) => { const checked = e.target.checked; setAutoGenerateSecret(checked); setForm({ ...form, secret: checked ? generateSharedSecret() : '' }); }} /><span className="form-check-label">Shared secret</span></label></div>
-              <div className="col-md-10"><label className="form-label">Shared Secret</label><input className="form-control" required value={form.secret} readOnly={autoGenerateSecret} onChange={(e) => setForm({ ...form, secret: e.target.value })} /></div>
-              <div className="col-md-2"><button className="btn btn-primary w-100"><IconRouter size={18} className="me-2" />Add</button></div>
+      {editForm && (
+        <Modal title="Edit NAS / Router / AP Client" onClose={() => setEditForm(null)}>
+          <form onSubmit={saveEdit}>
+            <div className="row g-3">
+              <div className="col-md-6"><label className="form-label">Name</label><input className="form-control" value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} /></div>
+              <div className="col-md-6"><label className="form-label">IP Address</label><input className="form-control" value={editForm.nas_ip} onChange={(e) => setEditForm({ ...editForm, nas_ip: e.target.value })} /></div>
+              <div className="col-md-6"><label className="form-label">Shortname</label><input className="form-control" value={editForm.shortname} onChange={(e) => setEditForm({ ...editForm, shortname: e.target.value })} /></div>
+              <div className="col-md-6"><label className="form-label">Shared Secret</label><input className="form-control" value={editForm.secret} onChange={(e) => setEditForm({ ...editForm, secret: e.target.value })} /></div>
+              <div className="col-md-6"><label className="form-label">Type</label><input className="form-control" value={editForm.type} onChange={(e) => setEditForm({ ...editForm, type: e.target.value })} /></div>
+              <div className="col-md-6"><label className="form-label">Status</label><select className="form-select" value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}><option value="active">Active</option><option value="disabled">Disabled</option></select></div>
+              <div className="col-12"><label className="form-label">Notes</label><textarea className="form-control" rows="3" value={editForm.notes} onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })} /></div>
+            </div>
+            <div className="modal-footer px-0 pb-0">
+              <button type="button" className="btn" onClick={() => setEditForm(null)}>Cancel</button>
+              <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Changes</button>
             </div>
           </form>
-          {secret && <div className="alert alert-info mt-3">Shared secret for Phase 1 testing: <code>{secret}</code></div>}
-        </Card>
-      </div>
-      <div className="col-12">
-        <Card title="Configuration Guidance">
-          <div className="text-muted">Set your router/AP RADIUS server IP to this Ubuntu server. Use staging ports <code>11812</code> and <code>11813</code> plus the shared secret.</div>
-        </Card>
-      </div>
-      <div className="col-12">
-        <Card title="NAS / Router / AP Clients">
-          <Table rows={rows} columns={['name', 'nas_ip', 'shortname', 'secret', 'type', 'status', 'notes', 'created_at']} />
-        </Card>
-      </div>
-    </div>
+        </Modal>
+      )}
+    </>
   );
 }
 

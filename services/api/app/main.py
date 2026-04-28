@@ -74,6 +74,16 @@ class NasCreate(BaseModel):
     notes: Optional[str] = None
 
 
+class NasUpdate(BaseModel):
+    name: Optional[str] = None
+    nas_ip: Optional[str] = None
+    shortname: Optional[str] = None
+    secret: Optional[str] = None
+    type: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class SystemSettingsUpdate(BaseModel):
     branding: Optional[dict] = None
     access: Optional[dict] = None
@@ -381,6 +391,51 @@ def create_nas(payload: NasCreate, admin=Depends(current_admin)):
             )
     audit(admin["id"], "create_nas_client", "nas_client", str(nas_id), {"shortname": payload.shortname})
     return {"id": nas_id, "secret": secret}
+
+
+@app.patch("/api/nas-clients/{nas_id}")
+def update_nas(nas_id: str, payload: NasUpdate, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT shortname FROM nas_clients WHERE id = %s", (nas_id,))
+            existing = cur.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="NAS client not found")
+            cur.execute(
+                """
+                UPDATE nas_clients
+                SET name = COALESCE(%s, name),
+                    nas_ip = COALESCE(%s, nas_ip),
+                    shortname = COALESCE(%s, shortname),
+                    secret = COALESCE(%s, secret),
+                    type = COALESCE(%s, type),
+                    status = COALESCE(%s, status),
+                    notes = %s,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING name, nas_ip::text, shortname, secret, type, status, notes
+                """,
+                (payload.name, payload.nas_ip, payload.shortname, payload.secret, payload.type, payload.status, payload.notes, nas_id),
+            )
+            updated = cur.fetchone()
+            cur.execute("DELETE FROM nas WHERE shortname = %s AND shortname <> %s", (existing["shortname"], updated["shortname"]))
+            if updated["status"] == "active":
+                cur.execute(
+                    """
+                    INSERT INTO nas(nasname, shortname, type, secret, description)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (shortname) DO UPDATE
+                    SET nasname = EXCLUDED.nasname,
+                        secret = EXCLUDED.secret,
+                        type = EXCLUDED.type,
+                        description = EXCLUDED.description
+                    """,
+                    (updated["nas_ip"], updated["shortname"], updated["type"], updated["secret"], updated["name"]),
+                )
+            else:
+                cur.execute("DELETE FROM nas WHERE shortname = %s", (updated["shortname"],))
+    audit(admin["id"], "update_nas_client", "nas_client", nas_id, payload.model_dump(exclude_none=True))
+    return {"status": "ok"}
 
 
 @app.post("/api/nas-clients/{nas_id}/rotate-secret")
