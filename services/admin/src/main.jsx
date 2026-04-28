@@ -153,6 +153,10 @@ function generateSharedSecret() {
   return Array.from(values, (value) => chars[value % chars.length]).join('');
 }
 
+function generateSessionId() {
+  return `acct-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function Login({ onLogin, branding }) {
   const [form, setForm] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
@@ -479,8 +483,16 @@ function Modal({ title, children, onClose }) {
 function WalletPage({ refresh }) {
   const [users, setUsers] = useState([]);
   const [topup, setTopup] = useState({ user_id: '', hours: 1, valid_until: '', is_unlimited: false, note: '' });
+  const [summary, setSummary] = useState(null);
   async function load() { setUsers(await request('/users')); }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!topup.user_id) {
+      setSummary(null);
+      return;
+    }
+    request(`/users/${topup.user_id}/wallet-accounting-summary`).then(setSummary).catch(() => setSummary(null));
+  }, [topup.user_id]);
 
   async function addBalance(e) {
     e.preventDefault();
@@ -523,6 +535,20 @@ function WalletPage({ refresh }) {
           <Table rows={users} columns={['username', 'status', 'time_remaining_seconds', 'valid_until', 'is_unlimited']} />
         </Card>
       </div>
+      {summary && (
+        <div className="col-12">
+          <Card title="Wallet Accounting Summary">
+            <div className="row g-3 mb-3">
+              <div className="col-md-3"><div className="text-muted">Current Time Remaining</div><div className="h3">{formatSeconds(summary.user.time_remaining_seconds)}</div></div>
+              <div className="col-md-3"><div className="text-muted">Unlimited</div><div className="h3">{summary.user.is_unlimited ? 'Yes' : 'No'}</div></div>
+              <div className="col-md-3"><div className="text-muted">Valid Until</div><div className="h3">{fmt(summary.user.valid_until) || 'Not set'}</div></div>
+              <div className="col-md-3"><div className="text-muted">Active Session</div><div className="h3">{summary.active_session ? 'Online' : 'Offline'}</div></div>
+            </div>
+            {summary.last_accounting_deduction && <div className="alert alert-info">Last accounting deduction: {summary.last_accounting_deduction.amount_seconds} seconds at {summary.last_accounting_deduction.created_at}</div>}
+            <Table rows={summary.recent_accounting_debits || []} columns={['amount_seconds', 'reference', 'note', 'created_at']} />
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
@@ -695,14 +721,33 @@ function RadiusTestGuide({ refresh }) {
     radius_host: 'radius',
     radius_port: 1812
   });
+  const [acctForm, setAcctForm] = useState({
+    username: '',
+    nas_ip: '172.18.0.1',
+    nas_identifier: 'Docker API Test NAS',
+    calling_station_id: 'REAL-ACCT-DEVICE',
+    framed_ip_address: '10.10.10.10',
+    acct_session_id: generateSessionId(),
+    acct_unique_session_id: '',
+    shared_secret: '',
+    radius_host: 'radius',
+    accounting_port: 1813,
+    acct_session_time: 0,
+    input_octets: 0,
+    output_octets: 0
+  });
   const [realDefaults, setRealDefaults] = useState(null);
   const [testing, setTesting] = useState(false);
   const [realTesting, setRealTesting] = useState(false);
+  const [acctTesting, setAcctTesting] = useState('');
   const [result, setResult] = useState(null);
   const [realResult, setRealResult] = useState(null);
+  const [acctResult, setAcctResult] = useState(null);
   const [error, setError] = useState('');
   const [realError, setRealError] = useState('');
+  const [acctError, setAcctError] = useState('');
   const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
+  const [showAcctDetails, setShowAcctDetails] = useState(false);
 
   useEffect(() => {
     request('/users').then((data) => setUsers(Array.isArray(data) ? data : [])).catch(() => setUsers([]));
@@ -715,6 +760,14 @@ function RadiusTestGuide({ refresh }) {
         shared_secret: data.shared_secret || current.shared_secret,
         radius_host: data.radius_host || current.radius_host,
         radius_port: data.radius_port || current.radius_port
+      }));
+      setAcctForm((current) => ({
+        ...current,
+        nas_ip: data.packet_nas_ip || current.nas_ip,
+        nas_identifier: data.client_name || current.nas_identifier,
+        shared_secret: data.shared_secret || current.shared_secret,
+        radius_host: data.radius_host || current.radius_host,
+        accounting_port: data.accounting_port || current.accounting_port
       }));
     }).catch(() => {});
     request('/nas-clients').then((data) => {
@@ -757,6 +810,21 @@ function RadiusTestGuide({ refresh }) {
       setRealTesting(false);
     }
   }
+  async function runAccountingTest(statusType) {
+    setAcctTesting(statusType);
+    setAcctError('');
+    setAcctResult(null);
+    try {
+      const endpoint = statusType === 'Start' ? 'start' : statusType === 'Stop' ? 'stop' : 'interim';
+      const data = await request(`/radius-test/accounting/${endpoint}`, { method: 'POST', body: JSON.stringify(acctForm) });
+      setAcctResult({ ...data, statusType });
+      refresh();
+    } catch (err) {
+      setAcctError(err.message);
+    } finally {
+      setAcctTesting('');
+    }
+  }
 
   const resultTone = result?.result === 'accept' ? 'success' : 'danger';
   const realTone = realResult?.result === 'Access-Accept' ? 'success' : (realResult?.result === 'Wrong Secret' || realResult?.result === 'Database Error' ? 'warning' : 'danger');
@@ -774,6 +842,7 @@ function RadiusTestGuide({ refresh }) {
   };
   const realReason = realResult?.diagnostic_reason || realResult?.reply_message || realResult?.detail || realResult?.result;
   const realSuggestion = suggestionMap[realReason] || suggestionMap[realResult?.result] || 'Check FreeRADIUS logs.';
+  const acctReason = acctResult?.diagnostic_reason || acctResult?.detail || acctResult?.result;
   const checkLabels = {
     user_exists: 'User exists',
     password_valid: 'Password is correct',
@@ -937,6 +1006,93 @@ function RadiusTestGuide({ refresh }) {
         </Card>
       </div>
       <div className="col-12">
+        <Card title="Real RADIUS Accounting Test" subtitle="Send real Accounting Start, Interim-Update, and Stop packets to FreeRADIUS.">
+          <div className="alert alert-info">
+            Accounting tells the system when a customer starts using the internet, whether they are still online, and when they disconnect. This is how the system tracks active devices, deducts time, and prevents the same account from being used on more than one device.
+          </div>
+          <form onSubmit={(e) => e.preventDefault()}>
+            <div className="row g-3">
+              <div className="col-md-4">
+                <label className="form-label">Username</label>
+                <input className="form-control" list="radius-acct-users" required value={acctForm.username} onChange={(e) => setAcctForm({ ...acctForm, username: e.target.value })} />
+                <datalist id="radius-acct-users">{users.map((user) => <option key={user.id} value={user.username} />)}</datalist>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">NAS Client / Internal Docker RADIUS Test Client</label>
+                <input className="form-control" value="Docker API Test NAS" readOnly />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Calling Station ID / Test Device</label>
+                <input className="form-control" value={acctForm.calling_station_id} onChange={(e) => setAcctForm({ ...acctForm, calling_station_id: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Framed IP Address</label>
+                <input className="form-control" value={acctForm.framed_ip_address} onChange={(e) => setAcctForm({ ...acctForm, framed_ip_address: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Acct Session ID</label>
+                <div className="input-group">
+                  <input className="form-control" value={acctForm.acct_session_id} onChange={(e) => setAcctForm({ ...acctForm, acct_session_id: e.target.value })} />
+                  <button className="btn" type="button" onClick={() => setAcctForm({ ...acctForm, acct_session_id: generateSessionId(), acct_session_time: 0, input_octets: 0, output_octets: 0 })}>Auto-generate</button>
+                </div>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">RADIUS Host</label>
+                <input className="form-control" value={acctForm.radius_host} onChange={(e) => setAcctForm({ ...acctForm, radius_host: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Accounting Port</label>
+                <input className="form-control" type="number" value={acctForm.accounting_port} onChange={(e) => setAcctForm({ ...acctForm, accounting_port: Number(e.target.value) })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Shared Secret</label>
+                <input className="form-control" value={acctForm.shared_secret} onChange={(e) => setAcctForm({ ...acctForm, shared_secret: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Session Time</label>
+                <input className="form-control" type="number" min="0" value={acctForm.acct_session_time} onChange={(e) => setAcctForm({ ...acctForm, acct_session_time: Number(e.target.value) })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Input Octets</label>
+                <input className="form-control" type="number" min="0" value={acctForm.input_octets} onChange={(e) => setAcctForm({ ...acctForm, input_octets: Number(e.target.value) })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Output Octets</label>
+                <input className="form-control" type="number" min="0" value={acctForm.output_octets} onChange={(e) => setAcctForm({ ...acctForm, output_octets: Number(e.target.value) })} />
+              </div>
+              <div className="col-12 d-flex gap-2 flex-wrap">
+                <button type="button" className="btn btn-primary" disabled={!!acctTesting} onClick={() => runAccountingTest('Start')}>Send Accounting Start</button>
+                <button type="button" className="btn btn-warning" disabled={!!acctTesting} onClick={() => runAccountingTest('Interim-Update')}>Send Interim Update</button>
+                <button type="button" className="btn btn-danger" disabled={!!acctTesting} onClick={() => runAccountingTest('Stop')}>Send Accounting Stop</button>
+                <button type="button" className="btn" onClick={() => { setAcctResult(null); setAcctForm({ ...acctForm, acct_session_id: generateSessionId(), acct_session_time: 0, input_octets: 0, output_octets: 0 }); }}>Reset Test Session ID</button>
+              </div>
+            </div>
+          </form>
+          {acctError && <div className="alert alert-danger mt-3 mb-0">{acctError}</div>}
+          {acctResult && (
+            <div className={`alert alert-${acctResult.result === 'Accounting-Response' ? 'success' : 'danger'} radius-test-result mt-3 mb-0`}>
+              <div className="fw-bold">{acctResult.result}</div>
+              <div>{acctReason}</div>
+              {acctResult.remote && <div>Reply From: {acctResult.remote}</div>}
+              <button className="nas-readmore mt-3" type="button" onClick={() => setShowAcctDetails(!showAcctDetails)}>
+                {showAcctDetails ? 'Hide technical details' : 'Show technical details'}
+              </button>
+              {showAcctDetails && (
+                <pre className="mt-3 mb-0"><code>{JSON.stringify({
+                  raw_attributes_sent: acctResult.raw_request_attributes || [],
+                  raw_response: acctResult.raw_response_attributes || [],
+                  username: acctForm.username,
+                  radius_host: acctForm.radius_host,
+                  accounting_port: acctForm.accounting_port,
+                  acct_session_id: acctForm.acct_session_id,
+                  timestamp: new Date().toISOString()
+                }, null, 2)}</code></pre>
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
+      <div className="col-12">
         <Card title="External NAS Test Instructions" subtitle="Use this when testing a real MikroTik, Omada AP/controller, hostapd device, or radtest from another machine.">
           <div className="text-muted mb-3">External routers and APs must be added in NAS / Router / AP Clients. Their shared secret is different from the internal Docker test client secret above.</div>
           <div className="row g-3">
@@ -954,6 +1110,69 @@ function SimplePage({ title, endpoint, columns, children }) {
   const [rows, setRows] = useState([]);
   useEffect(() => { request(endpoint).then((data) => setRows(Array.isArray(data) ? data : [])); }, [endpoint]);
   return <Card title={title}>{children}<Table rows={rows} columns={columns} /></Card>;
+}
+
+function SessionsPage({ refresh }) {
+  const [rows, setRows] = useState([]);
+  const [detail, setDetail] = useState(null);
+  async function load() { setRows(await request('/sessions')); }
+  useEffect(() => { load(); }, []);
+  const grouped = {
+    active: rows.filter((row) => row.display_status === 'ACTIVE'),
+    stale: rows.filter((row) => row.display_status === 'STALE'),
+    stopped: rows.filter((row) => !['ACTIVE', 'STALE'].includes(row.display_status))
+  };
+  async function viewDetails(row) {
+    setDetail(await request(`/sessions/${row.id}`));
+  }
+  async function action(row, type) {
+    await request(`/sessions/${row.id}/${type}`, { method: 'POST' });
+    await load(); refresh();
+  }
+  function sessionTable(items) {
+    if (!items.length) return <div className="empty">No sessions in this section.</div>;
+    return (
+      <div className="table-responsive">
+        <table className="table card-table table-vcenter text-nowrap">
+          <thead><tr><th>Username</th><th>Current Device</th><th>NAS / Router / AP</th><th>Framed IP</th><th>Start Time</th><th>Last Seen</th><th>Session Time</th><th>Input / Output Octets</th><th>Status</th><th className="text-end">Actions</th></tr></thead>
+          <tbody>
+            {items.map((row) => (
+              <tr key={row.id}>
+                <td>{row.username}</td>
+                <td>{fmt(row.calling_station_id)}</td>
+                <td>{fmt(row.nas_identifier || row.nas_ip)}</td>
+                <td>{fmt(row.framed_ip_address)}</td>
+                <td>{fmt(row.start_time)}</td>
+                <td>{fmt(row.last_update_time)}</td>
+                <td>{formatSeconds(row.acct_session_time)}</td>
+                <td>{fmt(row.input_octets)} / {fmt(row.output_octets)}</td>
+                <td><span className="badge bg-blue-lt text-blue">{row.display_status || row.status}</span></td>
+                <td className="text-end">
+                  <button className="btn btn-sm me-1" onClick={() => viewDetails(row)}>View Details</button>
+                  {row.display_status === 'ACTIVE' && <button className="btn btn-sm btn-warning me-1" onClick={() => action(row, 'mark-stale')}>Mark Stale</button>}
+                  {['ACTIVE', 'STALE'].includes(row.display_status) && <button className="btn btn-sm btn-danger" onClick={() => action(row, 'force-stop-local')}>Force Stop Locally</button>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+  return (
+    <div className="row row-cards">
+      <div className="col-12"><div className="alert alert-info">An active session means the system believes this customer is currently online. If single-device protection is enabled, another login using the same account will be rejected until this session stops or becomes stale.</div></div>
+      <div className="col-12"><Card title="Active Sessions">{sessionTable(grouped.active)}</Card></div>
+      <div className="col-12"><Card title="Stale Sessions">{sessionTable(grouped.stale)}</Card></div>
+      <div className="col-12"><Card title="Stopped Sessions / History">{sessionTable(grouped.stopped)}</Card></div>
+      <div className="col-12"><div className="alert alert-warning">Force Stop Locally does not disconnect the user from the AP/router yet. It only clears the local active-session record.</div></div>
+      {detail && (
+        <Modal title="Session Details" onClose={() => setDetail(null)}>
+          <pre><code>{JSON.stringify(detail, null, 2)}</code></pre>
+        </Modal>
+      )}
+    </div>
+  );
 }
 
 function ProfilePage({ onSaved }) {
@@ -1384,7 +1603,7 @@ function App() {
             {page === 'Users' && <UsersPage refresh={refresh} />}
             {page === 'Wallet / Manual Top-Up' && <WalletPage refresh={refresh} />}
             {page === 'NAS / Router / AP Clients' && <NasClients refresh={refresh} />}
-            {page === 'Sessions' && <SimplePage title="Sessions" endpoint="/sessions" columns={['username', 'calling_station_id', 'nas_ip', 'framed_ip_address', 'start_time', 'last_update_time', 'stop_time', 'status']} />}
+            {page === 'Sessions' && <SessionsPage refresh={refresh} />}
             {page === 'RADIUS Test Guide' && <RadiusTestGuide refresh={refresh} />}
             {page === 'System Settings' && <SystemSettingsPage refresh={refresh} />}
             {page === 'Logs' && <SimplePage title="Logs" endpoint="/audit-logs" columns={['action', 'target_type', 'target_id', 'details', 'created_at']} />}

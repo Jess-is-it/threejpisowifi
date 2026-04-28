@@ -8,7 +8,7 @@ exec radius_auth {
 
 exec radius_acct {
     wait = yes
-    program = "/opt/radius/radius_acct.py '%{User-Name}' '%{Acct-Status-Type}' '%{Packet-Src-IP-Address}' '%{NAS-Identifier}' '%{Calling-Station-Id}' '%{Framed-IP-Address}' '%{Acct-Session-Id}' '%{Acct-Input-Octets}' '%{Acct-Output-Octets}'"
+    program = "/opt/radius/radius_acct.py '%{User-Name}' '%{Acct-Status-Type}' '%{Packet-Src-IP-Address}' '%{NAS-Identifier}' '%{Calling-Station-Id}' '%{Framed-IP-Address}' '%{Acct-Session-Id}' '%{Acct-Input-Octets}' '%{Acct-Output-Octets}' '%{Acct-Session-Time}' '%{Acct-Unique-Session-Id}'"
     input_pairs = request
     output_pairs = reply
     shell_escape = yes

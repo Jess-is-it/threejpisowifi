@@ -13,4 +13,11 @@ It includes:
 - NAS / Router / AP client records.
 - Session tracking and single-device rejection.
 
+Phase 1C adds real RADIUS Accounting Start, Interim-Update, and Stop support. Accounting packets create active sessions, update last seen/device metadata, deduct wallet time through ACCOUNTING DEBIT transactions, and close sessions on Stop. Active accounting sessions are now the basis for single-device rejection.
+
+Admin test paths:
+- Simulated RADIUS Decision Test: backend-only source-of-truth decision check.
+- Real FreeRADIUS Authentication Test: real Access-Request from API container to FreeRADIUS.
+- Real RADIUS Accounting Test: real Accounting-Request packets for Start, Interim-Update, and Stop.
+
 It does not include coinslot, vendo, SMS, online payments, self-registration, dynamic VLAN, controller automation, WireGuard automation, production captive portal flow, or HA clustering.

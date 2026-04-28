@@ -76,17 +76,42 @@ CREATE TABLE IF NOT EXISTS sessions (
     calling_station_id TEXT,
     framed_ip_address INET,
     acct_session_id TEXT,
+    acct_unique_session_id TEXT,
     start_time TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_update_time TIMESTAMPTZ NOT NULL DEFAULT now(),
     stop_time TIMESTAMPTZ,
+    acct_session_time INTEGER NOT NULL DEFAULT 0,
     input_octets BIGINT NOT NULL DEFAULT 0,
     output_octets BIGINT NOT NULL DEFAULT 0,
-    status TEXT NOT NULL DEFAULT 'active',
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (username, acct_session_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(username, stop_time, last_update_time);
 CREATE INDEX IF NOT EXISTS idx_radius_auth_logs_created_at ON radius_auth_logs(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS radius_accounting_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username TEXT,
+    acct_status_type TEXT,
+    acct_session_id TEXT,
+    nas_ip INET,
+    nas_identifier TEXT,
+    calling_station_id TEXT,
+    framed_ip_address INET,
+    acct_session_time INTEGER NOT NULL DEFAULT 0,
+    input_octets BIGINT NOT NULL DEFAULT 0,
+    output_octets BIGINT NOT NULL DEFAULT 0,
+    raw_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    result TEXT NOT NULL,
+    diagnostic_reason TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_radius_accounting_logs_created_at ON radius_accounting_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_radius_accounting_logs_session ON radius_accounting_logs(username, acct_session_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

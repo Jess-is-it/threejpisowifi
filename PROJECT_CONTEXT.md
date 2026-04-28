@@ -126,6 +126,51 @@ UI direction:
 - Do not copy old-system product names.
 - Keep the UI focused on Phase 1 workflows instead of importing unrelated old-system modules.
 
+
+## Phase 1C — Real RADIUS Accounting & Session Tracking
+Phase 1C adds real RADIUS Accounting Start, Interim-Update, and Stop handling on top of the working Phase 1B real authentication test.
+
+What this phase adds:
+- Real UDP RADIUS Accounting-Request tests from the API container to the FreeRADIUS container.
+- Accounting Start creates ACTIVE sessions without deducting wallet time.
+- Accounting Interim-Update refreshes last seen/session counters and deducts elapsed wallet time safely.
+- Accounting Stop performs final deduction and marks sessions STOPPED.
+- `radius_accounting_logs` stores accounting diagnostics and raw packet payload context.
+- ACCOUNTING DEBIT transactions record wallet time deductions.
+- Sessions page separates Active, Stale, and Stopped sessions and supports View Details, Mark Stale, and Force Stop Locally.
+- Wallet page shows accounting deduction summary for the selected user.
+
+Accounting behavior:
+- Start finds the user, creates or updates a session as ACTIVE, and replies Accounting-Response.
+- Interim-Update finds the active session and deducts elapsed time using the delta since the previous update/session time, preventing double-deduction and negative balances.
+- Stop performs one final deduction, records stop time, and marks the session STOPPED.
+- Unlimited users are tracked but wallet time is not deducted.
+- Valid-until access is not deducted unless the user also has a time balance.
+
+Single-device behavior:
+- Real authentication rejects with `Active session already exists` when the same user has a session with `status = ACTIVE`, `stop_time IS NULL`, and `last_update_time` within `ACTIVE_SESSION_GRACE_SECONDS`.
+- Sessions outside the grace window are displayed as STALE and do not block login forever.
+
+Test types:
+- Simulated RADIUS Decision Test: API-only source-of-truth decision check, no UDP packet.
+- Real FreeRADIUS Authentication Test: real Access-Request packet from API container to FreeRADIUS auth port.
+- Real RADIUS Accounting Test: real Accounting-Request packet from API container to FreeRADIUS accounting port.
+
+Ports:
+- Staging web: `8080/tcp`; auth external: `11812/udp`; accounting external: `11813/udp`; internal Docker auth/accounting: `radius:1812` and `radius:1813`.
+- Production web: `80/tcp`; auth: `1812/udp`; accounting: `1813/udp`.
+
+Implementation choice:
+- FreeRADIUS accounting calls `/opt/radius/radius_acct.py`, which writes directly to PostgreSQL application tables and logs diagnostics. This keeps PostgreSQL as source of truth while preserving FreeRADIUS compatibility tables.
+
+Known limitations:
+- Force Stop Locally does not disconnect clients from routers/APs because CoA disconnect is not implemented yet.
+- Accounting packet tests are PAP/lab-focused and intended for Phase 1 validation.
+- No vouchers, client portal, SMS, payments, captive portal, WireGuard automation, or controller integration in this phase.
+
+Next planned phase:
+- Add the next owner-approved feature after Phase 1C validation, likely voucher/client-facing flow only when explicitly requested.
+
 ## 17. RADIUS behavior
 Access-Accept requires an active user, valid password, usable balance or valid-until or unlimited flag, and no active session inside `ACTIVE_SESSION_GRACE_SECONDS`. Access-Reject is returned for unknown users, invalid passwords, disabled users, no balance/expired access, or active single-device conflict. Accounting Start, Interim-Update, and Stop update the sessions table; Interim-Update decrements time balance without allowing negative balance.
 
@@ -177,6 +222,7 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
+- 2026-04-28: Completed Phase 1C real RADIUS accounting with Start/Interim/Stop packet tests, session tracking, wallet deduction, accounting logs, improved Sessions and Wallet UI, and updated documentation.
 - 2026-04-28: Reworked Real FreeRADIUS Packet Test to use a fixed Internal Docker RADIUS Test Client, added reject diagnostic reasons, technical details, troubleshooting suggestions, and documented separate simulated/internal/external RADIUS test flows.
 - 2026-04-28: Fixed Real FreeRADIUS Packet Test defaults so the Shared Secret uses the API-container/Docker-network FreeRADIUS client secret instead of the selected router/AP NAS record secret.
 - 2026-04-28: Clarified the Real FreeRADIUS Packet Test NAS client source as API container / Docker network in the admin UI.

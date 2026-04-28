@@ -89,6 +89,22 @@ class RealRadiusTestRequest(BaseModel):
     radius_port: int = Field(default=1812, ge=1, le=65535)
 
 
+class RealAccountingTestRequest(BaseModel):
+    username: str
+    nas_ip: str = "172.18.0.1"
+    nas_identifier: Optional[str] = "Docker API Test NAS"
+    calling_station_id: Optional[str] = "REAL-ACCT-TEST"
+    framed_ip_address: Optional[str] = "10.10.10.10"
+    acct_session_id: str
+    acct_unique_session_id: Optional[str] = None
+    shared_secret: Optional[str] = None
+    radius_host: str = "radius"
+    accounting_port: int = Field(default=1813, ge=1, le=65535)
+    acct_session_time: int = Field(default=0, ge=0)
+    input_octets: int = Field(default=0, ge=0)
+    output_octets: int = Field(default=0, ge=0)
+
+
 class NasCreate(BaseModel):
     name: str
     nas_ip: str
@@ -200,6 +216,7 @@ def evaluate_radius_auth(cur, username, password, nas_ip, nas_identifier, callin
             """
             SELECT 1 FROM sessions
             WHERE user_id = %s
+              AND status = 'ACTIVE'
               AND stop_time IS NULL
               AND last_update_time > now() - (%s || ' seconds')::interval
             LIMIT 1
@@ -337,6 +354,108 @@ def send_radius_access_request(payload: RealRadiusTestRequest) -> dict:
         "reply_message": reply_message,
         "diagnostic_reason": diagnostic_reason,
         "raw_attributes": parsed["raw_attributes"],
+        "remote": f"{remote[0]}:{remote[1]}",
+    }
+
+
+def encode_int(value: int) -> bytes:
+    return struct.pack("!I", int(value or 0))
+
+
+def build_accounting_attributes(payload: RealAccountingTestRequest, status_type: str) -> bytes:
+    status_map = {"Start": 1, "Stop": 2, "Interim-Update": 3}
+    nas_ip = normalize_ip(payload.nas_ip)
+    attrs = [
+        radius_attr(1, payload.username.encode()),
+        radius_attr(4, socket.inet_aton(nas_ip)),
+        radius_attr(5, encode_int(0)),
+        radius_attr(32, (payload.nas_identifier or "Docker API Test NAS").encode()),
+        radius_attr(31, (payload.calling_station_id or "REAL-ACCT-TEST").encode()),
+        radius_attr(40, encode_int(status_map[status_type])),
+        radius_attr(41, encode_int(0)),
+        radius_attr(42, encode_int(payload.input_octets)),
+        radius_attr(43, encode_int(payload.output_octets)),
+        radius_attr(44, payload.acct_session_id.encode()),
+        radius_attr(46, encode_int(payload.acct_session_time)),
+    ]
+    if payload.framed_ip_address:
+        attrs.append(radius_attr(8, socket.inet_aton(normalize_ip(payload.framed_ip_address))))
+    if payload.acct_unique_session_id:
+        attrs.append(radius_attr(50, payload.acct_unique_session_id.encode()))
+    return b"".join(attrs)
+
+
+def send_radius_accounting_request(payload: RealAccountingTestRequest, status_type: str) -> dict:
+    secret_value = payload.shared_secret or os.getenv("RADIUS_DEFAULT_SECRET") or "testing123"
+    secret = secret_value.encode()
+    identifier = secrets.randbelow(256)
+    attributes = build_accounting_attributes(payload, status_type)
+    packet_length = 20 + len(attributes)
+    header = struct.pack("!BBH", 4, identifier, packet_length)
+    request_authenticator = md5(header + (b"\x00" * 16) + attributes + secret).digest()
+    packet = header + request_authenticator + attributes
+    raw_request = parse_radius_reply(attributes)["raw_attributes"]
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(4)
+        try:
+            sock.sendto(packet, (payload.radius_host, payload.accounting_port))
+            response, remote = sock.recvfrom(4096)
+        except socket.timeout:
+            return {
+                "result": "No Reply",
+                "diagnostic_reason": "No reply from FreeRADIUS",
+                "detail": "No UDP Accounting-Response was received.",
+                "raw_request_attributes": raw_request,
+                "raw_response_attributes": [],
+            }
+        except OSError as exc:
+            return {
+                "result": "No Reply",
+                "diagnostic_reason": str(exc),
+                "detail": str(exc),
+                "raw_request_attributes": raw_request,
+                "raw_response_attributes": [],
+            }
+
+    if len(response) < 20:
+        return {
+            "result": "No Reply",
+            "diagnostic_reason": "Invalid short accounting response",
+            "detail": "Received an invalid short Accounting-Response.",
+            "raw_request_attributes": raw_request,
+            "raw_response_attributes": [],
+        }
+    code, response_identifier, response_length = struct.unpack("!BBH", response[:4])
+    if response_identifier != identifier or response_length > len(response):
+        return {
+            "result": "No Reply",
+            "diagnostic_reason": "Invalid accounting response identifier or length",
+            "detail": "Received an invalid Accounting-Response identifier or length.",
+            "raw_request_attributes": raw_request,
+            "raw_response_attributes": [],
+        }
+    response_packet = response[:response_length]
+    response_attrs = response_packet[20:]
+    expected = md5(response_packet[:4] + request_authenticator + response_attrs + secret).digest()
+    if response_packet[4:20] != expected:
+        return {
+            "result": "Wrong Secret",
+            "diagnostic_reason": "Wrong shared secret",
+            "detail": "FreeRADIUS replied, but the accounting response authenticator did not match the shared secret.",
+            "raw_request_attributes": raw_request,
+            "raw_response_attributes": [],
+            "remote": f"{remote[0]}:{remote[1]}",
+        }
+    parsed = parse_radius_reply(response_attrs)
+    diagnostic = parsed["reply_message"] or ("Accounting-Response" if code == 5 else f"Unexpected RADIUS code {code}")
+    return {
+        "result": "Accounting-Response" if code == 5 else "No Reply",
+        "diagnostic_reason": diagnostic,
+        "detail": diagnostic,
+        "reply_message": parsed["reply_message"],
+        "raw_request_attributes": raw_request,
+        "raw_response_attributes": parsed["raw_attributes"],
         "remote": f"{remote[0]}:{remote[1]}",
     }
 
@@ -580,7 +699,131 @@ def top_up(user_id: str, payload: TopUpRequest, admin=Depends(current_admin)):
 
 @app.get("/api/sessions")
 def list_sessions(admin=Depends(current_admin)):
-    return fetch_all("SELECT * FROM sessions ORDER BY last_update_time DESC LIMIT 200")
+    grace = int(os.getenv("ACTIVE_SESSION_GRACE_SECONDS", "180"))
+    return fetch_all(
+        """
+        SELECT s.*,
+               CASE
+                 WHEN s.status = 'ACTIVE' AND s.stop_time IS NULL AND s.last_update_time > now() - (%s || ' seconds')::interval THEN 'ACTIVE'
+                 WHEN s.status = 'ACTIVE' AND s.stop_time IS NULL THEN 'STALE'
+                 ELSE s.status
+               END AS display_status
+        FROM sessions s
+        ORDER BY s.last_update_time DESC
+        LIMIT 300
+        """,
+        (grace,),
+    )
+
+
+@app.get("/api/sessions/active")
+def active_sessions(admin=Depends(current_admin)):
+    grace = int(os.getenv("ACTIVE_SESSION_GRACE_SECONDS", "180"))
+    return fetch_all(
+        """
+        SELECT * FROM sessions
+        WHERE status = 'ACTIVE'
+          AND stop_time IS NULL
+          AND last_update_time > now() - (%s || ' seconds')::interval
+        ORDER BY last_update_time DESC
+        """,
+        (grace,),
+    )
+
+
+@app.get("/api/sessions/{session_id}")
+def get_session(session_id: str, admin=Depends(current_admin)):
+    session = fetch_one("SELECT * FROM sessions WHERE id = %s", (session_id,))
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    logs = fetch_all(
+        "SELECT * FROM radius_accounting_logs WHERE username = %s AND acct_session_id = %s ORDER BY created_at DESC LIMIT 50",
+        (session["username"], session["acct_session_id"]),
+    )
+    return {"session": session, "accounting_logs": logs}
+
+
+@app.post("/api/sessions/{session_id}/mark-stale")
+def mark_session_stale(session_id: str, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE sessions SET status = 'STALE', updated_at = now() WHERE id = %s RETURNING id", (session_id,))
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Session not found")
+    audit(admin["id"], "mark_session_stale", "session", session_id)
+    return {"status": "ok"}
+
+
+@app.post("/api/sessions/{session_id}/force-stop-local")
+def force_stop_local(session_id: str, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE sessions
+                SET status = 'STOPPED',
+                    stop_time = COALESCE(stop_time, now()),
+                    last_update_time = now(),
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING id
+                """,
+                (session_id,),
+            )
+            if not cur.fetchone():
+                raise HTTPException(status_code=404, detail="Session not found")
+    audit(admin["id"], "force_stop_session_local", "session", session_id, {"note": "Local stop only; no CoA disconnect sent"})
+    return {"status": "ok", "warning": "This does not disconnect the user from the AP/router yet. It only clears the local active-session record."}
+
+
+@app.get("/api/users/{user_id}/wallet-accounting-summary")
+def wallet_accounting_summary(user_id: str, admin=Depends(current_admin)):
+    grace = int(os.getenv("ACTIVE_SESSION_GRACE_SECONDS", "180"))
+    user = fetch_one(
+        """
+        SELECT u.id, u.username, u.status, w.time_remaining_seconds, w.valid_until, w.is_unlimited, w.updated_at AS wallet_updated_at
+        FROM users u
+        LEFT JOIN wallets w ON w.user_id = u.id
+        WHERE u.id = %s
+        """,
+        (user_id,),
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    active = fetch_one(
+        """
+        SELECT id, calling_station_id, nas_identifier, framed_ip_address::text, start_time, last_update_time, acct_session_time, status
+        FROM sessions
+        WHERE user_id = %s
+          AND status = 'ACTIVE'
+          AND stop_time IS NULL
+          AND last_update_time > now() - (%s || ' seconds')::interval
+        ORDER BY last_update_time DESC
+        LIMIT 1
+        """,
+        (user_id, grace),
+    )
+    last_debit = fetch_one(
+        """
+        SELECT amount_seconds, reference, note, created_at
+        FROM transactions
+        WHERE user_id = %s AND source = 'ACCOUNTING' AND type = 'DEBIT'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (user_id,),
+    )
+    debits = fetch_all(
+        """
+        SELECT amount_seconds, reference, note, created_at
+        FROM transactions
+        WHERE user_id = %s AND source = 'ACCOUNTING' AND type = 'DEBIT'
+        ORDER BY created_at DESC
+        LIMIT 10
+        """,
+        (user_id,),
+    )
+    return {"user": user, "active_session": active, "last_accounting_deduction": last_debit, "recent_accounting_debits": debits}
 
 
 @app.post("/api/radius/simulate-auth")
@@ -624,6 +867,7 @@ def real_radius_packet_defaults(admin=Depends(current_admin)):
         "shared_secret": os.getenv("RADIUS_DEFAULT_SECRET") or "testing123",
         "radius_host": "radius",
         "radius_port": 1812,
+        "accounting_port": 1813,
         "note": "This test is sent from the API container to the FreeRADIUS container. It uses the internal Docker test client secret, not the router/AP NAS shared secret.",
     }
 
@@ -691,6 +935,74 @@ def real_radius_packet_test(payload: RealRadiusTestRequest, admin=Depends(curren
     except Exception:
         pass
     return result
+
+
+def run_accounting_packet(payload: RealAccountingTestRequest, status_type: str, admin):
+    result = send_radius_accounting_request(payload, status_type)
+    recent = fetch_one(
+        """
+        SELECT id, result, diagnostic_reason, raw_payload
+        FROM radius_accounting_logs
+        WHERE username = %s
+          AND acct_session_id = %s
+          AND acct_status_type = %s
+          AND created_at > now() - interval '15 seconds'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (payload.username, payload.acct_session_id, status_type),
+    )
+    if recent:
+        result["accounting_result"] = recent["result"]
+        result["diagnostic_reason"] = recent["diagnostic_reason"] or result.get("diagnostic_reason")
+        result["detail"] = result["diagnostic_reason"]
+        result["raw_payload"] = recent["raw_payload"]
+    elif result["result"] != "Accounting-Response":
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO radius_accounting_logs(username, acct_status_type, acct_session_id, nas_ip, nas_identifier, calling_station_id,
+                                                       framed_ip_address, acct_session_time, input_octets, output_octets, raw_payload, result, diagnostic_reason)
+                    VALUES (%s, %s, %s, NULLIF(%s, '')::inet, %s, %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        payload.username,
+                        status_type,
+                        payload.acct_session_id,
+                        payload.nas_ip or "",
+                        payload.nas_identifier,
+                        payload.calling_station_id,
+                        payload.framed_ip_address or "",
+                        payload.acct_session_time,
+                        payload.input_octets,
+                        payload.output_octets,
+                        Json(payload.model_dump(mode="json")),
+                        result["result"],
+                        result.get("diagnostic_reason") or result.get("detail"),
+                    ),
+                )
+    audit(admin["id"], f"radius_accounting_{status_type.lower().replace('-', '_')}", "radius", payload.username, {
+        "result": result["result"],
+        "diagnostic_reason": result.get("diagnostic_reason"),
+        "acct_session_id": payload.acct_session_id,
+    })
+    return result
+
+
+@app.post("/api/radius-test/accounting/start")
+def accounting_start(payload: RealAccountingTestRequest, admin=Depends(current_admin)):
+    return run_accounting_packet(payload, "Start", admin)
+
+
+@app.post("/api/radius-test/accounting/interim")
+def accounting_interim(payload: RealAccountingTestRequest, admin=Depends(current_admin)):
+    return run_accounting_packet(payload, "Interim-Update", admin)
+
+
+@app.post("/api/radius-test/accounting/stop")
+def accounting_stop(payload: RealAccountingTestRequest, admin=Depends(current_admin)):
+    return run_accounting_packet(payload, "Stop", admin)
 
 
 @app.get("/api/nas-clients")

@@ -51,6 +51,26 @@ Reject reason mapping:
 - `Database lookup failed`: check API/PostgreSQL/FreeRADIUS database connectivity.
 - `Unknown authorization failure`: check FreeRADIUS logs.
 
+Accounting troubleshooting:
+- `No reply from FreeRADIUS`: confirm the target is `radius:1813` for internal UI tests or `SERVER-IP:11813` for staging external tests.
+- `Wrong shared secret`: use the internal Docker test client secret for UI tests, or the NAS record secret for real router/AP tests.
+- `No matching active session found`: send Accounting Start first or verify username, Calling-Station-ID, and Acct-Session-Id.
+- `User not found`: create the user before sending accounting packets.
+- `Wallet already empty`: add manual balance or enable unlimited access.
+- `Wallet deducted successfully`: confirm the ACCOUNTING DEBIT transaction on the Wallet page.
+- `Accounting packet received but ignored`: verify Acct-Status-Type is Start, Interim-Update, or Stop.
+- `Database error`: check PostgreSQL health and the FreeRADIUS runtime environment file inside the radius container.
+
+Useful accounting checks:
+
+```bash
+docker exec centralwifi_staging-postgres-1 sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT username, acct_status_type, acct_session_id, result, diagnostic_reason, created_at FROM radius_accounting_logs ORDER BY created_at DESC LIMIT 20;"'
+```
+
+```bash
+docker exec centralwifi_staging-postgres-1 sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT username, acct_session_id, status, last_update_time, stop_time, acct_session_time FROM sessions ORDER BY last_update_time DESC LIMIT 20;"'
+```
+
 Firewall checks:
 
 ```bash

@@ -80,6 +80,7 @@ def main():
                     """
                     SELECT 1 FROM sessions
                     WHERE user_id = %s
+                      AND status = 'ACTIVE'
                       AND stop_time IS NULL
                       AND last_update_time > now() - (%s || ' seconds')::interval
                     LIMIT 1
