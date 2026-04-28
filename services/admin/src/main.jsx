@@ -751,13 +751,13 @@ function RadiusTestGuide({ refresh }) {
               </div>
               <div className="col-md-4">
                 <label className="form-label">NAS / Router / AP IP</label>
-                <input className="form-control" list="radius-test-nas" required value={form.nas_ip} onChange={(e) => {
+                <select className="form-select" required value={form.nas_ip} onChange={(e) => {
                   const selected = nasClients.find((nas) => nas.nas_ip === e.target.value);
                   setForm({ ...form, nas_ip: e.target.value, nas_identifier: selected?.shortname || form.nas_identifier });
-                }} />
-                <datalist id="radius-test-nas">
-                  {nasClients.map((nas) => <option key={nas.id} value={nas.nas_ip}>{nas.name}</option>)}
-                </datalist>
+                }}>
+                  {!nasClients.length && <option value="">No NAS clients added</option>}
+                  {nasClients.map((nas) => <option key={nas.id} value={nas.nas_ip}>{nas.name} - {nas.nas_ip}</option>)}
+                </select>
               </div>
               <div className="col-md-6">
                 <label className="form-label">NAS Identifier</label>
