@@ -531,6 +531,17 @@ button.nav-link {
   margin-bottom: 0.5rem;
 }
 
+.radius-test-result {
+  border-radius: 12px;
+}
+
+.radius-check-badge {
+  justify-content: center;
+  min-width: 100%;
+  padding: 8px 10px;
+  white-space: normal;
+}
+
 .modal {
   background: rgba(15, 23, 42, 0.08);
 }

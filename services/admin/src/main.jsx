@@ -675,6 +675,132 @@ function NasClients({ refresh }) {
   );
 }
 
+function RadiusTestGuide({ refresh }) {
+  const [users, setUsers] = useState([]);
+  const [nasClients, setNasClients] = useState([]);
+  const [form, setForm] = useState({
+    username: '',
+    password: '',
+    nas_ip: '127.0.0.1',
+    nas_identifier: 'portal-simulator',
+    calling_station_id: 'SIMULATED-DEVICE'
+  });
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    request('/users').then((data) => setUsers(Array.isArray(data) ? data : [])).catch(() => setUsers([]));
+    request('/nas-clients').then((data) => {
+      const rows = Array.isArray(data) ? data : [];
+      setNasClients(rows);
+      const firstActive = rows.find((row) => row.status === 'active') || rows[0];
+      if (firstActive?.nas_ip) {
+        setForm((current) => ({ ...current, nas_ip: firstActive.nas_ip, nas_identifier: firstActive.shortname || current.nas_identifier }));
+      }
+    }).catch(() => setNasClients([]));
+  }, []);
+
+  async function runTest(e) {
+    e.preventDefault();
+    setTesting(true);
+    setError('');
+    setResult(null);
+    try {
+      const data = await request('/radius/simulate-auth', { method: 'POST', body: JSON.stringify(form) });
+      setResult(data);
+      refresh();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  const resultTone = result?.result === 'accept' ? 'success' : 'danger';
+  const checkLabels = {
+    user_exists: 'User exists',
+    password_valid: 'Password is correct',
+    user_active: 'User is active',
+    has_balance: 'User has active balance',
+    single_device_clear: 'No active session conflict'
+  };
+
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        <Card title="RADIUS Test Guide" subtitle="Use this page to test Phase 1 RADIUS decisions before configuring a router or access point.">
+          <div className="text-muted mb-3">This portal test simulates the same source-of-truth checks used by FreeRADIUS: user status, password, manual balance, valid-until, unlimited flag, and single-device active-session rejection.</div>
+          <pre className="mb-0"><code>radtest testuser password SERVER-IP:11812 0 shared-secret</code></pre>
+        </Card>
+      </div>
+      <div className="col-12">
+        <Card title="Simulated RADIUS Authentication Test" subtitle="Enter a WiFi test user's credentials and click Run Test. The result is saved to Recent Auth Results.">
+          <form onSubmit={runTest}>
+            <div className="row g-3">
+              <div className="col-md-4">
+                <label className="form-label">WiFi Username</label>
+                <input className="form-control" list="radius-test-users" required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+                <datalist id="radius-test-users">
+                  {users.map((user) => <option key={user.id} value={user.username} />)}
+                </datalist>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">WiFi Password</label>
+                <input className="form-control" type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">NAS / Router / AP IP</label>
+                <input className="form-control" list="radius-test-nas" required value={form.nas_ip} onChange={(e) => {
+                  const selected = nasClients.find((nas) => nas.nas_ip === e.target.value);
+                  setForm({ ...form, nas_ip: e.target.value, nas_identifier: selected?.shortname || form.nas_identifier });
+                }} />
+                <datalist id="radius-test-nas">
+                  {nasClients.map((nas) => <option key={nas.id} value={nas.nas_ip}>{nas.name}</option>)}
+                </datalist>
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">NAS Identifier</label>
+                <input className="form-control" value={form.nas_identifier} onChange={(e) => setForm({ ...form, nas_identifier: e.target.value })} />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Calling Station ID / Test Device</label>
+                <input className="form-control" value={form.calling_station_id} onChange={(e) => setForm({ ...form, calling_station_id: e.target.value })} />
+              </div>
+              <div className="col-12">
+                <button className="btn btn-primary" disabled={testing}>
+                  <IconWifi size={18} className="me-2" />{testing ? 'Testing...' : 'Run RADIUS Test'}
+                </button>
+              </div>
+            </div>
+          </form>
+          {error && <div className="alert alert-danger mt-3 mb-0">{error}</div>}
+          {result && (
+            <div className={`alert alert-${resultTone} radius-test-result mt-3 mb-0`}>
+              <div className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div>
+                  <div className="fw-bold">{result.access}</div>
+                  <div>{result.reply_message}</div>
+                </div>
+                {result.session_timeout && <span className="badge bg-green-lt text-green">Session Timeout: {result.session_timeout}s</span>}
+              </div>
+              <div className="row g-2 mt-3">
+                {Object.entries(checkLabels).map(([key, label]) => (
+                  <div className="col-md-4" key={key}>
+                    <span className={`badge ${result.checks?.[key] ? 'bg-green-lt text-green' : 'bg-red-lt text-red'} radius-check-badge`}>
+                      {result.checks?.[key] ? 'Pass' : 'Fail'} · {label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function SimplePage({ title, endpoint, columns, children }) {
   const [rows, setRows] = useState([]);
   useEffect(() => { request(endpoint).then((data) => setRows(Array.isArray(data) ? data : [])); }, [endpoint]);
@@ -1110,7 +1236,7 @@ function App() {
             {page === 'Wallet / Manual Top-Up' && <WalletPage refresh={refresh} />}
             {page === 'NAS / Router / AP Clients' && <NasClients refresh={refresh} />}
             {page === 'Sessions' && <SimplePage title="Sessions" endpoint="/sessions" columns={['username', 'calling_station_id', 'nas_ip', 'framed_ip_address', 'start_time', 'last_update_time', 'stop_time', 'status']} />}
-            {page === 'RADIUS Test Guide' && <Card title="Manual RADIUS Test"><div className="text-muted mb-3">Use radtest with a test user, password, server IP, port, and shared secret.</div><pre><code>radtest testuser password SERVER-IP:11812 0 shared-secret</code></pre></Card>}
+            {page === 'RADIUS Test Guide' && <RadiusTestGuide refresh={refresh} />}
             {page === 'System Settings' && <SystemSettingsPage refresh={refresh} />}
             {page === 'Logs' && <SimplePage title="Logs" endpoint="/audit-logs" columns={['action', 'target_type', 'target_id', 'details', 'created_at']} />}
             {['View Profile', 'Change Password'].includes(page) && <ProfilePage onSaved={refresh} />}

@@ -168,6 +168,7 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
+- 2026-04-28: Added an admin portal RADIUS Test Guide simulation tool that tests Phase 1 RADIUS accept/reject rules from the browser and logs results to `radius_auth_logs`.
 - 2026-04-28: Added NAS / Router / AP Client edit support with an Actions column in the admin table and a backend PATCH flow that synchronizes app NAS records with FreeRADIUS `nas` entries.
 - 2026-04-26: Updated NAS page read-more control to a seamless underlined text link and added visible shared secret creation/listing with auto-generate support.
 - 2026-04-26: Added short and expandable long explanatory guidance to the NAS / Router / AP Clients page.

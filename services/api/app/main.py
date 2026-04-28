@@ -65,6 +65,14 @@ class TopUpRequest(BaseModel):
     note: Optional[str] = None
 
 
+class RadiusSimulationRequest(BaseModel):
+    username: str
+    password: str
+    nas_ip: str = "127.0.0.1"
+    nas_identifier: Optional[str] = "portal-simulator"
+    calling_station_id: Optional[str] = "SIMULATED-DEVICE"
+
+
 class NasCreate(BaseModel):
     name: str
     nas_ip: str
@@ -119,6 +127,80 @@ def audit(actor_id: str, action: str, target_type: str = None, target_id: str = 
                 "INSERT INTO audit_logs(actor_admin_id, action, target_type, target_id, details) VALUES (%s, %s, %s, %s, %s)",
                 (actor_id, action, target_type, target_id, Json(details or {})),
             )
+
+
+def record_radius_auth(cur, username, nas_ip, nas_identifier, calling_station_id, result, message):
+    cur.execute(
+        """
+        INSERT INTO radius_auth_logs(username, nas_ip, nas_identifier, calling_station_id, result, reply_message)
+        VALUES (%s, NULLIF(%s, '')::inet, %s, %s, %s, %s)
+        """,
+        (username, nas_ip or "", nas_identifier, calling_station_id, result, message),
+    )
+
+
+def evaluate_radius_auth(cur, username, password, nas_ip, nas_identifier, calling_station_id):
+    grace = int(os.getenv("ACTIVE_SESSION_GRACE_SECONDS", "180"))
+    cur.execute(
+        """
+        SELECT u.id, u.password_hash, u.status, w.time_remaining_seconds, w.valid_until, w.is_unlimited
+        FROM users u
+        LEFT JOIN wallets w ON w.user_id = u.id
+        WHERE u.username = %s
+        """,
+        (username,),
+    )
+    user = cur.fetchone()
+    result = "reject"
+    message = "Unknown user"
+    session_timeout = None
+    checks = {
+        "user_exists": False,
+        "password_valid": False,
+        "user_active": False,
+        "has_balance": False,
+        "single_device_clear": False,
+    }
+    if not user:
+        record_radius_auth(cur, username, nas_ip, nas_identifier, calling_station_id, result, message)
+        return result, message, session_timeout, checks
+
+    checks["user_exists"] = True
+    checks["user_active"] = user["status"] == "active"
+    checks["password_valid"] = bool(password and verify_password(password, user["password_hash"]))
+    remaining = user["time_remaining_seconds"] or 0
+    valid_until = user["valid_until"]
+    unlimited = bool(user["is_unlimited"])
+    checks["has_balance"] = bool(unlimited or remaining > 0 or (valid_until and valid_until > datetime.now(timezone.utc)))
+
+    if not checks["user_active"]:
+        message = "User is disabled"
+    elif not checks["password_valid"]:
+        message = "Invalid password"
+    elif not checks["has_balance"]:
+        message = "No active balance"
+    else:
+        cur.execute(
+            """
+            SELECT 1 FROM sessions
+            WHERE user_id = %s
+              AND stop_time IS NULL
+              AND last_update_time > now() - (%s || ' seconds')::interval
+            LIMIT 1
+            """,
+            (user["id"], grace),
+        )
+        checks["single_device_clear"] = cur.fetchone() is None
+        if not checks["single_device_clear"]:
+            message = "Account is already in use"
+        else:
+            result = "accept"
+            message = "Access accepted"
+            if not unlimited and remaining > 0:
+                session_timeout = remaining
+
+    record_radius_auth(cur, username, nas_ip, nas_identifier, calling_station_id, result, message)
+    return result, message, session_timeout, checks
 
 
 @app.get("/health")
@@ -361,6 +443,35 @@ def top_up(user_id: str, payload: TopUpRequest, admin=Depends(current_admin)):
 @app.get("/api/sessions")
 def list_sessions(admin=Depends(current_admin)):
     return fetch_all("SELECT * FROM sessions ORDER BY last_update_time DESC LIMIT 200")
+
+
+@app.post("/api/radius/simulate-auth")
+def simulate_radius_auth(payload: RadiusSimulationRequest, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            result, message, session_timeout, checks = evaluate_radius_auth(
+                cur,
+                payload.username,
+                payload.password,
+                payload.nas_ip,
+                payload.nas_identifier,
+                payload.calling_station_id,
+            )
+    audit(
+        admin["id"],
+        "simulate_radius_auth",
+        "radius",
+        payload.username,
+        {"result": result, "reply_message": message, "nas_ip": payload.nas_ip, "calling_station_id": payload.calling_station_id},
+    )
+    return {
+        "result": result,
+        "access": "Access-Accept" if result == "accept" else "Access-Reject",
+        "reply_message": message,
+        "session_timeout": session_timeout,
+        "checks": checks,
+        "simulated": True,
+    }
 
 
 @app.get("/api/nas-clients")
