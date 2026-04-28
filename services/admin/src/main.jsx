@@ -833,7 +833,7 @@ function RadiusTestGuide({ refresh }) {
         </Card>
       </div>
       <div className="col-12">
-        <Card title="Real FreeRADIUS Packet Test" subtitle="Send an actual UDP RADIUS Access-Request packet to FreeRADIUS. Use host radius and port 1812 for the local Docker service.">
+        <Card title="Real FreeRADIUS Packet Test" subtitle="Send an actual UDP RADIUS Access-Request packet from the API container over the Docker network. Use host radius and port 1812 for the local Docker service.">
           <form onSubmit={runRealTest}>
             <div className="row g-3">
               <div className="col-md-4">
@@ -848,7 +848,7 @@ function RadiusTestGuide({ refresh }) {
                 <input className="form-control" type="password" required value={realForm.password} onChange={(e) => setRealForm({ ...realForm, password: e.target.value })} />
               </div>
               <div className="col-md-4">
-                <label className="form-label">NAS Client</label>
+                <label className="form-label">NAS client source: API container / Docker network</label>
                 <select className="form-select" required value={realForm.nas_ip} onChange={(e) => {
                   const selected = nasClients.find((nas) => nas.nas_ip === e.target.value);
                   setRealForm({
@@ -861,6 +861,7 @@ function RadiusTestGuide({ refresh }) {
                   {!nasClients.length && <option value="">No NAS clients added</option>}
                   {nasClients.map((nas) => <option key={nas.id} value={nas.nas_ip}>{nas.name} - {nas.nas_ip}</option>)}
                 </select>
+                <div className="form-hint">This real packet is sent by the API container, so FreeRADIUS sees the Docker network source.</div>
               </div>
               <div className="col-md-4">
                 <label className="form-label">Shared Secret</label>
