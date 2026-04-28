@@ -168,6 +168,7 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
+- 2026-04-28: Fixed Real FreeRADIUS Packet Test defaults so the Shared Secret uses the API-container/Docker-network FreeRADIUS client secret instead of the selected router/AP NAS record secret.
 - 2026-04-28: Clarified the Real FreeRADIUS Packet Test NAS client source as API container / Docker network in the admin UI.
 - 2026-04-28: Added a Real FreeRADIUS Packet Test section that sends an actual UDP RADIUS Access-Request and reports Access-Accept, Access-Reject, No Reply, Wrong Secret, or Database Error results.
 - 2026-04-28: Changed the RADIUS Test Guide NAS / Router / AP IP field to a dropdown populated from existing NAS client records.

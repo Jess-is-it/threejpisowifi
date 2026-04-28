@@ -704,6 +704,14 @@ function RadiusTestGuide({ refresh }) {
 
   useEffect(() => {
     request('/users').then((data) => setUsers(Array.isArray(data) ? data : [])).catch(() => setUsers([]));
+    request('/radius/real-packet-defaults').then((data) => {
+      setRealForm((current) => ({
+        ...current,
+        shared_secret: data.shared_secret || current.shared_secret,
+        radius_host: data.radius_host || current.radius_host,
+        radius_port: data.radius_port || current.radius_port
+      }));
+    }).catch(() => {});
     request('/nas-clients').then((data) => {
       const rows = Array.isArray(data) ? data : [];
       setNasClients(rows);
@@ -713,8 +721,7 @@ function RadiusTestGuide({ refresh }) {
         setRealForm((current) => ({
           ...current,
           nas_ip: firstActive.nas_ip,
-          nas_identifier: firstActive.shortname || current.nas_identifier,
-          shared_secret: firstActive.secret || current.shared_secret
+          nas_identifier: firstActive.shortname || current.nas_identifier
         }));
       }
     }).catch(() => setNasClients([]));
@@ -854,8 +861,7 @@ function RadiusTestGuide({ refresh }) {
                   setRealForm({
                     ...realForm,
                     nas_ip: e.target.value,
-                    nas_identifier: selected?.shortname || realForm.nas_identifier,
-                    shared_secret: selected?.secret || realForm.shared_secret
+                    nas_identifier: selected?.shortname || realForm.nas_identifier
                   });
                 }}>
                   {!nasClients.length && <option value="">No NAS clients added</option>}
@@ -866,6 +872,7 @@ function RadiusTestGuide({ refresh }) {
               <div className="col-md-4">
                 <label className="form-label">Shared Secret</label>
                 <input className="form-control" required value={realForm.shared_secret} onChange={(e) => setRealForm({ ...realForm, shared_secret: e.target.value })} />
+                <div className="form-hint">This must match the Docker-network client secret configured in FreeRADIUS, not the selected router/AP shared secret.</div>
               </div>
               <div className="col-md-4">
                 <label className="form-label">RADIUS Host</label>

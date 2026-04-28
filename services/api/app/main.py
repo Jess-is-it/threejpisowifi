@@ -84,7 +84,7 @@ class RealRadiusTestRequest(BaseModel):
     nas_ip: str = "127.0.0.1"
     nas_identifier: Optional[str] = "portal-real-test"
     calling_station_id: Optional[str] = "REAL-TEST-DEVICE"
-    shared_secret: str
+    shared_secret: Optional[str] = None
     radius_host: str = "radius"
     radius_port: int = Field(default=1812, ge=1, le=65535)
 
@@ -261,7 +261,8 @@ def parse_radius_reply(attributes: bytes) -> dict:
 
 
 def send_radius_access_request(payload: RealRadiusTestRequest) -> dict:
-    secret = payload.shared_secret.encode()
+    secret_value = payload.shared_secret or os.getenv("RADIUS_DEFAULT_SECRET") or "testing123"
+    secret = secret_value.encode()
     identifier = secrets.randbelow(256)
     request_authenticator = secrets.token_bytes(16)
     nas_ip = normalize_ip(payload.nas_ip)
@@ -600,6 +601,17 @@ def simulate_radius_auth(payload: RadiusSimulationRequest, admin=Depends(current
         "session_timeout": session_timeout,
         "checks": checks,
         "simulated": True,
+    }
+
+
+@app.get("/api/radius/real-packet-defaults")
+def real_radius_packet_defaults(admin=Depends(current_admin)):
+    return {
+        "nas_client_source": "API container / Docker network",
+        "shared_secret": os.getenv("RADIUS_DEFAULT_SECRET") or "testing123",
+        "radius_host": "radius",
+        "radius_port": 1812,
+        "note": "This is the FreeRADIUS client secret for packets sent by the API container over the Docker network.",
     }
 
 
