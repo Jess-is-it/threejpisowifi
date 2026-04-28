@@ -9,6 +9,19 @@ from passlib.context import CryptContext
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def load_runtime_env():
+    if os.environ.get("DATABASE_URL"):
+        return
+    try:
+        with open("/opt/radius/runtime.env", encoding="utf-8") as env_file:
+            for line in env_file:
+                key, _, value = line.strip().partition("=")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except FileNotFoundError:
+        pass
+
+
 def clean(value):
     return None if value in ("", "(null)", "None") else value
 
@@ -16,10 +29,10 @@ def clean(value):
 def log(cur, username, nas_ip, nas_identifier, calling_station_id, result, message):
     cur.execute(
         """
-        INSERT INTO radius_auth_logs(username, nas_ip, nas_identifier, calling_station_id, result, reply_message)
-        VALUES (%s, NULLIF(%s, '')::inet, %s, %s, %s, %s)
+        INSERT INTO radius_auth_logs(username, nas_ip, nas_identifier, calling_station_id, result, reply_message, diagnostic_reason)
+        VALUES (%s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s)
         """,
-        (username, nas_ip or "", nas_identifier, calling_station_id, result, message),
+        (username, nas_ip or "", nas_identifier, calling_station_id, result, message, message),
     )
 
 
@@ -29,9 +42,14 @@ def reject(message):
 
 
 def main():
+    load_runtime_env()
     username, password, nas_ip, nas_identifier, calling_station_id = [clean(v) for v in sys.argv[1:6]]
     grace = int(os.getenv("ACTIVE_SESSION_GRACE_SECONDS", "180"))
-    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+    try:
+        conn = psycopg.connect(os.environ["DATABASE_URL"])
+    except Exception:
+        return reject("Database lookup failed")
+    with conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -50,11 +68,13 @@ def main():
                 return reject(message)
             user_id, password_hash, status, remaining, valid_until, unlimited = user
             if status != "active":
-                message = "User is disabled"
+                message = "User disabled"
             elif not password or not pwd_context.verify(password, password_hash):
                 message = "Invalid password"
+            elif not unlimited and (remaining or 0) <= 0 and valid_until and valid_until <= datetime.now(timezone.utc):
+                message = "Account expired"
             elif not unlimited and (remaining or 0) <= 0 and not (valid_until and valid_until > datetime.now(timezone.utc)):
-                message = "No active balance"
+                message = "No active wallet balance"
             else:
                 cur.execute(
                     """
@@ -67,7 +87,7 @@ def main():
                     (user_id, grace),
                 )
                 if cur.fetchone():
-                    message = "Account is already in use"
+                    message = "Active session already exists"
                 else:
                     result = "accept"
                     message = "Access accepted"

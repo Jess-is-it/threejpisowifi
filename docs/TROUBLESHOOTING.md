@@ -33,6 +33,24 @@ Common auth failure reasons:
 - Router/AP uses the wrong shared secret.
 - Router/AP points to the wrong production or staging port.
 
+Real FreeRADIUS Packet Test notes:
+- The internal Admin Portal packet test is sent by the API container, not by a router/AP.
+- It must use the internal Docker client `Docker API Test NAS` and the `RADIUS_DEFAULT_SECRET` configured in FreeRADIUS.
+- Do not use a router/AP NAS record shared secret for the internal packet test.
+- If the result is `No Reply`, check the RADIUS host, UDP port, Docker networking, firewall, and FreeRADIUS container status.
+- If the result is `Wrong Secret`, confirm the internal Docker client secret matches `RADIUS_DEFAULT_SECRET`.
+- If the result is `Access-Reject`, use the displayed reason and suggestion in the Admin Portal.
+
+Reject reason mapping:
+- `Unknown user`: create the user or verify username spelling.
+- `Invalid password`: reset the user password and test again.
+- `User disabled`: enable the user account.
+- `No active wallet balance`: add manual balance or set unlimited access.
+- `Account expired`: extend the valid-until date.
+- `Active session already exists`: stop the active session or wait for the active session grace window.
+- `Database lookup failed`: check API/PostgreSQL/FreeRADIUS database connectivity.
+- `Unknown authorization failure`: check FreeRADIUS logs.
+
 Firewall checks:
 
 ```bash

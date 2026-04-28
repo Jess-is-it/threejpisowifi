@@ -5,6 +5,19 @@ import sys
 import psycopg
 
 
+def load_runtime_env():
+    if os.environ.get("DATABASE_URL"):
+        return
+    try:
+        with open("/opt/radius/runtime.env", encoding="utf-8") as env_file:
+            for line in env_file:
+                key, _, value = line.strip().partition("=")
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except FileNotFoundError:
+        pass
+
+
 def clean(value):
     return None if value in ("", "(null)", "None") else value
 
@@ -17,6 +30,7 @@ def int_or_zero(value):
 
 
 def main():
+    load_runtime_env()
     username, status_type, nas_ip, nas_identifier, calling_station_id, framed_ip, session_id, in_octets, out_octets = [
         clean(v) for v in sys.argv[1:10]
     ]

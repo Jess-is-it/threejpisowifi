@@ -688,25 +688,30 @@ function RadiusTestGuide({ refresh }) {
   const [realForm, setRealForm] = useState({
     username: '',
     password: '',
-    nas_ip: '',
+    nas_ip: '172.18.0.1',
     nas_identifier: 'portal-real-test',
     calling_station_id: 'REAL-TEST-DEVICE',
     shared_secret: '',
     radius_host: 'radius',
     radius_port: 1812
   });
+  const [realDefaults, setRealDefaults] = useState(null);
   const [testing, setTesting] = useState(false);
   const [realTesting, setRealTesting] = useState(false);
   const [result, setResult] = useState(null);
   const [realResult, setRealResult] = useState(null);
   const [error, setError] = useState('');
   const [realError, setRealError] = useState('');
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
 
   useEffect(() => {
     request('/users').then((data) => setUsers(Array.isArray(data) ? data : [])).catch(() => setUsers([]));
     request('/radius/real-packet-defaults').then((data) => {
+      setRealDefaults(data);
       setRealForm((current) => ({
         ...current,
+        nas_ip: data.packet_nas_ip || current.nas_ip,
+        nas_identifier: data.client_name || current.nas_identifier,
         shared_secret: data.shared_secret || current.shared_secret,
         radius_host: data.radius_host || current.radius_host,
         radius_port: data.radius_port || current.radius_port
@@ -718,11 +723,6 @@ function RadiusTestGuide({ refresh }) {
       const firstActive = rows.find((row) => row.status === 'active') || rows[0];
       if (firstActive?.nas_ip) {
         setForm((current) => ({ ...current, nas_ip: firstActive.nas_ip, nas_identifier: firstActive.shortname || current.nas_identifier }));
-        setRealForm((current) => ({
-          ...current,
-          nas_ip: firstActive.nas_ip,
-          nas_identifier: firstActive.shortname || current.nas_identifier
-        }));
       }
     }).catch(() => setNasClients([]));
   }, []);
@@ -760,6 +760,20 @@ function RadiusTestGuide({ refresh }) {
 
   const resultTone = result?.result === 'accept' ? 'success' : 'danger';
   const realTone = realResult?.result === 'Access-Accept' ? 'success' : (realResult?.result === 'Wrong Secret' || realResult?.result === 'Database Error' ? 'warning' : 'danger');
+  const suggestionMap = {
+    'Unknown user': 'Create the user or verify username spelling.',
+    'Invalid password': 'Reset the user password and test again.',
+    'User disabled': 'Enable the user account.',
+    'No active wallet balance': 'Add manual balance or set unlimited access.',
+    'Account expired': 'Extend valid-until date.',
+    'Active session already exists': 'Stop the active session or wait for session timeout.',
+    'Database lookup failed': 'Check API/PostgreSQL/FreeRADIUS SQL connectivity.',
+    'Unknown authorization failure': 'Check FreeRADIUS logs.',
+    'No Reply': 'Check RADIUS host, port, firewall, and FreeRADIUS client configuration.',
+    'Wrong Secret': 'Use the internal Docker test client shared secret for this test.'
+  };
+  const realReason = realResult?.diagnostic_reason || realResult?.reply_message || realResult?.detail || realResult?.result;
+  const realSuggestion = suggestionMap[realReason] || suggestionMap[realResult?.result] || 'Check FreeRADIUS logs.';
   const checkLabels = {
     user_exists: 'User exists',
     password_valid: 'Password is correct',
@@ -840,7 +854,14 @@ function RadiusTestGuide({ refresh }) {
         </Card>
       </div>
       <div className="col-12">
-        <Card title="Real FreeRADIUS Packet Test" subtitle="Send an actual UDP RADIUS Access-Request packet from the API container over the Docker network. Use host radius and port 1812 for the local Docker service.">
+        <Card title="Real FreeRADIUS Packet Test" subtitle="Send an actual UDP RADIUS Access-Request packet from the API container to the FreeRADIUS container.">
+          <div className="alert alert-info mb-3">
+            <div className="fw-semibold">Internal Docker RADIUS Test Client</div>
+            <div>Client: {realDefaults?.client_name || 'Docker API Test NAS'}</div>
+            <div>IP/Subnet: {realDefaults?.client_subnet || '172.18.0.0/16'}</div>
+            <div>Shared Secret: <code>{realForm.shared_secret}</code></div>
+            <div className="mt-2">This test is sent from the API container to the FreeRADIUS container. It uses the internal Docker test client secret, not the router/AP NAS shared secret.</div>
+          </div>
           <form onSubmit={runRealTest}>
             <div className="row g-3">
               <div className="col-md-4">
@@ -855,19 +876,9 @@ function RadiusTestGuide({ refresh }) {
                 <input className="form-control" type="password" required value={realForm.password} onChange={(e) => setRealForm({ ...realForm, password: e.target.value })} />
               </div>
               <div className="col-md-4">
-                <label className="form-label">NAS client source: API container / Docker network</label>
-                <select className="form-select" required value={realForm.nas_ip} onChange={(e) => {
-                  const selected = nasClients.find((nas) => nas.nas_ip === e.target.value);
-                  setRealForm({
-                    ...realForm,
-                    nas_ip: e.target.value,
-                    nas_identifier: selected?.shortname || realForm.nas_identifier
-                  });
-                }}>
-                  {!nasClients.length && <option value="">No NAS clients added</option>}
-                  {nasClients.map((nas) => <option key={nas.id} value={nas.nas_ip}>{nas.name} - {nas.nas_ip}</option>)}
-                </select>
-                <div className="form-hint">This real packet is sent by the API container, so FreeRADIUS sees the Docker network source.</div>
+                <label className="form-label">NAS Client</label>
+                <input className="form-control" value="Internal Docker RADIUS Test Client" readOnly />
+                <div className="form-hint">FreeRADIUS sees the API container/Docker network as the client source.</div>
               </div>
               <div className="col-md-4">
                 <label className="form-label">Shared Secret</label>
@@ -898,12 +909,41 @@ function RadiusTestGuide({ refresh }) {
               <div className="d-flex align-items-center justify-content-between flex-wrap gap-2">
                 <div>
                   <div className="fw-bold">{realResult.result}</div>
-                  <div>{realResult.detail}</div>
+                  {realResult.result === 'Access-Reject' && <div>Reason: {realReason}</div>}
+                  {realResult.result !== 'Access-Reject' && <div>{realResult.detail}</div>}
+                  {realResult.result !== 'Access-Accept' && <div>Suggestion: {realSuggestion}</div>}
                 </div>
                 {realResult.remote && <span className="badge bg-blue-lt text-blue">Reply From: {realResult.remote}</span>}
               </div>
+              <button className="nas-readmore mt-3" type="button" onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}>
+                {showTechnicalDetails ? 'Hide technical details' : 'Show technical details'}
+              </button>
+              {showTechnicalDetails && (
+                <div className="mt-3">
+                  <pre className="mb-0"><code>{JSON.stringify({
+                    raw_radius_response_attributes: realResult.raw_attributes || [],
+                    request_username: realForm.username,
+                    radius_host: realForm.radius_host,
+                    radius_port: realForm.radius_port,
+                    nas_client_source: realDefaults?.nas_client_source || 'Internal Docker RADIUS Test Client',
+                    selected_shared_secret_name: 'Internal Docker RADIUS Test Client Secret',
+                    selected_shared_secret_masked_value: realForm.shared_secret ? `${realForm.shared_secret.slice(0, 4)}...${realForm.shared_secret.slice(-4)}` : '',
+                    timestamp: new Date().toISOString()
+                  }, null, 2)}</code></pre>
+                </div>
+              )}
             </div>
           )}
+        </Card>
+      </div>
+      <div className="col-12">
+        <Card title="External NAS Test Instructions" subtitle="Use this when testing a real MikroTik, Omada AP/controller, hostapd device, or radtest from another machine.">
+          <div className="text-muted mb-3">External routers and APs must be added in NAS / Router / AP Clients. Their shared secret is different from the internal Docker test client secret above.</div>
+          <div className="row g-3">
+            <div className="col-md-4"><strong>MikroTik</strong><div className="text-muted">Set RADIUS server to this Ubuntu server IP, auth port 11812 on staging, accounting port 11813, and use the NAS record shared secret.</div></div>
+            <div className="col-md-4"><strong>Omada / AP</strong><div className="text-muted">Configure external RADIUS server with the staging or production ports and the NAS record shared secret.</div></div>
+            <div className="col-md-4"><strong>radtest</strong><pre className="mt-2 mb-0"><code>radtest USER PASS SERVER-IP:11812 0 NAS_SECRET</code></pre></div>
+          </div>
         </Card>
       </div>
     </div>

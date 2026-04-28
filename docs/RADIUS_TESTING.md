@@ -1,5 +1,24 @@
 # RADIUS Testing
 
+## Admin Portal Test Types
+
+Simulated backend decision test:
+- Runs inside the API only.
+- Does not send a UDP RADIUS packet.
+- Validates source-of-truth rules for user status, password, wallet balance, valid-until, unlimited flag, and active session conflict.
+
+Internal real FreeRADIUS packet test:
+- Sends a real UDP Access-Request from the API container to the FreeRADIUS container.
+- Uses the fixed internal client `Docker API Test NAS`.
+- IP/Subnet: `172.18.0.0/16`.
+- Shared secret: the same `RADIUS_DEFAULT_SECRET` used by the FreeRADIUS Docker client.
+- This does not use router/AP NAS shared secrets because the packet is not sent from the router/AP.
+
+External NAS/router/AP test:
+- Use this for MikroTik, Omada, hostapd, or `radtest` from another machine.
+- The external device must be added in NAS / Router / AP Clients.
+- Use the shared secret from that NAS/router/AP record.
+
 Production ports:
 - Authentication: `1812/udp`
 - Accounting: `1813/udp`
@@ -33,6 +52,16 @@ Expected Access-Reject:
 - Disabled user.
 - No balance or expired access.
 - Same account already has an active session.
+
+The Admin Portal should display the FreeRADIUS `Reply-Message` as the diagnostic reason. Expected reject reasons include:
+- `Unknown user`
+- `Invalid password`
+- `User disabled`
+- `No active wallet balance`
+- `Account expired`
+- `Active session already exists`
+- `Database lookup failed`
+- `Unknown authorization failure`
 
 Accounting can be tested with RADIUS client tools that send Start, Interim-Update, and Stop packets. The Admin Portal Sessions page should show the session and last seen time.
 

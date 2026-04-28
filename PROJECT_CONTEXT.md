@@ -129,8 +129,17 @@ UI direction:
 ## 17. RADIUS behavior
 Access-Accept requires an active user, valid password, usable balance or valid-until or unlimited flag, and no active session inside `ACTIVE_SESSION_GRACE_SECONDS`. Access-Reject is returned for unknown users, invalid passwords, disabled users, no balance/expired access, or active single-device conflict. Accounting Start, Interim-Update, and Stop update the sessions table; Interim-Update decrements time balance without allowing negative balance.
 
+The Admin Portal has three different RADIUS test paths:
+- Simulated backend decision test: runs the same source-of-truth decision rules through the API without sending a UDP RADIUS packet.
+- Internal real FreeRADIUS packet test: sends a real UDP Access-Request from the API container to the FreeRADIUS container using the fixed internal Docker test client `Docker API Test NAS`, subnet `172.18.0.0/16`, and the environment `RADIUS_DEFAULT_SECRET`.
+- External router/AP RADIUS test: uses a real MikroTik, Omada, hostapd, or radtest client from outside Docker and must use the NAS/router/AP record shared secret and production/staging UDP ports.
+
+Every FreeRADIUS reject path should include a `Reply-Message` so the Admin Portal can show a human-readable diagnostic reason and troubleshooting suggestion.
+
 ## 18. Database tables
 Application tables: `admins`, `users`, `wallets`, `transactions`, `nas_clients`, `radius_auth_logs`, `sessions`, `audit_logs`.
+
+`radius_auth_logs` stores `diagnostic_reason` for RADIUS troubleshooting in addition to `reply_message`.
 
 FreeRADIUS-compatible tables: `radcheck`, `radreply`, `radacct`, `radusergroup`, `radgroupcheck`, `radgroupreply`, `nas`.
 
@@ -168,6 +177,7 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
 
 ## 24. Changelog section
+- 2026-04-28: Reworked Real FreeRADIUS Packet Test to use a fixed Internal Docker RADIUS Test Client, added reject diagnostic reasons, technical details, troubleshooting suggestions, and documented separate simulated/internal/external RADIUS test flows.
 - 2026-04-28: Fixed Real FreeRADIUS Packet Test defaults so the Shared Secret uses the API-container/Docker-network FreeRADIUS client secret instead of the selected router/AP NAS record secret.
 - 2026-04-28: Clarified the Real FreeRADIUS Packet Test NAS client source as API container / Docker network in the admin UI.
 - 2026-04-28: Added a Real FreeRADIUS Packet Test section that sends an actual UDP RADIUS Access-Request and reports Access-Accept, Access-Reject, No Reply, Wrong Secret, or Database Error results.

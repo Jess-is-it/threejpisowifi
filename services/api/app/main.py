@@ -148,10 +148,10 @@ def audit(actor_id: str, action: str, target_type: str = None, target_id: str = 
 def record_radius_auth(cur, username, nas_ip, nas_identifier, calling_station_id, result, message):
     cur.execute(
         """
-        INSERT INTO radius_auth_logs(username, nas_ip, nas_identifier, calling_station_id, result, reply_message)
-        VALUES (%s, NULLIF(%s, '')::inet, %s, %s, %s, %s)
+        INSERT INTO radius_auth_logs(username, nas_ip, nas_identifier, calling_station_id, result, reply_message, diagnostic_reason)
+        VALUES (%s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s)
         """,
-        (username, nas_ip or "", nas_identifier, calling_station_id, result, message),
+        (username, nas_ip or "", nas_identifier, calling_station_id, result, message, message),
     )
 
 
@@ -244,7 +244,7 @@ def normalize_ip(value: str) -> str:
 
 
 def parse_radius_reply(attributes: bytes) -> dict:
-    reply = {"reply_message": ""}
+    reply = {"reply_message": "", "raw_attributes": []}
     index = 0
     messages = []
     while index + 2 <= len(attributes):
@@ -253,6 +253,7 @@ def parse_radius_reply(attributes: bytes) -> dict:
         if attr_len < 2 or index + attr_len > len(attributes):
             break
         value = attributes[index + 2:index + attr_len]
+        reply["raw_attributes"].append({"type": attr_type, "length": attr_len, "value_hex": value.hex()})
         if attr_type == 18:
             messages.append(value.decode(errors="replace"))
         index += attr_len
@@ -295,15 +296,17 @@ def send_radius_access_request(payload: RealRadiusTestRequest) -> dict:
                 "result": "No Reply",
                 "detail": "No UDP response was received. This can mean wrong host/port, firewall block, unknown RADIUS client, or a dropped packet.",
                 "reply_message": "",
+                "diagnostic_reason": "No Reply",
+                "raw_attributes": [],
             }
         except OSError as exc:
-            return {"result": "No Reply", "detail": str(exc), "reply_message": ""}
+            return {"result": "No Reply", "detail": str(exc), "reply_message": "", "diagnostic_reason": "No Reply", "raw_attributes": []}
 
     if len(response) < 20:
-        return {"result": "No Reply", "detail": "Received an invalid short RADIUS response.", "reply_message": ""}
+        return {"result": "No Reply", "detail": "Received an invalid short RADIUS response.", "reply_message": "", "diagnostic_reason": "No Reply", "raw_attributes": []}
     code, response_identifier, response_length = struct.unpack("!BBH", response[:4])
     if response_identifier != identifier or response_length > len(response):
-        return {"result": "No Reply", "detail": "Received an invalid RADIUS response identifier or length.", "reply_message": ""}
+        return {"result": "No Reply", "detail": "Received an invalid RADIUS response identifier or length.", "reply_message": "", "diagnostic_reason": "No Reply", "raw_attributes": []}
 
     response_packet = response[:response_length]
     response_authenticator = response_packet[4:20]
@@ -314,6 +317,8 @@ def send_radius_access_request(payload: RealRadiusTestRequest) -> dict:
             "result": "Wrong Secret",
             "detail": "RADIUS replied, but the response authenticator did not match the shared secret.",
             "reply_message": "",
+            "diagnostic_reason": "Wrong Secret",
+            "raw_attributes": [],
             "remote": f"{remote[0]}:{remote[1]}",
         }
 
@@ -325,10 +330,13 @@ def send_radius_access_request(payload: RealRadiusTestRequest) -> dict:
         result = "Database Error" if "database" in reply_message.lower() else "Access-Reject"
     else:
         result = "No Reply"
+    diagnostic_reason = reply_message or ("Unknown authorization failure" if result == "Access-Reject" else result)
     return {
         "result": result,
-        "detail": reply_message or f"Received RADIUS response code {code}.",
+        "detail": diagnostic_reason if result == "Access-Reject" else (reply_message or f"Received RADIUS response code {code}."),
         "reply_message": reply_message,
+        "diagnostic_reason": diagnostic_reason,
+        "raw_attributes": parsed["raw_attributes"],
         "remote": f"{remote[0]}:{remote[1]}",
     }
 
@@ -467,7 +475,7 @@ def dashboard(admin=Depends(current_admin)):
         """
     )
     recent_auth = fetch_all(
-        "SELECT username, nas_ip::text, calling_station_id, result, reply_message, created_at FROM radius_auth_logs ORDER BY created_at DESC LIMIT 10"
+        "SELECT username, nas_ip::text, calling_station_id, result, reply_message, diagnostic_reason, created_at FROM radius_auth_logs ORDER BY created_at DESC LIMIT 10"
     )
     return {"environment": os.getenv("APP_ENV", "unknown"), "health": health_data, "stats": stats, "recent_auth": recent_auth}
 
@@ -606,12 +614,17 @@ def simulate_radius_auth(payload: RadiusSimulationRequest, admin=Depends(current
 
 @app.get("/api/radius/real-packet-defaults")
 def real_radius_packet_defaults(admin=Depends(current_admin)):
+    docker_subnet = os.getenv("RADIUS_DOCKER_CLIENT_SUBNET", "172.18.0.0/16")
+    packet_nas_ip = os.getenv("RADIUS_INTERNAL_TEST_NAS_IP", "172.18.0.1")
     return {
-        "nas_client_source": "API container / Docker network",
+        "nas_client_source": "Internal Docker RADIUS Test Client",
+        "client_name": "Docker API Test NAS",
+        "client_subnet": docker_subnet,
+        "packet_nas_ip": packet_nas_ip,
         "shared_secret": os.getenv("RADIUS_DEFAULT_SECRET") or "testing123",
         "radius_host": "radius",
         "radius_port": 1812,
-        "note": "This is the FreeRADIUS client secret for packets sent by the API container over the Docker network.",
+        "note": "This test is sent from the API container to the FreeRADIUS container. It uses the internal Docker test client secret, not the router/AP NAS shared secret.",
     }
 
 
@@ -621,6 +634,23 @@ def real_radius_packet_test(payload: RealRadiusTestRequest, admin=Depends(curren
         result = send_radius_access_request(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    recent = fetch_one(
+        """
+        SELECT id, reply_message, diagnostic_reason
+        FROM radius_auth_logs
+        WHERE username = %s
+          AND created_at > now() - interval '15 seconds'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (payload.username,),
+    )
+    if result["result"] in ("Access-Reject", "Database Error") and not result.get("reply_message"):
+        if recent and (recent.get("diagnostic_reason") or recent.get("reply_message")):
+            reason = recent.get("diagnostic_reason") or recent.get("reply_message")
+            result["diagnostic_reason"] = reason
+            result["reply_message"] = recent.get("reply_message") or reason
+            result["detail"] = reason
     audit(
         admin["id"],
         "real_radius_packet_test",
@@ -634,6 +664,32 @@ def real_radius_packet_test(payload: RealRadiusTestRequest, admin=Depends(curren
             "nas_identifier": payload.nas_identifier,
         },
     )
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                if recent and result["result"] in ("Access-Accept", "Access-Reject", "Database Error"):
+                    cur.execute(
+                        "UPDATE radius_auth_logs SET result = %s, diagnostic_reason = COALESCE(diagnostic_reason, %s), reply_message = COALESCE(reply_message, %s) WHERE id = %s",
+                        (result["result"], result.get("diagnostic_reason") or result.get("detail"), result.get("reply_message") or result.get("detail"), recent["id"]),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO radius_auth_logs(username, nas_ip, nas_identifier, calling_station_id, result, reply_message, diagnostic_reason)
+                        VALUES (%s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s)
+                        """,
+                        (
+                            payload.username,
+                            payload.nas_ip or "",
+                            payload.nas_identifier,
+                            payload.calling_station_id,
+                            result["result"],
+                            result.get("reply_message") or result.get("detail"),
+                            result.get("diagnostic_reason") or result.get("detail"),
+                        ),
+                    )
+    except Exception:
+        pass
     return result
 
 
@@ -728,7 +784,7 @@ def rotate_secret(nas_id: str, admin=Depends(current_admin)):
 
 @app.get("/api/auth-logs")
 def auth_logs(admin=Depends(current_admin)):
-    return fetch_all("SELECT username, nas_ip::text, nas_identifier, calling_station_id, result, reply_message, created_at FROM radius_auth_logs ORDER BY created_at DESC LIMIT 200")
+    return fetch_all("SELECT username, nas_ip::text, nas_identifier, calling_station_id, result, reply_message, diagnostic_reason, created_at FROM radius_auth_logs ORDER BY created_at DESC LIMIT 200")
 
 
 @app.get("/api/audit-logs")

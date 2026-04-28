@@ -14,12 +14,17 @@ server default {
     authorize {
         preprocess
         radius_auth
-        if (ok) {
+        if (&reply:Reply-Message == "Access accepted") {
             update control {
                 Auth-Type := Accept
             }
         }
         else {
+            if (!&reply:Reply-Message) {
+                update reply {
+                    Reply-Message := "Unknown authorization failure"
+                }
+            }
             reject
         }
     }

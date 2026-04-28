@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS radius_auth_logs (
     calling_station_id TEXT,
     result TEXT NOT NULL,
     reply_message TEXT,
+    diagnostic_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
