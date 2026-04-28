@@ -1,7 +1,12 @@
 import os
 import secrets
 import shutil
+import socket
+import struct
 import time
+import hmac
+from hashlib import md5
+from ipaddress import ip_interface
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -71,6 +76,17 @@ class RadiusSimulationRequest(BaseModel):
     nas_ip: str = "127.0.0.1"
     nas_identifier: Optional[str] = "portal-simulator"
     calling_station_id: Optional[str] = "SIMULATED-DEVICE"
+
+
+class RealRadiusTestRequest(BaseModel):
+    username: str
+    password: str
+    nas_ip: str = "127.0.0.1"
+    nas_identifier: Optional[str] = "portal-real-test"
+    calling_station_id: Optional[str] = "REAL-TEST-DEVICE"
+    shared_secret: str
+    radius_host: str = "radius"
+    radius_port: int = Field(default=1812, ge=1, le=65535)
 
 
 class NasCreate(BaseModel):
@@ -201,6 +217,119 @@ def evaluate_radius_auth(cur, username, password, nas_ip, nas_identifier, callin
 
     record_radius_auth(cur, username, nas_ip, nas_identifier, calling_station_id, result, message)
     return result, message, session_timeout, checks
+
+
+def radius_attr(attr_type: int, value: bytes) -> bytes:
+    if len(value) > 253:
+        raise ValueError("RADIUS attribute value is too long")
+    return bytes([attr_type, len(value) + 2]) + value
+
+
+def encode_user_password(password: str, secret: bytes, request_authenticator: bytes) -> bytes:
+    password_bytes = password.encode()
+    padded_len = ((len(password_bytes) + 15) // 16) * 16
+    padded = password_bytes.ljust(padded_len or 16, b"\x00")
+    result = b""
+    previous = request_authenticator
+    for index in range(0, len(padded), 16):
+        digest = md5(secret + previous).digest()
+        block = bytes(a ^ b for a, b in zip(padded[index:index + 16], digest))
+        result += block
+        previous = block
+    return result
+
+
+def normalize_ip(value: str) -> str:
+    return str(ip_interface(value).ip)
+
+
+def parse_radius_reply(attributes: bytes) -> dict:
+    reply = {"reply_message": ""}
+    index = 0
+    messages = []
+    while index + 2 <= len(attributes):
+        attr_type = attributes[index]
+        attr_len = attributes[index + 1]
+        if attr_len < 2 or index + attr_len > len(attributes):
+            break
+        value = attributes[index + 2:index + attr_len]
+        if attr_type == 18:
+            messages.append(value.decode(errors="replace"))
+        index += attr_len
+    reply["reply_message"] = " ".join(messages)
+    return reply
+
+
+def send_radius_access_request(payload: RealRadiusTestRequest) -> dict:
+    secret = payload.shared_secret.encode()
+    identifier = secrets.randbelow(256)
+    request_authenticator = secrets.token_bytes(16)
+    nas_ip = normalize_ip(payload.nas_ip)
+    attributes = b"".join(
+        [
+            radius_attr(1, payload.username.encode()),
+            radius_attr(2, encode_user_password(payload.password, secret, request_authenticator)),
+            radius_attr(4, socket.inet_aton(nas_ip)),
+            radius_attr(5, struct.pack("!I", 0)),
+            radius_attr(6, struct.pack("!I", 2)),
+            radius_attr(31, (payload.calling_station_id or "REAL-TEST-DEVICE").encode()),
+            radius_attr(32, (payload.nas_identifier or "portal-real-test").encode()),
+        ]
+    )
+    attributes_with_message_authenticator = attributes + radius_attr(80, b"\x00" * 16)
+    packet_length = 20 + len(attributes_with_message_authenticator)
+    unsigned_packet = struct.pack("!BBH", 1, identifier, packet_length) + request_authenticator + attributes_with_message_authenticator
+    message_authenticator = hmac.new(secret, unsigned_packet, md5).digest()
+    attributes = attributes + radius_attr(80, message_authenticator)
+    packet_length = 20 + len(attributes)
+    packet = struct.pack("!BBH", 1, identifier, packet_length) + request_authenticator + attributes
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(4)
+        try:
+            sock.sendto(packet, (payload.radius_host, payload.radius_port))
+            response, remote = sock.recvfrom(4096)
+        except socket.timeout:
+            return {
+                "result": "No Reply",
+                "detail": "No UDP response was received. This can mean wrong host/port, firewall block, unknown RADIUS client, or a dropped packet.",
+                "reply_message": "",
+            }
+        except OSError as exc:
+            return {"result": "No Reply", "detail": str(exc), "reply_message": ""}
+
+    if len(response) < 20:
+        return {"result": "No Reply", "detail": "Received an invalid short RADIUS response.", "reply_message": ""}
+    code, response_identifier, response_length = struct.unpack("!BBH", response[:4])
+    if response_identifier != identifier or response_length > len(response):
+        return {"result": "No Reply", "detail": "Received an invalid RADIUS response identifier or length.", "reply_message": ""}
+
+    response_packet = response[:response_length]
+    response_authenticator = response_packet[4:20]
+    response_attributes = response_packet[20:]
+    expected_authenticator = md5(response_packet[:4] + request_authenticator + response_attributes + secret).digest()
+    if response_authenticator != expected_authenticator:
+        return {
+            "result": "Wrong Secret",
+            "detail": "RADIUS replied, but the response authenticator did not match the shared secret.",
+            "reply_message": "",
+            "remote": f"{remote[0]}:{remote[1]}",
+        }
+
+    parsed = parse_radius_reply(response_attributes)
+    reply_message = parsed["reply_message"]
+    if code == 2:
+        result = "Access-Accept"
+    elif code == 3:
+        result = "Database Error" if "database" in reply_message.lower() else "Access-Reject"
+    else:
+        result = "No Reply"
+    return {
+        "result": result,
+        "detail": reply_message or f"Received RADIUS response code {code}.",
+        "reply_message": reply_message,
+        "remote": f"{remote[0]}:{remote[1]}",
+    }
 
 
 @app.get("/health")
@@ -472,6 +601,28 @@ def simulate_radius_auth(payload: RadiusSimulationRequest, admin=Depends(current
         "checks": checks,
         "simulated": True,
     }
+
+
+@app.post("/api/radius/real-packet-test")
+def real_radius_packet_test(payload: RealRadiusTestRequest, admin=Depends(current_admin)):
+    try:
+        result = send_radius_access_request(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    audit(
+        admin["id"],
+        "real_radius_packet_test",
+        "radius",
+        payload.username,
+        {
+            "result": result["result"],
+            "radius_host": payload.radius_host,
+            "radius_port": payload.radius_port,
+            "nas_ip": payload.nas_ip,
+            "nas_identifier": payload.nas_identifier,
+        },
+    )
+    return result
 
 
 @app.get("/api/nas-clients")

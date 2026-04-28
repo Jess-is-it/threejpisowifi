@@ -685,9 +685,22 @@ function RadiusTestGuide({ refresh }) {
     nas_identifier: 'portal-simulator',
     calling_station_id: 'SIMULATED-DEVICE'
   });
+  const [realForm, setRealForm] = useState({
+    username: '',
+    password: '',
+    nas_ip: '',
+    nas_identifier: 'portal-real-test',
+    calling_station_id: 'REAL-TEST-DEVICE',
+    shared_secret: '',
+    radius_host: 'radius',
+    radius_port: 1812
+  });
   const [testing, setTesting] = useState(false);
+  const [realTesting, setRealTesting] = useState(false);
   const [result, setResult] = useState(null);
+  const [realResult, setRealResult] = useState(null);
   const [error, setError] = useState('');
+  const [realError, setRealError] = useState('');
 
   useEffect(() => {
     request('/users').then((data) => setUsers(Array.isArray(data) ? data : [])).catch(() => setUsers([]));
@@ -697,6 +710,12 @@ function RadiusTestGuide({ refresh }) {
       const firstActive = rows.find((row) => row.status === 'active') || rows[0];
       if (firstActive?.nas_ip) {
         setForm((current) => ({ ...current, nas_ip: firstActive.nas_ip, nas_identifier: firstActive.shortname || current.nas_identifier }));
+        setRealForm((current) => ({
+          ...current,
+          nas_ip: firstActive.nas_ip,
+          nas_identifier: firstActive.shortname || current.nas_identifier,
+          shared_secret: firstActive.secret || current.shared_secret
+        }));
       }
     }).catch(() => setNasClients([]));
   }, []);
@@ -716,8 +735,24 @@ function RadiusTestGuide({ refresh }) {
       setTesting(false);
     }
   }
+  async function runRealTest(e) {
+    e.preventDefault();
+    setRealTesting(true);
+    setRealError('');
+    setRealResult(null);
+    try {
+      const data = await request('/radius/real-packet-test', { method: 'POST', body: JSON.stringify(realForm) });
+      setRealResult(data);
+      refresh();
+    } catch (err) {
+      setRealError(err.message);
+    } finally {
+      setRealTesting(false);
+    }
+  }
 
   const resultTone = result?.result === 'accept' ? 'success' : 'danger';
+  const realTone = realResult?.result === 'Access-Accept' ? 'success' : (realResult?.result === 'Wrong Secret' || realResult?.result === 'Database Error' ? 'warning' : 'danger');
   const checkLabels = {
     user_exists: 'User exists',
     password_valid: 'Password is correct',
@@ -792,6 +827,72 @@ function RadiusTestGuide({ refresh }) {
                     </span>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+        </Card>
+      </div>
+      <div className="col-12">
+        <Card title="Real FreeRADIUS Packet Test" subtitle="Send an actual UDP RADIUS Access-Request packet to FreeRADIUS. Use host radius and port 1812 for the local Docker service.">
+          <form onSubmit={runRealTest}>
+            <div className="row g-3">
+              <div className="col-md-4">
+                <label className="form-label">Username</label>
+                <input className="form-control" list="radius-real-test-users" required value={realForm.username} onChange={(e) => setRealForm({ ...realForm, username: e.target.value })} />
+                <datalist id="radius-real-test-users">
+                  {users.map((user) => <option key={user.id} value={user.username} />)}
+                </datalist>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Password</label>
+                <input className="form-control" type="password" required value={realForm.password} onChange={(e) => setRealForm({ ...realForm, password: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">NAS Client</label>
+                <select className="form-select" required value={realForm.nas_ip} onChange={(e) => {
+                  const selected = nasClients.find((nas) => nas.nas_ip === e.target.value);
+                  setRealForm({
+                    ...realForm,
+                    nas_ip: e.target.value,
+                    nas_identifier: selected?.shortname || realForm.nas_identifier,
+                    shared_secret: selected?.secret || realForm.shared_secret
+                  });
+                }}>
+                  {!nasClients.length && <option value="">No NAS clients added</option>}
+                  {nasClients.map((nas) => <option key={nas.id} value={nas.nas_ip}>{nas.name} - {nas.nas_ip}</option>)}
+                </select>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Shared Secret</label>
+                <input className="form-control" required value={realForm.shared_secret} onChange={(e) => setRealForm({ ...realForm, shared_secret: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">RADIUS Host</label>
+                <input className="form-control" required value={realForm.radius_host} onChange={(e) => setRealForm({ ...realForm, radius_host: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">RADIUS Port</label>
+                <input className="form-control" type="number" min="1" max="65535" required value={realForm.radius_port} onChange={(e) => setRealForm({ ...realForm, radius_port: Number(e.target.value) })} />
+              </div>
+              <div className="col-12">
+                <button className="btn btn-primary" disabled={realTesting}>
+                  <IconWifi size={18} className="me-2" />{realTesting ? 'Testing...' : 'Run Real RADIUS Test'}
+                </button>
+              </div>
+            </div>
+          </form>
+          <div className="text-muted small mt-3">
+            Possible real results: Access-Accept, Access-Reject, No Reply, Unknown Client, Wrong Secret, Database Error.
+          </div>
+          {realError && <div className="alert alert-danger mt-3 mb-0">{realError}</div>}
+          {realResult && (
+            <div className={`alert alert-${realTone} radius-test-result mt-3 mb-0`}>
+              <div className="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div>
+                  <div className="fw-bold">{realResult.result}</div>
+                  <div>{realResult.detail}</div>
+                </div>
+                {realResult.remote && <span className="badge bg-blue-lt text-blue">Reply From: {realResult.remote}</span>}
               </div>
             </div>
           )}
