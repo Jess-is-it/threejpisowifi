@@ -3786,6 +3786,7 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [stationPortSearch, setStationPortSearch] = useState({});
   const [stationForm, setStationForm] = useState({
     station_name: '',
+    station_code: '',
     description: '',
     vlan_id: '77',
     vlan_interface_name: 'VLAN77-3J-HOTSPOT',
@@ -3796,6 +3797,9 @@ function CaptivePortalPage({ mode = 'full' }) {
     pool_name: 'POOL-3J-HOTSPOT-V77',
     dns_servers: '10.77.0.1,8.8.8.8,1.1.1.1',
     local_interface_list: 'LOCAL',
+    hotspot_dns_name: 'wifi.3j.local',
+    hotspot_server_name: 'HS-3J-HOTSPOT-V77',
+    portal_url: 'http://192.168.50.70:8080/portal',
     routers: []
   });
   const tabs = isMikrotikOnly ? ['MikroTik'] : ['Portal', 'Portal Settings', 'Sanity Check', 'Portal Sessions', 'Authorization Logs', 'Manual Setup Guide'];
@@ -3841,6 +3845,7 @@ function CaptivePortalPage({ mode = 'full' }) {
   function stationToForm(station) {
     return {
       station_name: station.station_name || '',
+      station_code: station.station_code || '',
       description: station.description || '',
       vlan_id: String(station.vlan_id || ''),
       vlan_interface_name: station.vlan_interface_name || '',
@@ -3851,6 +3856,9 @@ function CaptivePortalPage({ mode = 'full' }) {
       pool_name: station.pool_name || '',
       dns_servers: station.dns_servers || '',
       local_interface_list: station.local_interface_list || 'LOCAL',
+      hotspot_dns_name: station.hotspot_dns_name || 'wifi.3j.local',
+      hotspot_server_name: station.hotspot_server_name || '',
+      portal_url: station.portal_url || portalSettings.portal_url_staging || 'http://192.168.50.70:8080/portal',
       routers: (station.routers || []).map((router) => ({
         router_id: router.router_id || '',
         bridge_name: router.bridge_name || '',
@@ -3874,6 +3882,7 @@ function CaptivePortalPage({ mode = 'full' }) {
   function openStationModal() {
     setStationForm({
       station_name: '',
+      station_code: '',
       description: '',
       vlan_id: '77',
       vlan_interface_name: 'VLAN77-3J-HOTSPOT',
@@ -3884,6 +3893,9 @@ function CaptivePortalPage({ mode = 'full' }) {
       pool_name: 'POOL-3J-HOTSPOT-V77',
       dns_servers: '10.77.0.1,8.8.8.8,1.1.1.1',
       local_interface_list: 'LOCAL',
+      hotspot_dns_name: 'wifi.3j.local',
+      hotspot_server_name: 'HS-3J-HOTSPOT-V77',
+      portal_url: portalSettings.portal_url_staging || 'http://192.168.50.70:8080/portal',
       routers: []
     });
     setStationActiveRouterIndex(0);
@@ -3894,7 +3906,13 @@ function CaptivePortalPage({ mode = 'full' }) {
     setStationModalOpen(true);
   }
   function updateStationField(key, value) {
-    setStationForm((current) => ({ ...current, [key]: value }));
+    setStationForm((current) => {
+      const next = { ...current, [key]: value };
+      if (key === 'station_name' && (!current.station_code || /^[a-z0-9-]+$/.test(current.station_code))) {
+        next.station_code = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      }
+      return next;
+    });
   }
   function updateStationVlan(value) {
     setStationForm((current) => {
@@ -3905,6 +3923,9 @@ function CaptivePortalPage({ mode = 'full' }) {
       }
       if (!current.pool_name || /^POOL-3J-HOTSPOT-V\d+$/i.test(current.pool_name)) {
         next.pool_name = value ? `POOL-3J-HOTSPOT-V${value}` : '';
+      }
+      if (!current.hotspot_server_name || /^HS-3J-HOTSPOT-V\d+$/i.test(current.hotspot_server_name)) {
+        next.hotspot_server_name = value ? `HS-3J-HOTSPOT-V${value}` : '';
       }
       if (Number.isInteger(vlanNumber) && vlanNumber > 0 && vlanNumber < 255) {
         if (!current.client_network_cidr || /^10\.\d+\.0\.0\/24$/.test(current.client_network_cidr)) next.client_network_cidr = `10.${vlanNumber}.0.0/24`;
@@ -5248,6 +5269,7 @@ function CaptivePortalPage({ mode = 'full' }) {
   }
   const stationFieldHints = {
     stationName: 'Friendly name for this deployment path. Example: CCR2116-Roma to CRS317 or Roma/Batu/GK HotSpot VLAN.',
+    stationCode: 'Short unique code for this substation/station. It helps keep VLAN, HotSpot, logs, and future reports tied to one location.',
     stationDescription: 'Optional note describing where the VLAN travels, for example root gateway to CRS, OLT, ONU, and APs.',
     routerChain: 'Add routers in the exact order customer VLAN traffic travels. The first router is the root gateway; following routers only carry the same VLAN downstream.',
     mikrotikRouter: 'Choose one of the MikroTik routers already saved in the system. The system uses read-only scan/API data to list its ports and bridges.',
@@ -5263,7 +5285,10 @@ function CaptivePortalPage({ mode = 'full' }) {
     poolEnd: 'Last DHCP address given to WiFi clients. In your example this is 10.77.0.254.',
     poolName: 'RouterOS IP pool name for customer devices. In your example this is POOL-3J-HOTSPOT-V77.',
     localInterfaceList: 'Interface list where the new VLAN interface is added so existing LAN/local firewall logic can recognize it. In your example this is LOCAL.',
-    dnsServers: 'DNS servers sent to clients through DHCP. Usually include the MikroTik gateway IP first, then public DNS servers.'
+    dnsServers: 'DNS servers sent to clients through DHCP. Usually include the MikroTik gateway IP first, then public DNS servers.',
+    hotspotDnsName: 'Future MikroTik HotSpot DNS name for this station. This is planning data for HotSpot enforcement and should be unique enough to identify the station.',
+    hotspotServerName: 'Future MikroTik HotSpot server name for the root gateway. This is not used by CRS/trunk routers.',
+    portalUrl: 'Customer portal URL clients should reach before login. Staging usually uses http://192.168.50.70:8080/portal.'
   };
   function StationLabel({ children, hint }) {
     return (
@@ -5279,9 +5304,9 @@ function CaptivePortalPage({ mode = 'full' }) {
   }
   const stationChainReady = stationForm.routers.length > 0;
   const stationRouterPathReady = stationForm.routers.length > 0 && stationForm.routers.every((router) => router.router_id && router.bridge_name && router.tagged_ports);
-  const stationRootReady = Boolean(stationForm.vlan_id && stationForm.client_network_cidr && stationForm.gateway_ip && stationForm.pool_start_ip && stationForm.pool_end_ip);
+  const stationRootReady = Boolean(stationForm.vlan_id && stationForm.client_network_cidr && stationForm.gateway_ip && stationForm.pool_start_ip && stationForm.pool_end_ip && stationForm.portal_url);
   const stationStepItems = [
-    { label: '1. Name Station', ready: Boolean(stationForm.station_name.trim()), detail: 'Identify this deployment path.' },
+    { label: '1. Name Station', ready: Boolean(stationForm.station_name.trim() && stationForm.station_code.trim()), detail: 'Identify this substation network.' },
     { label: '2. Build Router Chain', ready: stationChainReady, detail: 'Root gateway first, downstream routers after.' },
     { label: '3. Fill Router Fields', ready: stationRouterPathReady && stationRootReady, detail: 'Select detected bridges/ports and root network values.' },
     { label: '4. Review Plan', ready: false, detail: 'Generated commands open after save.' }
@@ -5590,7 +5615,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                               <span className="station-chain-node root"><IconRouter size={18} /></span>
                               <div>
                                 <div className="fw-semibold">{station.station_name}</div>
-                                <div className="text-muted small">Hover the router links to view VLAN, gateway, client network, and pool details.</div>
+                                <div className="text-muted small">{station.station_code ? `${station.station_code} · ` : ''}Hover the router links to view VLAN, gateway, client network, and pool details.</div>
                               </div>
                             </div>
                             <div className="btn-list justify-content-end flex-nowrap">
@@ -5849,11 +5874,15 @@ function CaptivePortalPage({ mode = 'full' }) {
                         ))}
                       </div>
                       <div className="row g-3 mb-3">
-                        <div className="col-md-6">
+                        <div className="col-md-5">
                           <StationLabel hint={stationFieldHints.stationName}>Station Name</StationLabel>
                           <input className="form-control" value={stationForm.station_name} onChange={(e) => updateStationField('station_name', e.target.value)} placeholder="CCR2116-Roma/Batu/GK" required />
                         </div>
-                        <div className="col-md-6">
+                        <div className="col-md-3">
+                          <StationLabel hint={stationFieldHints.stationCode}>Station Code</StationLabel>
+                          <input className="form-control" value={stationForm.station_code} onChange={(e) => updateStationField('station_code', e.target.value)} placeholder="roma-batu-gk" required />
+                        </div>
+                        <div className="col-md-4">
                           <StationLabel hint={stationFieldHints.stationDescription}>Description</StationLabel>
                           <input className="form-control" value={stationForm.description} onChange={(e) => updateStationField('description', e.target.value)} placeholder="Root router to CRS/OLT/AP captive portal VLAN path" />
                         </div>
@@ -6080,7 +6109,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                               </div>
                                             </div>
                                           </div>
-                                          <div className="station-field-group mb-0">
+                                          <div className="station-field-group">
                                             <div className="station-field-group-header">Client DNS and firewall-list context</div>
                                             <div className="row g-3">
                                               <div className="col-md-4">
@@ -6095,6 +6124,23 @@ function CaptivePortalPage({ mode = 'full' }) {
                                               <div className="col-md-8">
                                                 <StationLabel hint={stationFieldHints.dnsServers}>DNS Servers</StationLabel>
                                                 <input className="form-control" value={stationForm.dns_servers} onChange={(e) => updateStationField('dns_servers', e.target.value)} placeholder="10.77.0.1,8.8.8.8,1.1.1.1" />
+                                              </div>
+                                            </div>
+                                          </div>
+                                          <div className="station-field-group mb-0">
+                                            <div className="station-field-group-header">Portal and future HotSpot context</div>
+                                            <div className="row g-3">
+                                              <div className="col-md-4">
+                                                <StationLabel hint={stationFieldHints.hotspotDnsName}>HotSpot DNS Name</StationLabel>
+                                                <input className="form-control" value={stationForm.hotspot_dns_name} onChange={(e) => updateStationField('hotspot_dns_name', e.target.value)} placeholder="wifi.3j.local" />
+                                              </div>
+                                              <div className="col-md-4">
+                                                <StationLabel hint={stationFieldHints.hotspotServerName}>HotSpot Server Name</StationLabel>
+                                                <input className="form-control" value={stationForm.hotspot_server_name} onChange={(e) => updateStationField('hotspot_server_name', e.target.value)} placeholder="HS-3J-HOTSPOT-V77" />
+                                              </div>
+                                              <div className="col-md-4">
+                                                <StationLabel hint={stationFieldHints.portalUrl}>Portal URL</StationLabel>
+                                                <input className="form-control" value={stationForm.portal_url} onChange={(e) => updateStationField('portal_url', e.target.value)} placeholder="http://192.168.50.70:8080/portal" required />
                                               </div>
                                             </div>
                                           </div>
@@ -6139,6 +6185,12 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Client Network</div><div className="h3 mb-0">{stationReview.client_network_cidr}</div></div></div>
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Gateway</div><div className="h3 mb-0">{stationReview.gateway_ip}</div></div></div>
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Status</div><div className="h3 mb-0">{stationReview.status}</div></div></div>
+	                    </div>
+	                    <div className="row g-3 mb-3">
+	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Station Code</div><div className="fw-semibold">{stationReview.station_code || '-'}</div></div></div>
+	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">HotSpot DNS</div><div className="fw-semibold">{stationReview.hotspot_dns_name || '-'}</div></div></div>
+	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">HotSpot Server</div><div className="fw-semibold">{stationReview.hotspot_server_name || '-'}</div></div></div>
+	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Portal URL</div><div className="fw-semibold text-truncate" title={stationReview.portal_url || ''}>{stationReview.portal_url || '-'}</div></div></div>
 	                    </div>
 	                    <div className="text-muted small mb-3">{stationReview.plan?.summary || 'Root router creates the customer VLAN gateway/DHCP network. Downstream routers carry the same VLAN as a tagged trunk toward OLT/AP paths.'}</div>
 	                    {(stationReview.plan?.router_plans || []).map((routerPlan) => (

@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 import hmac
+import uuid
 from hashlib import md5, sha256
 from ipaddress import ip_address, ip_interface, ip_network
 from datetime import datetime, timezone, timedelta
@@ -482,6 +483,7 @@ class MikrotikStationRouterPayload(BaseModel):
 
 class MikrotikStationCreate(BaseModel):
     station_name: str = Field(min_length=1, max_length=160)
+    station_code: Optional[str] = Field(default=None, max_length=80)
     description: Optional[str] = Field(default=None, max_length=2000)
     vlan_id: int = Field(ge=1, le=4094)
     vlan_interface_name: Optional[str] = Field(default=None, max_length=200)
@@ -492,6 +494,9 @@ class MikrotikStationCreate(BaseModel):
     pool_name: Optional[str] = Field(default=None, max_length=200)
     dns_servers: Optional[str] = Field(default=None, max_length=400)
     local_interface_list: Optional[str] = Field(default="LOCAL", max_length=120)
+    hotspot_dns_name: Optional[str] = Field(default=None, max_length=200)
+    hotspot_server_name: Optional[str] = Field(default=None, max_length=200)
+    portal_url: Optional[str] = Field(default=None, max_length=500)
     routers: list[MikrotikStationRouterPayload] = Field(default_factory=list)
 
 
@@ -6327,6 +6332,99 @@ def station_routeros_add_command(label: str, path: str, params: dict, **metadata
     return command
 
 
+def station_code_from_text(value: Optional[str]) -> str:
+    text = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return text or f"station-{uuid.uuid4().hex[:8]}"
+
+
+def station_snapshot_for_router(router_id: str) -> tuple[Optional[dict], dict]:
+    scan = latest_mikrotik_scan_row(router_id)
+    if not scan or scan.get("scan_status") != "SUCCESS":
+        return scan, {}
+    return scan, scan.get("sanitized_snapshot_json") or {}
+
+
+def station_interface_map(snapshot: dict) -> dict[str, dict]:
+    return {
+        str(item.get("name") or ""): item
+        for item in mikrotik_snapshot_items(snapshot, "interfaces")
+        if item.get("name")
+    }
+
+
+def station_interface_is_pppoe(interface: dict) -> bool:
+    text = " ".join(str(interface.get(key) or "").lower() for key in ("name", "type", "comment", "default-name"))
+    return "pppoe" in text
+
+
+def station_existing_vlan_is_managed(snapshot: dict, vlan_id: int, vlan_interface_name: str) -> bool:
+    marker = f"3j hotspot - vlan {vlan_id}"
+    for item in mikrotik_snapshot_items(snapshot, "interface_vlans"):
+        if vlan_id not in parse_routeros_vlan_ids(item.get("vlan-id")):
+            continue
+        if str(item.get("name") or "") == vlan_interface_name:
+            return True
+        if marker in str(item.get("comment") or "").lower():
+            return True
+    for item in mikrotik_snapshot_items(snapshot, "bridge_vlans"):
+        if vlan_id not in parse_routeros_vlan_ids(item.get("vlan-ids")):
+            continue
+        if marker in str(item.get("comment") or "").lower():
+            return True
+    return False
+
+
+def station_validate_router_path(payload: MikrotikStationCreate, station_id: Optional[str], network, pool_start, pool_end):
+    errors = []
+    vlan_id = int(payload.vlan_id)
+    vlan_interface_name = (payload.vlan_interface_name or "").strip() or f"VLAN{vlan_id}-3J-HOTSPOT"
+    pool_name = (payload.pool_name or "").strip() or f"POOL-3J-HOTSPOT-V{vlan_id}"
+    for index, item in enumerate(payload.routers):
+        router = fetch_one("SELECT id, router_name FROM mikrotik_routers WHERE id = %s", (item.router_id,))
+        router_label = router["router_name"] if router else f"router #{index + 1}"
+        scan, snapshot = station_snapshot_for_router(item.router_id)
+        if not scan:
+            errors.append(f"{router_label}: run a successful Preflight Scan before saving this station.")
+            continue
+        if scan.get("scan_status") != "SUCCESS":
+            errors.append(f"{router_label}: latest Preflight Scan failed. Re-scan before saving this station.")
+            continue
+        interfaces = station_interface_map(snapshot)
+        bridge_name = (item.bridge_name or "").strip()
+        if bridge_name not in interfaces:
+            errors.append(f"{router_label}: selected bridge/interface '{bridge_name}' was not found in the latest scan.")
+        elif station_interface_is_pppoe(interfaces[bridge_name]):
+            errors.append(f"{router_label}: '{bridge_name}' is PPPoE-related and cannot carry the station captive portal VLAN.")
+        for port_name in [port.strip() for port in str(item.tagged_ports or "").split(",") if port.strip()]:
+            if port_name not in interfaces:
+                errors.append(f"{router_label}: tagged port '{port_name}' was not found in the latest scan.")
+            elif station_interface_is_pppoe(interfaces[port_name]):
+                errors.append(f"{router_label}: tagged port '{port_name}' is PPPoE-related and cannot carry the station captive portal VLAN.")
+        existing_vlan_ids = set()
+        for row in mikrotik_snapshot_items(snapshot, "interface_vlans"):
+            existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-id")))
+        for row in mikrotik_snapshot_items(snapshot, "bridge_vlans"):
+            existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-ids")))
+        if vlan_id in existing_vlan_ids and not station_existing_vlan_is_managed(snapshot, vlan_id, vlan_interface_name):
+            errors.append(f"{router_label}: VLAN {vlan_id} already exists in the latest scan and is not marked as this station's managed VLAN.")
+        if index == 0:
+            for row in mikrotik_snapshot_items(snapshot, "ip_addresses"):
+                existing_network = parse_routeros_ip_network(row.get("address"))
+                existing_interface = str(row.get("interface") or "")
+                existing_comment = str(row.get("comment") or "").lower()
+                if existing_network and network.overlaps(existing_network) and existing_interface != vlan_interface_name and f"3j hotspot - vlan {vlan_id}" not in existing_comment:
+                    errors.append(f"{router_label}: client subnet {network.with_prefixlen} overlaps existing router network {existing_network} on {existing_interface or 'unknown interface'}.")
+            proposed_pool = (int(pool_start), int(pool_end))
+            for row in mikrotik_snapshot_items(snapshot, "ip_pools"):
+                if str(row.get("name") or "") == pool_name:
+                    continue
+                for existing_range in parse_routeros_pool_ranges(row.get("ranges")):
+                    if mikrotik_ranges_overlap(proposed_pool, existing_range):
+                        errors.append(f"{router_label}: DHCP pool {pool_start}-{pool_end} overlaps existing pool {row.get('name')}: {row.get('ranges')}.")
+    if errors:
+        raise HTTPException(status_code=400, detail=" ".join(errors))
+
+
 def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
     vlan_id = int(station["vlan_id"])
     network = ip_network(station["client_network_cidr"], strict=False)
@@ -6452,11 +6550,15 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
         })
     return {
         "summary": "Root router creates the customer VLAN gateway/DHCP network. Downstream routers carry the same VLAN as a tagged trunk toward OLT/AP paths.",
+        "station_code": station.get("station_code"),
         "vlan_id": vlan_id,
         "client_network_cidr": network.with_prefixlen,
         "gateway_ip": str(station["gateway_ip"]),
         "pool_range": f"{station['pool_start_ip']}-{station['pool_end_ip']}",
         "dns_servers": dns_servers,
+        "hotspot_dns_name": station.get("hotspot_dns_name"),
+        "hotspot_server_name": station.get("hotspot_server_name"),
+        "portal_url": station.get("portal_url"),
         "router_plans": router_plans,
     }
 
@@ -6479,6 +6581,7 @@ def public_mikrotik_station(row: dict) -> dict:
     return {
         "id": row["id"],
         "station_name": row["station_name"],
+        "station_code": row.get("station_code"),
         "description": row.get("description"),
         "vlan_id": row["vlan_id"],
         "vlan_interface_name": row.get("vlan_interface_name") or f"VLAN{row['vlan_id']}-3J-HOTSPOT",
@@ -6489,6 +6592,9 @@ def public_mikrotik_station(row: dict) -> dict:
         "pool_name": row.get("pool_name") or f"POOL-3J-HOTSPOT-V{row['vlan_id']}",
         "dns_servers": row.get("dns_servers"),
         "local_interface_list": row.get("local_interface_list") or "LOCAL",
+        "hotspot_dns_name": row.get("hotspot_dns_name"),
+        "hotspot_server_name": row.get("hotspot_server_name"),
+        "portal_url": row.get("portal_url"),
         "status": row["status"],
         "routers": [
             {
@@ -6531,8 +6637,32 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
             label = "root/primary router" if index == 0 else f"router #{index + 1}"
             raise HTTPException(status_code=400, detail=f"Tagged ports are required for the {label}.")
     network, gateway_ip, pool_start, pool_end, dns_servers = validate_station_network(payload)
+    station_code = station_code_from_text(payload.station_code or payload.station_name)
     vlan_interface_name = (payload.vlan_interface_name or "").strip() or f"VLAN{payload.vlan_id}-3J-HOTSPOT"
     pool_name = (payload.pool_name or "").strip() or f"POOL-3J-HOTSPOT-V{payload.vlan_id}"
+    hotspot_dns_name = (payload.hotspot_dns_name or "").strip() or f"wifi.{station_code}.local"
+    hotspot_server_name = (payload.hotspot_server_name or "").strip() or f"HS-3J-HOTSPOT-V{payload.vlan_id}"
+    portal_url = (payload.portal_url or "").strip() or "http://192.168.50.70:8080/portal"
+    station_validate_router_path(payload, station_id, network, pool_start, pool_end)
+    duplicate_conditions = [
+        ("station_code", "lower(btrim(station_code)) = lower(btrim(%s))", station_code, "Station code is already used by another active station."),
+        ("vlan_id", "vlan_id = %s", payload.vlan_id, f"Customer VLAN {payload.vlan_id} is already used by another active station."),
+        ("client_network_cidr", "lower(btrim(client_network_cidr)) = lower(btrim(%s))", network.with_prefixlen, f"Client network {network.with_prefixlen} is already used by another active station."),
+    ]
+    for _, condition, value, message in duplicate_conditions:
+        existing = fetch_one(
+            f"""
+            SELECT id, station_name
+            FROM mikrotik_stations
+            WHERE status <> 'ARCHIVED'
+              AND {condition}
+              AND (%s IS NULL OR id <> %s)
+            LIMIT 1
+            """,
+            (value, station_id, station_id),
+        )
+        if existing:
+            raise HTTPException(status_code=400, detail=f"{message} Existing station: {existing['station_name']}.")
     action = "create_mikrotik_station"
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -6565,6 +6695,7 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                     """
                     UPDATE mikrotik_stations
                     SET station_name = %s,
+                        station_code = %s,
                         description = %s,
                         vlan_id = %s,
                         vlan_interface_name = %s,
@@ -6575,6 +6706,9 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         pool_name = %s,
                         dns_servers = %s,
                         local_interface_list = %s,
+                        hotspot_dns_name = %s,
+                        hotspot_server_name = %s,
+                        portal_url = %s,
                         status = 'READY_FOR_REVIEW',
                         updated_at = now()
                     WHERE id = %s
@@ -6582,6 +6716,7 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                     """,
                     (
                         payload.station_name.strip(),
+                        station_code,
                         payload.description,
                         payload.vlan_id,
                         vlan_interface_name,
@@ -6592,6 +6727,9 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         pool_name,
                         dns_servers,
                         (payload.local_interface_list or "LOCAL").strip() or "LOCAL",
+                        hotspot_dns_name,
+                        hotspot_server_name,
+                        portal_url,
                         station["id"],
                     ),
                 )
@@ -6601,15 +6739,16 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                 cur.execute(
                     """
                     INSERT INTO mikrotik_stations(
-                        station_name, description, vlan_id, vlan_interface_name, client_network_cidr,
+                        station_name, station_code, description, vlan_id, vlan_interface_name, client_network_cidr,
                         gateway_ip, pool_start_ip, pool_end_ip, pool_name, dns_servers,
-                        local_interface_list, status, created_by_admin_id
+                        local_interface_list, hotspot_dns_name, hotspot_server_name, portal_url, status, created_by_admin_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'READY_FOR_REVIEW', %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'READY_FOR_REVIEW', %s)
                     RETURNING *
                     """,
                     (
                         payload.station_name.strip(),
+                        station_code,
                         payload.description,
                         payload.vlan_id,
                         vlan_interface_name,
@@ -6620,6 +6759,9 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         pool_name,
                         dns_servers,
                         (payload.local_interface_list or "LOCAL").strip() or "LOCAL",
+                        hotspot_dns_name,
+                        hotspot_server_name,
+                        portal_url,
                         admin["id"],
                     ),
                 )
@@ -6649,6 +6791,7 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
         str(station["id"]),
         {
             "station_name": payload.station_name,
+            "station_code": station_code,
             "vlan_id": payload.vlan_id,
             "client_network_cidr": network.with_prefixlen,
             "router_count": len(payload.routers),

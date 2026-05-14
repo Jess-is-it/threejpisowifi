@@ -740,6 +740,18 @@ Safety:
 
 The MikroTik workspace has moved from `Captive Portal -> MikroTik` into `Network -> MikroTik` because MikroTik is infrastructure/gateway management, not portal content management.
 
+## Station/Substation Captive Portal Network Model
+
+Long-term network direction:
+- One station/substation should have its own captive portal customer VLAN and client subnet.
+- Roaming is seamless inside one station when APs use the same SSID, VLAN, subnet, and root HotSpot gateway path.
+- Moving between stations may give the customer a new DHCP address, but vouchers/wallet/access remain global in 3JCentralPisowifi so the experience can still be seamless at the account/device layer.
+- DHCP and future HotSpot enforcement belong only on the root gateway router for that station.
+- CRS/switch/trunk/transport routers must only carry the VLAN and may expose a VLAN monitoring interface for visibility; they must not own DHCP/HotSpot for the station.
+- Station plans now include a unique station code, customer VLAN, client subnet, HotSpot DNS/server planning fields, and portal URL.
+- Active station plans must not reuse the same station code, customer VLAN, or client subnet.
+- Saving a station validates selected router bridge/tagged ports against latest successful MikroTik preflight scan data, rejects PPPoE-related interfaces, and checks VLAN/subnet/pool conflicts before the RouterOS implementation modal is used.
+
 Station planning:
 - A station models one captive portal VLAN path from the root gateway to downstream routers/switches/CRS/OLT/AP paths.
 - The first router in the station chain is the root/primary gateway. It owns the VLAN interface, gateway IP, DHCP pool/network options, and local interface-list membership.
