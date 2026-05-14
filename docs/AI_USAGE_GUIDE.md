@@ -1,11 +1,27 @@
 # AI Usage Guide
 
-Future AI agents must read `/PROJECT_CONTEXT.md` before making changes.
+AI features are no longer part of the active 3JCentralPisowifi operator workflow.
 
-Rules:
+## Current Rule
+
+- Do not add AI chat, AI explain, AI smoke tests, AI planning suggestions, or AI draft deployment plans unless the project owner explicitly reopens the feature.
+- Do not expose OpenAI settings in the admin UI.
+- Do not call OpenAI from the MikroTik preflight or captive portal workflow.
+- Keep MikroTik setup manual and deterministic under `Admin -> Network -> MikroTik -> Configuration`.
+- Keep MikroTik read-only preflight scan data because it provides validation input for manual operator fields such as VLAN IDs, subnets, pools, DHCP, HotSpot, PPPoE, OSPF, WireGuard, routing, and firewall risk indicators. The scan UI now lives inside `Admin -> Network -> MikroTik -> Configuration`.
+
+## Safety Boundary
+
+- Preflight scanning remains read-only.
+- Manual MikroTik configuration must show exact RouterOS changes before any step is applied.
+- Backend deterministic validation remains the authority for VLAN conflicts, subnet overlaps, pool overlaps, missing required fields, and protected-router warnings.
+- No AI output should be used to approve, generate, or apply RouterOS configuration.
+
+## General Project Rules
+
 - Always update `/PROJECT_CONTEXT.md` whenever architecture, deployment, features, commands, branches, workflows, or decisions change.
-- Never implement parked features unless the project owner explicitly asks.
-- Keep Phase 1 focused on Source of Truth + Manual RADIUS Test MVP.
 - Preserve the production/staging deployment model.
-- Production tracks `master`; staging tracks `staging`.
 - Keep secrets in environment-specific `.env` files and never commit generated secrets.
+- Current product priority is Captive Portal + Voucher access.
+- MikroTik is the preferred gateway/enforcement layer; Omada remains for AP/SSID management.
+- Preserve voucher, portal, RADIUS/authentication/accounting/session, Omada, and MikroTik read-only scan features while changing the MikroTik setup workflow.

@@ -152,6 +152,90 @@ Omada standalone AP guidance:
 - Use the environment-specific auth/accounting ports.
 - Use the shared secret from the Admin Portal.
 
+## Omada AP Real Device Test
+
+Use the Omada Controller setup page:
+
+```text
+http://192.168.50.70:8080/admin/settings/omada-controller
+```
+
+Staging RADIUS values:
+- Server: `192.168.50.70`
+- Authentication port: `11812`
+- Accounting port: `11813`
+
+Production RADIUS values:
+- Server: `192.168.50.70`
+- Authentication port: `1812`
+- Accounting port: `1813`
+
+Before testing, create a NAS / Router / AP Client for the IP FreeRADIUS sees as the RADIUS source. This may be `192.168.50.71` for the Omada Controller or the AP IP.
+
+Real AP checklist:
+1. Install and open Omada Controller.
+2. Adopt one Omada AP.
+3. Create SSID `3J-Test-WiFi`.
+4. Set security to WPA2-Enterprise.
+5. Add RADIUS server `192.168.50.70`.
+6. Use auth port `11812` and accounting port `11813` for staging.
+7. Use the NAS client shared secret.
+8. Create a test user and add wallet balance.
+9. Connect a phone/laptop.
+10. Confirm Access-Accept, Accounting Start, Interim-Update wallet deduction, and same-account second-device rejection.
+
+Check FreeRADIUS logs:
+
+```bash
+docker logs centralwifi_staging-radius-1
+```
+
 hostapd guidance:
 - Set `auth_server_addr`, `auth_server_port`, and `auth_server_shared_secret`.
 - Set `acct_server_addr`, `acct_server_port`, and `acct_server_shared_secret`.
+
+## Phase 1E Omada RADIUS Profile Automation Test
+
+Use staging first:
+
+```text
+RADIUS Server: 192.168.50.70
+Auth Port: 11812
+Accounting Port: 11813
+Interim Update: 300 seconds
+SSID: 3J-Test-WiFi
+Security: WPA2-Enterprise
+```
+
+Expected real AP behavior:
+1. Omada API login succeeds.
+2. Omada site is selected.
+3. Matching NAS client exists in 3JCentralPisowifi using the same shared secret.
+4. Omada RADIUS profile exists or is manually created from fallback values.
+5. Test WPA2-Enterprise SSID exists or is manually created.
+6. Phone/laptop connects with a 3JCentralPisowifi test user.
+7. FreeRADIUS logs show Access-Accept.
+8. Accounting Start creates an active session.
+9. Interim-Update deducts wallet time.
+10. A second device using the same account is rejected.
+
+Check logs:
+
+```bash
+docker logs centralwifi_staging-radius-1
+```
+
+If FreeRADIUS reports an unknown client, create another NAS client for the source IP shown in the log using the same shared secret.
+
+## Captive Portal Direction
+
+RADIUS and WPA2-Enterprise tests are now advanced/lab tools, not the primary customer login flow.
+
+Current customer direction:
+- Customer connects to open SSID `3J-FreeWiFi`.
+- Captive Portal opens at `http://192.168.50.70/portal`.
+- Customer enters a voucher code.
+- 3JCentralPisowifi validates the voucher and grants time/access.
+- Session and accounting foundations remain useful for tracking and enforcement.
+
+Keep these RADIUS tests available for backend validation. Do not remove Phase 1C authentication, accounting, wallet deduction, session tracking, or single-device rejection tests.

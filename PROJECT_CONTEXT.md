@@ -123,6 +123,7 @@ UI direction:
 - Admin Portal uses installed/imported Tabler UI packages, not the removed temporary template.
 - Admin Portal follows the project owner's previous common UI order for shared admin features: dark vertical sidebar, sticky top header with CPU/RAM/DISK/UPTIME metrics, card-based pages, profile/password/logout behind a sidebar account dropdown, and tabbed System Settings.
 - System Settings tab order is General, Access, System Update, Backup, Danger. The General tab contains Branding, including Company Logo, Browser Page Logo, System Display Name, Portal Subtitle, and Accent Color.
+- Success messages should display above the page's main panel/card, not inside nested tab content. They should use a dismissible Tabler alert and auto-close after 6 seconds unless the message requires operator action.
 - Do not copy old-system product names.
 - Keep the UI focused on Phase 1 workflows instead of importing unrelated old-system modules.
 
@@ -171,6 +172,33 @@ Known limitations:
 Next planned phase:
 - Add the next owner-approved feature after Phase 1C validation, likely voucher/client-facing flow only when explicitly requested.
 
+## Phase 1D — External Omada Controller Server
+Phase 1D adds an Admin Portal setup page for a separate Omada Software Controller server used for real TP-Link Omada AP/RADIUS test preparation.
+
+Environment:
+- 3JCentralPisowifi server: `192.168.50.70`.
+- Omada Controller server: `192.168.50.71`.
+- Omada is installed on a separate server for isolation.
+- RADIUS authentication and accounting are still handled by FreeRADIUS on `192.168.50.70`.
+- Staging RADIUS ports: auth `11812/udp`, accounting `11813/udp`.
+- Production RADIUS ports: auth `1812/udp`, accounting `1813/udp`.
+
+Architecture rules:
+- Omada Controller is not the source of truth.
+- 3JCentralPisowifi remains the source of truth for users, wallets, sessions, accounting, active device tracking, single-device rejection, and access decisions.
+- Omada manages AP adoption, SSIDs, WiFi profiles, RADIUS profile assignment, and AP monitoring only.
+- Do not store WiFi users, wallet state, vouchers, payment state, or access decisions in Omada.
+
+Implementation scope:
+- Admin Portal page: Settings / Omada Controller at `/admin/settings/omada-controller`.
+- Store Omada controller settings and install logs in PostgreSQL.
+- Use SSH only for controlled install/status/service actions against the Omada server.
+- No arbitrary shell command execution is allowed.
+- Omada install runs as a controlled background job with progress saved to `omada_install_logs`.
+- Default install method is Docker on `/opt/omada-controller` with Compose project `omada_controller`.
+- This phase does not automate AP adoption or deep Omada API automation.
+- This phase prepares real AP testing and provides RADIUS settings/checklists.
+
 ## 17. RADIUS behavior
 Access-Accept requires an active user, valid password, usable balance or valid-until or unlimited flag, and no active session inside `ACTIVE_SESSION_GRACE_SECONDS`. Access-Reject is returned for unknown users, invalid passwords, disabled users, no balance/expired access, or active single-device conflict. Accounting Start, Interim-Update, and Stop update the sessions table; Interim-Update decrements time balance without allowing negative balance.
 
@@ -182,7 +210,7 @@ The Admin Portal has three different RADIUS test paths:
 Every FreeRADIUS reject path should include a `Reply-Message` so the Admin Portal can show a human-readable diagnostic reason and troubleshooting suggestion.
 
 ## 18. Database tables
-Application tables: `admins`, `users`, `wallets`, `transactions`, `nas_clients`, `radius_auth_logs`, `sessions`, `audit_logs`.
+Application tables: `admins`, `users`, `wallets`, `transactions`, `nas_clients`, `radius_auth_logs`, `sessions`, `audit_logs`, `omada_controller_settings`, `omada_install_logs`.
 
 `radius_auth_logs` stores `diagnostic_reason` for RADIUS troubleshooting in addition to `reply_message`.
 
@@ -220,8 +248,86 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - Do not implement parked features unless the project owner explicitly asks.
 - Keep Phase 1 focused on Source of Truth + Manual RADIUS Test MVP.
 - Do not commit generated secrets, `.env` files, SSH keys, database dumps, or build artifacts.
+- Do not add arbitrary remote shell execution for Omada; only predefined install/status/service actions are allowed.
+
+## Project Direction Update — Captive Portal Priority
+
+The project priority has shifted from customer WPA2-Enterprise username/password WiFi login to a PisoWiFi-style Captive Portal flow.
+
+Direction:
+- WPA2-Enterprise testing is now parked as an advanced/lab feature.
+- Captive Portal is now the main customer access direction.
+- Main customer experience should be open SSID + portal + voucher.
+- Customer-facing login should not ask for WPA2 identity, anonymous identity, or WPA2 password.
+- Voucher system is the next major feature.
+
+Architecture:
+- Omada Controller remains useful for AP adoption, SSID configuration, WiFi profile management, and AP monitoring.
+- FreeRADIUS and accounting remain useful as the backend session/accounting foundation and should not be deleted.
+- PostgreSQL remains the source of truth.
+- 3JCentralPisowifi remains the source of truth for customers, vouchers, wallets, sessions, accounting, single-device policy, and access decisions.
+- Omada must not store WiFi customer accounts or voucher logic.
+
+Implementation notes:
+- Existing Phase 1C RADIUS authentication/accounting tests must remain working.
+- Phase 1D/1E Omada API and WPA2-Enterprise tools should remain available under Advanced Tools for engineering validation.
+- Admin Portal main navigation should emphasize Dashboard, Customers / Accounts, Vouchers, Wallet, Sessions, Captive Portal, Network, Omada Controller, System Settings, and Logs.
+- Vouchers and Captive Portal pages are currently placeholders until the next implementation phase.
+
+## Phase 2A — Voucher Management System
+
+Voucher Management is now the next core feature for the Captive Portal direction.
+
+Scope:
+- Admins can create single vouchers and bulk voucher batches.
+- Vouchers add access/time to customer wallets when redeemed.
+- Voucher types are `TIME_BASED`, `DATE_BASED`, and `UNLIMITED`.
+- Voucher statuses are `UNUSED`, `USED`, `EXPIRED`, `DISABLED`, and `VOIDED`.
+- Voucher redemption records success/failure history in PostgreSQL.
+- Admin Test Redeem simulates future captive portal redemption.
+
+Architecture rules:
+- Captive Portal will later redeem vouchers.
+- Vouchers do not replace PostgreSQL wallet/session source of truth.
+- Voucher redemption credits wallet/access and creates a `transactions` row with `source = VOUCHER`.
+- Wallets remain the source of truth for time remaining, valid-until, and unlimited access.
+- Sessions/accounting remain the source of truth for active usage.
+- Existing RADIUS/auth/accounting remains active and must not be removed.
+
+Not included in Phase 2A:
+- Actual captive portal enforcement.
+- Public customer portal redemption UI.
+- Omada external portal integration.
+- Payments, SMS, coinslot, or vendo integration.
+
+## Phase 2B — Client Portal / Voucher Redemption Page
+
+The client portal is the customer-facing page for voucher entry.
+
+Scope:
+- Public `/portal` page loads without admin login.
+- Customers can manually test voucher redemption at `/portal`.
+- Public APIs are limited to portal settings, portal session creation/update, voucher redemption, and portal status.
+- Voucher redemption uses the existing voucher service and credits wallet/access through PostgreSQL.
+- Portal sessions and portal events are stored for future captive portal integration.
+- Admin -> Captive Portal manages basic portal branding and shows recent portal events/redemptions.
+
+Architecture notes:
+- Customers will later be redirected here by Omada or MikroTik captive portal.
+- Captive portal enforcement is still not implemented in Phase 2B.
+- Browser JavaScript cannot reliably detect device MAC address by itself.
+- Device identifiers such as `client_mac`, `client_ip`, `ssid`, `site`, `gateway`, and `nas_id` are captured from optional query parameters for future Omada/MikroTik integration.
+- If no parameters exist, the portal creates a browser-based temporary portal session ID and marks the source as `MANUAL_TEST`.
+- Phase 2C is expected to integrate portal redirect/enforcement.
+
+Not included:
+- Omada external portal automation.
+- MikroTik hotspot integration.
+- Payments, SMS, coinslot, vendo, or production rollout automation.
 
 ## 24. Changelog section
+- 2026-04-30: Added Phase 1D External Omada Controller Server setup page, encrypted Omada/SSH settings, controlled SSH install/manage endpoints, Omada install logs, NAS helper, RADIUS copy settings, real AP checklist, and Omada setup documentation.
+- 2026-04-30: Added Omada install progress tracking with background install jobs, current step labels, and Admin Portal progress bar polling.
 - 2026-04-28: Completed Phase 1C real RADIUS accounting with Start/Interim/Stop packet tests, session tracking, wallet deduction, accounting logs, improved Sessions and Wallet UI, and updated documentation.
 - 2026-04-28: Reworked Real FreeRADIUS Packet Test to use a fixed Internal Docker RADIUS Test Client, added reject diagnostic reasons, technical details, troubleshooting suggestions, and documented separate simulated/internal/external RADIUS test flows.
 - 2026-04-28: Fixed Real FreeRADIUS Packet Test defaults so the Shared Secret uses the API-container/Docker-network FreeRADIUS client secret instead of the selected router/AP NAS record secret.
@@ -241,3 +347,419 @@ Coinslot, vendo device, SMS, online payment, self-registration, dynamic VLAN, co
 - 2026-04-26: Removed the previous third-party admin template direction, adopted the owner's old-system UI language without old naming, and added common profile, password, access, backup, danger, and system update surfaces.
 - 2026-04-26: Restyled the Admin Portal to follow a template-style dashboard layout while preserving the Phase 1 API-backed workflows.
 - 2026-04-25: Created Phase 1 foundation with Docker Compose production/staging overlays, FastAPI API, React admin portal, PostgreSQL schema, FreeRADIUS helper scripts, installer/updater scripts, and documentation.
+
+## Phase 1E — Omada RADIUS Profile Automation
+Phase 1E adds optional Omada API automation on top of the operational external Omada Controller server.
+
+Purpose:
+- Connect 3JCentralPisowifi to the Omada Controller API at `https://192.168.50.71:8043`.
+- Save Omada API settings and encrypted Omada password separately from SSH install credentials.
+- Test Omada API login, detect Omada sites, and save the selected site.
+- Build a 3JCentralPisowifi RADIUS profile using staging or production values.
+- Create the matching NAS / Router / AP Client entry inside 3JCentralPisowifi.
+- Attempt to create the Omada-side RADIUS profile and test WPA2-Enterprise SSID.
+- Always show manual fallback instructions if Omada API endpoints differ or automation fails.
+
+Environment:
+- 3JCentralPisowifi host: `192.168.50.70`.
+- Omada host: `192.168.50.71`.
+- Omada remains external and optional.
+- RADIUS staging ports: authentication `11812/udp`, accounting `11813/udp`.
+- RADIUS production ports: authentication `1812/udp`, accounting `1813/udp`.
+
+Architecture rules:
+- 3JCentralPisowifi remains the source of truth for users, wallets, sessions, balances, accounting, and access decisions.
+- Omada only manages APs, WLAN/SSID settings, RADIUS profiles, and AP monitoring.
+- Matching NAS client entries must exist in 3JCentralPisowifi using the same shared secret configured in Omada.
+- Omada API behavior may vary by controller version; automation must fail gracefully and show manual values.
+- This phase does not add vouchers, captive portal, SMS, payments, WireGuard, AP mass deployment, or production rollout automation.
+
+New data areas:
+- `omada_api_settings` stores API URL, username, TLS mode, controller/site identifiers, and encrypted password.
+- `omada_radius_profiles` stores local profile builder values, encrypted shared secret, Omada profile ID if returned, and status.
+- `omada_test_ssids` stores test WPA2-Enterprise SSID attempts and Omada WLAN ID if returned.
+- `omada_automation_logs` stores sanitized request/response summaries for API login, site detection, NAS creation, RADIUS profile creation, and SSID creation.
+
+Changelog:
+- 2026-04-30: Added Phase 1E Omada API settings, site detection, matching NAS creation, RADIUS profile automation adapter, test WPA2-Enterprise SSID automation adapter, sanitized automation logs, and manual fallback instructions.
+- 2026-04-30: Updated project direction to Captive Portal + Voucher priority, parked WPA2-Enterprise as an advanced/lab feature, cleaned Admin Portal navigation, added Vouchers and Captive Portal placeholders, moved RADIUS lab tools under Network/Advanced, and added Omada Portal Setup preparation UI.
+- 2026-04-30: Began Phase 2A Voucher Management with voucher batches, voucher records, redemption logs, wallet-credit redemption rules, admin voucher UI, CSV export, and admin test redemption.
+- 2026-04-30: Added Phase 2B Client Portal with public `/portal`, portal session/event tracking, client voucher redemption source, portal branding settings, and admin portal monitoring panels.
+
+## Phase 2C — Omada Captive Portal Integration
+Phase 2C makes Captive Portal the primary customer access path for Omada test deployments.
+
+Purpose:
+- Customers connect to the open SSID configured in APs Deployment -> Sites -> Configurations -> SSID and Security.
+- Omada redirects customers to `http://192.168.50.70:8080/portal` for staging.
+- 3JCentralPisowifi validates vouchers and remains the access decision system.
+- After a valid voucher is submitted from an Omada-sourced portal session, 3JCentralPisowifi attempts Omada client authorization through the Omada API.
+- Omada manages APs, SSIDs, captive portal redirect, and device authorization only.
+
+Architecture rules:
+- 3JCentralPisowifi remains the source of truth for vouchers, customers/accounts, wallets, portal sessions, access decisions, and logs.
+- Omada is not the source of truth and does not store customer wallet/account logic.
+- Portal sessions now capture Omada-style query parameters including `clientMac`, `client_mac`, `apMac`, `ap_mac`, `gatewayMac`, `vid`, `site`, `ssid`, `redirectUrl`, `token`, and `authToken`.
+- Omada API behavior may differ by controller version. Automation must fail gracefully and manual setup instructions must always remain visible.
+- This phase tests one SSID and one AP first. It does not include payment, SMS, coinslot, vendo, WireGuard, or production rollout automation.
+- AP identity is tracked by normalized MAC address and must survive site deletion or AP movement between Omada sites. Deleting a site must not erase AP deployment history, custom AP names, or configuration history from 3JCentralPisowifi. If an AP later appears in a new site, the UI/data model should show both previous and current site associations so operators can understand where that AP was used before and where it is connected now.
+- Site deletion uses a local deletion tombstone for Omada-detected sites. If Omada Controller rejects or does not support remote site deletion through its API, 3JCentralPisowifi still hides the site locally, preserves AP history, and reports the Omada limitation as a warning instead of blocking the operator.
+- AP map placement is stored on `ap_deployments` using manually captured latitude/longitude fields. The AP identity remains the normalized MAC plus deployment history; mapping an AP does not replace Omada as the AP runtime/status source.
+
+Voucher/authorization behavior:
+- Manual `/portal` testing still redeems vouchers without Omada authorization and marks the session as manual test.
+- For Omada-sourced portal sessions, the system validates the voucher first, attempts Omada authorization, and only consumes/credits the voucher after Omada authorization succeeds.
+- If Omada authorization fails, the voucher is not marked used and the customer sees an operator-friendly authorization failure message.
+
+New data areas:
+- `portal_sessions` stores normalized Omada context, raw query parameters, authorization status, authorization error, and access timestamps.
+- `omada_portal_authorizations` stores sanitized Omada authorization attempts, masked device identifiers in admin views, and success/failure details.
+- `captive_portal_settings` stores portal mode, portal URLs, selected Omada site, default unlimited authorization duration, and Captive Portal Sanity Check progress. The active SSID value is derived from AP Deployment configuration, not edited in Captive Portal.
+- `captive_portal_test_logs` stores sanitized setup/test automation results.
+
+Changelog:
+- 2026-05-01: Added Phase 2C Omada captive portal settings, Omada open SSID/external portal automation adapters, Omada client authorization attempt after voucher validation, portal query parameter capture, authorization logs, portal sessions table view, and manual Omada setup guide.
+- 2026-05-04: Renamed the main Customers / Accounts navigation surface to Connected Devices. The page now focuses on active/inactive AP client detection using Omada client data when available, with local RADIUS accounting and portal session records as fallback sources. Customer/account management is parked while voucher-first access remains the priority.
+- 2026-05-04: Added Sites Deployments admin page and `site_deployments` table for locally tracking planned Omada-managed WiFi locations. The first version supports listing sites and adding sites from an Add Sites modal, with optional Omada Site ID linkage reserved for later controller automation.
+- 2026-05-04: Added Location Management with reusable addresses, municipality/barangay fields, latitude/longitude storage, optional address search/geocoding, and delete management controls. Sites Deployments now hides deployment status and focuses on site address, municipality, barangay, and coordinates.
+- 2026-05-04: Refined the Add Site modal so site address entry comes only from saved Location Management records. The modal now shows a Location dropdown with a `+ Add Location` redirect and an OpenStreetMap preview for the selected saved location.
+
+## Captive Portal Direction Update — MikroTik Gateway Priority
+
+The recommended production captive portal path is now MikroTik as the gateway/enforcement layer and Omada as AP/SSID management only.
+
+Architecture direction:
+- Omada continues to manage TP-Link AP adoption, SSIDs, AP monitoring, radio settings, and VLAN tagging.
+- MikroTik should handle captive portal redirect, internet allow/block enforcement, RADIUS accounting, per-substation gateway control, queues/rate limits, routing, and future WireGuard tunnel integration.
+- 3JCentralPisowifi remains the source of truth for vouchers, wallets, portal sessions, access decisions, logs, and future tunnel-aware central management.
+- Multiple MikroTik routers are expected because future substations will have their own gateway/router.
+- Admin -> Captive Portal now uses `Portal` as the first tab instead of `Overview`.
+- MikroTik infrastructure management now lives under `Admin -> Network -> MikroTik` for storing RouterOS API records, running read-only scans, planning stations, and testing API login/reachability.
+- The Network `MikroTik` workspace has nested `Configuration` and `Add Router` tabs. Router details are managed under `Add Router`; station plans and scan access are handled under `Configuration`.
+- MikroTik configuration must be station-first. The active UI should model a full VLAN path across root gateway plus CRS/switch/transport routers before any RouterOS write action is offered.
+- Every future MikroTik configuration push must be reviewed first. The UI must show the exact planned RouterOS configuration and only allow applying an explicitly reviewed step. Do not push hidden configuration changes or show raw summary dumps as the main review surface.
+- Captive Portal must not maintain a separate editable Open SSID field. The SSID source is APs Deployment -> Sites -> Configurations -> SSID and Security. Captive Portal should display/use that SSID configuration for portal setup and MikroTik review/apply.
+- Admin -> Captive Portal no longer exposes separate `Omada Integration` or `MikroTik` setup tabs. Omada-specific AP, SSID, controller, and lab automation belongs in Omada Controller and APs Deployment; MikroTik gateway setup belongs in Network; Captive Portal focuses on portal settings/design, portal sessions, authorization logs, and operator guidance.
+- Admin -> Captive Portal uses a `Sanity Check` tab instead of `Test Flow`. The tab should show automatic readiness checks where system data is available, manual operator checks for field testing, and clear `Coming soon` placeholders for incomplete features such as full MikroTik HotSpot write automation, payments, SMS, and coinslot/vendo integration.
+- The MikroTik configuration review must not show a `Set captive portal mode` step. Portal mode is no longer a user-facing setting; MikroTik is the assumed gateway path for Captive Portal.
+- The old single-router `Start Setup`, `Check Config`, and `Remove Config` controls are no longer part of the main Configuration table. Station planning replaces that operator workflow.
+- The station modal must treat the operator as non-expert: first add routers to the chain, then click each vertical router tab to fill bridge/tagged-port values, then set root station network values.
+- The Add Station modal should be organized as an operator checklist: name the station, build the router chain, fill detected router bridge/tagged-port fields, fill root gateway network fields, then review the generated plan. Field-level info icons should explain each value in plain language.
+- Each station has one customer VLAN ID. The first router creates the managed MikroTik VLAN interface and uses it for captive portal gateway/DHCP/client traffic. Downstream routers carry that same VLAN as tagged trunk configuration. The same VLAN ID must be configured on the AP SSID/site VLAN so AP customer traffic reaches the correct MikroTik captive portal network.
+- MikroTik automation must use the System Display Name as the identifier for system-owned RouterOS objects where possible. New HotSpot profile/server and walled-garden records must include clear managed comments so operators can distinguish 3JCentralPisowifi-created configuration from existing MikroTik configuration.
+- MikroTik setup must create only system-owned RouterOS objects from the values entered in Add Router. It must not silently reuse existing RouterOS pools, subnets, profiles, speed-plan configuration, management interfaces, or WAN settings.
+- Future remove/apply phases must target only system-generated names and managed comments, and must not delete unrelated existing MikroTik configuration.
+- MikroTik API passwords are encrypted at rest and never returned to the browser.
+- A dedicated full/write RouterOS API account is required for MikroTik captive portal automation because the system must configure HotSpot, walled garden, client authorization, and portal enforcement. Do not use the main MikroTik admin account; create a dedicated automation account with only the required RouterOS policies.
+- Portal design can now be edited through `/admin/captive-portal/editor` using HTML/CSS placeholders. The required `{{voucher_form}}` placeholder must remain in the template so voucher redemption still works.
+- This update implements early MikroTik setup steps for API validation, HotSpot profile/server creation, and walled garden portal access. It does not yet implement full MikroTik HotSpot client authorization, generated login page upload, payments, SMS, coinslot/vendo, or WireGuard automation.
+
+New data areas:
+- `mikrotik_routers` stores multiple MikroTik gateway/API connection settings, HotSpot setup fields, API test status, and per-step configuration progress.
+- `portal_design_templates` stores the editable customer portal HTML/CSS template.
+- 2026-05-04: Removed manual Omada Site ID input from Add Site. New site records now always attempt Omada site creation first, then store the Omada-returned site ID automatically. Added Application Scenario, Country / Region, and Time Zone fields for Omada site creation.
+- 2026-05-04: Moved Omada site Country / Region and Time Zone defaults to System Settings -> General. Add Site now retrieves Application Scenario options from Omada `/api/v2/scenarios`, including custom scenarios configured in Omada Software Controller.
+- 2026-05-07: Added a Sites delete confirmation modal that shows affected APs, connected AP count, and total connected clients before deleting a site. The modal explicitly warns that AP data remains in the system, APs may disconnect after Omada site deletion, and future AP re-adoption should continue from the saved AP identity/history.
+- 2026-05-07: Added `site_deployment_tombstones` so Omada-detected sites can be removed from the local Sites Deployments view even when the Omada Controller API cannot delete the remote site using known endpoint paths.
+- 2026-05-08: Added APs Deployment -> Long Lat with a full-bleed OpenStreetMap tile view, mapped/unmapped AP panel, drag-and-drop AP coordinate capture, best-effort AP ping status, pulsing AP markers colored by client/error state, and a right-side AP details panel with street-view embed for mapped APs.
+- 2026-05-11: Added System Settings -> OPENAI tab copied from the `threejmain` project. The tab stores OpenAI API settings server-side, keeps the API key encrypted in PostgreSQL `app_settings` under key `openai`, exposes only masked key metadata to the browser, supports model and reasoning-effort selection, optional organization/project IDs, model pricing reference, and a live Responses API test through `/api/system-settings/openai/test`.
+
+## System Settings — OPENAI Integration (Retired)
+
+Retired: System Settings no longer shows an `OPENAI` tab. The notes below are historical only and are superseded by `AI Network Assistant Removal — Manual MikroTik Setup Refocus`.
+
+Behavior:
+- Admins can save an OpenAI API key, selected model, reasoning effort, optional organization ID, and optional project ID.
+- The API key is encrypted at rest using the existing application secret encryption helper and stored in PostgreSQL `app_settings` under the `openai` key.
+- API responses never return the full API key. The frontend only receives whether a key is configured and a masked key hint.
+- Admins can clear the saved API key.
+- Admins can run a live OpenAI Responses API test from the tab.
+- The test sends the selected model, selected reasoning effort, prompt, and max output token limit.
+- Test audit logs store model, reasoning effort, latency, and sanitized usage only. They must not store API keys.
+- The tab includes model summary cards and a pricing/reference table copied from the `threejmain` implementation.
+
+Endpoints:
+- `GET /api/system-settings/openai`
+- `PATCH /api/system-settings/openai`
+- `POST /api/system-settings/openai/test`
+
+Data:
+- Migration `029_openai_system_settings.sql` seeds the default OpenAI settings row.
+- OpenAI settings are separate from the normal `system` settings JSON so General/Branding saves do not overwrite AI configuration.
+
+## Phase MT-1 — MikroTik Preflight Scanner + Safe Deployment Foundation
+
+Purpose:
+- MT-1 originally added a read-only MikroTik preflight scanner. The current UI surfaces scan controls under Admin -> Network -> MikroTik -> Configuration instead of a standalone Preflight Scanner tab.
+- The scanner prepares safe captive portal deployment by discovering existing RouterOS configuration and identifying risks before any configuration is generated or applied.
+- The scanner must work generically for other ISPs and must not assume the current 3J topology.
+
+Safety rules:
+- MT-1 does not apply MikroTik configuration.
+- MT-1 does not generate final RouterOS apply commands.
+- MikroTik configuration must follow this safety model: scan -> policy/risk engine -> user confirmation -> exact command preview -> step-by-step apply.
+- AI/OpenAI is no longer part of the active MikroTik setup workflow.
+
+Scanner coverage:
+- Read-only RouterOS API print calls scan identity, resources, interfaces, bridges, VLANs, IP addresses/subnets, pools, DHCP, HotSpot, NAT/firewall summaries, routes, OSPF indicators, RADIUS entries, WireGuard indicators, and PPPoE servers where supported by the RouterOS version.
+- Unsupported RouterOS paths are stored as warnings and do not fail the full scan.
+- Findings are stored in `mikrotik_preflight_scans` and `mikrotik_preflight_findings`.
+- Scanner output includes router identity/model/version, role guess, recommended deployment mode, risk level, findings, conflicts, recommendations, and sanitized snapshot data.
+
+Risk model:
+- VLAN conflicts, subnet overlaps, pool overlaps, DHCP conflicts, existing HotSpot, PPPoE, OSPF/routing sensitivity, WireGuard sensitivity, public/core router indicators, and CRS/VLAN-switching risks are detected conservatively.
+- Role guesses are advisory: `HOTSPOT_GATEWAY_CANDIDATE`, `PPPoE_ACCESS_CONCENTRATOR`, `CORE_ROUTER_READ_ONLY`, `SWITCH_TRUNK_HELPER`, `ISP_BACKUP_TRANSPORT`, or `UNKNOWN_NEEDS_REVIEW`.
+- Deployment recommendations are advisory: `HotSpot Gateway`, `VLAN Trunk Helper`, `Read-only / Core Router`, or `ISP Backup / Transport Router`.
+
+AI behavior:
+- Retired. The scanner no longer exposes AI Explain or OpenAI-dependent actions.
+- The scanner remains fully usable for deterministic validation without AI.
+
+Future phases:
+- MT-2 Safe Deployment Mode / Policy Engine
+- MT-4 RouterOS Command Preview
+- MT-5 Step-by-step Apply
+- MT-6 Pilot Router Validation
+
+## Phase MT-2 — Multi-Router Preflight Summary + Safe Deployment Mode
+
+Purpose:
+- MT-2 extends MikroTik preflight scanning to work across all saved MikroTik routers.
+- Historical MT-2 UI had a `Summary` tab plus one tab per MikroTik router. The current UI removed that standalone tab and shows scan status/actions in the Configuration table.
+- `Prescan All Routers` runs read-only RouterOS API scans across all configured MikroTik routers with safe limited concurrency and stores one scan batch plus one scan result per router.
+- The Summary tab aggregates scan status, reachability, risk, role guesses, deployment readiness, VLAN/subnet conflict signals, missing scans, failed routers, high-risk routers, HotSpot candidates, read-only/core routers, VLAN trunk helpers, and rollout-order guidance.
+
+Safe deployment mode:
+- MT-2 adds a deterministic Safe Deployment Mode / Policy Engine.
+- Deployment modes are `HOTSPOT_GATEWAY`, `VLAN_TRUNK_HELPER`, `READ_ONLY_CORE`, `ISP_BACKUP_TRANSPORT`, and `UNKNOWN_NEEDS_REVIEW`.
+- Router role and deployment-mode confirmation fields are no longer shown in the active operator UI.
+- Network -> MikroTik -> Add Router captures RouterOS API connection details only. Dedicated captive portal network fields such as customer VLAN, parent interface, client subnet, gateway IP, DHCP pool, DNS, and WAN/NAT are not required when adding a router; they are only required later when a router is confirmed as `HOTSPOT_GATEWAY`.
+- HotSpot setup is blocked or strongly warned when policy detects no scan, core/router risk, CRS/switch risk, PPPoE/OSPF/WireGuard sensitivity, VLAN conflicts, subnet conflicts, pool conflicts, missing required HotSpot fields, or NAT without a WAN interface.
+- Expert override can record risk acceptance, but it does not apply MikroTik configuration and must not bypass hard blockers such as VLAN/subnet/pool overlap or missing required fields.
+
+Safety:
+- MT-2 still does not apply RouterOS configuration.
+- MT-2 disables RouterOS write apply paths; command preview/apply remains for later phases.
+- AI/OpenAI is no longer part of the active setup workflow.
+
+Future phases:
+- MT-4 RouterOS Command Preview
+- MT-5 Step-by-step Apply / Managed Rollback
+- MT-6 Pilot Router Validation
+
+## Phase MT-2.1 — Preflight Scanner Stabilization + Router Role Tuning
+
+Purpose:
+- MT-2.1 stabilizes the read-only MikroTik scanner and tunes router classification after multi-router prescan exposed failed scans and overly conservative read-only/core recommendations.
+- The scanner now sanitizes RouterOS text before database storage. Null bytes, invalid surrogate characters, and non-printable control characters are removed or replaced before JSON serialization and PostgreSQL insert/update.
+- Sanitization applies to RouterOS response strings, interface names, comments, routes, firewall/NAT comments, DHCP/bridge/VLAN fields, findings, conflicts, recommendations, raw snapshots, sanitized snapshots, and AI-ready summaries.
+- Failed scans caused by invalid RouterOS text should be prevented; if a scan still fails, the failure record is stored with clean text and the UI can direct the operator to retry.
+
+Role tuning:
+- PPPoE access concentrators are no longer automatically recommended as read-only/core.
+- PPPoE AC routers remain high risk, but may be possible HotSpot Gateway candidates only with a new dedicated VLAN/subnet/interface and explicit operator review.
+- Core routers remain read-only/core, but the classifier now requires multiple strong core indicators instead of treating every PPPoE/public-IP router as core.
+- CRS/switch/trunk devices are recommended as `VLAN_TRUNK_HELPER`, not HotSpot gateways.
+- Failed or incomplete scans remain `UNKNOWN_NEEDS_REVIEW` and are blocked until successful re-scan or manual review.
+
+UI:
+- Current Configuration table shows latest scan state per router and provides `Run Scan` and `View Scan Result` actions. `View Scan Result` opens `/admin/network/mikrotik/scan-result?router_id=...` in a new browser tab/page.
+- The scan-result page uses a vertical section navigator with large icon badges for Overview, Conflicts, VLANs, Subnets, Pools, DHCP, HotSpot, and Sensitive indicators.
+- The Overview section now contains router role explanation, findings by category, and scan history so operators can read the main scan context in one place.
+- The active scan-result view no longer shows `Policy Decision`, `Deployment Mode Confirmation`, or expert override cards.
+
+Safety:
+- MT-2.1 still does not apply RouterOS configuration.
+- RouterOS write apply remains disabled until a future command preview/apply phase.
+
+## Phase MT-3 — AI Network Assistant + Pilot Deployment Planner (Retired)
+
+Retired: the AI Network Assistant is no longer part of the active product workflow. This section is historical only and is superseded by `AI Network Assistant Removal — Manual MikroTik Setup Refocus`.
+
+Purpose:
+- MT-3 adds an `AI Network Assistant` tab under `Admin -> Captive Portal -> MikroTik`.
+- The assistant helps non-technical operators understand sanitized multi-router preflight results, choose a safer first pilot router, answer missing deployment questions, and create a draft deployment plan.
+- AI is advisory only. It can explain scan results, explain risk, ask clarifying questions, recommend a pilot router, and propose a structured draft plan.
+- AI cannot apply MikroTik configuration, cannot generate final RouterOS apply commands, cannot bypass the deterministic policy engine, and cannot approve unsafe setup.
+
+Safety boundary:
+- MT-3 still does not perform RouterOS write actions.
+- MT-3 does not generate final RouterOS command previews. MT-4 is the future command-preview phase.
+- AI uses sanitized preflight summary, selected-router scan/policy data, saved planning answers, role reasoning, deployment reasoning, and pilot suitability.
+- Secrets are redacted before AI use, including MikroTik passwords, API secrets, RADIUS secrets, WireGuard private keys, certificates/private keys, tokens, and private credentials.
+- Draft deployment plans are stored as structured JSON in `mikrotik_draft_deployment_plans`.
+- Draft plans must pass deterministic backend validation before they can be marked `READY_FOR_COMMAND_PREVIEW`.
+- Validation checks VLAN conflicts, subnet overlap, pool overlap, missing required fields, protected PPPoE/OSPF/WireGuard/core objects, read-only/core mode, CRS/switch HotSpot blocks, NAT/WAN safety, and command-content leakage.
+- Blocked plans cannot proceed to MT-4.
+
+Data model:
+- `mikrotik_ai_conversations` stores admin AI sessions.
+- `mikrotik_ai_messages` stores user/assistant messages with sanitized context metadata.
+- `mikrotik_deployment_questions` stores per-router answers needed before future command preview.
+- `mikrotik_draft_deployment_plans` stores AI-generated draft plans and deterministic validation results.
+
+Future phase:
+- MT-4 will generate exact RouterOS command previews only after a draft plan passes or warns through policy validation.
+- MT-5 will handle step-by-step apply/managed rollback after explicit user approval.
+
+## Phase MT-3.1 — Pilot Selection + Planning Readiness (Retired)
+
+Retired: AI pilot/planning readiness UI is no longer active. This section is historical only and is superseded by `AI Network Assistant Removal — Manual MikroTik Setup Refocus`.
+
+Purpose:
+- MT-3.1 focuses on the main `Admin -> Captive Portal -> MikroTik -> AI Network Assistant` page.
+- AI remains advisory only. It can run a small smoke test, explain scan/planning status, and help the operator answer planning questions.
+- RouterOS commands are still not generated or applied in MT-3.1.
+- One pilot MikroTik router must be selected before MT-4 command preview readiness.
+- Pilot selection is saved separately and does not change any MikroTik router configuration.
+- Core/read-only routers cannot be selected as a pilot without expert override, and CRS/switch trunk helpers cannot be selected as HotSpot Gateway pilots.
+- Missing planning questions are grouped by router role, AP/customer VLAN, client IP network, HotSpot/portal, NAT/internet, and protected routers.
+- Required planning answers must validate before draft-plan generation readiness: numeric VLAN, valid CIDR, gateway inside CIDR, DHCP pool inside CIDR, DNS IP list, NAT decision, and WAN interface when NAT is enabled.
+- Historical draft plan generation was gated by readiness such as successful preflight scan, selected pilot router, complete planning answers, no hard policy blockers, and OpenAI configured when AI generation was used.
+- Draft plans must pass deterministic safety validation before MT-4 readiness.
+
+Safety boundary:
+- AI smoke test sends sanitized summary only and asks for a short paragraph, not RouterOS commands.
+- If AI returns RouterOS-like command text, the system warns that command previews are not allowed until MT-4.
+- No RouterOS write/apply occurs in MT-3.1.
+
+## Phase MT-3.2 — AI Suggested Planning Answers + Auto-Derived Network Fields (Retired)
+
+Retired: AI suggested planning answers are no longer active. This section is historical only and is superseded by `AI Network Assistant Removal — Manual MikroTik Setup Refocus`.
+
+Purpose:
+- MT-3.2 improves `Admin -> Captive Portal -> MikroTik -> AI Network Assistant` planning so operators do not manually fill every missing question from scratch.
+- AI can suggest missing planning answers from sanitized preflight scan data, selected router policy data, existing operator answers, and scanned interface candidates.
+- AI suggestions are draft suggestions only. They do not apply MikroTik configuration, do not generate RouterOS command previews, and do not bypass policy validation.
+- Each planning question now has a lifecycle status: `EMPTY`, `AI_SUGGESTED`, `USER_EDITED`, `APPROVED`, `LOCKED`, or `REJECTED`.
+- AI suggestions now auto-fill the planning text fields when the field is empty or already AI-suggested. A bot icon marks values filled by AI.
+- If the operator manually edits an AI-filled field, the bot marker is removed and the status changes to `USER_EDITED`.
+- Per-field approve/reject buttons are no longer used in the Missing Questions modal. The operator reviews or edits the values, uses `Clear` to remove an AI-filled answer when needed, and uses `Save All` as the review/approval step.
+- Locked values are not overwritten by future AI suggestions or deterministic derivation.
+
+Deterministic derivation:
+- Dependent network fields are calculated by backend and previewed in the UI.
+- `client_network_cidr` derives network address, broadcast address, first usable IP, last usable IP, gateway IP, DHCP pool start/end, and usable host count.
+- Default derivation uses first usable IP as gateway, network + 10 as pool start where valid, and last usable IP as pool end.
+- Changing CIDR auto-updates gateway and DHCP pool unless those fields are locked.
+- Changing customer VLAN ID can auto-suggest the system-owned VLAN interface name.
+- Portal URL and HotSpot DNS name can be auto-filled from system defaults when blank.
+
+Validation:
+- Backend validation checks IPv4 CIDR format, CIDR size, gateway inside CIDR, gateway not network/broadcast, pool inside CIDR, pool ordering, pool excluding gateway, DNS IP list, NAT/WAN requirements, VLAN conflicts, subnet overlaps, and pool overlaps.
+- Draft plan readiness remains locked until required answers are approved/locked and validation passes.
+- MT-4 command preview remains locked until approved answers pass deterministic safety validation.
+
+Safety:
+- OpenAI receives sanitized planning context only.
+- AI must not invent interface names not found in scanned interface candidates. If uncertain, it should return `null` and require user review.
+- AI must not suggest touching PPPoE, OSPF, WireGuard, core routes, production bridges, or non-system-managed objects.
+- No RouterOS configuration is applied in MT-3.2.
+
+UI update:
+- `Admin -> Captive Portal -> MikroTik -> AI Network Assistant` now opens on an `Overview` workspace.
+- The Overview shows all MikroTik routers, pilot status, role/risk/pilot suitability, KPIs, AI health, missing-question status, and latest draft-plan status.
+- AI health/smoke test, pilot router selection, missing questions, and draft deployment plan are modal workflows launched from the Overview.
+- The AI chat is a right-side floating panel opened from `Chat with AI`, keeping the overview table visible while the operator asks questions.
+- The visible `Selected Router` dropdown was removed from the Overview because router choice now happens from table action buttons or inside each modal workflow.
+- Missing Questions are explicitly pilot-router-bound for now. The standalone Overview Missing Questions card was removed; only the selected pilot router row shows question progress such as `7/12` and enables `Questions` / `Draft` actions. Non-pilot routers show `Pilot only`.
+- When a pilot router is selected, planning answers/suggestions on non-pilot routers are cleared so operators do not accidentally prepare multiple routers before MT-4.
+- `Save All` must respect intentionally cleared HotSpot DNS and Portal URL fields. Defaults such as `wifi.3j.local` and `http://192.168.50.70:8080/portal` should come from AI suggestion/default derivation workflows, not be silently re-added after the operator clears and saves.
+- The Missing Questions validation warning (`Fix these answers`) is collapsible so large validation output can be hidden while editing.
+- These UI changes are workflow-only. They do not generate RouterOS command previews and do not apply MikroTik configuration.
+
+## Phase MT-3.3 — AI Planning Policy Fix + VLAN Path Planner (Retired)
+
+Retired: AI planning policy and Missing Questions/VLAN Path Planner workflows are no longer active. This section is historical only and is superseded by `AI Network Assistant Removal — Manual MikroTik Setup Refocus`.
+
+Purpose:
+- MT-3.3 corrects MikroTik AI planning policy before MT-4 command preview.
+- PPPoE access concentrators are high-risk but valid HotSpot Gateway candidates when the captive portal uses a new dedicated VLAN/subnet and existing PPPoE services remain untouched.
+- PPPoE AC routers must not automatically become `READ_ONLY_CORE`; they should be explained as possible with caution unless strong core-only indicators exist.
+- Router role and deployment mode are separate: role describes what the MikroTik currently does, while deployment mode describes what 3JCentralPisowifi plans to do on it.
+
+VLAN path planning:
+- AI must not guess the AP/customer VLAN parent interface without evidence.
+- The AP/customer VLAN may pass through MikroTik -> CRS -> OLT -> ONU/AP before reaching Omada APs.
+- The Missing Questions modal now starts with a step-by-step VLAN Path Planner before the remaining planning questions.
+- The Missing Questions modal uses two tabs: Phase 1 for pilot/router role, customer VLAN, and VLAN path prerequisites; Phase 2 for dependent network, portal, NAT, and protected-router planning answers.
+- The planner records gateway parent interface, CRS involvement, CRS ports, OLT involvement, OLT VLAN behavior, AP VLAN mode, and confirmation status.
+- The open captive portal SSID uses the same customer VLAN ID answered in the planning questions; there is no separate Omada/Open SSID VLAN ID field.
+- `Next Hop Device` means the first device after the HotSpot gateway on the way to AP clients, for example CRS in MikroTik -> CRS -> OLT -> ONU/AP.
+- VLAN path planning is stored in `mikrotik_vlan_path_plans`.
+- MT-4 readiness requires a confirmed VLAN path plan.
+- If AP receives tagged VLAN, the SSID should use the customer VLAN ID. If AP receives untagged/access VLAN, downstream conversion must be confirmed as a warning.
+
+AI and safety:
+- AI prompt rules now treat PPPoE AC as possible HotSpot Gateway with caution, not default read-only/core.
+- AI must return `null` for `vlan_parent_interface` unless the operator already confirmed the VLAN path or scan/topology data proves the bridge/trunk.
+- Large client subnets bigger than `/22` show a pilot warning; `/24` or `/22` is preferred for first test.
+- RouterOS commands are still not generated or applied in MT-3.3.
+
+## AI Network Assistant Removal — Manual MikroTik Setup Refocus
+
+Decision:
+- The AI Network Assistant is removed from the active product workflow because it made the MikroTik captive portal setup too complicated for operators.
+- Admin -> Network -> MikroTik no longer shows the `AI Network Assistant` tab.
+- Read-only preflight scan data remains required because it provides RouterOS data for deterministic validation, but it is no longer a standalone MikroTik tab.
+- Manual setup under Admin -> Network -> MikroTik -> Configuration is again the active path for MikroTik captive portal work.
+
+Removed from active UI/workflow:
+- AI Network Assistant overview.
+- AI chat.
+- AI health/smoke test.
+- AI Explain Scan.
+- AI suggested planning answers.
+- AI draft deployment plan generation.
+- System Settings -> OPENAI tab.
+
+Backend/API behavior:
+- AI/OpenAI API endpoints now return HTTP 410 with a removal message.
+- Existing AI-related migrations/tables are retained to avoid destructive schema changes on staging/production databases.
+- OpenAI settings data may remain in PostgreSQL if previously saved, but it is no longer exposed in the admin UI or used by the MikroTik workflow.
+
+Current MikroTik workflow:
+1. Open `Network -> MikroTik`.
+2. Add MikroTik router API credentials under `Add Router`.
+3. Return to `Configuration`.
+4. Run `Prescan All Routers` or run a scan from a router row.
+5. Click `View Scan Result` from the Configuration router table to open the scan result in a new browser tab/page and inspect existing VLANs, subnets, pools, DHCP, HotSpot, PPPoE, OSPF, WireGuard, routing, and firewall indicators.
+6. Use `Add Station` to build the ordered router chain. The button remains disabled until the operator has engaged read-only preflight scanning.
+7. Set per-router bridge/tagged-port values from the station modal.
+8. Set station network values such as customer VLAN, client CIDR, gateway, DHCP pool, DNS, and local interface list.
+9. Use preflight scan data to validate that VLANs, subnets, and pools are not already used.
+10. Review station-generated RouterOS output before any future apply step.
+
+Safety:
+- AI must not be reintroduced unless explicitly requested.
+- No AI output may approve, generate, or apply MikroTik configuration.
+- The deterministic preflight/policy engine remains the authority for conflict detection.
+- The active UI no longer shows `Deployment Mode Confirmation` or `Policy Decision` cards. Operators review raw scan results and station planning fields directly from the Configuration workflow.
+
+## MikroTik Station Deployment Planning
+
+The MikroTik workspace has moved from `Captive Portal -> MikroTik` into `Network -> MikroTik` because MikroTik is infrastructure/gateway management, not portal content management.
+
+Station planning:
+- A station models one captive portal VLAN path from the root gateway to downstream routers/switches/CRS/OLT/AP paths.
+- The first router in the station chain is the root/primary gateway. It owns the VLAN interface, gateway IP, DHCP pool/network options, and local interface-list membership.
+- Each following router is a trunk helper. It carries the same customer VLAN through its bridge/tagged ports toward OLTs and APs.
+- Operators can reorder routers in the station chain; order matters because the VLAN path follows the listed sequence.
+- The Add Station modal starts with an empty router chain. Operators add routers one at a time, then configure each selected router from vertical router tabs on the left side of the modal.
+- The vertical router tabs show router icons and an animated root-to-downstream pulse so operators can see the intended VLAN flow path.
+- Router tabs use a grey drag indicator and grab cursor to show that router order can be rearranged by dragging.
+- The modal shows a step summary: `Name Station`, `Build Router Chain`, `Fill Router Fields`, and `Review Plan`.
+- The selected router panel is split into `Step 3A: Select Router`, `Step 3B: Select Root Bridge and Tagged Ports`, and, for the root gateway only, `Step 3C: Root Gateway Network Values`.
+- `Step 4: Review Plan` appears in the modal after the operator clicks `Save & Review Station Plan`; this creates the saved plan and shows generated RouterOS preview text only. Saving and reviewing still do not apply MikroTik configuration.
+- Field labels use info icons/tooltips so non-MikroTik operators can understand values such as root bridge, tagged ports, customer VLAN, gateway IP, DHCP pool, DNS, and local interface list.
+- Root gateway network fields are shown inside the root gateway tab because only the root gateway owns the VLAN interface, gateway IP, DHCP pool/network options, DNS options, and local interface-list membership.
+- Router bridge/interface and tagged-port fields must use detected RouterOS interfaces from the saved MikroTik router record. Operators should select ports from dropdown/multi-select controls instead of typing interface names manually.
+- The station bridge/interface and tagged-port selectors must hide PPPoE interfaces because captive portal VLANs should be created/carried on bridges, trunks, or physical ports, not on dynamic/customer PPPoE sessions.
+- Tagged ports should use a searchable checkbox list instead of a multi-select requiring Ctrl/Command, because operators often need to choose several trunk/OLT/AP-facing ports safely.
+- The root gateway local interface-list field should also use detected RouterOS interface lists when available, because `LOCAL`/LAN membership is an existing router object and should not be typed manually if the router can report it.
+- The old single-router `Start Setup`, `Check Config`, and `Remove Config` controls are no longer shown in the main Configuration table. Their underlying backend primitives are retained for future reviewed apply/remove phases, but the active operator workflow is station-first.
+- This is based on the validated `ACroma -> CRS317` VLAN 77 pattern:
+  - Root gateway creates `VLAN77-3J-HOTSPOT` on `SwAC`, assigns `10.77.0.1/24`, creates `POOL-3J-HOTSPOT-V77`, adds DHCP network options, and adds the VLAN interface to `LOCAL`.
+  - CRS/trunk routers add a VLAN interface on the selected bridge and add `/interface bridge vlan` records for VLAN 77 on the ports that must carry the captive portal VLAN. The bridge itself is included as a tagged member so the VLAN interface is visible in RouterOS Interfaces for monitoring/bandwidth visibility.
+- Station plans are saved in PostgreSQL and generate reviewable RouterOS command previews. The `Implement` button opens a separate RouterOS write modal that displays every command, shows a progress bar, sends commands one at a time, marks each command success/skipped/error, and stops on the first error.
+- Station apply steps use station plans so multi-device paths such as `CCR2116 -> CRS317 -> CCR1009 -> OLT/APs` are handled as one deployment workflow instead of isolated single-router setup.

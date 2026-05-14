@@ -6,3 +6,6 @@ bcrypt==4.0.1
 PyJWT==2.10.1
 python-multipart==0.0.20
 redis==5.2.1
+cryptography==43.0.3
+paramiko==3.5.0
+requests==2.32.3
