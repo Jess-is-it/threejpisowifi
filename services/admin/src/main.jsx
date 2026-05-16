@@ -313,6 +313,29 @@ function formatSeconds(seconds) {
   return `${minutes}m`;
 }
 
+function formatCountdown(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds || 0)));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m ${secs}s`;
+  return `${hours}h ${minutes}m ${secs}s`;
+}
+
+function formatPortalDateTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
 function formatUsdPerMTok(value) {
   if (value === null || value === undefined || value === '') return '-';
   const numeric = Number(value);
@@ -433,11 +456,15 @@ function PortalApp() {
   const [voucherCode, setVoucherCode] = useState('');
   const [result, setResult] = useState(null);
   const [status, setStatus] = useState(null);
+  const [timerRemaining, setTimerRemaining] = useState(0);
+  const [localTimerExpired, setLocalTimerExpired] = useState(false);
   const [loading, setLoading] = useState(false);
   const params = new URLSearchParams(window.location.search);
   const rawQueryParams = Object.fromEntries(params.entries());
   const context = {
     portal_session_id: sessionId || null,
+    mac: params.get('mac') || null,
+    ip: params.get('ip') || null,
     client_mac: params.get('client_mac') || params.get('clientMac') || null,
     clientMac: params.get('clientMac') || null,
     client_ip: params.get('client_ip') || null,
@@ -453,11 +480,17 @@ function PortalApp() {
     redirect_url: params.get('redirect_url') || params.get('redirectUrl') || null,
     redirectUrl: params.get('redirectUrl') || null,
     nas_id: params.get('nas_id') || null,
+    server_name: params.get('server-name') || params.get('server_name') || params.get('server') || null,
+    link_login: params.get('link-login') || params.get('link_login') || null,
+    link_login_only: params.get('link-login-only') || params.get('link_login_only') || null,
+    link_orig: params.get('link-orig') || params.get('link_orig') || null,
+    chap_id: params.get('chap-id') || params.get('chap_id') || null,
+    chap_challenge: params.get('chap-challenge') || params.get('chap_challenge') || null,
     token: params.get('token') || params.get('t') || null,
     authToken: params.get('authToken') || null,
     raw_query_params: rawQueryParams
   };
-  const deviceDetected = Boolean(context.client_mac || context.ap_mac || context.gateway_mac || context.ssid || context.site || context.token || context.authToken);
+  const deviceDetected = Boolean(context.client_mac || context.mac || context.ip || context.ap_mac || context.gateway_mac || context.ssid || context.site || context.token || context.authToken || context.link_login_only || context.server_name);
 
   async function loadPortal() {
     const portalSettings = await publicRequest('/portal/settings');
@@ -508,9 +541,44 @@ function PortalApp() {
 
   const title = settings?.portal_title || '3J WiFi';
   const subtitle = settings?.portal_subtitle || 'Enter your voucher to connect';
-  const remaining = result?.remaining_time_seconds ?? status?.remaining_time_seconds;
+  const sourceRemaining = Math.max(0, Number(result?.remaining_time_seconds ?? status?.remaining_time_seconds ?? 0) || 0);
   const validUntil = result?.valid_until ?? status?.valid_until;
   const unlimited = result?.unlimited ?? status?.unlimited;
+  const authorizationStatus = result?.authorization_status || status?.mikrotik_authorization_status || status?.omada_authorization_status;
+  const accessExpiresAt = result?.access_expires_at ?? status?.access_expires_at;
+  const backendExpired = Boolean(result?.access_expired || status?.access_expired || status?.status === 'EXPIRED');
+  const hasAccessWindow = Boolean(unlimited || accessExpiresAt || validUntil || sourceRemaining > 0 || localTimerExpired || backendExpired);
+  const countdownActive = hasAccessWindow && !unlimited && !localTimerExpired && !backendExpired && timerRemaining > 0;
+  const timerExpired = Boolean(!unlimited && (localTimerExpired || backendExpired));
+  const connected = Boolean((result?.connected ?? status?.connected ?? authorizationStatus === 'AUTHORIZED') && !timerExpired);
+  const continueUrl = result?.redirect_url || status?.redirect_url;
+
+  useEffect(() => {
+    setTimerRemaining(sourceRemaining);
+    setLocalTimerExpired(backendExpired);
+  }, [sourceRemaining, accessExpiresAt, backendExpired]);
+
+  useEffect(() => {
+    if (!countdownActive) return undefined;
+    const intervalId = window.setInterval(() => {
+      setTimerRemaining((current) => {
+        if (current <= 1) {
+          setLocalTimerExpired(true);
+          return 0;
+        }
+        return current - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [countdownActive]);
+
+  useEffect(() => {
+    if (!localTimerExpired || !sessionId) return;
+    publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(sessionId)}`)
+      .then((nextStatus) => setStatus(nextStatus))
+      .catch(() => {});
+  }, [localTimerExpired, sessionId]);
+
   const brandSlot = (
     <div className="client-portal-brand">
       {settings?.company_logo_url ? <img src={settings.company_logo_url} alt={title} /> : <div className="client-portal-logo">3J</div>}
@@ -527,14 +595,21 @@ function PortalApp() {
       <label className="form-label">Voucher Code</label>
       <input className="form-control form-control-lg text-center voucher-input" autoComplete="one-time-code" value={voucherCode} onChange={(e) => setVoucherCode(e.target.value.toUpperCase())} placeholder="3J-ABCD-2345" required />
       <button className="btn btn-primary btn-lg w-100 mt-3" disabled={loading}>{loading ? 'Checking...' : 'Redeem / Connect'}</button>
-      {result && <div className={`alert mt-3 mb-0 ${result.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'}`}>{result.message}</div>}
+      {result && !(timerExpired && result.status === 'SUCCESS') && <div className={`alert mt-3 mb-0 ${result.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'}`}>{result.message}</div>}
       {result?.authorization_status === 'FAILED' && <button className="btn btn-outline-primary w-100 mt-3" type="button" onClick={() => setResult(null)}>Try Again</button>}
+      {result?.status === 'SUCCESS' && continueUrl && !timerExpired && <a className="btn btn-success w-100 mt-3" href={continueUrl}>Continue to Internet</a>}
       <button className="btn btn-outline-secondary w-100 mt-2" type="button" onClick={checkStatus} disabled={loading}>Check Status</button>
-      {(remaining > 0 || validUntil || unlimited) && <div className="client-portal-status mt-3">
-        {unlimited && <div><strong>Unlimited access</strong></div>}
-        {remaining > 0 && <div>Time remaining: <strong>{formatSeconds(remaining)}</strong></div>}
-        {validUntil && <div>Valid until: <strong>{fmt(validUntil)}</strong></div>}
-        {(result?.authorization_status || status?.omada_authorization_status) === 'AUTHORIZED' && <div><strong>Connected</strong></div>}
+      {hasAccessWindow && <div className={`client-portal-status client-portal-timer-card mt-3 ${timerExpired ? 'is-expired' : connected ? 'is-connected' : 'is-loaded'}`}>
+        <div className="client-portal-timer-icon"><IconClock size={34} /></div>
+        <div className="client-portal-timer-copy">
+          <div className="client-portal-timer-label">{unlimited ? 'Access Status' : 'Remaining Time'}</div>
+          <div className="client-portal-timer-value">{unlimited ? 'Unlimited' : formatCountdown(timerRemaining)}</div>
+          <div className={`client-portal-timer-state ${timerExpired ? 'text-danger' : connected ? 'text-success' : 'text-blue'}`}>
+            {timerExpired ? 'Time fully consumed' : connected ? 'Connected' : 'Access loaded'}
+          </div>
+        </div>
+        {validUntil && <div className="client-portal-timer-valid">Valid until {formatPortalDateTime(validUntil)}</div>}
+        {timerExpired && <div className="alert alert-warning py-2 mt-3 mb-0">Your voucher time has been fully consumed. Enter a new voucher to continue.</div>}
       </div>}
     </form>
   );
@@ -1891,9 +1966,6 @@ function ListOfApsPage() {
   }
 
   useEffect(() => { load(); }, []);
-  useEffect(() => {
-    if (!['Configuration', 'Scan Result', 'Add Router'].includes(mikrotikTab)) setMikrotikTab('Configuration');
-  }, [mikrotikTab]);
   useEffect(() => {
     const timer = window.setInterval(() => {
       load(true).catch(() => {});
@@ -3780,6 +3852,56 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [stationImplementationSteps, setStationImplementationSteps] = useState([]);
   const [stationImplementing, setStationImplementing] = useState(false);
   const [stationImplementationMessage, setStationImplementationMessage] = useState('');
+  const [stationPushCompleted, setStationPushCompleted] = useState(false);
+  const [stationPushCloseCountdown, setStationPushCloseCountdown] = useState(10);
+  const [stationRemove, setStationRemove] = useState(null);
+  const [stationRemoveSteps, setStationRemoveSteps] = useState([]);
+  const [stationRemoving, setStationRemoving] = useState(false);
+  const [stationRemoveMessage, setStationRemoveMessage] = useState('');
+  const [stationRemoveCompleted, setStationRemoveCompleted] = useState(false);
+  const [stationRemoveCloseCountdown, setStationRemoveCloseCountdown] = useState(10);
+  const [stationManagedStatus, setStationManagedStatus] = useState(null);
+  const [stationCheckingManaged, setStationCheckingManaged] = useState(false);
+  const [stationCommandLogs, setStationCommandLogs] = useState([]);
+  const [stationDiagnostics, setStationDiagnostics] = useState(null);
+  const [stationDiagnosticsClientIp, setStationDiagnosticsClientIp] = useState('');
+  const [stationDiagnosticsLoading, setStationDiagnosticsLoading] = useState(false);
+  const [hotspotLoginSync, setHotspotLoginSync] = useState({ summary: {}, stations: [] });
+  const [hotspotLoginChecking, setHotspotLoginChecking] = useState(false);
+  const [hotspotLoginSyncing, setHotspotLoginSyncing] = useState(false);
+  const [apManagementConfig, setApManagementConfig] = useState(null);
+  const [apManagementModalOpen, setApManagementModalOpen] = useState(false);
+  const [apManagementSaving, setApManagementSaving] = useState(false);
+  const [apManagementError, setApManagementError] = useState('');
+  const [apManagementImplementation, setApManagementImplementation] = useState(null);
+  const [apManagementImplementationSteps, setApManagementImplementationSteps] = useState([]);
+  const [apManagementImplementing, setApManagementImplementing] = useState(false);
+  const [apManagementImplementationMessage, setApManagementImplementationMessage] = useState('');
+  const [apManagementPushCompleted, setApManagementPushCompleted] = useState(false);
+  const [apManagementPushCloseCountdown, setApManagementPushCloseCountdown] = useState(10);
+  const [apManagementManagedStatus, setApManagementManagedStatus] = useState(null);
+  const [apManagementCheckingManaged, setApManagementCheckingManaged] = useState(false);
+  const [apManagementActiveRouterIndex, setApManagementActiveRouterIndex] = useState(0);
+  const [apManagementPortSearch, setApManagementPortSearch] = useState({});
+  const [apManagementDragIndex, setApManagementDragIndex] = useState(null);
+  const apManagementStepRefs = useRef({});
+  const [apManagementForm, setApManagementForm] = useState({
+    config_name: 'Central AP Management',
+    vlan_id: '111',
+    vlan_interface_name: 'VLAN111-AP-MGMT',
+    network_cidr: '10.111.0.0/24',
+    gateway_ip: '10.111.0.1',
+    pool_start_ip: '10.111.0.10',
+    pool_end_ip: '10.111.0.254',
+    pool_name: 'POOL-AP-MGMT-V111',
+    dhcp_server_name: 'DHCP-AP-MGMT-V111',
+    dhcp_lease_time: '1h',
+    dns_servers: '8.8.8.8,1.1.1.1',
+    local_interface_list: 'LOCAL',
+    routers: []
+  });
+  const [stationProgressMap, setStationProgressMap] = useState({});
+  const stationStepRefs = useRef({});
   const [stationError, setStationError] = useState('');
   const [stationDragIndex, setStationDragIndex] = useState(null);
   const [stationActiveRouterIndex, setStationActiveRouterIndex] = useState(0);
@@ -3795,9 +3917,17 @@ function CaptivePortalPage({ mode = 'full' }) {
     pool_start_ip: '10.77.0.2',
     pool_end_ip: '10.77.0.254',
     pool_name: 'POOL-3J-HOTSPOT-V77',
-    dns_servers: '10.77.0.1,8.8.8.8,1.1.1.1',
+    create_dhcp_server: true,
+    dhcp_server_name: 'DHCP-3J-HOTSPOT-V77',
+    dhcp_lease_time: '1h',
+    dns_servers: '8.8.8.8,1.1.1.1',
     local_interface_list: 'LOCAL',
-    hotspot_dns_name: 'wifi.3j.local',
+    create_hotspot_profile: true,
+    create_hotspot_server: true,
+    create_walled_garden: true,
+    hotspot_profile_name: 'PROFILE-3J-HOTSPOT-V77',
+    hotspot_html_directory: 'hotspot',
+    hotspot_dns_name: 'wifi.3j.3jportal.test',
     hotspot_server_name: 'HS-3J-HOTSPOT-V77',
     portal_url: 'http://192.168.50.70:8080/portal',
     routers: []
@@ -3842,6 +3972,41 @@ function CaptivePortalPage({ mode = 'full' }) {
     const router = mikrotiks.find((item) => item.id === row?.router_id);
     return row?.router_name || router?.router_name || row?.router_id || `Router ${index + 1}`;
   }
+  function apManagementRouterTemplate(router = null) {
+    return {
+      router_id: router?.id || '',
+      bridge_name: '',
+      tagged_ports: '',
+      notes: ''
+    };
+  }
+  function apManagementRouterDisplay(row, index) {
+    const router = mikrotiks.find((item) => item.id === row?.router_id);
+    return row?.router_name || router?.router_name || row?.router_id || `Router ${index + 1}`;
+  }
+  function apManagementToForm(config = {}) {
+    const vlan = config.vlan_id ? String(config.vlan_id) : '111';
+    return {
+      config_name: config.config_name || 'Central AP Management',
+      vlan_id: vlan,
+      vlan_interface_name: config.vlan_interface_name || `VLAN${vlan}-AP-MGMT`,
+      network_cidr: config.network_cidr || '10.111.0.0/24',
+      gateway_ip: config.gateway_ip || '10.111.0.1',
+      pool_start_ip: config.pool_start_ip || '10.111.0.10',
+      pool_end_ip: config.pool_end_ip || '10.111.0.254',
+      pool_name: config.pool_name || `POOL-AP-MGMT-V${vlan}`,
+      dhcp_server_name: config.dhcp_server_name || `DHCP-AP-MGMT-V${vlan}`,
+      dhcp_lease_time: config.dhcp_lease_time || '1h',
+      dns_servers: config.dns_servers || '8.8.8.8,1.1.1.1',
+      local_interface_list: config.local_interface_list || 'LOCAL',
+      routers: (config.routers || []).map((router) => ({
+        router_id: router.router_id || '',
+        bridge_name: router.bridge_name || '',
+        tagged_ports: router.tagged_ports || '',
+        notes: router.notes || ''
+      }))
+    };
+  }
   function stationToForm(station) {
     return {
       station_name: station.station_name || '',
@@ -3854,9 +4019,17 @@ function CaptivePortalPage({ mode = 'full' }) {
       pool_start_ip: station.pool_start_ip || '',
       pool_end_ip: station.pool_end_ip || '',
       pool_name: station.pool_name || '',
+      create_dhcp_server: station.create_dhcp_server !== false,
+      dhcp_server_name: station.dhcp_server_name || '',
+      dhcp_lease_time: station.dhcp_lease_time || '1h',
       dns_servers: station.dns_servers || '',
       local_interface_list: station.local_interface_list || 'LOCAL',
-      hotspot_dns_name: station.hotspot_dns_name || 'wifi.3j.local',
+      create_hotspot_profile: station.create_hotspot_profile !== false,
+      create_hotspot_server: station.create_hotspot_server !== false,
+      create_walled_garden: station.create_walled_garden !== false,
+      hotspot_profile_name: station.hotspot_profile_name || '',
+      hotspot_html_directory: station.hotspot_html_directory || 'hotspot',
+      hotspot_dns_name: station.hotspot_dns_name || 'wifi.3j.3jportal.test',
       hotspot_server_name: station.hotspot_server_name || '',
       portal_url: station.portal_url || portalSettings.portal_url_staging || 'http://192.168.50.70:8080/portal',
       routers: (station.routers || []).map((router) => ({
@@ -3891,9 +4064,17 @@ function CaptivePortalPage({ mode = 'full' }) {
       pool_start_ip: '10.77.0.2',
       pool_end_ip: '10.77.0.254',
       pool_name: 'POOL-3J-HOTSPOT-V77',
-      dns_servers: '10.77.0.1,8.8.8.8,1.1.1.1',
+      create_dhcp_server: true,
+      dhcp_server_name: 'DHCP-3J-HOTSPOT-V77',
+      dhcp_lease_time: '1h',
+      dns_servers: '8.8.8.8,1.1.1.1',
       local_interface_list: 'LOCAL',
-      hotspot_dns_name: 'wifi.3j.local',
+      create_hotspot_profile: true,
+      create_hotspot_server: true,
+      create_walled_garden: true,
+      hotspot_profile_name: 'PROFILE-3J-HOTSPOT-V77',
+      hotspot_html_directory: 'hotspot',
+      hotspot_dns_name: 'wifi.3j.3jportal.test',
       hotspot_server_name: 'HS-3J-HOTSPOT-V77',
       portal_url: portalSettings.portal_url_staging || 'http://192.168.50.70:8080/portal',
       routers: []
@@ -3924,6 +4105,12 @@ function CaptivePortalPage({ mode = 'full' }) {
       if (!current.pool_name || /^POOL-3J-HOTSPOT-V\d+$/i.test(current.pool_name)) {
         next.pool_name = value ? `POOL-3J-HOTSPOT-V${value}` : '';
       }
+      if (!current.dhcp_server_name || /^DHCP-3J-HOTSPOT-V\d+$/i.test(current.dhcp_server_name)) {
+        next.dhcp_server_name = value ? `DHCP-3J-HOTSPOT-V${value}` : '';
+      }
+      if (!current.hotspot_profile_name || /^PROFILE-3J-HOTSPOT-V\d+$/i.test(current.hotspot_profile_name)) {
+        next.hotspot_profile_name = value ? `PROFILE-3J-HOTSPOT-V${value}` : '';
+      }
       if (!current.hotspot_server_name || /^HS-3J-HOTSPOT-V\d+$/i.test(current.hotspot_server_name)) {
         next.hotspot_server_name = value ? `HS-3J-HOTSPOT-V${value}` : '';
       }
@@ -3932,7 +4119,34 @@ function CaptivePortalPage({ mode = 'full' }) {
         if (!current.gateway_ip || /^10\.\d+\.0\.1$/.test(current.gateway_ip)) next.gateway_ip = `10.${vlanNumber}.0.1`;
         if (!current.pool_start_ip || /^10\.\d+\.0\.2$/.test(current.pool_start_ip)) next.pool_start_ip = `10.${vlanNumber}.0.2`;
         if (!current.pool_end_ip || /^10\.\d+\.0\.254$/.test(current.pool_end_ip)) next.pool_end_ip = `10.${vlanNumber}.0.254`;
-        if (!current.dns_servers || /^10\.\d+\.0\.1,8\.8\.8\.8,1\.1\.1\.1$/.test(current.dns_servers)) next.dns_servers = `10.${vlanNumber}.0.1,8.8.8.8,1.1.1.1`;
+        if (!current.dns_servers || /^(10\.\d+\.0\.1,)?8\.8\.8\.8,1\.1\.1\.1$/.test(current.dns_servers)) next.dns_servers = '8.8.8.8,1.1.1.1';
+      }
+      return next;
+    });
+  }
+  function updateStationApManagementVlan(value) {
+    setStationForm((current) => {
+      const next = { ...current, ap_management_vlan_id: value };
+      if (!current.ap_management_vlan_interface_name || /^VLAN\d+-AP-MGMT$/i.test(current.ap_management_vlan_interface_name)) {
+        next.ap_management_vlan_interface_name = value ? `VLAN${value}-AP-MGMT` : '';
+      }
+      if (!current.ap_management_pool_name || /^POOL-AP-MGMT-V\d+$/i.test(current.ap_management_pool_name)) {
+        next.ap_management_pool_name = value ? `POOL-AP-MGMT-V${value}` : '';
+      }
+      if (!current.ap_management_dhcp_server_name || /^DHCP-AP-MGMT-V\d+$/i.test(current.ap_management_dhcp_server_name)) {
+        next.ap_management_dhcp_server_name = value ? `DHCP-AP-MGMT-V${value}` : '';
+      }
+      return next;
+    });
+  }
+  function updateStationApManagementCidr(value) {
+    setStationForm((current) => {
+      const next = { ...current, ap_management_network_cidr: value };
+      const preview = localNetworkPreview(value);
+      if (preview.status === 'SUCCESS') {
+        if (!current.ap_management_gateway_ip || /^10\.\d+\.\d+\.1$/.test(current.ap_management_gateway_ip)) next.ap_management_gateway_ip = preview.gateway_ip;
+        if (!current.ap_management_pool_start_ip || /^10\.\d+\.\d+\.10$/.test(current.ap_management_pool_start_ip)) next.ap_management_pool_start_ip = preview.pool_start_ip;
+        if (!current.ap_management_pool_end_ip || /^10\.\d+\.\d+\.254$/.test(current.ap_management_pool_end_ip)) next.ap_management_pool_end_ip = preview.pool_end_ip;
       }
       return next;
     });
@@ -4003,6 +4217,290 @@ function CaptivePortalPage({ mode = 'full' }) {
       setStationSaving(false);
     }
   }
+  async function downloadStationLoginHtml(station) {
+    if (!station?.id) return;
+    const token = localStorage.getItem('centralwifi_token');
+    const res = await fetch(`/api/network/mikrotik/stations/${station.id}/hotspot-login.html`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || 'Could not download HotSpot login.html');
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${station.station_code || station.station_name || 'station'}-login.html`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+  async function checkHotspotLoginSync() {
+    if (hotspotLoginChecking) return;
+    setHotspotLoginChecking(true);
+    try {
+      const data = await request('/network/mikrotik/stations/hotspot-login-sync-status?remote=true');
+      setHotspotLoginSync(data || { summary: {}, stations: [] });
+      setMessage('HotSpot login.html sync status checked.');
+    } catch (error) {
+      setActionResult({ status: 'FAILED', message: error.message || 'Could not check HotSpot login.html sync status.' });
+    } finally {
+      setHotspotLoginChecking(false);
+    }
+  }
+  async function syncHotspotLoginHtml(stationId = '') {
+    if (hotspotLoginSyncing) return null;
+    setHotspotLoginSyncing(true);
+    try {
+      const data = stationId
+        ? await request(`/network/mikrotik/stations/${stationId}/sync-hotspot-login`, { method: 'POST', body: JSON.stringify({}) })
+        : await request('/network/mikrotik/stations/sync-hotspot-login', { method: 'POST', body: JSON.stringify({}) });
+      setMessage(data.message || 'Managed HotSpot login.html synced.');
+      const status = await request('/network/mikrotik/stations/hotspot-login-sync-status?remote=true').catch(() => null);
+      if (status) setHotspotLoginSync(status);
+      await loadStationCommandLogs(stationId || stationImplementation?.id || stationReview?.id);
+      return data;
+    } catch (error) {
+      setActionResult({ status: 'FAILED', message: error.message || 'Managed HotSpot login.html sync failed.' });
+      return null;
+    } finally {
+      setHotspotLoginSyncing(false);
+    }
+  }
+  function hotspotLoginStatusClass(status) {
+    if (status === 'SYNCED' || status === 'SUCCESS') return 'bg-green-lt text-green';
+    if (status === 'MISSING' || status === 'OUTDATED' || status === 'DETECTED' || status === 'UNKNOWN' || status === 'NEVER_SYNCED') return 'bg-yellow-lt text-yellow';
+    if (status === 'ERROR' || status === 'FAILED' || status === 'NOT_READY') return 'bg-red-lt text-red';
+    return 'bg-secondary-lt text-secondary';
+  }
+  function stationLoginSyncRow(stationId) {
+    return (hotspotLoginSync.stations || []).find((item) => item.station_id === stationId);
+  }
+  function openApManagementModal() {
+    setApManagementForm(apManagementToForm(apManagementConfig || {}));
+    setApManagementActiveRouterIndex(0);
+    setApManagementPortSearch({});
+    setApManagementError('');
+    setApManagementModalOpen(true);
+    (apManagementConfig?.routers || []).forEach((router) => {
+      if (router.router_id && !mikrotikOptions[router.router_id]) loadMikrotikRouterOptions(router.router_id);
+    });
+  }
+  function updateApManagementField(key, value) {
+    setApManagementForm((current) => ({ ...current, [key]: value }));
+  }
+  function updateApManagementVlan(value) {
+    setApManagementForm((current) => {
+      const next = { ...current, vlan_id: value };
+      if (!current.vlan_interface_name || /^VLAN\d+-AP-MGMT$/i.test(current.vlan_interface_name)) next.vlan_interface_name = value ? `VLAN${value}-AP-MGMT` : '';
+      if (!current.pool_name || /^POOL-AP-MGMT-V\d+$/i.test(current.pool_name)) next.pool_name = value ? `POOL-AP-MGMT-V${value}` : '';
+      if (!current.dhcp_server_name || /^DHCP-AP-MGMT-V\d+$/i.test(current.dhcp_server_name)) next.dhcp_server_name = value ? `DHCP-AP-MGMT-V${value}` : '';
+      return next;
+    });
+  }
+  function updateApManagementCidr(value) {
+    setApManagementForm((current) => {
+      const next = { ...current, network_cidr: value };
+      const preview = localNetworkPreview(value);
+      if (preview.status === 'SUCCESS') {
+        if (!current.gateway_ip || /^10\.\d+\.\d+\.1$/.test(current.gateway_ip)) next.gateway_ip = preview.gateway_ip;
+        if (!current.pool_start_ip || /^10\.\d+\.\d+\.10$/.test(current.pool_start_ip)) next.pool_start_ip = preview.pool_start_ip;
+        if (!current.pool_end_ip || /^10\.\d+\.\d+\.254$/.test(current.pool_end_ip)) next.pool_end_ip = preview.pool_end_ip;
+      }
+      return next;
+    });
+  }
+  function updateApManagementRouter(index, patch) {
+    setApManagementForm((current) => ({
+      ...current,
+      routers: current.routers.map((router, routerIndex) => routerIndex === index ? { ...router, ...patch } : router)
+    }));
+  }
+  function addApManagementRouter() {
+    setApManagementForm((current) => {
+      setApManagementActiveRouterIndex(current.routers.length);
+      return { ...current, routers: [...current.routers, apManagementRouterTemplate()] };
+    });
+  }
+  function removeApManagementRouter(index) {
+    setApManagementForm((current) => {
+      const routers = current.routers.filter((_, routerIndex) => routerIndex !== index);
+      setApManagementActiveRouterIndex((active) => Math.max(0, Math.min(active >= index ? active - 1 : active, Math.max(routers.length - 1, 0))));
+      return { ...current, routers };
+    });
+  }
+  function moveApManagementRouter(fromIndex, toIndex) {
+    setApManagementForm((current) => {
+      if (toIndex < 0 || toIndex >= current.routers.length || fromIndex === toIndex) return current;
+      const routers = [...current.routers];
+      const [item] = routers.splice(fromIndex, 1);
+      routers.splice(toIndex, 0, item);
+      setApManagementActiveRouterIndex(toIndex);
+      return { ...current, routers };
+    });
+  }
+  function toggleApManagementTaggedPort(index, portName, checked) {
+    setApManagementForm((current) => ({
+      ...current,
+      routers: current.routers.map((router, routerIndex) => {
+        if (routerIndex !== index) return router;
+        const existing = String(router.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+        const next = checked
+          ? Array.from(new Set([...existing, portName]))
+          : existing.filter((item) => item !== portName);
+        return { ...router, tagged_ports: next.join(',') };
+      })
+    }));
+  }
+  async function saveApManagement(e) {
+    e.preventDefault();
+    setApManagementSaving(true);
+    setApManagementError('');
+    try {
+      const saved = await request('/network/mikrotik/ap-management', { method: 'PUT', body: JSON.stringify(apManagementForm) });
+      setApManagementConfig(saved);
+      setApManagementModalOpen(false);
+      setMessage('Central AP management plan saved.');
+      await load();
+    } catch (error) {
+      setApManagementError(error.message || 'AP management details could not be saved.');
+    } finally {
+      setApManagementSaving(false);
+    }
+  }
+  function apManagementStepList(config) {
+    return (config?.plan?.router_plans || []).flatMap((routerPlan) => (
+      (routerPlan.commands || []).map((command, commandIndex) => ({
+        id: `ap-management-${routerPlan.router_id}-${commandIndex}`,
+        router_id: routerPlan.router_id,
+        router_name: routerPlan.router_name,
+        router_role: routerPlan.role,
+        host: routerPlan.host,
+        command_index: commandIndex,
+        label: command.label || `Command ${commandIndex + 1}`,
+        preview: command.preview || '',
+        status: 'PENDING',
+        message: '',
+        result: null
+      }))
+    ));
+  }
+  function apManagementStepsWithDetectedProgress(steps, progress) {
+    if (!progress) return steps;
+    const foundKeys = new Set();
+    (progress.routers || []).forEach((router) => {
+      (router.items || []).forEach((item) => {
+        if (item.status === 'FOUND') foundKeys.add(`${router.router_id}-${item.command_index}`);
+      });
+    });
+    return steps.map((step) => {
+      if (foundKeys.has(`${step.router_id}-${step.command_index}`)) {
+        return { ...step, status: 'SKIPPED', detected: true, message: 'Detected on MikroTik. This step will be skipped/kept during push.' };
+      }
+      return step.status === 'SKIPPED' && step.detected ? { ...step, status: 'PENDING', detected: false, message: '' } : step;
+    });
+  }
+  function apManagementProgressSummary(config = apManagementConfig) {
+    const progress = apManagementManagedStatus?.push_progress || config?.push_progress;
+    const fallbackTotal = apManagementStepList(config).length;
+    if (progress) return { pushed: progress.pushed_steps || 0, total: progress.total_steps || fallbackTotal };
+    return { pushed: 0, total: fallbackTotal };
+  }
+  function scrollApManagementStepIntoView(stepId) {
+    setTimeout(() => {
+      const node = apManagementStepRefs.current[stepId];
+      if (node?.scrollIntoView) node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+  }
+  async function checkApManagementConfiguration(config = apManagementImplementation || apManagementConfig, options = {}) {
+    if (!config?.id || apManagementCheckingManaged) return null;
+    setApManagementCheckingManaged(true);
+    try {
+      const status = await request(`/network/mikrotik/ap-management/${config.id}/managed-configuration-status${options.quiet ? '?quiet=true' : ''}`);
+      setApManagementManagedStatus(status);
+      if (status.push_progress && options.updatePushSteps) {
+        setApManagementImplementationSteps((current) => apManagementStepsWithDetectedProgress(
+          current.length ? current : apManagementStepList(config),
+          status.push_progress
+        ));
+      }
+      return status;
+    } catch (error) {
+      const status = { status: 'ERROR', message: error.message || 'AP management config check failed.', found_count: 0, routers: [] };
+      setApManagementManagedStatus(status);
+      return status;
+    } finally {
+      setApManagementCheckingManaged(false);
+    }
+  }
+  function openApManagementImplementation() {
+    if (!apManagementConfig?.id) return;
+    setApManagementImplementation(apManagementConfig);
+    setApManagementImplementationSteps(apManagementStepList(apManagementConfig));
+    setApManagementImplementationMessage('Validating already pushed AP management config...');
+    setApManagementPushCompleted(false);
+    setApManagementPushCloseCountdown(10);
+    setApManagementManagedStatus(null);
+    checkApManagementConfiguration(apManagementConfig, { updatePushSteps: true });
+  }
+  function closeApManagementPushSuccess() {
+    setApManagementImplementation(null);
+    setApManagementPushCompleted(false);
+    setApManagementPushCloseCountdown(10);
+    setApManagementImplementationMessage('');
+    setActionResult({ status: 'SUCCESS', message: 'Central AP management configuration push completed successfully.' });
+    load().catch(() => null);
+  }
+  async function runApManagementImplementation() {
+    if (!apManagementImplementation || apManagementImplementing) return;
+    const progress = apManagementManagedStatus?.push_progress;
+    const steps = apManagementStepsWithDetectedProgress(apManagementStepList(apManagementImplementation), progress);
+    if (!steps.length) {
+      setApManagementImplementationMessage('No RouterOS commands are available for AP management.');
+      return;
+    }
+    setApManagementImplementing(true);
+    setApManagementImplementationMessage('AP management config push started. Commands are sent one at a time.');
+    setApManagementImplementationSteps(steps);
+    let failed = false;
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      if (step.status === 'SKIPPED') continue;
+      setApManagementImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: 'Sending to MikroTik...' } : item));
+      scrollApManagementStepIntoView(step.id);
+      try {
+        const result = await request(`/network/mikrotik/ap-management/${apManagementImplementation.id}/implement-command`, {
+          method: 'POST',
+          body: JSON.stringify({ router_id: step.router_id, command_index: step.command_index })
+        });
+        const status = result.status || 'SUCCESS';
+        setApManagementImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? {
+          ...item,
+          status,
+          message: result.message || (status === 'SKIPPED' ? 'Existing AP management config found; skipped.' : 'Command completed.'),
+          result
+        } : item));
+      } catch (error) {
+        failed = true;
+        setApManagementImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? {
+          ...item,
+          status: 'FAILED',
+          message: error.message || 'Command failed.',
+          result: null
+        } : item));
+        setApManagementImplementationMessage(`Stopped at ${step.router_name || 'router'}: ${error.message || 'command failed.'}`);
+        break;
+      }
+    }
+    setApManagementImplementing(false);
+    if (!failed) {
+      setApManagementImplementationMessage('Central AP management config push completed. Existing matching objects may have been skipped safely.');
+      setApManagementPushCompleted(true);
+      setApManagementPushCloseCountdown(10);
+      await checkApManagementConfiguration(apManagementImplementation, { updatePushSteps: true });
+      await load().catch(() => null);
+    }
+  }
   function stationRouterTooltip(station, router, index) {
     const ports = String(router.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
     const lines = [
@@ -4023,7 +4521,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     ));
   }
   function stationImplementationStepList(station) {
-    return (station?.plan?.router_plans || []).flatMap((routerPlan) => (
+    const routerSteps = (station?.plan?.router_plans || []).flatMap((routerPlan) => (
       (routerPlan.commands || []).map((command, commandIndex) => ({
         id: `${routerPlan.router_id}-${commandIndex}`,
         router_id: routerPlan.router_id,
@@ -4038,11 +4536,193 @@ function CaptivePortalPage({ mode = 'full' }) {
         result: null
       }))
     ));
+    if (!station?.id) return routerSteps;
+    const rootRouter = (station.plan?.router_plans || [])[0] || (station.routers || [])[0] || {};
+    return [
+      ...routerSteps,
+      {
+        id: `${station.id}-sync-login-html`,
+        action: 'sync_login_html',
+        router_id: rootRouter.router_id,
+        router_name: rootRouter.router_name,
+        router_role: 'ROOT_GATEWAY',
+        host: rootRouter.host,
+        command_index: null,
+        label: 'Upload managed HotSpot login.html',
+        preview: `/file set-or-add name=${station.hotspot_login_file_path || 'hotspot/login.html'} contents=<3J managed redirect template>`,
+        status: 'PENDING',
+        message: '',
+        result: null
+      }
+    ];
+  }
+  function stepsWithDetectedProgress(steps, progress) {
+    if (!progress) return steps;
+    const foundKeys = new Set();
+    (progress.routers || []).forEach((router) => {
+      (router.items || []).forEach((item) => {
+        if (item.status === 'FOUND') foundKeys.add(`${router.router_id}-${item.command_index}`);
+      });
+    });
+    const loginSynced = progress.login_html_status?.status === 'SYNCED';
+    return steps.map((step) => {
+      if (step.action === 'sync_login_html' && loginSynced) {
+        return { ...step, status: 'SKIPPED', detected: true, message: 'Managed login.html is already synced on the root gateway.' };
+      }
+      if (foundKeys.has(`${step.router_id}-${step.command_index}`)) {
+        return { ...step, status: 'SKIPPED', detected: true, message: 'Detected on MikroTik. This step will be skipped/kept during push.' };
+      }
+      return step.status === 'SKIPPED' && step.detected ? { ...step, status: 'PENDING', detected: false, message: '' } : step;
+    });
+  }
+  function stationProgressSummary(station) {
+    const progress = stationProgressMap[station.id] || station.push_progress;
+    const fallbackTotal = stationImplementationStepList(station).length;
+    if (progress) return { pushed: progress.pushed_steps || 0, total: progress.total_steps || fallbackTotal };
+    const synced = station.hotspot_login_sync?.is_current ? 1 : 0;
+    return { pushed: synced, total: fallbackTotal };
+  }
+  function scrollStationStepIntoView(stepId) {
+    setTimeout(() => {
+      const node = stationStepRefs.current[stepId];
+      if (node?.scrollIntoView) node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+  }
+  function stationRemoveStepList(station) {
+    return (station?.remove_plan?.router_plans || []).flatMap((routerPlan) => (
+      (routerPlan.commands || []).map((command, commandIndex) => ({
+        id: `${routerPlan.router_id}-remove-${commandIndex}`,
+        router_id: routerPlan.router_id,
+        router_name: routerPlan.router_name,
+        router_role: routerPlan.role,
+        host: routerPlan.host,
+        command_index: commandIndex,
+        label: command.label || `Remove ${commandIndex + 1}`,
+        preview: command.preview || '',
+        status: 'PENDING',
+        message: '',
+        result: null
+      }))
+    ));
+  }
+  async function loadStationCommandLogs(stationId) {
+    if (!stationId) return;
+    try {
+      const logs = await request(`/network/mikrotik/stations/${stationId}/command-logs`);
+      setStationCommandLogs(Array.isArray(logs) ? logs : []);
+    } catch {
+      setStationCommandLogs([]);
+    }
+  }
+  async function checkStationManagedConfiguration(station = stationImplementation || stationRemove, options = {}) {
+    if (!station?.id || stationCheckingManaged) return null;
+    setStationCheckingManaged(true);
+    try {
+      const status = await request(`/network/mikrotik/stations/${station.id}/managed-configuration-status`);
+      setStationManagedStatus(status);
+      if (status.push_progress) {
+        setStationProgressMap((current) => ({ ...current, [station.id]: status.push_progress }));
+        setMikrotikStations((current) => current.map((item) => item.id === station.id ? { ...item, push_progress: status.push_progress } : item));
+        if (options.updatePushSteps) {
+          setStationImplementationSteps((current) => stepsWithDetectedProgress(
+            current.length ? current : stationImplementationStepList(station),
+            status.push_progress
+          ));
+        }
+      }
+      await loadStationCommandLogs(station.id);
+      return status;
+    } catch (error) {
+      const status = { status: 'ERROR', message: error.message || 'Station config check failed.', found_count: 0, routers: [] };
+      setStationManagedStatus(status);
+      return status;
+    } finally {
+      setStationCheckingManaged(false);
+    }
+  }
+  async function refreshStationProgressSummaries(stations) {
+    const rows = Array.isArray(stations) ? stations.filter((station) => station?.id) : [];
+    for (const station of rows) {
+      try {
+        const status = await request(`/network/mikrotik/stations/${station.id}/managed-configuration-status?quiet=true`);
+        if (status.push_progress) {
+          setStationProgressMap((current) => ({ ...current, [station.id]: status.push_progress }));
+          setMikrotikStations((current) => current.map((item) => item.id === station.id ? { ...item, push_progress: status.push_progress } : item));
+        }
+      } catch {
+        // Keep the last visible progress if a background refresh cannot reach a router.
+      }
+    }
   }
   function openStationImplementation(station) {
     setStationImplementation(station);
-    setStationImplementationSteps(stationImplementationStepList(station));
+    const cachedProgress = stationProgressMap[station.id] || station.push_progress;
+    setStationImplementationSteps(stepsWithDetectedProgress(stationImplementationStepList(station), cachedProgress));
+    setStationImplementationMessage('Validating already pushed RouterOS config...');
+    setStationPushCompleted(false);
+    setStationPushCloseCountdown(10);
+    setStationManagedStatus(null);
+    loadStationCommandLogs(station.id);
+    checkStationManagedConfiguration(station, { updatePushSteps: true });
+  }
+  function closeStationPushSuccess() {
+    const stationName = stationImplementation?.station_name || 'Station';
+    const station = stationImplementation;
+    setStationImplementation(null);
+    setStationPushCompleted(false);
+    setStationPushCloseCountdown(10);
     setStationImplementationMessage('');
+    setActionResult({ status: 'SUCCESS', message: `${stationName} configuration push completed successfully.` });
+    if (station) refreshStationProgressSummaries([station]);
+  }
+  function openStationRemove(station) {
+    setStationRemove(station);
+    setStationRemoveSteps(stationRemoveStepList(station));
+    setStationRemoveMessage('Validating station-created RouterOS config before remove is enabled...');
+    setStationRemoveCompleted(false);
+    setStationRemoveCloseCountdown(10);
+    setStationManagedStatus(null);
+    loadStationCommandLogs(station.id);
+    checkStationManagedConfiguration(station).then((status) => {
+      if (!status) return;
+      setStationRemoveMessage(status.has_managed_config
+        ? `${status.found_count || 0} station-created object(s) detected. Review the remove steps before starting.`
+        : 'No station-created RouterOS config was detected for this station.');
+    });
+  }
+  function closeStationRemoveSuccess() {
+    const stationName = stationRemove?.station_name || 'Station';
+    const station = stationRemove;
+    setStationRemove(null);
+    setStationRemoveCompleted(false);
+    setStationRemoveCloseCountdown(10);
+    setStationRemoveMessage('');
+    setStationManagedStatus(null);
+    setActionResult({ status: 'SUCCESS', message: `${stationName} configuration was removed successfully.` });
+    if (station) refreshStationProgressSummaries([station]);
+  }
+  function stationDiagnosticStatusClass(status) {
+    if (status === 'OK' || status === 'READY') return 'bg-green-lt text-green';
+    if (status === 'FAILED') return 'bg-red-lt text-red';
+    return 'bg-yellow-lt text-yellow';
+  }
+  async function runStationHotspotDiagnostics(station = stationDiagnostics?.station, clientIp = stationDiagnosticsClientIp) {
+    if (!station?.id || stationDiagnosticsLoading) return;
+    setStationDiagnosticsLoading(true);
+    try {
+      const query = clientIp ? `?client_ip=${encodeURIComponent(clientIp)}` : '';
+      const result = await request(`/network/mikrotik/stations/${station.id}/hotspot-diagnostics${query}`);
+      setStationDiagnostics({ station, result });
+    } catch (error) {
+      setStationDiagnostics({ station, result: { status: 'FAILED', checks: [], summary: {}, station, message: error.message } });
+    } finally {
+      setStationDiagnosticsLoading(false);
+    }
+  }
+  function openStationDiagnostics(station) {
+    setStationDiagnostics({ station, result: null });
+    setStationDiagnosticsClientIp('');
+    runStationHotspotDiagnostics(station, '');
   }
   function stationImplementationStatusIcon(status) {
     if (status === 'SUCCESS' || status === 'SKIPPED') return <IconCircleCheck size={17} />;
@@ -4050,30 +4730,72 @@ function CaptivePortalPage({ mode = 'full' }) {
     if (status === 'RUNNING') return <IconRefresh size={17} />;
     return <IconClock size={17} />;
   }
+  function renderStationManagedStatus() {
+    if (!stationManagedStatus) return <div className="text-muted small">Run Check Existing Config before applying or removing station RouterOS objects.</div>;
+    return (
+      <div className={`alert py-2 mb-0 ${stationManagedStatus.status === 'ERROR' ? 'alert-danger' : stationManagedStatus.has_managed_config ? 'alert-warning' : 'alert-info'}`}>
+        <div className="fw-semibold">{stationManagedStatus.found_count || 0} station-managed object(s) detected</div>
+        {stationManagedStatus.message && <div className="small">{stationManagedStatus.message}</div>}
+        {!!(stationManagedStatus.routers || []).length && (
+          <div className="d-flex flex-wrap gap-1 mt-2">
+            {stationManagedStatus.routers.map((router) => (
+              <span className={`badge ${router.status === 'ERROR' ? 'bg-red-lt text-red' : router.found_count ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`} key={`station-managed-${router.router_id}`}>
+                {router.router_name || 'Router'}: {router.found_count || 0}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+  function renderStationCommandHistory() {
+    if (!stationCommandLogs.length) return <div className="text-muted small">No station command history yet.</div>;
+    return (
+      <div className="station-history-list">
+        {stationCommandLogs.slice(0, 8).map((log) => (
+          <div className="station-history-item" key={log.id}>
+            <span className={`badge ${log.command_status === 'FAILED' ? 'bg-red-lt text-red' : log.command_status === 'SUCCESS' || log.command_status === 'SKIPPED' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>
+              {log.operation}
+            </span>
+            <div className="min-w-0">
+              <div className="fw-semibold text-truncate">{log.command_label || 'Station operation'}</div>
+              <div className="text-muted small text-truncate">{log.router_name || 'Station'} · {log.command_status} · {fmt(log.created_at)}</div>
+              {log.message && <div className="text-muted small text-truncate">{log.message}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
   async function runStationImplementation() {
     if (!stationImplementation || stationImplementing) return;
-    const steps = stationImplementationStepList(stationImplementation);
+    const progress = stationProgressMap[stationImplementation.id] || stationManagedStatus?.push_progress;
+    const steps = stepsWithDetectedProgress(stationImplementationStepList(stationImplementation), progress);
     if (!steps.length) {
       setStationImplementationMessage('No RouterOS commands are available for this station plan.');
       return;
     }
     setStationImplementing(true);
-    setStationImplementationMessage('Implementation started. Commands are sent one at a time.');
+    setStationImplementationMessage('Config push started. Commands are sent one at a time.');
     setStationImplementationSteps(steps);
     let failed = false;
     for (let index = 0; index < steps.length; index += 1) {
       const step = steps[index];
-      setStationImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: 'Sending to MikroTik...' } : item));
+      if (step.status === 'SKIPPED') continue;
+      setStationImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: step.action === 'sync_login_html' ? 'Uploading managed login.html...' : 'Sending to MikroTik...' } : item));
+      scrollStationStepIntoView(step.id);
       try {
-        const result = await request(`/network/mikrotik/stations/${stationImplementation.id}/implement-command`, {
-          method: 'POST',
-          body: JSON.stringify({ router_id: step.router_id, command_index: step.command_index })
-        });
+        const result = step.action === 'sync_login_html'
+          ? await request(`/network/mikrotik/stations/${stationImplementation.id}/sync-hotspot-login`, { method: 'POST', body: JSON.stringify({}) })
+          : await request(`/network/mikrotik/stations/${stationImplementation.id}/implement-command`, {
+            method: 'POST',
+            body: JSON.stringify({ router_id: step.router_id, command_index: step.command_index })
+          });
         const status = result.status || 'SUCCESS';
         setStationImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? {
           ...item,
           status,
-          message: result.message || (status === 'SKIPPED' ? 'Existing configuration found; skipped.' : 'Command completed.'),
+          message: result.message || (step.action === 'sync_login_html' ? 'Managed login.html uploaded.' : status === 'SKIPPED' ? 'Existing configuration found; skipped.' : 'Command completed.'),
           result
         } : item));
       } catch (error) {
@@ -4090,11 +4812,70 @@ function CaptivePortalPage({ mode = 'full' }) {
     }
     setStationImplementing(false);
     if (!failed) {
-      setStationImplementationMessage('Station implementation completed. Existing matching objects may have been skipped safely.');
+      setStationImplementationMessage('Station config push completed. Existing matching objects may have been skipped safely.');
+      setStationPushCompleted(true);
+      setStationPushCloseCountdown(10);
       try {
         await load();
       } catch (refreshError) {
-        setActionResult({ status: 'FAILED', message: `Implementation completed, but refresh failed: ${refreshError.message}` });
+        setActionResult({ status: 'FAILED', message: `Config push completed, but refresh failed: ${refreshError.message}` });
+      }
+      const syncStatus = await request('/network/mikrotik/stations/hotspot-login-sync-status?remote=true').catch(() => null);
+      if (syncStatus) setHotspotLoginSync(syncStatus);
+      await checkStationManagedConfiguration(stationImplementation);
+      await loadStationCommandLogs(stationImplementation.id);
+    }
+  }
+  async function runStationRemove() {
+    if (!stationRemove || stationRemoving) return;
+    const steps = stationRemoveStepList(stationRemove);
+    if (!steps.length) {
+      setStationRemoveMessage('No remove commands are available for this station plan.');
+      return;
+    }
+    setStationRemoving(true);
+    setStationRemoveMessage('Remove config started. Commands are sent one at a time in reverse order.');
+    setStationRemoveSteps(steps);
+    let failed = false;
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      setStationRemoveSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: 'Removing from MikroTik...' } : item));
+      scrollStationStepIntoView(step.id);
+      try {
+        const result = await request(`/network/mikrotik/stations/${stationRemove.id}/remove-command`, {
+          method: 'POST',
+          body: JSON.stringify({ router_id: step.router_id, command_index: step.command_index })
+        });
+        const status = result.status || 'SUCCESS';
+        setStationRemoveSteps((current) => current.map((item, itemIndex) => itemIndex === index ? {
+          ...item,
+          status,
+          message: result.message || (status === 'SKIPPED' ? 'No matching station-created object found.' : 'Remove command completed.'),
+          result
+        } : item));
+      } catch (error) {
+        failed = true;
+        setStationRemoveSteps((current) => current.map((item, itemIndex) => itemIndex === index ? {
+          ...item,
+          status: 'FAILED',
+          message: error.message || 'Remove command failed.',
+          result: null
+        } : item));
+        setStationRemoveMessage(`Stopped at ${step.router_name || 'router'}: ${error.message || 'remove command failed.'}`);
+        break;
+      }
+    }
+    setStationRemoving(false);
+    if (!failed) {
+      setStationRemoveMessage('Station remove config completed. Existing shared objects may have been skipped safely.');
+      setStationRemoveCompleted(true);
+      setStationRemoveCloseCountdown(10);
+      setStationManagedStatus(null);
+      try {
+        await load();
+        await loadStationCommandLogs(stationRemove.id);
+      } catch (refreshError) {
+        setActionResult({ status: 'FAILED', message: `Remove completed, but refresh failed: ${refreshError.message}` });
       }
     }
   }
@@ -4125,7 +4906,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                   </div>
                   <div className="station-chain-popover-meta">
                     {router.host && <span><IconServer size={13} /> {router.host}{router.api_port ? `:${router.api_port}` : ''}</span>}
-                    <span><IconWifi size={13} /> {index === 0 ? `Creates and serves VLAN ${station.vlan_id}` : `Carries VLAN ${station.vlan_id} downstream`}</span>
+                    <span><IconWifi size={13} /> {index === 0 ? `Creates HotSpot VLAN ${station.vlan_id}` : `Carries HotSpot VLAN ${station.vlan_id}`}</span>
                   </div>
                 </div>
                 <div className="station-chain-popover-section mb-0">
@@ -4151,7 +4932,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <span>{router.router_name || 'Router'} to {routers[index + 1]?.router_name || 'Next router'}</span>
                   </div>
                   <div className="station-chain-popover-section">
-                    <div className="station-chain-popover-label"><IconWifi size={14} /> VLAN and client network</div>
+                    <div className="station-chain-popover-label"><IconWifi size={14} /> Customer HotSpot VLAN</div>
                     <div className="station-chain-popover-badges">
                       <span className="badge bg-green-lt text-green">VLAN {station.vlan_id}</span>
                       {station.vlan_interface_name && <span className="badge bg-cyan-lt text-cyan">{station.vlan_interface_name}</span>}
@@ -4185,11 +4966,13 @@ function CaptivePortalPage({ mode = 'full' }) {
     );
   }
   async function load() {
-    const [system, portalCfg, routerRows, stationRows, events, voucherData, voucherLogs, portalSessions, authLogs] = await Promise.all([
+    const [system, portalCfg, routerRows, stationRows, apManagementRow, loginSyncRows, events, voucherData, voucherLogs, portalSessions, authLogs] = await Promise.all([
       request('/system/settings'),
       request('/captive-portal/settings'),
       request('/captive-portal/mikrotik'),
       request('/network/mikrotik/stations'),
+      request('/network/mikrotik/ap-management').catch(() => null),
+      request('/network/mikrotik/stations/hotspot-login-sync-status').catch(() => ({ summary: {}, stations: [] })),
       request('/portal/events'),
       request('/vouchers'),
       request('/voucher-redemptions?source=CLIENT_PORTAL'),
@@ -4201,7 +4984,14 @@ function CaptivePortalPage({ mode = 'full' }) {
     const safeRouterRows = Array.isArray(routerRows) ? routerRows : [];
     setMikrotiks(safeRouterRows);
     setMikrotikRows(editableMikrotikRows(safeRouterRows));
-    setMikrotikStations(Array.isArray(stationRows) ? stationRows : []);
+    const safeStationRows = Array.isArray(stationRows) ? stationRows : [];
+    setMikrotikStations(safeStationRows);
+    refreshStationProgressSummaries(safeStationRows);
+    if (apManagementRow) {
+      setApManagementConfig(apManagementRow);
+      if (apManagementRow.id) checkApManagementConfiguration(apManagementRow, { quiet: true });
+    }
+    setHotspotLoginSync(loginSyncRows || { summary: {}, stations: [] });
     setPreflightRouterId((current) => current || safeRouterRows[0]?.id || '');
     setAiRouterId((current) => safeRouterRows.some((router) => router.id === current) ? current : '');
     setPortalEvents(Array.isArray(events) ? events : []);
@@ -4211,6 +5001,39 @@ function CaptivePortalPage({ mode = 'full' }) {
     setAuthorizations(Array.isArray(authLogs) ? authLogs : []);
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!apManagementPushCompleted || !apManagementImplementation) return undefined;
+    if (apManagementPushCloseCountdown <= 0) {
+      closeApManagementPushSuccess();
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setApManagementPushCloseCountdown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [apManagementPushCompleted, apManagementPushCloseCountdown, apManagementImplementation]);
+  useEffect(() => {
+    if (!stationPushCompleted || !stationImplementation) return undefined;
+    if (stationPushCloseCountdown <= 0) {
+      closeStationPushSuccess();
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setStationPushCloseCountdown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [stationPushCompleted, stationPushCloseCountdown, stationImplementation]);
+  useEffect(() => {
+    if (!stationRemoveCompleted || !stationRemove) return undefined;
+    if (stationRemoveCloseCountdown <= 0) {
+      closeStationRemoveSuccess();
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setStationRemoveCloseCountdown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [stationRemoveCompleted, stationRemoveCloseCountdown, stationRemove]);
   useEffect(() => {
     if (activeTab === 'MikroTik' && (mikrotikTab === 'Overview' || mikrotikTab === 'Configuration')) {
       loadPreflightSummary();
@@ -5284,11 +6107,29 @@ function CaptivePortalPage({ mode = 'full' }) {
     poolStart: 'First DHCP address given to WiFi clients. In your example this is 10.77.0.2.',
     poolEnd: 'Last DHCP address given to WiFi clients. In your example this is 10.77.0.254.',
     poolName: 'RouterOS IP pool name for customer devices. In your example this is POOL-3J-HOTSPOT-V77.',
+    createDhcpServer: 'Keep this enabled when the root gateway should hand IP addresses to voucher WiFi clients. CRS/trunk routers do not create DHCP servers.',
+    dhcpServerName: 'RouterOS DHCP server name created on the root gateway for this station VLAN. In your example this maps to /ip dhcp-server add using the VLAN interface and pool.',
+    dhcpLeaseTime: 'How long voucher clients keep their DHCP address before renewal. A short value such as 1h is practical during pilot testing.',
     localInterfaceList: 'Interface list where the new VLAN interface is added so existing LAN/local firewall logic can recognize it. In your example this is LOCAL.',
-    dnsServers: 'DNS servers sent to clients through DHCP. Usually include the MikroTik gateway IP first, then public DNS servers.',
-    hotspotDnsName: 'Future MikroTik HotSpot DNS name for this station. This is planning data for HotSpot enforcement and should be unique enough to identify the station.',
-    hotspotServerName: 'Future MikroTik HotSpot server name for the root gateway. This is not used by CRS/trunk routers.',
-    portalUrl: 'Customer portal URL clients should reach before login. Staging usually uses http://192.168.50.70:8080/portal.'
+    dnsServers: 'Router upstream DNS servers. Captive clients receive only the MikroTik gateway as DNS; the router forwards lookups to these upstream servers after controlling captive detection.',
+    createHotspotProfile: 'Keep this enabled to create a station-specific MikroTik HotSpot profile on the root gateway.',
+    createHotspotServer: 'Keep this enabled to create the MikroTik HotSpot server on the root gateway VLAN interface. CRS/trunk routers do not create HotSpot servers.',
+    createWalledGarden: 'Adds pre-login allow rules so clients can reach the 3J portal server and DNS before they redeem a voucher.',
+    hotspotProfileName: 'RouterOS HotSpot profile name for this station. The HotSpot server uses this profile.',
+    hotspotHtmlDirectory: 'RouterOS HotSpot HTML directory. Use hotspot unless you have uploaded a custom directory to the MikroTik.',
+    hotspotDnsName: 'MikroTik HotSpot DNS name for this station. Clients can be redirected to this local name during HotSpot login.',
+    hotspotServerName: 'MikroTik HotSpot server name for the root gateway. This is not used by CRS/trunk routers.',
+    portalUrl: 'Customer portal URL clients should reach before login. Staging usually uses http://192.168.50.70:8080/portal.',
+    apManagementEnabled: 'Enable this when APs should receive management IPs from a dedicated AP management VLAN instead of the customer HotSpot VLAN.',
+    apManagementVlanId: 'VLAN tag used by AP management. Configure the same management VLAN on Omada/APs. Default for new stations is VLAN 111.',
+    apManagementInterfaceName: 'RouterOS VLAN interface name for AP management on the root gateway and monitoring interfaces on trunk routers.',
+    apManagementNetwork: 'Dedicated subnet for AP management IP addresses. Default is 10.111.0.0/24. Do not reuse the customer HotSpot subnet.',
+    apManagementGateway: 'Root MikroTik IP address inside the AP management subnet. APs use this as their gateway.',
+    apManagementPoolStart: 'First DHCP address for AP management. Leave room before this range for static AP/router addresses.',
+    apManagementPoolEnd: 'Last DHCP address for AP management.',
+    apManagementPoolName: 'RouterOS IP pool name for AP management leases.',
+    apManagementDhcpServerName: 'RouterOS DHCP server name for AP management. This is root-gateway-only.',
+    apManagementDnsServers: 'DNS servers handed to APs on the management VLAN. AP adoption should still use the Omada controller IP or inform URL.'
   };
   function StationLabel({ children, hint }) {
     return (
@@ -5302,13 +6143,26 @@ function CaptivePortalPage({ mode = 'full' }) {
     const text = [iface.name, iface.type, iface.comment].map((value) => String(value || '').toLowerCase()).join(' ');
     return text.includes('pppoe');
   }
+  function interfaceOptionLabel(iface = {}) {
+    return [iface.name, iface.type, iface.bridge ? `bridge: ${iface.bridge}` : '', iface.comment].filter(Boolean).join(' - ');
+  }
   const stationChainReady = stationForm.routers.length > 0;
   const stationRouterPathReady = stationForm.routers.length > 0 && stationForm.routers.every((router) => router.router_id && router.bridge_name && router.tagged_ports);
-  const stationRootReady = Boolean(stationForm.vlan_id && stationForm.client_network_cidr && stationForm.gateway_ip && stationForm.pool_start_ip && stationForm.pool_end_ip && stationForm.portal_url);
+  const stationRootReady = Boolean(
+    stationForm.vlan_id
+    && stationForm.client_network_cidr
+    && stationForm.gateway_ip
+    && stationForm.pool_start_ip
+    && stationForm.pool_end_ip
+    && (!stationForm.create_dhcp_server || stationForm.dhcp_server_name)
+    && (!stationForm.create_hotspot_profile || stationForm.hotspot_profile_name)
+    && (!stationForm.create_hotspot_server || stationForm.hotspot_server_name)
+    && stationForm.portal_url
+  );
   const stationStepItems = [
     { label: '1. Name Station', ready: Boolean(stationForm.station_name.trim() && stationForm.station_code.trim()), detail: 'Identify this substation network.' },
     { label: '2. Build Router Chain', ready: stationChainReady, detail: 'Root gateway first, downstream routers after.' },
-    { label: '3. Fill Router Fields', ready: stationRouterPathReady && stationRootReady, detail: 'Select detected bridges/ports and root network values.' },
+    { label: '3. Fill Router Fields', ready: stationRouterPathReady && stationRootReady, detail: 'Select bridges/ports plus customer VLAN values.' },
     { label: '4. Review Plan', ready: false, detail: 'Generated commands open after save.' }
   ];
   const mikrotikFieldHints = {
@@ -5346,7 +6200,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     { key: 'voucher-stock', group: 'Voucher', title: 'Unused voucher exists for testing', details: `${voucherSummary?.unused || 0} unused voucher${Number(voucherSummary?.unused || 0) === 1 ? '' : 's'} available.`, mode: 'auto', state: hasUnusedVouchers ? 'ready' : 'needs_action' },
     { key: 'portal-redemption', group: 'Voucher', title: 'Portal voucher redemption has succeeded before', details: hasSuccessfulPortalRedemption ? 'At least one CLIENT_PORTAL redemption exists.' : 'Create a test voucher and redeem it from /portal.', mode: 'auto', state: hasSuccessfulPortalRedemption ? 'ready' : 'needs_action' },
     { key: 'portal-session', group: 'Session', title: 'Portal sessions are being recorded', details: `${sessions.length} portal session${sessions.length === 1 ? '' : 's'} recorded.`, mode: 'auto', state: hasPortalSession ? 'ready' : 'needs_action' },
-    { key: 'gateway-auth', group: 'Gateway', title: 'Gateway authorization has succeeded', details: hasGatewayAuthorizationSuccess ? 'At least one gateway authorization log succeeded.' : 'This will pass after MikroTik device authorization is implemented and tested.', mode: 'auto', state: hasGatewayAuthorizationSuccess ? 'ready' : 'placeholder' },
+    { key: 'gateway-auth', group: 'Gateway', title: 'Gateway authorization has succeeded', details: hasGatewayAuthorizationSuccess ? 'At least one gateway authorization log succeeded.' : 'Redeem a voucher from a MikroTik HotSpot redirect to test gateway authorization.', mode: 'auto', state: hasGatewayAuthorizationSuccess ? 'ready' : 'needs_action' },
     { key: 'phone-redirect', group: 'Field Test', title: 'Phone redirects to the portal from the test SSID', details: 'Manual operator check. Connect a phone to the AP SSID and confirm it opens the voucher portal.', mode: 'manual', state: sanityProgress['phone-redirect'] ? 'ready' : 'manual' },
     { key: 'internet-after-voucher', group: 'Field Test', title: 'Internet works after a valid voucher', details: 'Manual operator check. This remains blocked until MikroTik enforcement/authorization is fully wired.', mode: 'manual', state: sanityProgress['internet-after-voucher'] ? 'ready' : 'placeholder' },
     { key: 'expired-blocked', group: 'Field Test', title: 'Expired or invalid voucher stays blocked', details: 'Manual operator check after gateway enforcement is active.', mode: 'manual', state: sanityProgress['expired-blocked'] ? 'ready' : 'placeholder' },
@@ -5599,9 +6453,103 @@ function CaptivePortalPage({ mode = 'full' }) {
                 <div className="border rounded p-3 mb-3">
                   <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                     <div>
+                      <div className="fw-semibold">HTML and AP Management</div>
+                      <div className="text-muted small">The system uses one managed redirect file named <code>login.html</code> on every station root gateway. Central AP management VLAN/subnet is configured here once and pushed through the selected root/trunk routers.</div>
+                    </div>
+                    <div className="btn-list justify-content-end flex-nowrap">
+                      <button className="btn btn-outline-secondary btn-sm" type="button" onClick={openApManagementModal} disabled={!preflightEngaged}>
+                        <IconSettings size={15} className="me-1" />AP Management Details
+                      </button>
+                      <button className="btn btn-outline-primary btn-sm" type="button" onClick={openApManagementImplementation} disabled={!apManagementConfig?.id}>
+                        <IconCloudUpload size={15} className="me-1" />Push AP Management Config
+                      </button>
+                      <button className="btn btn-outline-primary btn-sm" type="button" onClick={checkHotspotLoginSync} disabled={hotspotLoginChecking || hotspotLoginSyncing || !mikrotikStations.length}>
+                        <IconSearch size={15} className="me-1" />{hotspotLoginChecking ? 'Checking...' : 'Check Sync'}
+                      </button>
+                      <button className="btn btn-primary btn-sm" type="button" onClick={() => syncHotspotLoginHtml()} disabled={hotspotLoginSyncing || !mikrotikStations.length}>
+                        <IconRefresh size={15} className="me-1" />{hotspotLoginSyncing ? 'Syncing...' : 'Sync login.html to MikroTik'}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="row g-2 mb-3">
+                    {[
+                      { label: 'Stations', value: hotspotLoginSync.summary?.total ?? mikrotikStations.length, tone: 'bg-blue-lt text-blue' },
+                      { label: 'Synced', value: hotspotLoginSync.summary?.synced ?? 0, tone: 'bg-green-lt text-green' },
+                      { label: 'Needs Sync', value: hotspotLoginSync.summary?.needs_sync ?? 0, tone: 'bg-yellow-lt text-yellow' },
+                      { label: 'Errors', value: hotspotLoginSync.summary?.failed ?? 0, tone: 'bg-red-lt text-red' }
+                    ].map((item) => (
+                      <div className="col-6 col-md-3" key={`login-sync-kpi-${item.label}`}>
+                        <div className="border rounded p-2 h-100">
+                          <div className="text-muted small">{item.label}</div>
+                          <span className={`badge fs-6 ${item.tone}`}>{item.value}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="border rounded p-3 mb-3 bg-light">
+                    {(() => {
+                      const progress = apManagementProgressSummary(apManagementConfig);
+                      return (
+                        <div className="d-flex flex-column flex-lg-row align-items-start align-items-lg-center justify-content-between gap-3">
+                          <div>
+                            <div className="fw-semibold">{apManagementConfig?.config_name || 'Central AP Management'}</div>
+                            <div className="text-muted small">
+                              VLAN {apManagementConfig?.vlan_id || 111} · {apManagementConfig?.network_cidr || '10.111.0.0/24'} · {apManagementConfig?.routers?.length || 0} router(s) in path
+                            </div>
+                            <div className="text-muted small">Use this for Omada/AP management traffic. Customer voucher traffic stays in station HotSpot VLANs.</div>
+                          </div>
+                          <div className="d-flex flex-wrap align-items-center gap-2">
+                            <span className={`badge ${apManagementConfig?.id ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{apManagementConfig?.id ? apManagementConfig.status || 'READY' : 'Not saved'}</span>
+                            <span className="badge bg-blue-lt text-blue">{progress.pushed}/{progress.total || 0} pushed</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  {!!(hotspotLoginSync.stations || []).length && (
+                    <div className="table-responsive">
+                      <table className="table table-sm table-vcenter mb-0">
+                        <thead>
+                          <tr>
+                            <th>Station</th>
+                            <th>Root Gateway</th>
+                            <th>File</th>
+                            <th>Status</th>
+                            <th className="text-end">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(hotspotLoginSync.stations || []).map((row) => (
+                            <tr key={`login-sync-${row.station_id}`}>
+                              <td>
+                                <div className="fw-semibold">{row.station_name}</div>
+                                <div className="text-muted small">{row.latest_sync?.created_at ? `Last sync: ${fmt(row.latest_sync.created_at)}` : 'Not synced yet'}</div>
+                              </td>
+                              <td>{row.router_name || '-'}</td>
+                              <td><code>{row.file_path || 'hotspot/login.html'}</code></td>
+                              <td>
+                                <span className={`badge ${hotspotLoginStatusClass(row.status)}`}>{row.status || 'UNKNOWN'}</span>
+                                {row.message && <div className="text-muted small text-truncate mt-1" title={row.message}>{row.message}</div>}
+                              </td>
+                              <td className="text-end">
+                                <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => syncHotspotLoginHtml(row.station_id)} disabled={hotspotLoginSyncing}>
+                                  <IconRefresh size={15} className="me-1" />Sync
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  {!mikrotikStations.length && <div className="text-muted small">Create a station first. Sync status appears here after the station root gateway is saved.</div>}
+                </div>
+                <div className="border rounded p-3 mb-3">
+                  <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                    <div>
                       <div className="fw-semibold">Station-based MikroTik planning</div>
                       <div className="text-muted small">
-                        A station is the full path for one captive portal VLAN: root gateway first, then CRS/switch/transport routers toward OLTs and APs. Your ACroma to CRS317 VLAN 77 setup is now the reference pattern for this workflow.
+                        A station is the customer captive portal VLAN path: root gateway first, then CRS/switch/transport routers toward OLTs and APs. Central AP management is configured separately in HTML and AP Management.
                       </div>
                     </div>
                     <span className="badge bg-blue-lt text-blue">Router chain</span>
@@ -5610,25 +6558,50 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <div className="station-card-list">
                       {mikrotikStations.map((station) => (
                         <div className="station-plan-card" key={station.id}>
+                          {(() => {
+                            const progress = stationProgressSummary(station);
+                            const pct = progress.total ? Math.round((progress.pushed / progress.total) * 100) : 0;
+                            return (
+                              <div className="station-plan-progress">
+                                <div className="station-plan-progress-bar" style={{ width: `${pct}%` }} />
+                              </div>
+                            );
+                          })()}
                           <div className="station-plan-card-header">
                             <div className="station-plan-card-title">
                               <span className="station-chain-node root"><IconRouter size={18} /></span>
                               <div>
                                 <div className="fw-semibold">{station.station_name}</div>
-                                <div className="text-muted small">{station.station_code ? `${station.station_code} · ` : ''}Hover the router links to view VLAN, gateway, client network, and pool details.</div>
+                                <div className="text-muted small">{station.station_code ? `${station.station_code} · ` : ''}Hover the router links to view customer VLAN, gateway, and pool details.</div>
                               </div>
                             </div>
                             <div className="btn-list justify-content-end flex-nowrap">
                               <span className="badge bg-secondary-lt text-secondary align-self-center">{station.status}</span>
+                              {(() => {
+                                const progress = stationProgressSummary(station);
+                                return <span className={`badge align-self-center ${progress.pushed >= progress.total && progress.total ? 'bg-green-lt text-green' : progress.pushed ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>{progress.pushed}/{progress.total} pushed</span>;
+                              })()}
+                              {(() => {
+                                const syncRow = stationLoginSyncRow(station.id) || station.hotspot_login_sync || {};
+                                return <span className={`badge align-self-center ${hotspotLoginStatusClass(syncRow.status)}`}>login.html {syncRow.status || 'UNKNOWN'}</span>;
+                              })()}
                               <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => setStationReview(station)} title="View generated station plan">
                                 <IconEye size={16} className="me-1" />View
                               </button>
                               <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => openEditStation(station)} title="Edit station plan">
                                 <IconEdit size={16} className="me-1" />Edit
                               </button>
-                              <button className="btn btn-sm btn-primary" type="button" onClick={() => openStationImplementation(station)} title="Open config implementation workflow">
-                                <IconPlayerPlay size={16} className="me-1" />Implement
+                              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openStationDiagnostics(station)} title="Run HotSpot diagnostics">
+                                <IconActivity size={16} className="me-1" />Diagnostics
                               </button>
+                              <button className="btn btn-sm btn-primary" type="button" onClick={() => openStationImplementation(station)} title="Open config push workflow">
+                                <IconPlayerPlay size={16} className="me-1" />Push Config
+                              </button>
+                              {station.status === 'ACTIVE' && (
+                                <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => openStationRemove(station)} title="Remove station-created RouterOS config">
+                                  <IconTrash size={16} className="me-1" />Remove Config
+                                </button>
+                              )}
                             </div>
                           </div>
                           <div className="station-plan-card-body">
@@ -5773,7 +6746,7 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                                <div className="col-md-3"><label className="form-label small d-flex align-items-center gap-1">DHCP Server Name <FieldHint text={mikrotikFieldHints.dhcpServerName} /></label><input className="form-control" value={setupMikrotikRow.hotspot_dhcp_server_name || ''} onChange={(e) => updateMikrotikRow(setupMikrotikRow.id, { hotspot_dhcp_server_name: e.target.value })} placeholder="auto: system-name-dhcp" /></div>
 	                                <div className="col-md-3"><label className="form-label small d-flex align-items-center gap-1">Lease Time <FieldHint text={mikrotikFieldHints.leaseTime} /></label><input className="form-control" value={setupMikrotikRow.hotspot_dhcp_lease_time || '1h'} onChange={(e) => updateMikrotikRow(setupMikrotikRow.id, { hotspot_dhcp_lease_time: e.target.value })} placeholder="1h" /></div>
 	                                <div className="col-md-3"><label className="form-label small d-flex align-items-center gap-1">DNS Servers <FieldHint text={mikrotikFieldHints.dnsServers} /></label><input className="form-control" value={setupMikrotikRow.hotspot_dns_servers || ''} onChange={(e) => updateMikrotikRow(setupMikrotikRow.id, { hotspot_dns_servers: e.target.value })} placeholder="1.1.1.1,8.8.8.8" /></div>
-	                                <div className="col-md-3"><label className="form-label small d-flex align-items-center gap-1">HotSpot DNS Name <FieldHint text={mikrotikFieldHints.hotspotDnsName} /></label><input className="form-control" value={setupMikrotikRow.hotspot_dns_name || ''} onChange={(e) => updateMikrotikRow(setupMikrotikRow.id, { hotspot_dns_name: e.target.value })} placeholder="wifi.3j.local" /></div>
+	                                <div className="col-md-3"><label className="form-label small d-flex align-items-center gap-1">HotSpot DNS Name <FieldHint text={mikrotikFieldHints.hotspotDnsName} /></label><input className="form-control" value={setupMikrotikRow.hotspot_dns_name || ''} onChange={(e) => updateMikrotikRow(setupMikrotikRow.id, { hotspot_dns_name: e.target.value })} placeholder="wifi.3j.3jportal.test" /></div>
 	                                <div className="col-md-3">
 	                                  <label className="form-label small d-flex align-items-center gap-1">WAN/Internet Interface <FieldHint text={mikrotikFieldHints.wanInterface} /></label>
 	                                  <select className="form-select" value={setupMikrotikRow.hotspot_wan_interface || ''} onChange={(e) => updateMikrotikRow(setupMikrotikRow.id, { hotspot_wan_interface: e.target.value })}>
@@ -5854,12 +6827,320 @@ function CaptivePortalPage({ mode = 'full' }) {
                   </Modal>
                 )}
                 {false && !mikrotikPlan && actionResult && <div className={`alert mt-3 mb-0 ${actionResult.status === 'REACHABLE' || actionResult.status === 'SUCCESS' ? 'alert-success' : actionResult.status === 'RUNNING' ? 'alert-info' : 'alert-warning'}`}>{actionResult.message || actionResult.status}</div>}
+                {apManagementModalOpen && (
+                  <Modal title="HTML and AP Management Setup" size="xl" onClose={() => apManagementSaving ? null : setApManagementModalOpen(false)}>
+                    <form onSubmit={saveApManagement}>
+                      <div className="alert alert-info">
+                        <div className="fw-semibold mb-1">Central AP management plan only</div>
+                        <div>This saves the AP management VLAN/subnet and router path. It does not configure MikroTik until you use Push AP Management Config.</div>
+                      </div>
+                      {apManagementError && <div className="alert alert-danger">{apManagementError}</div>}
+                      <div className="row g-3">
+                        <div className="col-md-4">
+                          <StationLabel hint="Friendly name for this central AP management setup.">Config Name</StationLabel>
+                          <input className="form-control" value={apManagementForm.config_name} onChange={(e) => updateApManagementField('config_name', e.target.value)} required />
+                        </div>
+                        <div className="col-md-2">
+                          <StationLabel hint="One centralized VLAN tag used only for AP/Omada management traffic.">AP Mgmt VLAN</StationLabel>
+                          <input className="form-control" type="number" min="1" max="4094" value={apManagementForm.vlan_id} onChange={(e) => updateApManagementVlan(e.target.value)} required />
+                        </div>
+                        <div className="col-md-3">
+                          <StationLabel hint="RouterOS VLAN interface name created on the root gateway and monitoring interfaces on trunk routers.">VLAN Interface Name</StationLabel>
+                          <input className="form-control" value={apManagementForm.vlan_interface_name} onChange={(e) => updateApManagementField('vlan_interface_name', e.target.value)} required />
+                        </div>
+                        <div className="col-md-3">
+                          <StationLabel hint="Central subnet used by APs for management IP addresses.">AP Mgmt Subnet</StationLabel>
+                          <input className="form-control" value={apManagementForm.network_cidr} onChange={(e) => updateApManagementCidr(e.target.value)} placeholder="10.111.0.0/24" required />
+                        </div>
+                        <div className="col-md-3">
+                          <StationLabel hint="Root MikroTik IP address inside the AP management subnet.">Gateway IP</StationLabel>
+                          <input className="form-control" value={apManagementForm.gateway_ip} onChange={(e) => updateApManagementField('gateway_ip', e.target.value)} required />
+                        </div>
+                        <div className="col-md-3">
+                          <StationLabel hint="First DHCP IP that APs can receive. Leave room for static AP/router addresses.">Pool Start</StationLabel>
+                          <input className="form-control" value={apManagementForm.pool_start_ip} onChange={(e) => updateApManagementField('pool_start_ip', e.target.value)} required />
+                        </div>
+                        <div className="col-md-3">
+                          <StationLabel hint="Last DHCP IP that APs can receive.">Pool End</StationLabel>
+                          <input className="form-control" value={apManagementForm.pool_end_ip} onChange={(e) => updateApManagementField('pool_end_ip', e.target.value)} required />
+                        </div>
+                        <div className="col-md-3">
+                          <StationLabel hint="RouterOS IP pool name for AP management leases.">Pool Name</StationLabel>
+                          <input className="form-control" value={apManagementForm.pool_name} onChange={(e) => updateApManagementField('pool_name', e.target.value)} required />
+                        </div>
+                        <div className="col-md-3">
+                          <StationLabel hint="RouterOS DHCP server name. This is created only on the root gateway.">DHCP Server Name</StationLabel>
+                          <input className="form-control" value={apManagementForm.dhcp_server_name} onChange={(e) => updateApManagementField('dhcp_server_name', e.target.value)} required />
+                        </div>
+                        <div className="col-md-2">
+                          <StationLabel hint="DHCP lease time for AP management addresses.">Lease Time</StationLabel>
+                          <input className="form-control" value={apManagementForm.dhcp_lease_time} onChange={(e) => updateApManagementField('dhcp_lease_time', e.target.value)} placeholder="1h" />
+                        </div>
+                        <div className="col-md-4">
+                          <StationLabel hint="Upstream DNS servers the root MikroTik uses for AP management clients.">DNS Servers</StationLabel>
+                          <input className="form-control" value={apManagementForm.dns_servers} onChange={(e) => updateApManagementField('dns_servers', e.target.value)} placeholder="8.8.8.8,1.1.1.1" />
+                        </div>
+                        <div className="col-md-3">
+                          <StationLabel hint="RouterOS interface list where the AP management VLAN interface is added on the root gateway.">Local Interface List</StationLabel>
+                          {(() => {
+                            const root = apManagementForm.routers[0];
+                            const routerOptions = root?.router_id ? (mikrotikOptions[root.router_id] || {}) : {};
+                            const lists = routerOptions.interface_lists || [];
+                            return (
+                              <select className="form-select" value={apManagementForm.local_interface_list} onChange={(e) => updateApManagementField('local_interface_list', e.target.value)} disabled={!root?.router_id}>
+                                <option value="">{root?.router_id ? 'Choose detected interface list' : 'Choose root router first'}</option>
+                                {apManagementForm.local_interface_list && !lists.some((item) => item.name === apManagementForm.local_interface_list) && <option value={apManagementForm.local_interface_list}>{apManagementForm.local_interface_list} (current/default)</option>}
+                                {lists.map((item) => <option value={item.name} key={`ap-mgmt-interface-list-${item.name}`}>{item.name}{item.comment ? ` - ${item.comment}` : ''}</option>)}
+                              </select>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                      <div className="border rounded p-3 mt-3">
+                        <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                          <div>
+                            <div className="fw-semibold">Router Chain</div>
+                            <div className="text-muted small">Add the root gateway first, then CRS/switch/transport routers in the order the AP management VLAN travels toward OLTs and APs.</div>
+                          </div>
+                          <button className="btn btn-outline-primary btn-sm" type="button" onClick={addApManagementRouter}>
+                            <IconRouter size={16} className="me-1" />Add Router
+                          </button>
+                        </div>
+                        {apManagementForm.routers.length ? (
+                          <div className="station-chain-editor">
+                            <div className="station-chain-tabs">
+                              {apManagementForm.routers.map((row, index) => (
+                                <button
+                                  className={`station-chain-tab ${apManagementActiveRouterIndex === index ? 'active' : ''}`}
+                                  type="button"
+                                  draggable
+                                  onClick={() => {
+                                    setApManagementActiveRouterIndex(index);
+                                    if (row.router_id && !mikrotikOptions[row.router_id]) loadMikrotikRouterOptions(row.router_id);
+                                  }}
+                                  onDragStart={() => setApManagementDragIndex(index)}
+                                  onDragOver={(e) => e.preventDefault()}
+                                  onDrop={() => {
+                                    if (apManagementDragIndex !== null) moveApManagementRouter(apManagementDragIndex, index);
+                                    setApManagementDragIndex(null);
+                                  }}
+                                  key={`ap-management-router-tab-${index}`}
+                                >
+                                  <span className={`station-chain-node ${index === 0 ? 'root' : ''}`}><IconRouter size={18} /></span>
+                                  <span className="station-chain-tab-text">
+                                    <span className="fw-semibold">{apManagementRouterDisplay(row, index)}</span>
+                                    <span className="text-muted small">{index === 0 ? 'Root gateway' : `Hop ${index + 1}`}</span>
+                                  </span>
+                                  <span className="station-chain-drag-indicator" title="Drag to reorder">::</span>
+                                </button>
+                              ))}
+                            </div>
+                            {(() => {
+                              const activeIndex = Math.min(apManagementActiveRouterIndex, apManagementForm.routers.length - 1);
+                              const row = apManagementForm.routers[activeIndex];
+                              const routerOptions = row?.router_id ? (mikrotikOptions[row.router_id] || {}) : {};
+                              const routerInterfaces = routerOptions.interfaces || [];
+                              const safeInterfaces = routerInterfaces.filter((iface) => !isPppoeInterface(iface));
+                              const selectedTaggedPorts = String(row?.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+                              const selectedTaggedPortSet = new Set(selectedTaggedPorts);
+                              const portSearchKey = row?.router_id || `ap-management-index-${activeIndex}`;
+                              const portSearchText = apManagementPortSearch[portSearchKey] || '';
+                              const visibleTaggedInterfaces = safeInterfaces.filter((iface) => {
+                                const haystack = [iface.name, iface.type, iface.bridge, iface.comment].map((value) => String(value || '').toLowerCase()).join(' ');
+                                return !portSearchText.trim() || haystack.includes(portSearchText.trim().toLowerCase());
+                              });
+                              return (
+                                <div className="station-router-panel">
+                                  <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                                    <div>
+                                      <div className="fw-semibold">{activeIndex === 0 ? 'Root Gateway AP Management Setup' : `AP Management Trunk Setup - Hop ${activeIndex + 1}`}</div>
+                                      <div className="text-muted small">
+                                        {activeIndex === 0
+                                          ? 'This router creates the AP management VLAN interface, gateway IP, DHCP pool/server, and tagged trunk.'
+                                          : 'This router carries the same AP management VLAN through its bridge/tagged ports toward OLTs and APs.'}
+                                      </div>
+                                    </div>
+                                    <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => removeApManagementRouter(activeIndex)}>
+                                      <IconTrash size={15} className="me-1" />Remove Router
+                                    </button>
+                                  </div>
+                                  <div className="row g-3">
+                                    <div className="col-md-5">
+                                      <StationLabel hint="Select one of the MikroTik routers already saved in the system.">Router</StationLabel>
+                                      <select
+                                        className="form-select"
+                                        value={row.router_id}
+                                        onChange={(e) => {
+                                          updateApManagementRouter(activeIndex, { router_id: e.target.value, bridge_name: '', tagged_ports: '' });
+                                          if (e.target.value) loadMikrotikRouterOptions(e.target.value);
+                                        }}
+                                        required
+                                      >
+                                        <option value="">Choose router</option>
+                                        {mikrotiks.map((router) => <option value={router.id} key={`ap-management-router-${router.id}`}>{router.router_name} · {router.host}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="col-md-5">
+                                      <StationLabel hint="Bridge/interface where AP management VLAN traffic is carried. PPPoE interfaces are hidden.">Bridge / Interface</StationLabel>
+                                      <select className="form-select" value={row.bridge_name} onChange={(e) => updateApManagementRouter(activeIndex, { bridge_name: e.target.value })} disabled={!row.router_id} required>
+                                        <option value="">{row.router_id ? 'Choose detected bridge/interface' : 'Choose router first'}</option>
+                                        {safeInterfaces.map((iface) => <option value={iface.name} key={`ap-management-bridge-${activeIndex}-${iface.name}`}>{interfaceOptionLabel(iface)}</option>)}
+                                      </select>
+                                    </div>
+                                    <div className="col-md-2 d-flex align-items-end">
+                                      <button className="btn btn-outline-primary w-100" type="button" onClick={() => row.router_id && loadMikrotikRouterOptions(row.router_id)} disabled={!row.router_id}>
+                                        <IconSearch size={15} className="me-1" />Detect Ports
+                                      </button>
+                                    </div>
+                                    <div className="col-12">
+                                      <StationLabel hint="Check every detected RouterOS interface that should carry the centralized AP management VLAN on this router.">Tagged Ports</StationLabel>
+                                      <div className="input-icon mb-2">
+                                        <span className="input-icon-addon"><IconSearch size={16} /></span>
+                                        <input
+                                          className="form-control"
+                                          value={portSearchText}
+                                          onChange={(e) => setApManagementPortSearch((current) => ({ ...current, [portSearchKey]: e.target.value }))}
+                                          placeholder="Search tagged ports"
+                                          disabled={!row.router_id}
+                                        />
+                                        {portSearchText && (
+                                          <button className="btn btn-icon input-icon-addon end-0" type="button" onClick={() => setApManagementPortSearch((current) => ({ ...current, [portSearchKey]: '' }))} title="Clear search">
+                                            <IconX size={14} />
+                                          </button>
+                                        )}
+                                      </div>
+                                      <div className="station-port-checkbox-grid">
+                                        {visibleTaggedInterfaces.map((iface) => (
+                                          <label className="form-check station-port-check" key={`ap-management-port-${activeIndex}-${iface.name}`}>
+                                            <input
+                                              className="form-check-input"
+                                              type="checkbox"
+                                              checked={selectedTaggedPortSet.has(iface.name)}
+                                              onChange={(e) => toggleApManagementTaggedPort(activeIndex, iface.name, e.target.checked)}
+                                            />
+                                            <span className="form-check-label">
+                                              <span className="fw-semibold">{iface.name}</span>
+                                              <span className="text-muted small">{iface.type || 'interface'}{iface.bridge ? ` · ${iface.bridge}` : ''}</span>
+                                            </span>
+                                          </label>
+                                        ))}
+                                        {!visibleTaggedInterfaces.length && <div className="text-muted small">No detected non-PPPoE interfaces match this search.</div>}
+                                      </div>
+                                      {!!selectedTaggedPorts.length && (
+                                        <div className="d-flex flex-wrap gap-1 mt-2">
+                                          {selectedTaggedPorts.map((port) => (
+                                            <span className="badge bg-blue-lt text-blue station-selected-port-badge" key={`ap-management-selected-port-${activeIndex}-${port}`}>
+                                              <span>{port}</span>
+                                              <button className="station-selected-port-remove" type="button" onClick={() => toggleApManagementTaggedPort(activeIndex, port, false)} title={`Remove ${port}`} aria-label={`Remove ${port}`}>
+                                                <IconX size={12} />
+                                              </button>
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        ) : (
+                          <div className="empty py-4">
+                            <div className="empty-icon"><IconRouter size={32} /></div>
+                            <p className="empty-title">Add the root AP management router</p>
+                            <p className="empty-subtitle text-muted">Start with the root gateway, then add CRS/transport routers in the same order AP management VLAN traffic travels toward OLTs/APs.</p>
+                            <button className="btn btn-primary" type="button" onClick={addApManagementRouter}><IconRouter size={18} className="me-2" />Add Router</button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="modal-footer px-0 pb-0">
+                        <button type="button" className="btn" onClick={() => setApManagementModalOpen(false)} disabled={apManagementSaving}>Close</button>
+                        <button type="submit" className="btn btn-primary" disabled={apManagementSaving}>
+                          <IconDeviceFloppy size={18} className="me-2" />{apManagementSaving ? 'Saving...' : 'Save AP Management Plan'}
+                        </button>
+                      </div>
+                    </form>
+                  </Modal>
+                )}
+                {apManagementImplementation && (
+                  <Modal title={`Push AP Management Config: ${apManagementImplementation.config_name}`} size="xl" onClose={() => { if (!apManagementImplementing) { apManagementPushCompleted ? closeApManagementPushSuccess() : setApManagementImplementation(null); } }}>
+                    <div className="alert alert-danger">
+                      <div className="fw-semibold mb-1">RouterOS write action</div>
+                      <div>Review every AP management command below before starting. When you click Start Push, the system sends these commands to the listed MikroTik routers one at a time and stops on the first error.</div>
+                    </div>
+                    <div className="row g-3 mb-3">
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">AP Management VLAN</div><div className="h3 mb-0">VLAN {apManagementImplementation.vlan_id}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Management Network</div><div className="h4 mb-0">{apManagementImplementation.network_cidr}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Gateway</div><div className="h4 mb-0">{apManagementImplementation.gateway_ip}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Routers</div><div className="h3 mb-0">{(apManagementImplementation.routers || []).length}</div></div></div>
+                    </div>
+                    {(() => {
+                      const totalSteps = apManagementImplementationSteps.length || apManagementStepList(apManagementImplementation).length;
+                      const completedSteps = apManagementImplementationSteps.filter((item) => ['SUCCESS', 'SKIPPED', 'FAILED'].includes(item.status)).length;
+                      const successSteps = apManagementImplementationSteps.filter((item) => ['SUCCESS', 'SKIPPED'].includes(item.status)).length;
+                      const failedSteps = apManagementImplementationSteps.filter((item) => item.status === 'FAILED').length;
+                      const progressPct = totalSteps ? Math.round((completedSteps / totalSteps) * 100) : 0;
+                      return (
+                        <div className="border rounded p-3 mb-3">
+                          <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
+                            <div>
+                              <div className="fw-semibold">Push progress</div>
+                              <div className="text-muted small">{successSteps}/{totalSteps} successful or already existing{failedSteps ? ` · ${failedSteps} failed` : ''}</div>
+                            </div>
+                            <span className={`badge ${failedSteps ? 'bg-red-lt text-red' : completedSteps === totalSteps && totalSteps ? 'bg-green-lt text-green' : apManagementImplementing ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
+                              {apManagementImplementing ? 'Running' : failedSteps ? 'Stopped' : completedSteps === totalSteps && totalSteps ? 'Complete' : 'Ready'}
+                            </span>
+                          </div>
+                          <div className="progress"><div className={`progress-bar ${failedSteps ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${progressPct}%` }} /></div>
+                        </div>
+                      );
+                    })()}
+                    {apManagementImplementationMessage && <div className={`alert ${apManagementPushCompleted ? 'alert-success' : 'alert-info'} py-2`}>{apManagementImplementationMessage}</div>}
+                    {apManagementPushCompleted && (
+                      <div className="text-center border rounded p-4 mb-3">
+                        <IconCircleCheck size={54} className="text-success mb-2" />
+                        <div className="h3 mb-1">AP management config pushed</div>
+                        <div className="text-muted">The modal will close automatically unless you keep reviewing the command results.</div>
+                      </div>
+                    )}
+                    <div className="station-command-list mb-3">
+                      {apManagementImplementationSteps.map((step, index) => (
+                        <div
+                          className={`station-command-step ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'is-success' : step.status === 'FAILED' ? 'is-failed' : step.status === 'RUNNING' ? 'is-running' : ''}`}
+                          key={step.id}
+                          ref={(node) => { apManagementStepRefs.current[step.id] = node; }}
+                        >
+                          <div className="station-command-step-icon">{stationImplementationStatusIcon(step.status)}</div>
+                          <div className="station-command-step-body">
+                            <div className="d-flex align-items-start justify-content-between gap-3">
+                              <div>
+                                <div className="fw-semibold">{index + 1}. {step.label}</div>
+                                <div className="text-muted small">{step.router_name || 'Router'} · {step.router_role || 'Router'}{step.detected ? ' · already detected' : ''}</div>
+                              </div>
+                              <span className={`badge ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'bg-green-lt text-green' : step.status === 'FAILED' ? 'bg-red-lt text-red' : step.status === 'RUNNING' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>{step.status}</span>
+                            </div>
+                            {step.message && <div className="small mt-1">{step.message}</div>}
+                            <pre className="mt-2 mb-0 small"><code>{step.preview || 'No command preview available.'}</code></pre>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="modal-footer px-0 pb-0">
+                      <button type="button" className="btn" onClick={() => apManagementPushCompleted ? closeApManagementPushSuccess() : setApManagementImplementation(null)} disabled={apManagementImplementing}>
+                        {apManagementPushCompleted ? `Close (${apManagementPushCloseCountdown}s)` : 'Close'}
+                      </button>
+                      <button type="button" className="btn btn-primary" onClick={runApManagementImplementation} disabled={apManagementImplementing || apManagementPushCompleted}>
+                        <IconCloudUpload size={18} className="me-2" />{apManagementImplementing ? 'Pushing...' : 'Start Push'}
+                      </button>
+                    </div>
+                  </Modal>
+                )}
                 {stationModalOpen && (
                   <Modal title={stationEditingId ? 'Edit MikroTik Station' : 'Add MikroTik Station'} size="xl" onClose={() => stationSaving ? null : setStationModalOpen(false)}>
                     <form onSubmit={saveStation}>
 	                      <div className="alert alert-info">
 	                        <div className="fw-semibold mb-1">Station plan only</div>
-	                        <div>This does not configure MikroTik yet. It saves the root-to-downstream router chain and generates the same pattern as your tested VLAN 77 setup: root VLAN interface, bridge VLAN trunk, gateway IP, DHCP pool/network options, and LOCAL interface-list membership.</div>
+	                        <div>This does not configure MikroTik yet. It saves the root-to-downstream router chain and generates the same pattern as your tested VLAN 77 setup for customer HotSpot traffic. Central AP management is handled from HTML and AP Management.</div>
 	                      </div>
 	                      {stationError && <div className="alert alert-danger">{stationError}</div>}
 	                      <div className="station-process-steps mb-3">
@@ -6070,9 +7351,9 @@ function CaptivePortalPage({ mode = 'full' }) {
                                     {activeIndex === 0 && (
                                       <div className="col-12">
                                         <div className="station-subpanel">
-                                          <div className="station-subpanel-title">Step 3C: Root Gateway Network Values</div>
+                                          <div className="station-subpanel-title">Step 3B: Root Gateway VLAN Networks</div>
                                           <div className="station-field-group">
-                                            <div className="station-field-group-header">VLAN identity</div>
+                                            <div className="station-field-group-header">Customer HotSpot VLAN identity</div>
                                             <div className="row g-3">
                                               <div className="col-md-3">
                                                 <StationLabel hint={stationFieldHints.vlanId}>Customer VLAN</StationLabel>
@@ -6107,10 +7388,39 @@ function CaptivePortalPage({ mode = 'full' }) {
                                                 <StationLabel hint={stationFieldHints.poolEnd}>Pool End</StationLabel>
                                                 <input className="form-control" value={stationForm.pool_end_ip} onChange={(e) => updateStationField('pool_end_ip', e.target.value)} placeholder="10.77.0.254" required />
                                               </div>
+                                              <div className="col-md-4">
+                                                <label className="form-check form-switch mt-4">
+                                                  <input
+                                                    className="form-check-input"
+                                                    type="checkbox"
+                                                    checked={stationForm.create_dhcp_server}
+                                                    onChange={(e) => updateStationField('create_dhcp_server', e.target.checked)}
+                                                  />
+                                                  <span className="form-check-label d-inline-flex align-items-center gap-1">
+                                                    Create DHCP server on root gateway
+                                                    <FieldHint text={stationFieldHints.createDhcpServer} />
+                                                  </span>
+                                                </label>
+                                              </div>
+                                              {stationForm.create_dhcp_server && (
+                                                <>
+                                                  <div className="col-md-4">
+                                                    <StationLabel hint={stationFieldHints.dhcpServerName}>DHCP Server Name</StationLabel>
+                                                    <input className="form-control" value={stationForm.dhcp_server_name} onChange={(e) => updateStationField('dhcp_server_name', e.target.value)} placeholder="DHCP-3J-HOTSPOT-V77" required />
+                                                  </div>
+                                                  <div className="col-md-4">
+                                                    <StationLabel hint={stationFieldHints.dhcpLeaseTime}>DHCP Lease Time</StationLabel>
+                                                    <input className="form-control" value={stationForm.dhcp_lease_time} onChange={(e) => updateStationField('dhcp_lease_time', e.target.value)} placeholder="1h" />
+                                                  </div>
+                                                </>
+                                              )}
+                                              <div className="col-12">
+                                                <div className="text-muted small">DHCP is created only on the first/root gateway. Downstream CRS/trunk routers only carry VLAN {stationForm.vlan_id || '-'}.</div>
+                                              </div>
                                             </div>
                                           </div>
                                           <div className="station-field-group">
-                                            <div className="station-field-group-header">Client DNS and firewall-list context</div>
+                                            <div className="station-field-group-header">Captive DNS and firewall-list context</div>
                                             <div className="row g-3">
                                               <div className="col-md-4">
                                                 <StationLabel hint={stationFieldHints.localInterfaceList}>Local Interface List</StationLabel>
@@ -6122,25 +7432,79 @@ function CaptivePortalPage({ mode = 'full' }) {
                                                 <div className="text-muted small">Loaded from RouterOS /interface/list/print on the root gateway.</div>
                                               </div>
                                               <div className="col-md-8">
-                                                <StationLabel hint={stationFieldHints.dnsServers}>DNS Servers</StationLabel>
-                                                <input className="form-control" value={stationForm.dns_servers} onChange={(e) => updateStationField('dns_servers', e.target.value)} placeholder="10.77.0.1,8.8.8.8,1.1.1.1" />
+                                                <StationLabel hint={stationFieldHints.dnsServers}>Router Upstream DNS</StationLabel>
+                                                <input className="form-control" value={stationForm.dns_servers} onChange={(e) => updateStationField('dns_servers', e.target.value)} placeholder="8.8.8.8,1.1.1.1" />
+                                                <div className="text-muted small">Phones on this HotSpot receive only {stationForm.gateway_ip || 'the gateway IP'} as DNS. MikroTik forwards DNS to these upstream servers.</div>
                                               </div>
                                             </div>
                                           </div>
                                           <div className="station-field-group mb-0">
-                                            <div className="station-field-group-header">Portal and future HotSpot context</div>
+                                            <div className="station-field-group-header">Root HotSpot and portal enforcement</div>
                                             <div className="row g-3">
                                               <div className="col-md-4">
+                                                <label className="form-check form-switch">
+                                                  <input
+                                                    className="form-check-input"
+                                                    type="checkbox"
+                                                    checked={stationForm.create_hotspot_profile}
+                                                    onChange={(e) => updateStationField('create_hotspot_profile', e.target.checked)}
+                                                  />
+                                                  <span className="form-check-label d-inline-flex align-items-center gap-1">
+                                                    Create HotSpot profile
+                                                    <FieldHint text={stationFieldHints.createHotspotProfile} />
+                                                  </span>
+                                                </label>
+                                              </div>
+                                              <div className="col-md-4">
+                                                <label className="form-check form-switch">
+                                                  <input
+                                                    className="form-check-input"
+                                                    type="checkbox"
+                                                    checked={stationForm.create_hotspot_server}
+                                                    onChange={(e) => updateStationField('create_hotspot_server', e.target.checked)}
+                                                  />
+                                                  <span className="form-check-label d-inline-flex align-items-center gap-1">
+                                                    Create HotSpot server
+                                                    <FieldHint text={stationFieldHints.createHotspotServer} />
+                                                  </span>
+                                                </label>
+                                              </div>
+                                              <div className="col-md-4">
+                                                <label className="form-check form-switch">
+                                                  <input
+                                                    className="form-check-input"
+                                                    type="checkbox"
+                                                    checked={stationForm.create_walled_garden}
+                                                    onChange={(e) => updateStationField('create_walled_garden', e.target.checked)}
+                                                  />
+                                                  <span className="form-check-label d-inline-flex align-items-center gap-1">
+                                                    Allow portal before login
+                                                    <FieldHint text={stationFieldHints.createWalledGarden} />
+                                                  </span>
+                                                </label>
+                                              </div>
+                                              <div className="col-md-4">
+                                                <StationLabel hint={stationFieldHints.hotspotProfileName}>HotSpot Profile Name</StationLabel>
+                                                <input className="form-control" value={stationForm.hotspot_profile_name} onChange={(e) => updateStationField('hotspot_profile_name', e.target.value)} placeholder="PROFILE-3J-HOTSPOT-V77" disabled={!stationForm.create_hotspot_profile && !stationForm.create_hotspot_server} required={stationForm.create_hotspot_profile || stationForm.create_hotspot_server} />
+                                              </div>
+                                              <div className="col-md-4">
                                                 <StationLabel hint={stationFieldHints.hotspotDnsName}>HotSpot DNS Name</StationLabel>
-                                                <input className="form-control" value={stationForm.hotspot_dns_name} onChange={(e) => updateStationField('hotspot_dns_name', e.target.value)} placeholder="wifi.3j.local" />
+                                                <input className="form-control" value={stationForm.hotspot_dns_name} onChange={(e) => updateStationField('hotspot_dns_name', e.target.value)} placeholder="wifi.3j.3jportal.test" disabled={!stationForm.create_hotspot_profile} />
+                                              </div>
+                                              <div className="col-md-4">
+                                                <StationLabel hint={stationFieldHints.hotspotHtmlDirectory}>HotSpot HTML Directory</StationLabel>
+                                                <input className="form-control" value={stationForm.hotspot_html_directory} onChange={(e) => updateStationField('hotspot_html_directory', e.target.value)} placeholder="hotspot" disabled={!stationForm.create_hotspot_profile} />
                                               </div>
                                               <div className="col-md-4">
                                                 <StationLabel hint={stationFieldHints.hotspotServerName}>HotSpot Server Name</StationLabel>
-                                                <input className="form-control" value={stationForm.hotspot_server_name} onChange={(e) => updateStationField('hotspot_server_name', e.target.value)} placeholder="HS-3J-HOTSPOT-V77" />
+                                                <input className="form-control" value={stationForm.hotspot_server_name} onChange={(e) => updateStationField('hotspot_server_name', e.target.value)} placeholder="HS-3J-HOTSPOT-V77" disabled={!stationForm.create_hotspot_server} required={stationForm.create_hotspot_server} />
                                               </div>
-                                              <div className="col-md-4">
+                                              <div className="col-md-8">
                                                 <StationLabel hint={stationFieldHints.portalUrl}>Portal URL</StationLabel>
                                                 <input className="form-control" value={stationForm.portal_url} onChange={(e) => updateStationField('portal_url', e.target.value)} placeholder="http://192.168.50.70:8080/portal" required />
+                                              </div>
+                                              <div className="col-12">
+                                                <div className="text-muted small">HotSpot profile/server and walled garden rules are created only on the first/root gateway. This prepares MikroTik enforcement; voucher validation still stays in 3JCentralPisowifi.</div>
                                               </div>
                                             </div>
                                           </div>
@@ -6178,7 +7542,7 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                  <Modal title={`Review Station Plan: ${stationReview.station_name}`} size="xl" onClose={() => setStationReview(null)}>
 	                    <div className="alert alert-warning">
 	                      <div className="fw-semibold mb-1">Preview only</div>
-	                      <div>This is the generated RouterOS plan for review. No MikroTik configuration is applied from this screen.</div>
+	                      <div>This is the generated RouterOS plan for review. The managed HotSpot <code>login.html</code> is uploaded during implementation or from the sync action; no manual file upload is needed.</div>
 	                    </div>
 	                    <div className="row g-3 mb-3">
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">VLAN</div><div className="h3 mb-0">{stationReview.vlan_id}</div></div></div>
@@ -6191,6 +7555,16 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">HotSpot DNS</div><div className="fw-semibold">{stationReview.hotspot_dns_name || '-'}</div></div></div>
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">HotSpot Server</div><div className="fw-semibold">{stationReview.hotspot_server_name || '-'}</div></div></div>
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Portal URL</div><div className="fw-semibold text-truncate" title={stationReview.portal_url || ''}>{stationReview.portal_url || '-'}</div></div></div>
+	                    </div>
+	                    <div className="row g-3 mb-3">
+	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">Root DHCP Server</div><div className="fw-semibold">{stationReview.create_dhcp_server ? (stationReview.dhcp_server_name || '-') : 'Disabled'}</div></div></div>
+	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">DHCP Lease Time</div><div className="fw-semibold">{stationReview.create_dhcp_server ? (stationReview.dhcp_lease_time || '1h') : '-'}</div></div></div>
+	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">DHCP Ownership</div><div className="fw-semibold">Root gateway only</div></div></div>
+	                    </div>
+	                    <div className="row g-3 mb-3">
+	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">HotSpot Profile</div><div className="fw-semibold">{stationReview.create_hotspot_profile ? (stationReview.hotspot_profile_name || '-') : 'Disabled'}</div></div></div>
+	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">HotSpot Server</div><div className="fw-semibold">{stationReview.create_hotspot_server ? (stationReview.hotspot_server_name || '-') : 'Disabled'}</div></div></div>
+	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">Pre-login Portal/DNS</div><div className="fw-semibold">{stationReview.create_walled_garden ? 'Enabled' : 'Disabled'}</div></div></div>
 	                    </div>
 	                    <div className="text-muted small mb-3">{stationReview.plan?.summary || 'Root router creates the customer VLAN gateway/DHCP network. Downstream routers carry the same VLAN as a tagged trunk toward OLT/AP paths.'}</div>
 	                    {(stationReview.plan?.router_plans || []).map((routerPlan) => (
@@ -6208,30 +7582,39 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                      </details>
 	                    ))}
 	                    <div className="modal-footer px-0 pb-0">
+	                      <button type="button" className="btn btn-outline-primary" onClick={() => syncHotspotLoginHtml(stationReview.id)} disabled={hotspotLoginSyncing}>
+	                        <IconRefresh size={18} className="me-2" />{hotspotLoginSyncing ? 'Syncing...' : 'Sync HotSpot login.html'}
+	                      </button>
 	                      <button type="button" className="btn btn-primary" onClick={() => setStationReview(null)}>Close Review</button>
 	                    </div>
 	                  </Modal>
 	                )}
                   {stationImplementation && (
-                    <Modal title={`Implement Config: ${stationImplementation.station_name}`} size="xl" onClose={() => { if (!stationImplementing) setStationImplementation(null); }}>
+                    <Modal title={`Push Config: ${stationImplementation.station_name}`} size="xl" onClose={() => { if (!stationImplementing) { stationPushCompleted ? closeStationPushSuccess() : setStationImplementation(null); } }}>
                       <div className="alert alert-danger">
                         <div className="fw-semibold mb-1">RouterOS write action</div>
-                        <div>Review every command below before starting. When you click Start Implementation, the system sends these commands to the listed MikroTik routers one at a time and stops on the first error.</div>
+                        <div>Review every command below before starting. When you click Start Push, the system sends these commands to the listed MikroTik routers one at a time, uploads the managed HotSpot login.html, and stops on the first error.</div>
                       </div>
                       <div className="row g-3 mb-3">
-                        <div className="col-md-4">
+                        <div className="col-md-3">
                           <div className="border rounded p-3 h-100">
-                            <div className="text-muted small">Station VLAN</div>
+                            <div className="text-muted small">Customer VLAN</div>
                             <div className="h3 mb-0">VLAN {stationImplementation.vlan_id}</div>
                           </div>
                         </div>
-                        <div className="col-md-4">
+                        <div className="col-md-3">
                           <div className="border rounded p-3 h-100">
-                            <div className="text-muted small">Network</div>
+                            <div className="text-muted small">Customer Network</div>
                             <div className="h4 mb-0">{stationImplementation.client_network_cidr}</div>
                           </div>
                         </div>
-                        <div className="col-md-4">
+                        <div className="col-md-3">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Portal URL</div>
+                            <div className="h4 mb-0 text-truncate" title={stationImplementation.portal_url || ''}>{stationImplementation.portal_url || '-'}</div>
+                          </div>
+                        </div>
+                        <div className="col-md-3">
                           <div className="border rounded p-3 h-100">
                             <div className="text-muted small">Routers</div>
                             <div className="h3 mb-0">{(stationImplementation.routers || []).length}</div>
@@ -6248,7 +7631,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                           <div className="border rounded p-3 mb-3">
                             <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
                               <div>
-                                <div className="fw-semibold">Implementation progress</div>
+                                <div className="fw-semibold">Push progress</div>
                                 <div className="text-muted small">{successSteps}/{totalSteps} successful or already existing{failedSteps ? ` · ${failedSteps} failed` : ''}</div>
                               </div>
                               <span className={`badge ${failedSteps ? 'bg-red-lt text-red' : completedSteps === totalSteps && totalSteps ? 'bg-green-lt text-green' : stationImplementing ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
@@ -6262,13 +7645,30 @@ function CaptivePortalPage({ mode = 'full' }) {
                           </div>
                         );
                       })()}
+                      {stationPushCompleted ? (
+                        <div className="station-push-success">
+                          <div className="station-push-success-icon">
+                            <IconCircleCheck size={56} />
+                          </div>
+                          <div>
+                            <div className="h2 mb-2">Configuration pushed successfully</div>
+                            <div className="text-muted">
+                              All planned station configuration steps completed or were already detected on MikroTik. The managed HotSpot login.html sync step is also complete.
+                            </div>
+                          </div>
+                          <button type="button" className="btn btn-success btn-lg" onClick={closeStationPushSuccess}>
+                            Close ({stationPushCloseCountdown}s)
+                          </button>
+                        </div>
+                      ) : (
+                        <>
                       <div className="mb-3">
                         <div className="fw-semibold mb-2">Router path</div>
                         {renderStationChainPath(stationImplementation)}
                       </div>
                       <div className="station-implementation-list">
                         {(stationImplementationSteps.length ? stationImplementationSteps : stationImplementationStepList(stationImplementation)).map((step, stepIndex) => (
-                          <div className={`station-implementation-step ${step.status?.toLowerCase() || 'pending'}`} key={`${step.id}-${stepIndex}`}>
+                          <div className={`station-implementation-step ${step.status?.toLowerCase() || 'pending'} ${step.detected ? 'detected' : ''}`} key={`${step.id}-${stepIndex}`} ref={(node) => { if (node) stationStepRefs.current[step.id] = node; }}>
                             <div className="station-implementation-step-header">
                               <span className="station-implementation-status-icon">{stationImplementationStatusIcon(step.status)}</span>
                               <div className="min-w-0">
@@ -6276,7 +7676,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                 <div className="text-muted small">{step.router_name || 'Router'}{step.host ? ` · ${step.host}` : ''} · {step.router_role}</div>
                               </div>
                               <span className={`badge ms-auto ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'bg-green-lt text-green' : step.status === 'FAILED' ? 'bg-red-lt text-red' : step.status === 'RUNNING' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
-                                {step.status === 'SKIPPED' ? 'Already exists' : step.status}
+                                {step.detected ? 'Already pushed' : step.status === 'SKIPPED' ? 'Already exists' : step.status}
                               </span>
                             </div>
                             <pre className="station-implementation-command mb-0"><code>{step.preview}</code></pre>
@@ -6297,9 +7697,193 @@ function CaptivePortalPage({ mode = 'full' }) {
                         >
                           <IconEye size={18} className="me-2" />Review Plan First
                         </button>
-                        <button type="button" className="btn btn-danger" disabled={stationImplementing || !(stationImplementationSteps.length || stationImplementationStepList(stationImplementation).length)} onClick={runStationImplementation}>
-                          <IconPlayerPlay size={18} className="me-2" />{stationImplementing ? 'Implementing...' : 'Start Implementation'}
+                        <button type="button" className="btn btn-danger" disabled={stationImplementing || !stationManagedStatus || stationCheckingManaged || !(stationImplementationSteps.length || stationImplementationStepList(stationImplementation).length)} onClick={runStationImplementation} title={!stationManagedStatus ? 'Checking existing config first.' : 'Start station config push'}>
+                          <IconPlayerPlay size={18} className="me-2" />{stationImplementing ? 'Pushing...' : stationCheckingManaged && !stationManagedStatus ? 'Checking...' : 'Start Push'}
                         </button>
+                      </div>
+                      <div className="border-top pt-3 mt-3">
+                        <div className="fw-semibold mb-2">Recent station history</div>
+                        {renderStationCommandHistory()}
+                      </div>
+                        </>
+                      )}
+                    </Modal>
+                  )}
+                  {stationRemove && (
+                    <Modal title={`Remove Config: ${stationRemove.station_name}`} size="xl" onClose={() => { if (!stationRemoving) { stationRemoveCompleted ? closeStationRemoveSuccess() : setStationRemove(null); } }}>
+                      <div className="alert alert-danger">
+                        <div className="fw-semibold mb-1">Remove station-created RouterOS config</div>
+                        <div>This removes only objects matching this station plan by exact generated names/comments. Shared bridge VLAN rows are not deleted unless they carry the station-created comment.</div>
+                      </div>
+                      <div className="row g-3 mb-3">
+                        <div className="col-md-3">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Customer VLAN</div>
+                            <div className="h3 mb-0">VLAN {stationRemove.vlan_id}</div>
+                          </div>
+                        </div>
+                        <div className="col-md-3">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Customer Network</div>
+                            <div className="h4 mb-0">{stationRemove.client_network_cidr}</div>
+                          </div>
+                        </div>
+                        <div className="col-md-3">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Portal URL</div>
+                            <div className="h4 mb-0 text-truncate" title={stationRemove.portal_url || ''}>{stationRemove.portal_url || '-'}</div>
+                          </div>
+                        </div>
+                        <div className="col-md-3">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Routers</div>
+                            <div className="h3 mb-0">{(stationRemove.routers || []).length}</div>
+                          </div>
+                        </div>
+                      </div>
+                      {(() => {
+                        const totalSteps = stationRemoveSteps.length || stationRemoveStepList(stationRemove).length;
+                        const completedSteps = stationRemoveSteps.filter((item) => ['SUCCESS', 'SKIPPED', 'FAILED'].includes(item.status)).length;
+                        const successSteps = stationRemoveSteps.filter((item) => ['SUCCESS', 'SKIPPED'].includes(item.status)).length;
+                        const failedSteps = stationRemoveSteps.filter((item) => item.status === 'FAILED').length;
+                        const progressPct = totalSteps ? Math.round((completedSteps / totalSteps) * 100) : 0;
+                        return (
+                          <div className="border rounded p-3 mb-3">
+                            <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
+                              <div>
+                                <div className="fw-semibold">Remove progress</div>
+                                <div className="text-muted small">{successSteps}/{totalSteps} removed or not found{failedSteps ? ` · ${failedSteps} failed` : ''}</div>
+                              </div>
+                              <span className={`badge ${failedSteps ? 'bg-red-lt text-red' : completedSteps === totalSteps && totalSteps ? 'bg-green-lt text-green' : stationRemoving ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
+                                {stationRemoving ? 'Running' : failedSteps ? 'Stopped' : completedSteps === totalSteps && totalSteps ? 'Complete' : 'Ready'}
+                              </span>
+                            </div>
+                            <div className="progress">
+                              <div className={`progress-bar ${failedSteps ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${progressPct}%` }} />
+                            </div>
+                            {stationRemoveMessage && <div className="text-muted small mt-2">{stationRemoveMessage}</div>}
+                          </div>
+                        );
+                      })()}
+                      {stationRemoveCompleted ? (
+                        <div className="station-push-success">
+                          <div className="station-push-success-icon">
+                            <IconCircleCheck size={56} />
+                          </div>
+                          <div>
+                            <div className="h2 mb-2">Configuration removed successfully</div>
+                            <div className="text-muted">
+                              The station-created RouterOS configuration steps completed or were already absent. Shared objects that did not match the station plan were left untouched.
+                            </div>
+                          </div>
+                          <button type="button" className="btn btn-success btn-lg" onClick={closeStationRemoveSuccess}>
+                            Close ({stationRemoveCloseCountdown}s)
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                      <div className="station-implementation-list">
+                        {(stationRemoveSteps.length ? stationRemoveSteps : stationRemoveStepList(stationRemove)).map((step, stepIndex) => (
+                          <div className={`station-implementation-step ${step.status?.toLowerCase() || 'pending'}`} key={`${step.id}-${stepIndex}`} ref={(node) => { if (node) stationStepRefs.current[step.id] = node; }}>
+                            <div className="station-implementation-step-header">
+                              <span className="station-implementation-status-icon">{stationImplementationStatusIcon(step.status)}</span>
+                              <div className="min-w-0">
+                                <div className="fw-semibold">{stepIndex + 1}. {step.label}</div>
+                                <div className="text-muted small">{step.router_name || 'Router'}{step.host ? ` · ${step.host}` : ''} · {step.router_role}</div>
+                              </div>
+                              <span className={`badge ms-auto ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'bg-green-lt text-green' : step.status === 'FAILED' ? 'bg-red-lt text-red' : step.status === 'RUNNING' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
+                                {step.status === 'SKIPPED' ? 'Not found' : step.status}
+                              </span>
+                            </div>
+                            <pre className="station-implementation-command mb-0"><code>{step.preview}</code></pre>
+                            {step.message && <div className={`small mt-2 ${step.status === 'FAILED' ? 'text-danger' : 'text-muted'}`}>{step.message}</div>}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="modal-footer px-0 pb-0">
+                        <button type="button" className="btn" onClick={() => setStationRemove(null)} disabled={stationRemoving}>Close</button>
+                        <button type="button" className="btn btn-danger" disabled={stationRemoving || stationCheckingManaged || !stationManagedStatus?.has_managed_config || !(stationRemoveSteps.length || stationRemoveStepList(stationRemove).length)} onClick={runStationRemove} title={!stationManagedStatus ? 'Checking station-created config first.' : !stationManagedStatus?.has_managed_config ? 'No station-created config detected.' : 'Remove station-created config'}>
+                          <IconTrash size={18} className="me-2" />{stationRemoving ? 'Removing...' : stationCheckingManaged && !stationManagedStatus ? 'Checking...' : 'Start Remove Config'}
+                        </button>
+                      </div>
+                      <div className="border-top pt-3 mt-3">
+                        <div className="fw-semibold mb-2">Recent station history</div>
+                        {renderStationCommandHistory()}
+                      </div>
+                        </>
+                      )}
+                    </Modal>
+                  )}
+                  {stationDiagnostics && (
+                    <Modal title={`HotSpot Diagnostics: ${stationDiagnostics.station?.station_name || 'Station'}`} size="xl" onClose={() => setStationDiagnostics(null)}>
+                      <div className="alert alert-info">
+                        <div className="fw-semibold mb-1">Live MikroTik HotSpot checks</div>
+                        <div>This is read-only. It checks the station root gateway for HotSpot server/profile, managed login.html, walled garden, DHCP, and whether a phone/client IP is visible in the MikroTik HotSpot host table.</div>
+                      </div>
+                      <div className="row g-3 mb-3">
+                        <div className="col-md-4">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Station VLAN</div>
+                            <div className="h3 mb-0">VLAN {stationDiagnostics.station?.vlan_id}</div>
+                          </div>
+                        </div>
+                        <div className="col-md-4">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Client Network</div>
+                            <div className="h4 mb-0">{stationDiagnostics.station?.client_network_cidr}</div>
+                          </div>
+                        </div>
+                        <div className="col-md-4">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Portal URL</div>
+                            <div className="fw-semibold text-truncate" title={stationDiagnostics.result?.station?.portal_url || stationDiagnostics.station?.portal_url || ''}>{stationDiagnostics.result?.station?.portal_url || stationDiagnostics.station?.portal_url || '-'}</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="border rounded p-3 mb-3">
+                        <label className="form-label">Phone / client IP to check</label>
+                        <div className="input-group">
+                          <input className="form-control" value={stationDiagnosticsClientIp} onChange={(e) => setStationDiagnosticsClientIp(e.target.value)} placeholder="Example: 10.77.0.8" />
+                          <button className="btn btn-primary" type="button" onClick={() => runStationHotspotDiagnostics()} disabled={stationDiagnosticsLoading}>
+                            <IconRefresh size={16} className="me-1" />{stationDiagnosticsLoading ? 'Checking...' : 'Run Diagnostics'}
+                          </button>
+                        </div>
+                        <div className="text-muted small mt-2">Use the phone IP shown on the WiFi client, for example the current `10.77.0.8` test client.</div>
+                      </div>
+                      {stationDiagnostics.result ? (
+                        <>
+                          <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
+                            <span className={`badge ${stationDiagnosticStatusClass(stationDiagnostics.result.status)}`}>Overall: {stationDiagnostics.result.status}</span>
+                            <span className="badge bg-green-lt text-green">Ready {stationDiagnostics.result.summary?.ready || 0}</span>
+                            <span className="badge bg-yellow-lt text-yellow">Warnings {stationDiagnostics.result.summary?.warnings || 0}</span>
+                            <span className="badge bg-red-lt text-red">Failed {stationDiagnostics.result.summary?.failed || 0}</span>
+                          </div>
+                          <div className="station-implementation-list">
+                            {(stationDiagnostics.result.checks || []).map((check) => (
+                              <div className={`station-implementation-step ${check.status === 'OK' ? 'success' : check.status === 'FAILED' ? 'failed' : 'pending'}`} key={check.key}>
+                                <div className="station-implementation-step-header">
+                                  <span className="station-implementation-status-icon">{check.status === 'OK' ? <IconCircleCheck size={17} /> : check.status === 'FAILED' ? <IconAlertTriangle size={17} /> : <IconInfoCircle size={17} />}</span>
+                                  <div className="min-w-0">
+                                    <div className="fw-semibold">{check.title}</div>
+                                    <div className="text-muted small">{check.message}</div>
+                                  </div>
+                                  <span className={`badge ms-auto ${stationDiagnosticStatusClass(check.status)}`}>{check.status}</span>
+                                </div>
+                                {!!Object.keys(check.details || {}).length && (
+                                  <details>
+                                    <summary className="small text-muted">Details</summary>
+                                    <pre className="station-implementation-command mt-2 mb-0"><code>{JSON.stringify(check.details, null, 2)}</code></pre>
+                                  </details>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <div className="text-muted small">Diagnostics are loading...</div>
+                      )}
+                      <div className="modal-footer px-0 pb-0">
+                        <button type="button" className="btn" onClick={() => setStationDiagnostics(null)}>Close</button>
                       </div>
                     </Modal>
                   )}
@@ -7694,7 +9278,7 @@ function CaptivePortalPage({ mode = 'full' }) {
       </div>
       }
       {activeTab === 'Authorization Logs' && <>
-        <div className="col-12"><Card title="Gateway Authorization Logs"><Table rows={authorizations} columns={['created_at', 'client_mac_masked', 'voucher_code_masked', 'username', 'status', 'authorization_duration_seconds', 'access_expires_at', 'error_message']} /></Card></div>
+        <div className="col-12"><Card title="Gateway Authorization Logs"><Table rows={authorizations} columns={['created_at', 'gateway_type', 'client_mac_masked', 'voucher_code_masked', 'username', 'status', 'authorization_duration_seconds', 'access_expires_at', 'error_message']} /></Card></div>
         <div className="col-12"><Card title="Recent Portal Events"><Table rows={portalEvents.slice(0, 20)} columns={['event_type', 'voucher_code_masked', 'message', 'public_session_id', 'ip_address', 'created_at']} /></Card></div>
         <div className="col-12"><Card title="Recent Portal Redemptions"><Table rows={redemptions.slice(0, 20)} columns={['voucher_code', 'result', 'username', 'source', 'redeemed_time_seconds', 'failure_reason', 'created_at']} /></Card></div>
       </>}

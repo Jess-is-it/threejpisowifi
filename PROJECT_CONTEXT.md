@@ -664,7 +664,7 @@ UI update:
 - The visible `Selected Router` dropdown was removed from the Overview because router choice now happens from table action buttons or inside each modal workflow.
 - Missing Questions are explicitly pilot-router-bound for now. The standalone Overview Missing Questions card was removed; only the selected pilot router row shows question progress such as `7/12` and enables `Questions` / `Draft` actions. Non-pilot routers show `Pilot only`.
 - When a pilot router is selected, planning answers/suggestions on non-pilot routers are cleared so operators do not accidentally prepare multiple routers before MT-4.
-- `Save All` must respect intentionally cleared HotSpot DNS and Portal URL fields. Defaults such as `wifi.3j.local` and `http://192.168.50.70:8080/portal` should come from AI suggestion/default derivation workflows, not be silently re-added after the operator clears and saves.
+- `Save All` must respect intentionally cleared HotSpot DNS and Portal URL fields. Defaults such as `wifi.3j.3jportal.test` and `http://192.168.50.70:8080/portal` should come from suggestion/default derivation workflows, not be silently re-added after the operator clears and saves.
 - The Missing Questions validation warning (`Fix these answers`) is collapsible so large validation output can be hidden while editing.
 - These UI changes are workflow-only. They do not generate RouterOS command previews and do not apply MikroTik configuration.
 
@@ -752,6 +752,21 @@ Long-term network direction:
 - Active station plans must not reuse the same station code, customer VLAN, or client subnet.
 - Saving a station validates selected router bridge/tagged ports against latest successful MikroTik preflight scan data, rejects PPPoE-related interfaces, and checks VLAN/subnet/pool conflicts before the RouterOS implementation modal is used.
 
+## Station Implementation History + Remove Config
+
+Phase 2 station safety foundation:
+- Station implementation and removal now write per-command history to `mikrotik_station_command_logs`.
+- The station action is labeled `Push Config` in the UI. It checks existing station config before `Start Push` is enabled, then sends RouterOS commands one at a time.
+- The config check detects station-created RouterOS objects per router using exact generated names/comments from the station remove plan.
+- Dynamic RouterOS `/interface bridge vlan` rows are treated as read-only. If a station VLAN already appears only as a dynamic bridge VLAN row, Push Config creates a static station-managed bridge VLAN row instead of trying to modify the dynamic row.
+- Push Config now detects station apply progress before pushing. Previously pushed objects are marked as already existing, the station card shows pushed-step progress such as `1/16`, and retries continue from the next missing step instead of visually resetting to zero.
+- During Push Config, the running command is scrolled into view so the operator can watch each RouterOS step being sent and completed.
+- The `Remove Config` workflow is station-specific and runs in reverse order with the same progress/status UI as implementation.
+- The `Remove Config` action is shown only after a station is active so draft station plans do not look removable before anything has been pushed.
+- Removal is conservative: it removes only objects matching station-generated names/comments. Shared bridge VLAN rows are not deleted unless they carry the station-created comment; existing shared bridge VLAN rows updated during implementation are not blindly removed.
+- Command history is visible from the station implementation/remove modals so operators can review previous apply/check/remove results after refresh.
+- This phase still keeps DHCP/HotSpot ownership on the station root gateway. CRS/trunk routers remain VLAN carriers only.
+
 Station planning:
 - A station models one captive portal VLAN path from the root gateway to downstream routers/switches/CRS/OLT/AP paths.
 - The first router in the station chain is the root/primary gateway. It owns the VLAN interface, gateway IP, DHCP pool/network options, and local interface-list membership.
@@ -775,3 +790,250 @@ Station planning:
   - CRS/trunk routers add a VLAN interface on the selected bridge and add `/interface bridge vlan` records for VLAN 77 on the ports that must carry the captive portal VLAN. The bridge itself is included as a tagged member so the VLAN interface is visible in RouterOS Interfaces for monitoring/bandwidth visibility.
 - Station plans are saved in PostgreSQL and generate reviewable RouterOS command previews. The `Implement` button opens a separate RouterOS write modal that displays every command, shows a progress bar, sends commands one at a time, marks each command success/skipped/error, and stops on the first error.
 - Station apply steps use station plans so multi-device paths such as `CCR2116 -> CRS317 -> CCR1009 -> OLT/APs` are handled as one deployment workflow instead of isolated single-router setup.
+
+## Phase 3 — Root Gateway DHCP Server Foundation
+
+Purpose:
+- Phase 3 completes the per-station VLAN/DHCP foundation for the long-term model where each station/substation owns its own captive portal customer VLAN and subnet.
+- The root gateway router is the only router that creates DHCP ownership for the station.
+- CRS/switch/trunk/transport routers remain VLAN carriers only. They may add VLAN monitoring interfaces and bridge VLAN trunk rows, but they must not create DHCP servers for the station.
+
+Root gateway behavior:
+- Station plans now include `create_dhcp_server`, `dhcp_server_name`, and `dhcp_lease_time`.
+- `Create DHCP server on root gateway` is enabled by default in the Add Station modal.
+- The generated root gateway plan now includes `/ip dhcp-server add` using the station VLAN interface and DHCP pool.
+- The DHCP server name defaults to `DHCP-3J-HOTSPOT-V{vlan_id}` and the lease time defaults to `1h`.
+- Existing DHCP servers on the proposed station VLAN interface are checked during station validation so the operator does not accidentally place two DHCP servers on the same interface.
+
+Removal behavior:
+- Station remove plans now remove the station-managed root DHCP server by exact generated name before removing DHCP network options, pools, IP addresses, bridge VLAN rows, and VLAN interfaces.
+- Remove Config remains conservative and station-scoped. It removes only objects created by the station plan using exact names/comments.
+
+UI behavior:
+- The root gateway tab in Add Station now shows a DHCP server toggle, DHCP server name, and lease time inside `Step 3C: Root Gateway Network Values`.
+- The station review modal shows DHCP ownership explicitly so operators can verify that DHCP is root-gateway-only before implementation.
+
+## Phase 4 — Root Gateway HotSpot Enforcement Foundation
+
+Purpose:
+- Phase 4 adds the first station-based MikroTik HotSpot enforcement objects on top of the VLAN/DHCP foundation.
+- The root gateway remains the only router that owns HotSpot enforcement for a station/substation.
+- CRS/switch/trunk/transport routers remain VLAN carriers only; they must not create HotSpot profiles, HotSpot servers, DHCP servers, or portal allow rules for the station.
+
+Root gateway behavior:
+- Station plans now include `create_hotspot_profile`, `create_hotspot_server`, `create_walled_garden`, `hotspot_profile_name`, and `hotspot_html_directory`.
+- The generated root gateway plan can create:
+  - `/ip hotspot profile` for the station.
+  - `/ip hotspot` server bound to the station VLAN interface.
+  - `/ip hotspot walled-garden ip` entries that allow the 3J portal server and DNS before login.
+- Defaults:
+  - HotSpot profile: `PROFILE-3J-HOTSPOT-V{vlan_id}`
+  - HotSpot server: `HS-3J-HOTSPOT-V{vlan_id}`
+  - HTML directory: `hotspot`
+  - Portal URL: staging `/portal` URL unless overridden.
+- Station validation checks the latest root-router preflight scan for conflicting HotSpot profiles or servers before saving the station.
+
+Removal behavior:
+- Station remove plans now remove station-managed HotSpot server, HotSpot profile, and walled garden entries by exact generated names/comments before removing VLAN/DHCP objects.
+- Remove Config remains conservative and station-scoped. Shared or unrelated MikroTik HotSpot objects are not removed.
+
+UI behavior:
+- The Add Station root gateway tab now has `Root HotSpot and portal enforcement` controls.
+- Operators can enable/disable HotSpot profile creation, HotSpot server creation, and pre-login portal/DNS allow rules per station.
+- The station review modal shows root HotSpot profile/server and walled garden status before the implementation modal sends any RouterOS write commands.
+
+## Phase 5 — MikroTik HotSpot Portal Handoff + Voucher Authorization
+
+Purpose:
+- Phase 5 connects the MikroTik HotSpot redirect flow to the existing `/portal` voucher redemption flow.
+- MikroTik remains the gateway/enforcement layer.
+- 3JCentralPisowifi remains the source of truth for vouchers, wallets, portal sessions, and access decisions.
+
+MikroTik portal session capture:
+- `/portal` now captures common MikroTik HotSpot variables such as `mac`, `ip`, `server-name`, `link-login`, `link-login-only`, `link-orig`, `chap-id`, and `chap-challenge`.
+- Portal sessions store MikroTik context separately from Omada context.
+- If MikroTik HotSpot variables are present, the portal session source is `MIKROTIK`.
+
+Voucher authorization behavior:
+- For MikroTik portal sessions, voucher validation happens before consuming the voucher.
+- After validation, the system attempts to authorize the client on the station root gateway through RouterOS API.
+- The system creates or reuses a portal HotSpot user for the internal portal account and calls the MikroTik HotSpot active login action for the detected client IP/MAC.
+- If MikroTik authorization fails, the voucher is not redeemed/consumed and the customer sees a friendly operator-contact message.
+- If MikroTik authorization succeeds, the voucher is redeemed, the wallet/access is credited, the portal session becomes `ACCESS_GRANTED`, and an authorization log is saved.
+
+HotSpot login page:
+- The MikroTik HotSpot `login.html` file is now system-managed instead of manually uploaded by the operator.
+- One generic managed redirect template is used for all stations. It always writes to the same filename, `login.html`, inside the station HotSpot HTML directory, normally `hotspot/login.html`.
+- The template redirects MikroTik HotSpot clients to the configured Captive Portal URL with MikroTik query parameters preserved.
+- Station implementation includes a final step that uploads/overwrites the managed `login.html` on the station root gateway.
+- Network -> MikroTik -> Configuration -> `HTML and AP Management` includes the HotSpot login sync checker and a `Sync login.html to MikroTik` action. Operators should use this after Captive Portal URL/template changes so all station root gateways receive the current managed file.
+- Sync status is tracked per station/root gateway so the UI can show whether the file is synced, missing, outdated, detected without hash verification, or failed.
+
+Logs and UI:
+- `mikrotik_portal_authorizations` stores MikroTik authorization attempts and outcomes.
+- Captive Portal authorization logs now include gateway type so Omada and MikroTik authorization events are distinguishable.
+- Sanity Check now treats gateway authorization as testable through a MikroTik HotSpot redirect voucher redemption.
+
+Safety:
+- RouterOS write actions during redemption are limited to the selected station root gateway.
+- CRS/trunk routers are not used for client authorization.
+- Voucher consumption is gated behind successful MikroTik authorization for MikroTik portal sessions.
+
+## Phase 5.1 — Live HotSpot Diagnostics + Redirect Hardening
+
+- Phase 5.1 stabilizes the first real phone test on VLAN 77 before moving to broader rollout phases.
+- `/api/portal/redeem` portal-session creation was hardened so MikroTik and manual station-client visits no longer fail before voucher validation.
+- If a customer manually opens `/portal` from a station client subnet, such as `10.77.0.0/24`, the portal can classify the session as MikroTik-backed even when the MikroTik login page did not provide query parameters.
+- Station matching can use the HotSpot server name, station VLAN, or client IP subnet. This supports field testing when HotSpot redirect parameters are missing.
+- Active station records should store explicit `portal_url` and `hotspot_server_name` values. Migration `044_station_field_test_defaults.sql` backfills these for existing active station plans.
+- Network -> MikroTik -> Configuration now includes a station HotSpot diagnostics action. Diagnostics are read-only and check root gateway API login, HotSpot profile/server, managed `login.html`, DHCP server, walled garden portal access, and whether a client IP is visible in MikroTik HotSpot host/active tables.
+- Successful DHCP on a station client, for example a phone receiving `10.77.0.8`, proves VLAN/DHCP path readiness but does not by itself prove HotSpot redirect or internet authorization readiness.
+- Redirect troubleshooting should first confirm the client appears in `/ip hotspot host` on the root gateway and that managed `hotspot/login.html` is synced.
+
+## Phase 5.2 — Station Internet NAT + HotSpot Address Translation
+
+- Real MikroTik HotSpot tests showed that the customer device DHCP address and the HotSpot Active session address can differ.
+- Example: the phone may show `10.77.0.11`, while MikroTik HotSpot Active shows `10.77.0.12` as the translated `to-address`.
+- The portal authorization flow must therefore look up `/ip hotspot host` by both `address` and `to-address`, then authorize using the HotSpot `to-address` while keeping the real client/MAC stored in logs.
+- The station HotSpot server should use `address-pool=none` because DHCP is already owned by the station root gateway. This avoids confusing HotSpot address translation for new client sessions.
+- If the portal detects an old HotSpot host where `to-address` differs from the client `address` while the server is now `address-pool=none`, it clears only that client's HotSpot active/host state and asks the customer to reconnect before redeeming. The voucher is not consumed in this stale-state cleanup path.
+- RouterOS HotSpot users accumulate `uptime`; reusing the same portal HotSpot username after a voucher expires can trigger `your uptime limit is reached`.
+- The MikroTik authorization flow now updates an existing portal HotSpot user's `limit-uptime` to current RouterOS uptime plus the new voucher duration before calling active login.
+- A voucher can authorize the HotSpot session successfully while the phone still has no internet if the station client subnet is not NATed or routed upstream.
+- Station root gateway plans now include a managed NAT masquerade rule scoped only by the station client subnet.
+- The managed NAT rule uses comment `3J Hotspot - NAT for VLAN {vlan_id} clients` so push/remove/detection remains station-scoped.
+- The station NAT rule intentionally does not depend on `out-interface-list=WAN`, because live testing showed the root gateway's active internet route may not match the existing WAN interface list, causing zero NAT hits.
+- Station diagnostics now checks for the managed NAT rule and reports internet readiness separately from voucher authorization readiness.
+
+## Phase 5.3 — Live Portal Countdown Status
+
+- The public `/portal` page now shows a large live countdown timer for the current voucher access window.
+- For MikroTik/Omada-backed sessions, the customer-facing remaining time is based on `portal_sessions.access_expires_at`, not the wallet's stored remaining seconds. This prevents stale displays such as `Time remaining: 15m Connected` after the HotSpot session has already consumed its time.
+- Time-based vouchers now store an access expiry of `now + voucher duration` during gateway authorization.
+- `/api/portal/status` recalculates remaining time from the access expiry and marks the portal session `EXPIRED` when the countdown reaches zero.
+- When time is fully consumed, the portal shows `Time fully consumed` and asks the customer to enter a new voucher instead of showing connected.
+
+## Phase 5.4 — Captive Popup Detection Hardening
+
+- Station Push Config now includes a root-gateway DNS readiness step: `/ip dns set allow-remote-requests=yes`.
+- This is needed because Android/iOS/Windows captive network detection first resolves OS captive-check hostnames. If DNS fails before login, the phone may stay connected without opening the WiFi sign-in popup.
+- Station Push Config now creates DHCP option 114 (`3J-CAPPORT-V{vlan_id}`) and attaches it to the station DHCP network. This advertises the captive portal API URL to phones that support RFC 8910/CAPPORT.
+- `/api/portal/capport` is a public captive portal API endpoint that returns `application/captive+json` with `captive=true` for unauthenticated station clients and points them to the configured `/portal` URL.
+- The managed MikroTik HotSpot `login.html` now includes a meta refresh fallback in addition to JavaScript redirect. This helps captive popup mini-browsers that do not execute JavaScript reliably.
+- The JavaScript redirect still preserves MikroTik variables such as client MAC/IP when available; the meta refresh fallback opens the portal without those variables, and `/portal` can still classify station clients by source IP/subnet.
+- HotSpot diagnostics now checks RouterOS DNS remote request status and DHCP DNS options in addition to API login, HotSpot profile/server, DHCP server, NAT, walled garden, managed `login.html`, and client host/active state.
+- HotSpot diagnostics also checks DHCP option 114 so operators can confirm whether modern phones are being explicitly told where the captive portal is.
+- The station remove workflow does not disable RouterOS DNS remote requests because it is a shared router-level setting and may be required by other active station VLANs.
+
+## Phase 5.5 — Captive DNS Enforcement for MikroTik HotSpot
+
+- Station Push Config now treats DNS as part of captive portal enforcement.
+- Captive clients must receive only the station HotSpot gateway IP as DHCP DNS, for example `10.77.0.1` on VLAN 77.
+- Public DNS servers are configured as MikroTik upstream resolver servers instead of being handed directly to unauthenticated phones.
+- Station Push Config updates the DHCP network DNS option to the gateway-only value and keeps RouterOS DNS remote requests enabled.
+- Station Push Config adds station-scoped DNS redirect rules for TCP/UDP port 53 so clients that manually try public DNS are redirected back to the MikroTik resolver.
+- This improves Android/iOS/Windows captive portal popup detection by preventing clients from bypassing the HotSpot DNS path before voucher login.
+- The station form labels the DNS field as router upstream DNS to avoid confusing it with client DHCP DNS.
+- HotSpot diagnostics now warns if DHCP DNS is not gateway-only or if the station DNS redirect rules are missing.
+
+## Phase 5.6 — HotSpot Redirect Tracking Exceptions
+
+- Live testing on the CCR2116 root gateway found a broad enabled `/ip firewall raw action=notrack` rule.
+- Broad raw notrack rules can prevent normal connection tracking for station client traffic, which can stop MikroTik HotSpot from reliably redirecting unauthenticated HTTP captive-check traffic.
+- Station Push Config now adds station-scoped raw accept exceptions before broad raw notrack rules:
+  - source client subnet, for example `10.77.0.0/24`
+  - destination client subnet, for example `10.77.0.0/24`
+- The system does not disable or remove existing non-3J raw/notrack rules. It only adds managed exceptions for the station subnet.
+- Station remove config removes only the station-managed raw accept exceptions by exact comment.
+- HotSpot diagnostics now checks whether broad raw notrack exists and whether station tracking exceptions are present.
+
+## Phase 5.7 — Captive-Check DNS Probe Mapping
+
+- Live Android/Realme testing showed the phone was detecting `no internet access` but was not opening the captive portal assistant.
+- RouterOS counters showed DNS captive-check activity but little/no unauthenticated HTTP redirect traffic, meaning the phone was not reaching the normal HotSpot HTTP redirect path.
+- Station Push Config now creates station-managed DNS static records for common OS captive-check hostnames and points them to the station HotSpot gateway IP.
+- Initial managed hostnames include Android, Apple, Windows, Huawei/Honor, Unisoc, and MIUI captive-check domains such as `connectivitycheck.gstatic.com`, `captive.apple.com`, `www.msftconnecttest.com`, and `connectivitycheck.platform.hicloud.com`.
+- These static records are exact-name records only. The system avoids broad wildcard hijacks and avoids generic domains such as `google.com` so normal authenticated browsing is not broken.
+- Station remove config removes these captive-check DNS records by exact station-managed comments.
+- HotSpot diagnostics now checks whether common captive-check hostnames resolve to the HotSpot gateway.
+
+## Phase 5.8 — Direct Portal Redirect for Unauthenticated HTTP Checks
+
+- Live testing showed Android phones were finally hitting MikroTik HotSpot HTTP/HTTPS local redirect counters, but the phone still did not open the voucher portal assistant.
+- The staging reverse proxy previously sent unknown/root paths to `/admin/`. For captive-check requests that reach `192.168.50.70:8080`, unknown paths now redirect to `/portal` instead.
+- Common captive-check paths such as `/generate_204`, `/gen_204`, `/hotspot-detect.html`, `/connecttest.txt`, and `/ncsi.txt` explicitly return `302 /portal`.
+- The direct `pre-hotspot` dst-nat experiment was removed after live testing because it bypassed the normal MikroTik HotSpot login flow and did not reliably deliver phone browser requests to the portal server.
+- Station Push Config now relies on the standard MikroTik HotSpot HTTP redirect to serve the managed `hotspot/login.html`, which then opens `/portal`.
+
+## Phase 5.9 — Standard MikroTik HotSpot Redirect Flow
+
+- Captive popup testing returned to the safer standard MikroTik HotSpot flow:
+  1. DHCP gives clients only the station gateway as DNS.
+  2. MikroTik DNS resolves normal public hostnames through upstream DNS.
+  3. MikroTik HotSpot intercepts unauthenticated HTTP traffic.
+  4. MikroTik serves the managed `hotspot/login.html`.
+  5. The managed login file redirects the customer to the 3J `/portal`.
+- Station Push Config no longer creates static DNS records that point captive-check domains to the HotSpot gateway. Live testing showed this can make phones try HTTPS against the gateway and display `site can't be reached` instead of opening the portal.
+- Station Push Config no longer creates the station-scoped `pre-hotspot` direct portal dst-nat rule.
+- Station remove config still removes the old experimental captive-check DNS records and direct redirect rule by exact managed comments if they exist.
+- HotSpot diagnostics now focuses on the stable requirements: HotSpot profile/server, synced `login.html`, DHCP gateway-only DNS, DNS redirect, DHCP option 114, NAT, raw tracking exceptions, walled garden, and client HotSpot host visibility.
+- HotSpot DNS names must avoid `.local`. Many phones reserve `.local` for mDNS and may not resolve it through MikroTik DNS, causing `site can't be reached` after HotSpot redirects to the login page.
+- The default HotSpot DNS name is now `wifi.<station-code>.3jportal.test`, for example `wifi.station-roma-batu-gk.3jportal.test`. MikroTik serves this name locally for captive clients; it is not a public internet hostname.
+- Captive portal does not use MikroTik Web Proxy as the enforcement design. A legacy global NAT redirect from TCP `80,443` to web-proxy port `8081` was found on the live CCR and disabled because it can interfere with standard HotSpot redirects.
+- HotSpot diagnostics now flags enabled global TCP `80,443 -> 8081` web-proxy redirect rules as a warning.
+- Station HotSpot enforcement is IPv4-only for now. Station Push Config suppresses IPv6 router advertisements on the HotSpot VLAN with a station-scoped `/ipv6 nd` rule (`ra-lifetime=0s`, `advertise-dns=no`) because phones may otherwise try IPv6/HTTPS captive checks that MikroTik IPv4 HotSpot cannot intercept.
+- HotSpot diagnostics now checks for station IPv6 RA suppression.
+
+## Phase 5.10 — Android Private DNS Captive Fallback
+
+- Live testing on VLAN 77 showed an unauthenticated Android phone being discovered by MikroTik HotSpot through `TCP -> 10.77.0.1:853`, which is DNS-over-TLS / Android Private DNS behavior.
+- DNS-over-TLS to the HotSpot gateway can stop the phone from falling back to normal captive DNS and HTTP checks, leaving the WiFi status at `Connected / No internet access` without opening the voucher portal.
+- Station Push Config now adds a station-scoped firewall filter rule that rejects TCP `853` from the captive client subnet with `tcp-reset`.
+- The rule is managed by exact comment, for example `3J Hotspot - reject Private DNS TLS for VLAN 77`, and is inserted before the RouterOS HotSpot input jump when possible.
+- This does not enable general internet access before voucher redemption. It only makes unsupported Private DNS fail fast so Android can continue with normal captive portal detection.
+- HotSpot diagnostics now checks for the station Private DNS fallback rule.
+
+## Phase 5.11 — Port 80 Captive Portal Exposure
+
+- Live testing showed that both the 3J managed HotSpot login and an isolated VLAN 66 default MikroTik HotSpot test could see unauthenticated phones in `/ip hotspot host`, but phones still did not reliably open the captive browser.
+- To remove non-standard port behavior from the phone captive path, the staging proxy now exposes the same web app on normal HTTP port `80` in addition to `8080`.
+- The active station portal URL was changed to `http://192.168.50.70/portal`.
+- The MikroTik managed `hotspot/login.html`, DHCP CAPPORT option 114, and walled garden portal URL rule were updated to use port `80`.
+- Admin/staging access on `http://192.168.50.70:8080` remains available, but captive portal clients should be directed to the port-80 URL for the most reliable phone captive-assistant behavior.
+
+## Phase 5.12 — Gateway-Hosted Voucher Login
+
+- Captive portal testing showed the first page should be served by the MikroTik HotSpot gateway/local DNS name, not immediately redirected away to the central server.
+- The managed MikroTik `hotspot/login.html` now displays the voucher entry form directly on the gateway-served HotSpot page, for example `http://wifi.station-roma-batu-gk.3jportal.test/login`.
+- The gateway-hosted page calls `http://192.168.50.70/api/portal/redeem` in the background using CORS, passing MikroTik variables such as client MAC, client IP, HotSpot server name, and original link.
+- `/api/portal/capport` now points station clients to the gateway-local HotSpot login URL as the user portal URL when a station can be identified from the client IP.
+- The full React `/portal` page remains available as a fallback and operator/manual test page, but the field captive popup path should prefer the gateway-hosted page.
+
+## Phase 5.13 — CAPPORT Gateway Masquerade Detection
+
+- Live testing showed station client requests to the central portal server can arrive with the MikroTik root gateway IP because the station NAT masquerade rule applies to the captive subnet.
+- `/api/portal/capport` now maps both direct station client IPs and station root gateway IPs back to the active MikroTik station.
+- When CAPPORT sees the root gateway IP, it returns the gateway-hosted HotSpot login URL, for example `http://wifi.station-roma-batu-gk.3jportal.test/login`, instead of the generic `/portal` URL.
+- This improves standards-based captive assistant discovery without changing RouterOS enforcement or applying additional router configuration.
+
+## Phase 5.14 — Captive VLAN Isolation Diagnostics
+
+- Live testing showed the same phone MAC can receive both a station HotSpot VLAN lease, for example `10.77.0.x`, and a normal management LAN lease, for example `192.168.50.x`.
+- When this happens, the phone is not isolated to the captive SSID/VLAN path and may bypass the MikroTik HotSpot popup detection flow even though the manual gateway login link works.
+- Station HotSpot diagnostics now checks for duplicate MAC leases between the station DHCP server and other DHCP servers on the root gateway.
+- Diagnostics also warns when AP-looking devices such as EAP/AP hostnames receive leases from the captive client DHCP server, because AP management should normally stay on the management/native network while SSID client traffic uses the HotSpot VLAN.
+- The operational fix is in the network/AP path: the open customer SSID must tag the station VLAN, such as VLAN 77, while AP management remains on the management/native network. A phone connected to the customer SSID should have only the captive VLAN address before voucher login.
+
+## Phase 5.15 — Centralized AP Management VLAN
+
+- AP management is now centralized instead of being configured inside each Add Station plan.
+- Network -> MikroTik -> Configuration renames the managed `login.html` panel to `HTML and AP Management`.
+- The `HTML and AP Management` panel owns the central AP management VLAN/subnet details and provides an AP Management Details modal plus a Push AP Management Config modal.
+- Default central AP management values are VLAN `111`, subnet `10.111.0.0/24`, gateway `10.111.0.1`, DHCP pool `10.111.0.10-10.111.0.254`, and RouterOS names such as `VLAN111-AP-MGMT`, `POOL-AP-MGMT-V111`, and `DHCP-AP-MGMT-V111`.
+- The first/root router creates the AP management VLAN interface, gateway IP, DHCP pool/server, DHCP network options, and local interface-list membership.
+- Downstream CRS/switch/trunk routers carry the AP management VLAN as tagged trunk configuration and create a VLAN monitoring interface for visibility.
+- Add Station returns to customer HotSpot VLAN planning only. Station plans no longer ask for AP management VLAN values.
+- The customer captive portal VLAN remains separate, for example VLAN 77 with `10.77.0.0/24`, and continues to own HotSpot, captive DNS, voucher authorization, and NAT behavior.
+- AP management is not a HotSpot network. It exists so Omada/AP control traffic stays off the customer captive VLAN while the open SSID still tags the customer VLAN.
+- Validation rejects AP management VLANs/subnets that overlap station customer HotSpot VLAN/subnet or existing scanned router VLAN/subnet/pool state.
+- AP management config is not pushed automatically. It uses the same step-by-step RouterOS push pattern as Station Push Config: detect existing matching objects, show every command, push one command at a time, and stop on the first error.

@@ -343,6 +343,18 @@ Add Station is disabled:
 - Add Station stays disabled until read-only scan data exists.
 - If a router was scanned but the button is still disabled, refresh the Configuration tab and confirm the latest preflight status is visible in the table.
 
+AP Management Details is disabled:
+- Run at least one read-only preflight scan first. Central AP management uses scan data to validate selected bridges, tagged ports, existing VLANs, subnets, and pools.
+
+AP management save is blocked:
+- Confirm the AP management VLAN is not already used by a station customer VLAN.
+- Confirm the AP management subnet does not overlap station customer subnets or existing root-router subnets.
+- Select only detected non-PPPoE bridges/interfaces and tagged ports.
+
+AP management push stops:
+- The push modal sends one RouterOS command at a time and stops on the first error.
+- Reopen `Push AP Management Config`; the system rechecks already-pushed objects and marks detected steps as already existing.
+
 Router appears read-only/core:
 - Do not select HotSpot Gateway unless a network expert confirms a dedicated non-conflicting captive portal VLAN/network can be used.
 - Prefer Read-only/Core for ISP core routers and use a different pilot gateway.

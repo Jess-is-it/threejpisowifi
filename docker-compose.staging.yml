@@ -1,6 +1,7 @@
 services:
   proxy:
     ports:
+      - "80:80/tcp"
       - "8080:80/tcp"
   radius:
     ports:

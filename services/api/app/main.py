@@ -2,6 +2,7 @@ import os
 import base64
 import concurrent.futures
 import csv
+import html
 import io
 import json
 import re
@@ -374,6 +375,8 @@ class VoucherRedeemTest(BaseModel):
 
 class PortalSessionRequest(BaseModel):
     portal_session_id: Optional[str] = None
+    mac: Optional[str] = None
+    ip: Optional[str] = None
     client_mac: Optional[str] = None
     clientMac: Optional[str] = None
     client_ip: Optional[str] = None
@@ -389,6 +392,12 @@ class PortalSessionRequest(BaseModel):
     redirect_url: Optional[str] = None
     redirectUrl: Optional[str] = None
     nas_id: Optional[str] = None
+    server_name: Optional[str] = None
+    link_login: Optional[str] = None
+    link_login_only: Optional[str] = None
+    link_orig: Optional[str] = None
+    chap_id: Optional[str] = None
+    chap_challenge: Optional[str] = None
     token: Optional[str] = None
     authToken: Optional[str] = None
     raw_query_params: Optional[dict] = None
@@ -492,12 +501,54 @@ class MikrotikStationCreate(BaseModel):
     pool_start_ip: str = Field(min_length=3, max_length=64)
     pool_end_ip: str = Field(min_length=3, max_length=64)
     pool_name: Optional[str] = Field(default=None, max_length=200)
+    dhcp_server_name: Optional[str] = Field(default=None, max_length=200)
+    dhcp_lease_time: Optional[str] = Field(default="1h", max_length=80)
+    create_dhcp_server: bool = True
     dns_servers: Optional[str] = Field(default=None, max_length=400)
     local_interface_list: Optional[str] = Field(default="LOCAL", max_length=120)
+    create_hotspot_profile: bool = True
+    create_hotspot_server: bool = True
+    create_walled_garden: bool = True
+    hotspot_profile_name: Optional[str] = Field(default=None, max_length=200)
+    hotspot_html_directory: Optional[str] = Field(default="hotspot", max_length=160)
     hotspot_dns_name: Optional[str] = Field(default=None, max_length=200)
     hotspot_server_name: Optional[str] = Field(default=None, max_length=200)
     portal_url: Optional[str] = Field(default=None, max_length=500)
+    ap_management_enabled: bool = False
+    ap_management_vlan_id: Optional[int] = Field(default=111, ge=1, le=4094)
+    ap_management_vlan_interface_name: Optional[str] = Field(default=None, max_length=200)
+    ap_management_network_cidr: Optional[str] = Field(default="10.111.0.0/24", max_length=64)
+    ap_management_gateway_ip: Optional[str] = Field(default="10.111.0.1", max_length=64)
+    ap_management_pool_start_ip: Optional[str] = Field(default="10.111.0.10", max_length=64)
+    ap_management_pool_end_ip: Optional[str] = Field(default="10.111.0.254", max_length=64)
+    ap_management_pool_name: Optional[str] = Field(default=None, max_length=200)
+    ap_management_dhcp_server_name: Optional[str] = Field(default=None, max_length=200)
+    ap_management_dhcp_lease_time: Optional[str] = Field(default="1h", max_length=80)
+    ap_management_dns_servers: Optional[str] = Field(default=None, max_length=400)
     routers: list[MikrotikStationRouterPayload] = Field(default_factory=list)
+
+
+class MikrotikApManagementRouterPayload(BaseModel):
+    router_id: str
+    bridge_name: Optional[str] = Field(default=None, max_length=200)
+    tagged_ports: Optional[str] = Field(default=None, max_length=1200)
+    notes: Optional[str] = Field(default=None, max_length=1200)
+
+
+class MikrotikApManagementConfigPayload(BaseModel):
+    config_name: str = Field(default="Central AP Management", min_length=1, max_length=160)
+    vlan_id: int = Field(default=111, ge=1, le=4094)
+    vlan_interface_name: Optional[str] = Field(default=None, max_length=200)
+    network_cidr: str = Field(default="10.111.0.0/24", min_length=4, max_length=64)
+    gateway_ip: Optional[str] = Field(default="10.111.0.1", max_length=64)
+    pool_start_ip: Optional[str] = Field(default="10.111.0.10", max_length=64)
+    pool_end_ip: Optional[str] = Field(default="10.111.0.254", max_length=64)
+    pool_name: Optional[str] = Field(default=None, max_length=200)
+    dhcp_server_name: Optional[str] = Field(default=None, max_length=200)
+    dhcp_lease_time: Optional[str] = Field(default="1h", max_length=80)
+    dns_servers: Optional[str] = Field(default=None, max_length=400)
+    local_interface_list: Optional[str] = Field(default="LOCAL", max_length=120)
+    routers: list[MikrotikApManagementRouterPayload] = Field(default_factory=list)
 
 
 class MikrotikConfigurationStepApply(BaseModel):
@@ -507,6 +558,10 @@ class MikrotikConfigurationStepApply(BaseModel):
 class MikrotikStationCommandApply(BaseModel):
     router_id: str
     command_index: int = Field(ge=0)
+
+
+class MikrotikHotspotLoginSyncPayload(BaseModel):
+    station_ids: Optional[list[str]] = None
 
 
 class MikrotikDeploymentModePayload(BaseModel):
@@ -1327,6 +1382,10 @@ def routeros_remove_path_for_print(print_path: str):
     return None
 
 
+def routeros_truthy(value) -> bool:
+    return str(value or "").strip().lower() in {"true", "yes", "1"}
+
+
 def routeros_execute_commands(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, commands: list, timeout: float = 8.0):
     raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
     sock = raw_sock
@@ -1343,6 +1402,46 @@ def routeros_execute_commands(host: str, port: int, username: Optional[str], pas
             path = command.get("path")
             params = command.get("params") or {}
             label = command.get("label") or path
+            verify = command.get("verify")
+            if verify and verify.get("words"):
+                existing = routeros_read_result_after_send(sock, verify["words"])
+                if routeros_verify_matches(existing, verify):
+                    results.append({
+                        "label": label,
+                        "status": "SKIPPED",
+                        "message": routeros_verify_message(verify),
+                        "existing_count": len(existing),
+                    })
+                    continue
+            if command.get("set_existing_query"):
+                query = command["set_existing_query"]
+                print_path = query.get("print_path")
+                query_fields = query.get("query") or {}
+                set_path = query.get("set_path") or path
+                existing = routeros_read_result_after_send(
+                    sock,
+                    [print_path] + [f"?{key}={value}" for key, value in query_fields.items() if value not in (None, "")],
+                )
+                if not existing:
+                    query_label = ", ".join(f"{key}={value}" for key, value in query_fields.items())
+                    raise RuntimeError(f"{label}: existing RouterOS item was not found for {query_label}.")
+                item_id = existing[0].get(".id")
+                if not item_id:
+                    raise RuntimeError(f"{label}: existing RouterOS item has no ID.")
+                replies = routeros_read_result_after_send(sock, routeros_command_words(set_path, {".id": item_id, **params}))
+                results.append({"label": label, "status": "SUCCESS", "message": "Existing RouterOS item was updated.", "reply_count": len(replies)})
+                continue
+            if command.get("place_before_query"):
+                place_query = command["place_before_query"]
+                place_print_path = place_query.get("print_path")
+                place_fields = place_query.get("query") or {}
+                if place_print_path and place_fields:
+                    place_rows = routeros_read_result_after_send(
+                        sock,
+                        [place_print_path] + [f"?{key}={value}" for key, value in place_fields.items() if value not in (None, "")],
+                    )
+                    if place_rows and place_rows[0].get(".id"):
+                        params = {**params, "place-before": place_rows[0][".id"]}
             if command.get("merge_bridge_vlan_tagged"):
                 print_path = routeros_print_path_for_add(path)
                 bridge = params.get("bridge")
@@ -1351,19 +1450,31 @@ def routeros_execute_commands(host: str, port: int, username: Optional[str], pas
                 if print_path and bridge and vlan_ids and desired_tagged:
                     existing = routeros_read_result_after_send(sock, [print_path, f"?bridge={bridge}", f"?vlan-ids={vlan_ids}"])
                     if existing:
-                        existing_item = existing[0]
+                        editable_existing = [item for item in existing if not routeros_truthy(item.get("dynamic"))]
+                        if not editable_existing:
+                            words = routeros_command_words(path, params)
+                            replies = routeros_read_result_after_send(sock, words)
+                            results.append({
+                                "label": label,
+                                "status": "SUCCESS",
+                                "message": "Created a static bridge VLAN row. Existing dynamic RouterOS VLAN rows are read-only and were left unchanged.",
+                                "reply_count": len(replies),
+                                "dynamic_existing_count": len(existing),
+                            })
+                            continue
+                        existing_item = editable_existing[0]
                         existing_tagged = existing_item.get("tagged") or ""
                         merged_tagged = station_dedupe_csv(existing_tagged, desired_tagged)
                         existing_set = {item.strip() for item in existing_tagged.split(",") if item.strip()}
                         merged_set = {item.strip() for item in merged_tagged.split(",") if item.strip()}
                         if merged_set == existing_set:
-                            results.append({"label": label, "status": "SKIPPED", "message": "Existing bridge VLAN already has the required tagged members.", "existing_count": len(existing)})
+                            results.append({"label": label, "status": "SKIPPED", "message": "Existing static bridge VLAN already has the required tagged members.", "existing_count": len(editable_existing), "dynamic_existing_count": len(existing) - len(editable_existing)})
                             continue
                         item_id = existing_item.get(".id")
                         if not item_id:
                             raise RuntimeError("Existing bridge VLAN item has no RouterOS ID.")
                         routeros_read_result_after_send(sock, ["/interface/bridge/vlan/set", f"=.id={item_id}", f"=tagged={merged_tagged}"])
-                        results.append({"label": label, "status": "SUCCESS", "message": f"Updated existing bridge VLAN tagged members to {merged_tagged}.", "existing_count": len(existing)})
+                        results.append({"label": label, "status": "SUCCESS", "message": f"Updated existing static bridge VLAN tagged members to {merged_tagged}.", "existing_count": len(editable_existing), "dynamic_existing_count": len(existing) - len(editable_existing)})
                         continue
             unique_query = None
             if command.get("existing_query"):
@@ -1391,6 +1502,187 @@ def routeros_execute_commands(host: str, port: int, username: Optional[str], pas
             replies = routeros_read_result_after_send(sock, words)
             results.append({"label": label, "status": "SUCCESS", "message": "Command accepted by RouterOS.", "reply_count": len(replies)})
         return {"status": "SUCCESS", "message": "RouterOS commands completed.", "results": results}
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        if sock is not raw_sock:
+            try:
+                raw_sock.close()
+            except Exception:
+                pass
+
+
+def routeros_duration_to_seconds(value: Optional[str]) -> int:
+    text = str(value or "").strip().lower()
+    if not text:
+        return 0
+    if ":" in text and re.fullmatch(r"\d+:\d{1,2}:\d{1,2}", text):
+        hours, minutes, seconds = [int(part) for part in text.split(":")]
+        return hours * 3600 + minutes * 60 + seconds
+    total = 0
+    for amount, unit in re.findall(r"(\d+)([wdhms])", text):
+        number = int(amount)
+        if unit == "w":
+            total += number * 7 * 24 * 3600
+        elif unit == "d":
+            total += number * 24 * 3600
+        elif unit == "h":
+            total += number * 3600
+        elif unit == "m":
+            total += number * 60
+        elif unit == "s":
+            total += number
+    if total:
+        return total
+    try:
+        return int(float(text))
+    except ValueError:
+        return 0
+
+
+def routeros_authorize_hotspot_client(
+    host: str,
+    port: int,
+    username: Optional[str],
+    password: Optional[str],
+    use_tls: bool,
+    hotspot_username: str,
+    hotspot_password: str,
+    duration_seconds: int,
+    comment: str,
+    login_ip: str,
+    client_mac: Optional[str],
+    timeout: float = 8.0,
+):
+    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
+    sock = raw_sock
+    try:
+        if use_tls:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            sock = context.wrap_socket(raw_sock, server_hostname=host)
+        sock.settimeout(timeout)
+        routeros_login_socket(sock, username, password)
+        requested_seconds = max(int(duration_seconds or 0), 60)
+        existing_users = routeros_read_result_after_send(
+            sock,
+            [
+                "/ip/hotspot/user/print",
+                f"?name={hotspot_username}",
+                "=.proplist=.id,name,uptime,limit-uptime,disabled,comment",
+            ],
+        )
+        results = []
+        if existing_users:
+            existing = existing_users[0]
+            existing_id = existing.get(".id")
+            if not existing_id:
+                raise RuntimeError("Existing HotSpot user has no RouterOS ID.")
+            used_seconds = routeros_duration_to_seconds(existing.get("uptime"))
+            new_limit_seconds = max(used_seconds + requested_seconds, requested_seconds)
+            routeros_read_result_after_send(
+                sock,
+                [
+                    "/ip/hotspot/user/set",
+                    f"=.id={existing_id}",
+                    f"=password={hotspot_password}",
+                    f"=limit-uptime={new_limit_seconds}s",
+                    f"=comment={comment}",
+                    "=disabled=no",
+                ],
+            )
+            results.append({
+                "label": "Extend existing portal HotSpot user",
+                "status": "SUCCESS",
+                "message": f"Existing HotSpot user limit updated to preserve {requested_seconds}s of new voucher time.",
+                "previous_uptime": existing.get("uptime"),
+                "new_limit_uptime": f"{new_limit_seconds}s",
+            })
+        else:
+            routeros_read_result_after_send(
+                sock,
+                [
+                    "/ip/hotspot/user/add",
+                    f"=name={hotspot_username}",
+                    f"=password={hotspot_password}",
+                    f"=limit-uptime={requested_seconds}s",
+                    f"=comment={comment}",
+                ],
+            )
+            results.append({
+                "label": "Create portal HotSpot user",
+                "status": "SUCCESS",
+                "message": "HotSpot user created for this portal account.",
+                "limit_uptime": f"{requested_seconds}s",
+            })
+        login_words = [
+            "/ip/hotspot/active/login",
+            f"=user={hotspot_username}",
+            f"=password={hotspot_password}",
+            f"=ip={login_ip}",
+        ]
+        if client_mac:
+            login_words.append(f"=mac-address={client_mac}")
+        replies = routeros_read_result_after_send(sock, login_words)
+        results.append({
+            "label": "Authorize active MikroTik HotSpot client",
+            "status": "SUCCESS",
+            "message": "Command accepted by RouterOS.",
+            "reply_count": len(replies),
+        })
+        return {"status": "SUCCESS", "message": "RouterOS HotSpot authorization completed.", "results": results}
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        if sock is not raw_sock:
+            try:
+                raw_sock.close()
+            except Exception:
+                pass
+
+
+def routeros_remove_hotspot_client_state(
+    host: str,
+    port: int,
+    username: Optional[str],
+    password: Optional[str],
+    use_tls: bool,
+    client_mac: Optional[str] = None,
+    timeout: float = 8.0,
+) -> dict:
+    if not client_mac:
+        return {"status": "SKIPPED", "message": "No client MAC was available for HotSpot state cleanup.", "removed": []}
+    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
+    sock = raw_sock
+    removed = []
+    try:
+        if use_tls:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            sock = context.wrap_socket(raw_sock, server_hostname=host)
+        sock.settimeout(timeout)
+        routeros_login_socket(sock, username, password)
+        for print_path, remove_path in [
+            ("/ip/hotspot/active/print", "/ip/hotspot/active/remove"),
+            ("/ip/hotspot/host/print", "/ip/hotspot/host/remove"),
+        ]:
+            rows = routeros_read_result_after_send(
+                sock,
+                [print_path, f"?mac-address={client_mac}", "=.proplist=.id,address,to-address,mac-address,user,server,authorized"],
+            )
+            for row in rows:
+                item_id = row.get(".id")
+                if not item_id:
+                    continue
+                routeros_read_result_after_send(sock, [remove_path, f"=.id={item_id}"])
+                removed.append({"path": remove_path, "id": item_id, "address": row.get("address"), "to_address": row.get("to-address")})
+        return {"status": "SUCCESS", "message": "HotSpot active/host state removed for this client.", "removed": removed}
     finally:
         try:
             sock.close()
@@ -1499,6 +1791,124 @@ def routeros_detect_remove_targets(host: str, port: int, username: Optional[str]
                 pass
 
 
+def routeros_detect_station_apply_targets(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, commands: list, timeout: float = 8.0):
+    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
+    sock = raw_sock
+    try:
+        if use_tls:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            sock = context.wrap_socket(raw_sock, server_hostname=host)
+        sock.settimeout(timeout)
+        routeros_login_socket(sock, username, password)
+        items = []
+        found_count = 0
+        for index, command in enumerate(commands):
+            label = command.get("label") or command.get("path") or f"Command {index + 1}"
+            path = command.get("path")
+            params = command.get("params") or {}
+            print_path = routeros_print_path_for_add(path or "")
+            query_words = None
+            query_label = ""
+            verify = command.get("verify")
+            if verify and verify.get("words"):
+                existing = routeros_read_result_after_send(sock, verify["words"])
+                matched = routeros_verify_matches(existing, verify)
+                found_count += 1 if matched else 0
+                items.append({
+                    "label": label,
+                    "command_index": index,
+                    "status": "FOUND" if matched else "NOT_FOUND",
+                    "found_count": 1 if matched else 0,
+                    "query_label": verify.get("label") or ", ".join(verify.get("words") or []),
+                    "existing_count": len(existing),
+                    "message": routeros_verify_message(verify) if matched else verify.get("not_found_message") or "Required RouterOS state was not detected.",
+                })
+                continue
+            if command.get("set_existing_query"):
+                query = command["set_existing_query"]
+                print_path = query.get("print_path")
+                query_fields = query.get("query") or {}
+                existing = routeros_read_result_after_send(
+                    sock,
+                    [print_path] + [f"?{key}={value}" for key, value in query_fields.items() if value not in (None, "")],
+                )
+                items.append({
+                    "label": label,
+                    "command_index": index,
+                    "status": "UNKNOWN",
+                    "found_count": 0,
+                    "query_label": ", ".join(f"{key}={value}" for key, value in query_fields.items()),
+                    "existing_count": len(existing),
+                    "message": "This step updates an existing RouterOS item. Detection requires a verification rule.",
+                })
+                continue
+            if command.get("merge_bridge_vlan_tagged") and print_path:
+                bridge = params.get("bridge")
+                vlan_ids = params.get("vlan-ids")
+                tagged = {item.strip() for item in str(params.get("tagged") or "").split(",") if item.strip()}
+                if bridge and vlan_ids:
+                    query_words = [print_path, f"?bridge={bridge}", f"?vlan-ids={vlan_ids}"]
+                    query_label = f"bridge={bridge}, vlan-ids={vlan_ids}"
+                    existing = routeros_read_result_after_send(sock, query_words)
+                    static_rows = [row for row in existing if not routeros_truthy(row.get("dynamic"))]
+                    matched = any(tagged.issubset({item.strip() for item in str(row.get("tagged") or "").split(",") if item.strip()}) for row in static_rows)
+                    found_count += 1 if matched else 0
+                    items.append({
+                        "label": label,
+                        "command_index": index,
+                        "status": "FOUND" if matched else "NOT_FOUND",
+                        "found_count": 1 if matched else 0,
+                        "query_label": query_label,
+                        "dynamic_existing_count": len(existing) - len(static_rows),
+                        "message": "Static bridge VLAN row has the required tagged members." if matched else "No static bridge VLAN row has all required tagged members yet.",
+                    })
+                    continue
+            if command.get("existing_query") and print_path:
+                unique_query = command.get("existing_query")
+                if isinstance(unique_query, dict):
+                    query_words = [print_path] + [f"?{key}={value}" for key, value in unique_query.items() if value not in (None, "")]
+                    query_label = ", ".join(f"{key}={value}" for key, value in unique_query.items())
+            elif command.get("unique_comment") and print_path:
+                query_words = [print_path, f"?comment={command.get('unique_comment')}"]
+                query_label = f"comment={command.get('unique_comment')}"
+            elif command.get("unique_field") and command.get("unique_value") and print_path:
+                query_words = [print_path, f"?{command.get('unique_field')}={command.get('unique_value')}"]
+                query_label = f"{command.get('unique_field')}={command.get('unique_value')}"
+            if not query_words:
+                items.append({"label": label, "command_index": index, "status": "UNKNOWN", "found_count": 0, "message": "No safe detection query is available for this command."})
+                continue
+            existing = routeros_read_result_after_send(sock, query_words)
+            count = len(existing)
+            found_count += 1 if count else 0
+            items.append({
+                "label": label,
+                "command_index": index,
+                "status": "FOUND" if count else "NOT_FOUND",
+                "found_count": 1 if count else 0,
+                "query_label": query_label,
+                "existing_count": count,
+            })
+        return {
+            "status": "SUCCESS",
+            "message": f"Found {found_count} pushed station step(s).",
+            "has_managed_config": found_count > 0,
+            "found_count": found_count,
+            "items": items,
+        }
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        if sock is not raw_sock:
+            try:
+                raw_sock.close()
+            except Exception:
+                pass
+
+
 def routeros_readonly_query(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, words: list, timeout: float = 8.0):
     raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
     sock = raw_sock
@@ -1511,6 +1921,78 @@ def routeros_readonly_query(host: str, port: int, username: Optional[str], passw
         sock.settimeout(timeout)
         routeros_login_socket(sock, username, password)
         return routeros_read_result_after_send(sock, words)
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        if sock is not raw_sock:
+            try:
+                raw_sock.close()
+            except Exception:
+                pass
+
+
+def routeros_file_words(file_path: str) -> list[str]:
+    return [
+        "/file/print",
+        f"?name={file_path}",
+        "=.proplist=.id,name,type,size,contents,creation-time,modified-time",
+    ]
+
+
+def routeros_file_query(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, file_path: str, timeout: float = 8.0):
+    return routeros_readonly_query(host, port, username, password, use_tls, routeros_file_words(file_path), timeout=timeout)
+
+
+def routeros_write_text_file(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, file_path: str, content: str, timeout: float = 10.0):
+    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
+    sock = raw_sock
+    try:
+        if use_tls:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            sock = context.wrap_socket(raw_sock, server_hostname=host)
+        sock.settimeout(timeout)
+        routeros_login_socket(sock, username, password)
+        existing = routeros_read_result_after_send(sock, routeros_file_words(file_path))
+        action = "add"
+        if existing:
+            item_id = existing[0].get(".id")
+            if not item_id:
+                raise RuntimeError("Existing RouterOS file has no ID and cannot be updated safely.")
+            try:
+                routeros_read_result_after_send(sock, ["/file/set", f"=.id={item_id}", f"=contents={content}"])
+                action = "set"
+            except Exception:
+                routeros_read_result_after_send(sock, ["/file/remove", f"=.id={item_id}"])
+                routeros_read_result_after_send(sock, ["/file/add", f"=name={file_path}", f"=contents={content}"])
+                action = "replace"
+        else:
+            routeros_read_result_after_send(sock, ["/file/add", f"=name={file_path}", f"=contents={content}"])
+        verified = routeros_read_result_after_send(sock, routeros_file_words(file_path))
+        if not verified:
+            raise RuntimeError("RouterOS accepted the file operation but the file was not detected after upload.")
+        returned_content = verified[0].get("contents")
+        expected_hash = sha256(content.encode()).hexdigest()
+        try:
+            remote_size = int(verified[0].get("size") or 0)
+        except (TypeError, ValueError):
+            remote_size = 0
+        returned_truncated = bool(returned_content and ("[TRUNCATED]" in returned_content or (remote_size and len(returned_content) < remote_size)))
+        returned_hash = sha256(returned_content.encode()).hexdigest() if returned_content is not None and not returned_truncated else None
+        return {
+            "status": "SUCCESS",
+            "message": f"Uploaded managed HotSpot login.html using RouterOS /file {action}.",
+            "file_path": file_path,
+            "action": action,
+            "content_hash": expected_hash,
+            "returned_content_hash": returned_hash,
+            "content_verified": returned_hash == expected_hash if returned_hash else None,
+            "content_readback_truncated": returned_truncated,
+            "file": sanitize_summary(verified[0]),
+        }
     finally:
         try:
             sock.close()
@@ -3214,9 +3696,13 @@ def normalize_mac(mac: Optional[str]) -> Optional[str]:
 
 def portal_context(payload: PortalSessionRequest) -> dict:
     raw = payload.raw_query_params or {}
+    raw_server_name = raw.get("server-name") or raw.get("server_name") or raw.get("server")
+    link_login = payload.link_login or raw.get("link-login") or raw.get("link_login")
+    link_login_only = payload.link_login_only or raw.get("link-login-only") or raw.get("link_login_only")
+    link_orig = payload.link_orig or raw.get("link-orig") or raw.get("link_orig")
     return {
-        "client_mac": payload.client_mac or payload.clientMac or raw.get("client_mac") or raw.get("clientMac"),
-        "client_ip": payload.client_ip or raw.get("client_ip") or raw.get("clientIp"),
+        "client_mac": payload.client_mac or payload.clientMac or payload.mac or raw.get("client_mac") or raw.get("clientMac") or raw.get("mac"),
+        "client_ip": payload.client_ip or payload.ip or raw.get("client_ip") or raw.get("clientIp") or raw.get("ip"),
         "ap_mac": payload.ap_mac or payload.apMac or raw.get("ap_mac") or raw.get("apMac"),
         "gateway_mac": payload.gateway_mac or payload.gatewayMac or raw.get("gateway_mac") or raw.get("gatewayMac"),
         "vlan_id": payload.vlan_id or payload.vid or raw.get("vlan_id") or raw.get("vid"),
@@ -3224,7 +3710,13 @@ def portal_context(payload: PortalSessionRequest) -> dict:
         "site": payload.site or raw.get("site"),
         "gateway": payload.gateway or raw.get("gateway"),
         "redirect_url": payload.redirect_url or payload.redirectUrl or raw.get("redirect_url") or raw.get("redirectUrl"),
-        "nas_id": payload.nas_id or raw.get("nas_id") or raw.get("nasId"),
+        "nas_id": payload.nas_id or raw.get("nas_id") or raw.get("nasId") or raw_server_name,
+        "mikrotik_server_name": payload.server_name or raw_server_name,
+        "mikrotik_link_login": link_login,
+        "mikrotik_link_login_only": link_login_only,
+        "mikrotik_link_orig": link_orig,
+        "mikrotik_chap_id": payload.chap_id or raw.get("chap-id") or raw.get("chap_id"),
+        "mikrotik_chap_challenge": payload.chap_challenge or raw.get("chap-challenge") or raw.get("chap_challenge"),
         "auth_token": payload.authToken or payload.token or raw.get("authToken") or raw.get("token") or raw.get("t"),
         "raw_query_params": raw,
     }
@@ -3234,7 +3726,7 @@ def portal_source(payload: PortalSessionRequest) -> str:
     ctx = portal_context(payload)
     gateway = (ctx["gateway"] or "").lower()
     nas_id = (ctx["nas_id"] or "").lower()
-    if "mikrotik" in gateway or "mikrotik" in nas_id:
+    if ctx.get("mikrotik_link_login") or ctx.get("mikrotik_link_login_only") or ctx.get("mikrotik_server_name") or ("mikrotik" in gateway or "mikrotik" in nas_id):
         return "MIKROTIK"
     if ctx["site"] or ctx["ap_mac"] or ctx["client_mac"] or ctx["auth_token"]:
         return "OMADA"
@@ -3243,17 +3735,129 @@ def portal_source(payload: PortalSessionRequest) -> str:
     return "MANUAL_TEST"
 
 
+def station_hotspot_server_name(station: Optional[dict]) -> Optional[str]:
+    if not station:
+        return None
+    return (station.get("hotspot_server_name") or f"HS-3J-HOTSPOT-V{station['vlan_id']}").strip()
+
+
+def station_portal_url(station: Optional[dict] = None) -> str:
+    settings = ensure_captive_portal_settings()
+    return (
+        (station or {}).get("portal_url")
+        or settings.get("portal_url_staging")
+        or settings.get("portal_url_production")
+        or "http://192.168.50.70:8080/portal"
+    )
+
+
+def station_capport_url(station: Optional[dict] = None) -> str:
+    portal_url = station_portal_url(station)
+    parsed_url = portal_url if "://" in portal_url else f"http://{portal_url}"
+    parsed = urlparse(parsed_url)
+    scheme = parsed.scheme or "http"
+    netloc = parsed.netloc or parsed.path.split("/")[0]
+    if not netloc:
+        netloc = "192.168.50.70:8080"
+    return f"{scheme}://{netloc}/api/portal/capport"
+
+
+def station_gateway_login_url(station: Optional[dict] = None) -> str:
+    if not station:
+        return station_portal_url(station)
+    dns_name = (station.get("hotspot_dns_name") or default_hotspot_dns_name(station.get("station_code"))).strip()
+    return f"http://{dns_name}/login" if dns_name else station_portal_url(station)
+
+
+def default_hotspot_dns_name(station_code: Optional[str] = None) -> str:
+    code = re.sub(r"[^a-z0-9-]+", "-", str(station_code or "3j").strip().lower()).strip("-") or "3j"
+    # Avoid .local because phones often reserve it for mDNS and skip normal DNS.
+    return f"wifi.{code}.3jportal.test"
+
+
+def station_captive_dns_probe_hosts() -> list[str]:
+    return [
+        "connectivitycheck.gstatic.com",
+        "connectivitycheck.android.com",
+        "captive.apple.com",
+        "www.msftconnecttest.com",
+        "ipv6.msftconnecttest.com",
+        "www.msftncsi.com",
+        "dns.msftncsi.com",
+        "connectivitycheck.platform.hicloud.com",
+        "connectivitycheck.platform.hihonorcloud.com",
+        "connectivitycheck.unisoc.com",
+        "connect.rom.miui.com",
+    ]
+
+
+def station_for_client_ip(client_ip: Optional[str]):
+    if not client_ip:
+        return None
+    try:
+        target_ip = ip_address(str(client_ip))
+    except ValueError:
+        return None
+    for station in fetch_all("SELECT * FROM mikrotik_stations WHERE status <> 'ARCHIVED' ORDER BY updated_at DESC"):
+        try:
+            if target_ip in ip_network(station["client_network_cidr"], strict=False):
+                return station
+        except Exception:
+            continue
+    return None
+
+
+def station_for_root_gateway_ip(gateway_ip: Optional[str]):
+    if not gateway_ip:
+        return None
+    return fetch_one(
+        """
+        SELECT s.*
+        FROM mikrotik_stations s
+        JOIN mikrotik_station_routers sr ON sr.station_id = s.id
+        JOIN mikrotik_routers mr ON mr.id = sr.router_id
+        WHERE s.status <> 'ARCHIVED'
+          AND mr.host = %s
+          AND (sr.station_role = 'ROOT_GATEWAY' OR sr.sequence_order = 0)
+        ORDER BY
+          CASE WHEN sr.station_role = 'ROOT_GATEWAY' THEN 0 ELSE 1 END,
+          sr.sequence_order ASC,
+          s.updated_at DESC
+        LIMIT 1
+        """,
+        (str(gateway_ip).strip(),),
+    )
+
+
 def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
     public_session_id = payload.portal_session_id or secrets.token_urlsafe(18)
     source = portal_source(payload)
     ctx = portal_context(payload)
+    request_ip = public_ip(request)
+    request_ip_station = station_for_client_ip(request_ip)
+    payload_ip_station = station_for_client_ip(ctx.get("client_ip"))
+    request_station = request_ip_station or payload_ip_station
+    if request_station:
+        if request_ip_station:
+            ctx["client_ip"] = request_ip
+        if not ctx.get("vlan_id"):
+            ctx["vlan_id"] = str(request_station["vlan_id"])
+        if not ctx.get("mikrotik_server_name"):
+            ctx["mikrotik_server_name"] = station_hotspot_server_name(request_station)
+        if source == "MANUAL_TEST":
+            source = "MIKROTIK"
     cur.execute(
         """
         INSERT INTO portal_sessions(public_session_id, client_mac, client_ip, ap_mac, ssid, site, gateway, nas_id, redirect_url, user_agent, source,
                                     gateway_mac, vlan_id, raw_query_params, omada_site_name, omada_client_mac, omada_ap_mac,
-                                    omada_gateway_mac, omada_token_encrypted, omada_redirect_url, omada_authorization_status)
+                                    omada_gateway_mac, omada_token_encrypted, omada_redirect_url, omada_authorization_status,
+                                    mikrotik_client_mac, mikrotik_client_ip, mikrotik_server_name, mikrotik_link_login,
+                                    mikrotik_link_login_only, mikrotik_link_orig, mikrotik_chap_id, mikrotik_chap_challenge,
+                                    mikrotik_authorization_status)
         VALUES (%s, %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                CASE WHEN %s = 'OMADA' THEN 'PENDING' WHEN %s = 'MANUAL_TEST' THEN 'MANUAL_TEST' ELSE 'NOT_REQUIRED' END)
+                CASE WHEN %s = 'OMADA' THEN 'PENDING' WHEN %s = 'MANUAL_TEST' THEN 'MANUAL_TEST' ELSE 'NOT_REQUIRED' END,
+                %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s, %s,
+                CASE WHEN %s = 'MIKROTIK' THEN 'PENDING' WHEN %s = 'MANUAL_TEST' THEN 'MANUAL_TEST' ELSE 'NOT_REQUIRED' END)
         ON CONFLICT (public_session_id) DO UPDATE
         SET client_mac = COALESCE(EXCLUDED.client_mac, portal_sessions.client_mac),
             client_ip = COALESCE(EXCLUDED.client_ip, portal_sessions.client_ip),
@@ -3272,11 +3876,23 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             omada_gateway_mac = COALESCE(EXCLUDED.omada_gateway_mac, portal_sessions.omada_gateway_mac),
             omada_token_encrypted = COALESCE(EXCLUDED.omada_token_encrypted, portal_sessions.omada_token_encrypted),
             omada_redirect_url = COALESCE(EXCLUDED.omada_redirect_url, portal_sessions.omada_redirect_url),
+            mikrotik_client_mac = COALESCE(EXCLUDED.mikrotik_client_mac, portal_sessions.mikrotik_client_mac),
+            mikrotik_client_ip = COALESCE(EXCLUDED.mikrotik_client_ip, portal_sessions.mikrotik_client_ip),
+            mikrotik_server_name = COALESCE(EXCLUDED.mikrotik_server_name, portal_sessions.mikrotik_server_name),
+            mikrotik_link_login = COALESCE(EXCLUDED.mikrotik_link_login, portal_sessions.mikrotik_link_login),
+            mikrotik_link_login_only = COALESCE(EXCLUDED.mikrotik_link_login_only, portal_sessions.mikrotik_link_login_only),
+            mikrotik_link_orig = COALESCE(EXCLUDED.mikrotik_link_orig, portal_sessions.mikrotik_link_orig),
+            mikrotik_chap_id = COALESCE(EXCLUDED.mikrotik_chap_id, portal_sessions.mikrotik_chap_id),
+            mikrotik_chap_challenge = COALESCE(EXCLUDED.mikrotik_chap_challenge, portal_sessions.mikrotik_chap_challenge),
             user_agent = EXCLUDED.user_agent,
             source = CASE WHEN portal_sessions.source = 'MANUAL_TEST' THEN EXCLUDED.source ELSE portal_sessions.source END,
             omada_authorization_status = CASE
                 WHEN EXCLUDED.source = 'OMADA' AND portal_sessions.omada_authorization_status IN ('NOT_REQUIRED', 'MANUAL_TEST') THEN 'PENDING'
                 ELSE portal_sessions.omada_authorization_status
+            END,
+            mikrotik_authorization_status = CASE
+                WHEN EXCLUDED.source = 'MIKROTIK' AND portal_sessions.mikrotik_authorization_status IN ('NOT_REQUIRED', 'MANUAL_TEST') THEN 'PENDING'
+                ELSE portal_sessions.mikrotik_authorization_status
             END,
             updated_at = now()
         RETURNING *
@@ -3302,6 +3918,16 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             ctx["gateway_mac"],
             encrypt_secret(ctx["auth_token"]) if ctx["auth_token"] else None,
             ctx["redirect_url"],
+            source,
+            source,
+            ctx["client_mac"],
+            ctx["client_ip"] or "",
+            ctx["mikrotik_server_name"],
+            ctx["mikrotik_link_login"],
+            ctx["mikrotik_link_login_only"],
+            ctx["mikrotik_link_orig"],
+            ctx["mikrotik_chap_id"],
+            ctx["mikrotik_chap_challenge"],
             source,
             source,
         ),
@@ -3368,6 +3994,61 @@ def portal_wallet_status(cur, session):
         (session["user_id"],),
     )
     return cur.fetchone()
+
+
+def aware_utc(value):
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def portal_access_view(session, wallet, redemption=None):
+    now = datetime.now(timezone.utc)
+    wallet_remaining = int((wallet or {}).get("time_remaining_seconds") or 0)
+    unlimited = bool((wallet or {}).get("is_unlimited"))
+    valid_until = aware_utc((wallet or {}).get("valid_until"))
+    access_expires_at = aware_utc(session.get("access_expires_at"))
+    if not access_expires_at and session.get("source") in {"OMADA", "MIKROTIK"} and redemption:
+        redeemed_seconds = int(redemption.get("redeemed_time_seconds") or 0)
+        granted_at = aware_utc(session.get("access_granted_at")) or aware_utc(redemption.get("created_at"))
+        if redeemed_seconds > 0 and granted_at:
+            access_expires_at = granted_at + timedelta(seconds=redeemed_seconds)
+
+    gateway_authorization_status = session.get("mikrotik_authorization_status") if session.get("source") == "MIKROTIK" else session.get("omada_authorization_status")
+    gateway_authorized = gateway_authorization_status == "AUTHORIZED"
+    uses_gateway_window = session.get("source") in {"OMADA", "MIKROTIK"} and access_expires_at and not unlimited
+
+    if uses_gateway_window:
+        remaining = max(int((access_expires_at - now).total_seconds()), 0)
+        expired = remaining <= 0
+        return {
+            "remaining_time_seconds": remaining,
+            "valid_until": access_expires_at,
+            "unlimited": False,
+            "access_expires_at": access_expires_at,
+            "access_expired": expired,
+            "connected": gateway_authorized and not expired,
+            "message": "Access time fully consumed. Enter a new voucher to continue." if expired else "Access loaded.",
+        }
+
+    valid_until_expired = valid_until is not None and valid_until <= now
+    access_expired = not unlimited and wallet_remaining <= 0 and valid_until_expired
+    return {
+        "remaining_time_seconds": max(wallet_remaining, 0),
+        "valid_until": valid_until,
+        "unlimited": unlimited,
+        "access_expires_at": access_expires_at,
+        "access_expired": access_expired,
+        "connected": bool(unlimited or wallet_remaining > 0 or (valid_until and valid_until > now)),
+        "message": "Access time fully consumed. Enter a new voucher to continue." if access_expired else ("Access loaded." if wallet else "Enter a voucher to start."),
+    }
 
 
 def ensure_captive_portal_settings():
@@ -3468,7 +4149,8 @@ def validate_voucher_for_portal(cur, voucher_code: str):
 def voucher_authorization_duration(voucher, settings):
     now = datetime.now(timezone.utc)
     if voucher["voucher_type"] == "TIME_BASED":
-        return max(int(voucher["time_value_seconds"] or 0), 0), None
+        duration = max(int(voucher["time_value_seconds"] or 0), 0)
+        return duration, now + timedelta(seconds=duration) if duration > 0 else now
     if voucher["voucher_type"] == "DATE_BASED":
         valid_until = voucher["valid_until"]
         if valid_until and valid_until.tzinfo is None:
@@ -3609,6 +4291,349 @@ def attempt_omada_authorization(cur, session, voucher, user, duration_seconds: i
         return {"status": "FAILED", "error": str(exc), "authorization_id": authorization["id"], "response_summary": response_summary}
 
 
+def portal_user_cleartext_password(cur, user) -> str:
+    cur.execute(
+        "SELECT value FROM radcheck WHERE username = %s AND attribute = 'Cleartext-Password' ORDER BY id DESC LIMIT 1",
+        (user["username"],),
+    )
+    row = cur.fetchone()
+    if row and row.get("value"):
+        return row["value"]
+    password = secrets.token_urlsafe(18)
+    cur.execute(
+        """
+        INSERT INTO radcheck(username, attribute, op, value)
+        VALUES (%s, 'Cleartext-Password', ':=', %s)
+        ON CONFLICT (username, attribute) DO UPDATE SET value = EXCLUDED.value
+        """,
+        (user["username"], password),
+    )
+    return password
+
+
+def station_for_mikrotik_portal_session(session, ctx: dict):
+    server_name = (ctx.get("mikrotik_server_name") or session.get("mikrotik_server_name") or "").strip()
+    vlan_id = (ctx.get("vlan_id") or session.get("vlan_id") or "").strip()
+    if server_name:
+        for row in fetch_all("SELECT * FROM mikrotik_stations WHERE status <> 'ARCHIVED' ORDER BY updated_at DESC"):
+            if (station_hotspot_server_name(row) or "").lower() == server_name.lower():
+                return row
+    if vlan_id:
+        try:
+            return fetch_one(
+                """
+                SELECT *
+                FROM mikrotik_stations
+                WHERE status <> 'ARCHIVED' AND vlan_id = %s
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (int(vlan_id),),
+            )
+        except (TypeError, ValueError):
+            return None
+    client_ip = session.get("mikrotik_client_ip") or session.get("client_ip") or ctx.get("client_ip")
+    station = station_for_client_ip(str(client_ip) if client_ip else None)
+    if station:
+        return station
+    return None
+
+
+def attempt_mikrotik_authorization(cur, session, voucher, user, duration_seconds: int, access_expires_at, payload: PortalRedeemRequest):
+    ctx = portal_context(payload)
+    station = station_for_mikrotik_portal_session(session, ctx)
+    client_mac = ctx["client_mac"] or session.get("mikrotik_client_mac") or session.get("client_mac")
+    client_ip = str(session.get("mikrotik_client_ip") or session.get("client_ip") or ctx["client_ip"] or "")
+    server_name = ctx.get("mikrotik_server_name") or session.get("mikrotik_server_name") or station_hotspot_server_name(station)
+    request_summary = {
+        "station_id": str(station["id"]) if station else None,
+        "station_name": station.get("station_name") if station else None,
+        "client_mac": mask_mac(client_mac),
+        "client_ip": client_ip,
+        "hotspot_server_name": server_name,
+        "duration_seconds": duration_seconds,
+    }
+    router = None
+    if station:
+        routers = station_router_rows(str(station["id"]))
+        if routers:
+            router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (routers[0]["router_id"],))
+    cur.execute(
+        """
+        INSERT INTO mikrotik_portal_authorizations(portal_session_id, station_id, router_id, voucher_id, user_id,
+                                                   client_mac, client_ip, hotspot_server_name, authorization_duration_seconds,
+                                                   access_expires_at, mikrotik_request_summary, status)
+        VALUES (%s, %s, %s, %s, %s, %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, 'PENDING')
+        RETURNING *
+        """,
+        (
+            session["id"],
+            station["id"] if station else None,
+            router["id"] if router else None,
+            voucher["id"],
+            user["id"],
+            client_mac,
+            client_ip or "",
+            server_name,
+            duration_seconds,
+            access_expires_at,
+            Json(sanitize_summary(request_summary)),
+        ),
+    )
+    authorization = cur.fetchone()
+
+    def fail_authorization(message: str, response_summary: Optional[dict] = None):
+        safe_message = sanitize_routeros_text(str(message))
+        cur.execute(
+            """
+            UPDATE mikrotik_portal_authorizations
+            SET status = 'FAILED', error_message = %s, mikrotik_response_summary = %s, updated_at = now()
+            WHERE id = %s
+            """,
+            (safe_message, Json(response_summary or {"error": safe_message}), authorization["id"]),
+        )
+        cur.execute(
+            "UPDATE portal_sessions SET mikrotik_authorization_status = 'FAILED', mikrotik_authorization_error = %s, updated_at = now() WHERE id = %s",
+            (safe_message, session["id"]),
+        )
+        return {"status": "FAILED", "error": safe_message, "authorization_id": authorization["id"], "request_summary": request_summary, "response_summary": response_summary or {"error": safe_message}}
+
+    error = None
+    if not station:
+        error = "MikroTik station not found for this HotSpot server or VLAN."
+    elif not router:
+        error = "Root gateway router not found for this station."
+    elif not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        error = "Root gateway RouterOS API credentials are incomplete."
+    elif not server_name:
+        error = "MikroTik HotSpot server name was not provided by the portal redirect."
+    elif not client_ip and not client_mac:
+        error = "MikroTik client IP or MAC was not provided by the portal redirect."
+    if error:
+        return fail_authorization(error)
+
+    password = decrypt_secret(router.get("password_encrypted"))
+    hotspot_host_rows = []
+    hotspot_active_rows = []
+    hotspot_login_ip = client_ip
+    if client_ip:
+        try:
+            hotspot_host_rows = routeros_readonly_query(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                password,
+                router.get("use_tls"),
+                ["/ip/hotspot/host/print", f"?address={client_ip}", "=.proplist=.id,address,to-address,mac-address,authorized,bypassed,server,comment"],
+                timeout=8,
+            )
+            if not hotspot_host_rows:
+                hotspot_host_rows = routeros_readonly_query(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    ["/ip/hotspot/host/print", f"?to-address={client_ip}", "=.proplist=.id,address,to-address,mac-address,authorized,bypassed,server,comment"],
+                    timeout=8,
+                )
+        except Exception as exc:
+            return fail_authorization(f"Could not verify MikroTik HotSpot host before authorization: {exc}")
+        if hotspot_host_rows:
+            host_row = hotspot_host_rows[0]
+            if not client_mac:
+                client_mac = host_row.get("mac-address")
+            client_ip = host_row.get("address") or client_ip
+            hotspot_login_ip = host_row.get("to-address") or host_row.get("address") or client_ip
+            host_to_address = host_row.get("to-address")
+            if host_to_address and host_to_address != host_row.get("address"):
+                try:
+                    server_rows = routeros_readonly_query(
+                        router["host"],
+                        router["api_port"],
+                        router.get("username"),
+                        password,
+                        router.get("use_tls"),
+                        ["/ip/hotspot/print", f"?name={server_name}", "=.proplist=.id,name,address-pool"],
+                        timeout=8,
+                    )
+                except Exception:
+                    server_rows = []
+                server_pool = (server_rows[0].get("address-pool") if server_rows else "") or ""
+                if server_pool in {"", "none"}:
+                    cleanup = routeros_remove_hotspot_client_state(
+                        router["host"],
+                        router["api_port"],
+                        router.get("username"),
+                        password,
+                        router.get("use_tls"),
+                        client_mac,
+                    )
+                    return fail_authorization(
+                        "MikroTik cleared an old translated HotSpot session for this phone. Reconnect to WiFi, open the portal again, then redeem the voucher.",
+                        {
+                            "request": sanitize_summary(request_summary),
+                            "stale_host": sanitize_summary(host_row),
+                            "cleanup": sanitize_summary(cleanup),
+                        },
+                    )
+            request_summary["client_mac"] = mask_mac(client_mac)
+            request_summary["hotspot_host_detected"] = True
+            request_summary["hotspot_host_server"] = host_row.get("server")
+            request_summary["hotspot_host_address"] = host_row.get("address")
+            request_summary["hotspot_login_ip"] = hotspot_login_ip
+            cur.execute(
+                """
+                UPDATE mikrotik_portal_authorizations
+                SET client_mac = %s, client_ip = NULLIF(%s, '')::inet, mikrotik_request_summary = %s, updated_at = now()
+                WHERE id = %s
+                """,
+                (client_mac, client_ip or "", Json(sanitize_summary(request_summary)), authorization["id"]),
+            )
+            cur.execute(
+                """
+                UPDATE portal_sessions
+                SET client_ip = NULLIF(%s, '')::inet,
+                    mikrotik_client_ip = NULLIF(%s, '')::inet,
+                    mikrotik_client_mac = COALESCE(%s, mikrotik_client_mac),
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (client_ip or "", client_ip or "", client_mac, session["id"]),
+            )
+            try:
+                hotspot_active_rows = routeros_readonly_query(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    ["/ip/hotspot/active/print", f"?address={hotspot_login_ip}", "=.proplist=.id,address,mac-address,user,server,uptime,session-time-left"],
+                    timeout=8,
+                )
+            except Exception:
+                hotspot_active_rows = []
+            if routeros_truthy(host_row.get("authorized")) or hotspot_active_rows:
+                response_summary = sanitize_summary({
+                    "status": "SUCCESS",
+                    "message": "Client is already authorized in MikroTik HotSpot.",
+                    "hotspot_login_ip": hotspot_login_ip,
+                    "active_rows": hotspot_active_rows,
+                })
+                cur.execute(
+                    """
+                    UPDATE mikrotik_portal_authorizations
+                    SET status = 'SUCCESS', mikrotik_response_summary = %s, updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (Json(response_summary), authorization["id"]),
+                )
+                cur.execute(
+                    """
+                    UPDATE portal_sessions
+                    SET mikrotik_authorization_status = 'AUTHORIZED',
+                        mikrotik_authorization_error = NULL,
+                        access_granted_at = now(),
+                        access_expires_at = %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (access_expires_at, session["id"]),
+                )
+                log_captive_portal_test("AUTHORIZE_MIKROTIK_CLIENT", "SUCCESS", "MikroTik HotSpot client was already authorized.", {"request": request_summary, "response": response_summary})
+                return {"status": "SUCCESS", "authorization_id": authorization["id"], "response_summary": response_summary}
+        else:
+            request_summary["hotspot_host_detected"] = False
+            return fail_authorization(
+                f"Client {client_ip} is not visible in MikroTik HotSpot hosts. Reconnect to the HotSpot SSID, open the portal again, then retry the voucher.",
+                {"request": sanitize_summary(request_summary), "host_rows": []},
+            )
+
+    hotspot_password = portal_user_cleartext_password(cur, user)
+    hotspot_user_comment = f"3J Hotspot - portal user {user['username']}"
+    try:
+        result = routeros_authorize_hotspot_client(
+            router["host"],
+            router["api_port"],
+            router.get("username"),
+            password,
+            router.get("use_tls"),
+            user["username"],
+            hotspot_password,
+            duration_seconds,
+            hotspot_user_comment,
+            hotspot_login_ip,
+            client_mac,
+        )
+        response_summary = sanitize_summary({**result, "commands": [{"label": item.get("label"), "status": item.get("status"), "message": item.get("message")} for item in result.get("results", [])]})
+        cur.execute(
+            """
+            UPDATE mikrotik_portal_authorizations
+            SET status = 'SUCCESS', mikrotik_response_summary = %s, updated_at = now()
+            WHERE id = %s
+            """,
+            (Json(response_summary), authorization["id"]),
+        )
+        cur.execute(
+            """
+            UPDATE portal_sessions
+            SET mikrotik_authorization_status = 'AUTHORIZED',
+                mikrotik_authorization_error = NULL,
+                access_granted_at = now(),
+                access_expires_at = %s,
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (access_expires_at, session["id"]),
+        )
+        log_captive_portal_test("AUTHORIZE_MIKROTIK_CLIENT", "SUCCESS", "MikroTik HotSpot client authorization succeeded.", {"request": request_summary, "response": response_summary})
+        return {"status": "SUCCESS", "authorization_id": authorization["id"], "response_summary": response_summary}
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        log_captive_portal_test("AUTHORIZE_MIKROTIK_CLIENT", "FAILED", "MikroTik HotSpot client authorization failed.", {"request": request_summary, "error": message})
+        return fail_authorization(message)
+
+
+def mikrotik_station_client_is_authorized(station: Optional[dict], client_ip: Optional[str]) -> bool:
+    if not station or not client_ip:
+        return False
+    root = station_root_router(str(station["id"]))
+    if not root:
+        return False
+    router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (root["router_id"],))
+    if not router or not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        return False
+    try:
+        password = decrypt_secret(router.get("password_encrypted"))
+        rows = routeros_readonly_query(
+            router["host"],
+            router["api_port"],
+            router.get("username"),
+            password,
+            router.get("use_tls"),
+            ["/ip/hotspot/active/print", f"?address={client_ip}", "=.proplist=.id,address,mac-address,user,server,session-time-left"],
+            timeout=5,
+        )
+        return bool(rows)
+    except Exception:
+        return False
+
+
+@app.get("/api/portal/capport")
+def portal_capport(request: Request):
+    client_ip = public_ip(request)
+    station = station_for_client_ip(client_ip) or station_for_root_gateway_ip(client_ip)
+    portal_url = station_gateway_login_url(station) if station else station_portal_url(station)
+    payload = {
+        "captive": True if station and station_for_root_gateway_ip(client_ip) else not mikrotik_station_client_is_authorized(station, client_ip),
+        "user-portal-url": portal_url,
+        "venue-info-url": portal_url,
+        "can-extend-session": True,
+        "seconds-remaining": 0,
+    }
+    return Response(content=json.dumps(payload), media_type="application/captive+json")
+
+
 @app.get("/api/portal/settings")
 def portal_settings():
     branding = public_branding()
@@ -3638,6 +4663,7 @@ def create_or_update_portal_session(payload: PortalSessionRequest, request: Requ
         "status": session["status"],
         "source": session["source"],
         "omada_authorization_status": session.get("omada_authorization_status"),
+        "mikrotik_authorization_status": session.get("mikrotik_authorization_status"),
         "device_detected": session["source"] in {"OMADA", "MIKROTIK", "UNKNOWN"},
     }
 
@@ -3713,12 +4739,68 @@ def portal_redeem(payload: PortalRedeemRequest, request: Request):
                         "portal_session_id": session["public_session_id"],
                         "authorization_status": "FAILED",
                         "authorization_error": authorization.get("error"),
+                }
+
+            if session["source"] == "MIKROTIK":
+                voucher, failure = validate_voucher_for_portal(cur, payload.voucher_code)
+                if failure:
+                    if voucher:
+                        log_failed_redemption(
+                            cur,
+                            voucher,
+                            VoucherRedeemTest(voucher_code=payload.voucher_code, user_id=str(user["id"]), device_identifier=payload.mac or payload.client_mac or payload.clientMac or payload.ip or payload.client_ip or session["public_session_id"]),
+                            failure,
+                            "CLIENT_PORTAL",
+                            request,
+                        )
+                    cur.execute(
+                        """
+                        UPDATE portal_sessions
+                        SET status = 'ACCESS_DENIED',
+                            last_error = %s,
+                            mikrotik_authorization_status = 'FAILED',
+                            mikrotik_authorization_error = %s,
+                            updated_at = now()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (failure, failure, session["id"]),
+                    )
+                    session = cur.fetchone()
+                    create_portal_event(cur, session["id"], "VOUCHER_REDEEM_FAILED", request, failure, payload.voucher_code, {"result": "FAILED", "phase": "mikrotik_validation"})
+                    return {"status": "FAILED", "message": failure or "Something went wrong. Please try again or contact the operator.", "portal_session_id": session["public_session_id"], "authorization_status": session.get("mikrotik_authorization_status")}
+
+                portal_settings_row = ensure_captive_portal_settings()
+                duration_seconds, access_expires_at = voucher_authorization_duration(voucher, portal_settings_row)
+                authorization = attempt_mikrotik_authorization(cur, session, voucher, user, duration_seconds, access_expires_at, payload)
+                if authorization["status"] != "SUCCESS":
+                    message = "Voucher is valid but we could not authorize your device. Please ask the operator."
+                    cur.execute(
+                        """
+                        UPDATE portal_sessions
+                        SET status = 'ACCESS_DENIED',
+                            last_error = %s,
+                            updated_at = now()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (authorization.get("error") or message, session["id"]),
+                    )
+                    session = cur.fetchone()
+                    create_portal_event(cur, session["id"], "VOUCHER_REDEEM_FAILED", request, message, payload.voucher_code, {"result": "FAILED", "authorization": sanitize_summary(authorization), "source": "MIKROTIK"})
+                    return {
+                        "status": "FAILED",
+                        "message": message,
+                        "portal_session_id": session["public_session_id"],
+                        "authorization_status": "FAILED",
+                        "authorization_error": authorization.get("error"),
                     }
 
-            result = redeem_voucher(cur, VoucherRedeemTest(voucher_code=payload.voucher_code, user_id=str(user["id"]), device_identifier=payload.client_mac or payload.client_ip or session["public_session_id"]), None, request, "CLIENT_PORTAL")
+            result = redeem_voucher(cur, VoucherRedeemTest(voucher_code=payload.voucher_code, user_id=str(user["id"]), device_identifier=payload.client_mac or payload.clientMac or payload.mac or payload.client_ip or payload.ip or session["public_session_id"]), None, request, "CLIENT_PORTAL")
             if result["status"] == "SUCCESS":
-                next_status = "ACCESS_GRANTED" if session["source"] == "OMADA" else "VOUCHER_REDEEMED"
+                next_status = "ACCESS_GRANTED" if session["source"] in {"OMADA", "MIKROTIK"} else "VOUCHER_REDEEMED"
                 omada_status = "AUTHORIZED" if session["source"] == "OMADA" else ("MANUAL_TEST" if session["source"] == "MANUAL_TEST" else "NOT_REQUIRED")
+                mikrotik_status = "AUTHORIZED" if session["source"] == "MIKROTIK" else ("MANUAL_TEST" if session["source"] == "MANUAL_TEST" else "NOT_REQUIRED")
                 cur.execute(
                     """
                     UPDATE portal_sessions
@@ -3727,27 +4809,32 @@ def portal_redeem(payload: PortalRedeemRequest, request: Request):
                         status = %s,
                         last_error = NULL,
                         omada_authorization_status = %s,
+                        mikrotik_authorization_status = %s,
                         updated_at = now()
                     WHERE id = %s
                     RETURNING *
                     """,
-                    (result["voucher_id"], user["id"], next_status, omada_status, session["id"]),
+                    (result["voucher_id"], user["id"], next_status, omada_status, mikrotik_status, session["id"]),
                 )
                 session = cur.fetchone()
-                success_message = "Voucher accepted. You may now use the internet." if session["source"] == "OMADA" else "Voucher accepted. Your access has been loaded."
-                create_portal_event(cur, session["id"], "VOUCHER_REDEEM_SUCCESS", request, success_message, payload.voucher_code, {"result": result["status"], "authorization_status": session.get("omada_authorization_status")})
+                success_message = "Voucher accepted. You may now use the internet." if session["source"] in {"OMADA", "MIKROTIK"} else "Voucher accepted. Your access has been loaded."
+                create_portal_event(cur, session["id"], "VOUCHER_REDEEM_SUCCESS", request, success_message, payload.voucher_code, {"result": result["status"], "authorization_status": session.get("omada_authorization_status") or session.get("mikrotik_authorization_status")})
                 wallet = portal_wallet_status(cur, session)
+                access_view = portal_access_view(session, wallet)
                 return {
                     "status": "SUCCESS",
                     "message": success_message,
                     "portal_session_id": session["public_session_id"],
                     "username": user["username"],
-                    "remaining_time_seconds": wallet["time_remaining_seconds"] if wallet else 0,
-                    "valid_until": wallet["valid_until"] if wallet else None,
-                    "unlimited": bool(wallet["is_unlimited"]) if wallet else False,
+                    "remaining_time_seconds": access_view["remaining_time_seconds"],
+                    "valid_until": access_view["valid_until"],
+                    "unlimited": access_view["unlimited"],
                     "time_added_seconds": result.get("time_added_seconds", 0),
-                    "authorization_status": session.get("omada_authorization_status"),
-                    "access_expires_at": session.get("access_expires_at"),
+                    "authorization_status": session.get("mikrotik_authorization_status") if session["source"] == "MIKROTIK" else session.get("omada_authorization_status"),
+                    "access_expires_at": access_view["access_expires_at"],
+                    "access_expired": access_view["access_expired"],
+                    "connected": access_view["connected"],
+                    "redirect_url": session.get("mikrotik_link_orig") or session.get("redirect_url"),
                 }
             cur.execute(
                 """
@@ -3790,19 +4877,38 @@ def portal_status(portal_session_id: str, request: Request):
                 (session["user_id"],),
             )
             redemption = cur.fetchone() if session.get("user_id") else None
+            access_view = portal_access_view(session, wallet, redemption)
+            if access_view["access_expired"] and session["status"] == "ACCESS_GRANTED":
+                cur.execute(
+                    """
+                    UPDATE portal_sessions
+                    SET status = 'EXPIRED',
+                        last_error = 'Access time fully consumed. Enter a new voucher to continue.',
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (session["id"],),
+                )
+                session = cur.fetchone()
     return {
         "status": session["status"],
         "portal_session_id": session["public_session_id"],
         "username": wallet["username"] if wallet else None,
-        "remaining_time_seconds": wallet["time_remaining_seconds"] if wallet else 0,
-        "valid_until": wallet["valid_until"] if wallet else None,
-        "unlimited": bool(wallet["is_unlimited"]) if wallet else False,
+        "remaining_time_seconds": access_view["remaining_time_seconds"],
+        "valid_until": access_view["valid_until"],
+        "unlimited": access_view["unlimited"],
         "source": session["source"],
         "omada_authorization_status": session.get("omada_authorization_status"),
+        "mikrotik_authorization_status": session.get("mikrotik_authorization_status"),
         "authorization_error": session.get("omada_authorization_error"),
-        "access_expires_at": session.get("access_expires_at"),
+        "mikrotik_authorization_error": session.get("mikrotik_authorization_error"),
+        "access_expires_at": access_view["access_expires_at"],
+        "access_expired": access_view["access_expired"],
+        "connected": access_view["connected"],
+        "redirect_url": session.get("mikrotik_link_orig") or session.get("redirect_url"),
         "last_voucher_redemption": redemption,
-        "message": session["last_error"] or ("Access loaded." if wallet else "Enter a voucher to start."),
+        "message": session["last_error"] or access_view["message"],
     }
 
 
@@ -6265,6 +7371,30 @@ def normalize_dns_servers(value: Optional[str], gateway_ip: str) -> str:
     return ",".join(tokens)
 
 
+def normalize_upstream_dns_servers(value: Optional[str], gateway_ip: str) -> str:
+    tokens = [token.strip() for token in str(value or "").split(",") if token.strip()]
+    if not tokens:
+        tokens = ["8.8.8.8", "1.1.1.1"]
+    filtered = []
+    seen = set()
+    for token in tokens:
+        try:
+            parsed = ip_address(token)
+            if parsed.version != 4:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"DNS server is not a valid IPv4 address: {token}")
+        normalized = str(parsed)
+        if normalized == str(gateway_ip):
+            continue
+        if normalized not in seen:
+            seen.add(normalized)
+            filtered.append(normalized)
+    if not filtered:
+        filtered = ["8.8.8.8", "1.1.1.1"]
+    return ",".join(filtered)
+
+
 def validate_station_network(payload: MikrotikStationCreate) -> tuple[object, object, object, object, str]:
     try:
         network = ip_network(payload.client_network_cidr, strict=False)
@@ -6290,8 +7420,73 @@ def validate_station_network(payload: MikrotikStationCreate) -> tuple[object, ob
         raise HTTPException(status_code=400, detail="DHCP pool start must be lower than or equal to pool end.")
     if int(pool_start) <= int(gateway_ip) <= int(pool_end):
         raise HTTPException(status_code=400, detail="DHCP pool cannot include the gateway IP.")
-    dns_servers = normalize_dns_servers(payload.dns_servers, str(gateway_ip))
+    dns_servers = normalize_upstream_dns_servers(payload.dns_servers, str(gateway_ip))
     return network, gateway_ip, pool_start, pool_end, dns_servers
+
+
+def station_default_ipv4_values(cidr: Optional[str]) -> dict:
+    try:
+        network = ip_network(str(cidr or "").strip(), strict=False)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="AP management network CIDR is invalid.")
+    if network.version != 4:
+        raise HTTPException(status_code=400, detail="AP management network must be IPv4.")
+    if network.num_addresses < 16:
+        raise HTTPException(status_code=400, detail="AP management network is too small for DHCP.")
+    gateway_ip = ip_address(int(network.network_address) + 1)
+    pool_start = ip_address(min(int(network.network_address) + 10, int(network.broadcast_address) - 1))
+    pool_end = ip_address(int(network.broadcast_address) - 1)
+    return {
+        "network": network,
+        "gateway_ip": gateway_ip,
+        "pool_start": pool_start,
+        "pool_end": pool_end,
+    }
+
+
+def validate_station_ap_management_network(payload: MikrotikStationCreate, client_network) -> Optional[dict]:
+    if not payload.ap_management_enabled:
+        return None
+    if not payload.ap_management_vlan_id:
+        raise HTTPException(status_code=400, detail="AP management VLAN ID is required when AP management is enabled.")
+    if int(payload.ap_management_vlan_id) == int(payload.vlan_id):
+        raise HTTPException(status_code=400, detail="AP management VLAN must be different from the customer HotSpot VLAN.")
+    defaults = station_default_ipv4_values(payload.ap_management_network_cidr or "10.111.0.0/24")
+    network = defaults["network"]
+    try:
+        gateway_ip = ip_address(payload.ap_management_gateway_ip or str(defaults["gateway_ip"]))
+        pool_start = ip_address(payload.ap_management_pool_start_ip or str(defaults["pool_start"]))
+        pool_end = ip_address(payload.ap_management_pool_end_ip or str(defaults["pool_end"]))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="AP management gateway and pool values must be valid IPv4 addresses.")
+    if any(value.version != 4 for value in (gateway_ip, pool_start, pool_end)):
+        raise HTTPException(status_code=400, detail="AP management gateway and pool values must be IPv4 addresses.")
+    if network.overlaps(client_network):
+        raise HTTPException(status_code=400, detail="AP management subnet must be different from the customer HotSpot client subnet.")
+    if gateway_ip not in network:
+        raise HTTPException(status_code=400, detail="AP management gateway IP must be inside the AP management CIDR.")
+    if gateway_ip in (network.network_address, network.broadcast_address):
+        raise HTTPException(status_code=400, detail="AP management gateway IP cannot be the network or broadcast address.")
+    if pool_start not in network or pool_end not in network:
+        raise HTTPException(status_code=400, detail="AP management DHCP pool start and end must be inside the AP management CIDR.")
+    if int(pool_start) > int(pool_end):
+        raise HTTPException(status_code=400, detail="AP management DHCP pool start must be lower than or equal to pool end.")
+    if int(pool_start) <= int(gateway_ip) <= int(pool_end):
+        raise HTTPException(status_code=400, detail="AP management DHCP pool cannot include the gateway IP.")
+    dns_servers = normalize_upstream_dns_servers(payload.ap_management_dns_servers, str(gateway_ip))
+    vlan_id = int(payload.ap_management_vlan_id)
+    return {
+        "vlan_id": vlan_id,
+        "vlan_interface_name": (payload.ap_management_vlan_interface_name or "").strip() or f"VLAN{vlan_id}-AP-MGMT",
+        "network": network,
+        "gateway_ip": gateway_ip,
+        "pool_start": pool_start,
+        "pool_end": pool_end,
+        "pool_name": (payload.ap_management_pool_name or "").strip() or f"POOL-AP-MGMT-V{vlan_id}",
+        "dhcp_server_name": (payload.ap_management_dhcp_server_name or "").strip() or f"DHCP-AP-MGMT-V{vlan_id}",
+        "dhcp_lease_time": (payload.ap_management_dhcp_lease_time or "1h").strip() or "1h",
+        "dns_servers": dns_servers,
+    }
 
 
 def station_dedupe_csv(*values: Optional[str]) -> str:
@@ -6321,6 +7516,44 @@ def routeros_cli_add_preview(path: str, params: dict) -> str:
     return f"/{command}\n{' '.join(parts)}"
 
 
+def routeros_cli_set_preview(path: str, params: dict) -> str:
+    section = path[:-4] if path.endswith("/set") else path
+    command = section.strip("/").replace("/", " ")
+    parts = ["set"]
+    for key, value in (params or {}).items():
+        if value is None or value == "":
+            continue
+        text_value = str(value)
+        if any(char.isspace() for char in text_value):
+            text_value = '"' + text_value.replace('"', '\\"') + '"'
+        parts.append(f"{key}={text_value}")
+    return f"/{command}\n{' '.join(parts)}"
+
+
+def routeros_verify_matches(rows: list[dict], verify: Optional[dict]) -> bool:
+    if not verify:
+        return False
+    checks = verify.get("checks")
+    if checks:
+        return all(routeros_verify_matches(rows, check) for check in checks)
+    field = verify.get("field")
+    expected = verify.get("value")
+    if not field or not rows:
+        return False
+    if verify.get("truthy"):
+        expected_truthy = routeros_truthy(expected)
+        return any(routeros_truthy(row.get(field)) == expected_truthy for row in rows)
+    if verify.get("contains"):
+        return any(str(expected or "") in str(row.get(field) or "") for row in rows)
+    return any(str(row.get(field) or "").strip() == str(expected or "").strip() for row in rows)
+
+
+def routeros_verify_message(verify: Optional[dict]) -> str:
+    if not verify:
+        return "No verification rule was provided."
+    return verify.get("message") or f"{verify.get('field')} is already {verify.get('value')}."
+
+
 def station_routeros_add_command(label: str, path: str, params: dict, **metadata) -> dict:
     command = {
         "label": label,
@@ -6330,6 +7563,43 @@ def station_routeros_add_command(label: str, path: str, params: dict, **metadata
     }
     command.update(metadata)
     return command
+
+
+def station_routeros_set_command(label: str, path: str, params: dict, **metadata) -> dict:
+    command = {
+        "label": label,
+        "path": path,
+        "params": params,
+        "preview": routeros_cli_set_preview(path, params),
+    }
+    command.update(metadata)
+    return command
+
+
+def station_routeros_set_existing_command(label: str, print_path: str, query: dict, set_path: str, params: dict, **metadata) -> dict:
+    command = {
+        "label": label,
+        "path": set_path,
+        "params": params,
+        "set_existing_query": {
+            "print_path": print_path,
+            "query": query,
+            "set_path": set_path,
+        },
+        "preview": f"{routeros_remove_preview(print_path, next(iter(query.keys())), next(iter(query.values()))).replace(' remove ', ' set ')} {' '.join(f'{key}={value}' for key, value in params.items() if value not in (None, ''))}",
+    }
+    command.update(metadata)
+    return command
+
+
+def station_routeros_remove_command(label: str, print_path: str, query_field: str, query_value: str) -> dict:
+    return {
+        "label": label,
+        "print_path": print_path,
+        "query_field": query_field,
+        "query_value": query_value,
+        "preview": routeros_remove_preview(print_path, query_field, query_value),
+    }
 
 
 def station_code_from_text(value: Optional[str]) -> str:
@@ -6357,8 +7627,8 @@ def station_interface_is_pppoe(interface: dict) -> bool:
     return "pppoe" in text
 
 
-def station_existing_vlan_is_managed(snapshot: dict, vlan_id: int, vlan_interface_name: str) -> bool:
-    marker = f"3j hotspot - vlan {vlan_id}"
+def station_existing_vlan_is_managed(snapshot: dict, vlan_id: int, vlan_interface_name: str, marker: Optional[str] = None) -> bool:
+    marker = (marker or f"3j hotspot - vlan {vlan_id}").lower()
     for item in mikrotik_snapshot_items(snapshot, "interface_vlans"):
         if vlan_id not in parse_routeros_vlan_ids(item.get("vlan-id")):
             continue
@@ -6367,6 +7637,8 @@ def station_existing_vlan_is_managed(snapshot: dict, vlan_id: int, vlan_interfac
         if marker in str(item.get("comment") or "").lower():
             return True
     for item in mikrotik_snapshot_items(snapshot, "bridge_vlans"):
+        if routeros_truthy(item.get("dynamic")):
+            continue
         if vlan_id not in parse_routeros_vlan_ids(item.get("vlan-ids")):
             continue
         if marker in str(item.get("comment") or "").lower():
@@ -6374,11 +7646,18 @@ def station_existing_vlan_is_managed(snapshot: dict, vlan_id: int, vlan_interfac
     return False
 
 
-def station_validate_router_path(payload: MikrotikStationCreate, station_id: Optional[str], network, pool_start, pool_end):
+def station_validate_router_path(payload: MikrotikStationCreate, station_id: Optional[str], network, pool_start, pool_end, ap_management: Optional[dict] = None):
     errors = []
     vlan_id = int(payload.vlan_id)
     vlan_interface_name = (payload.vlan_interface_name or "").strip() or f"VLAN{vlan_id}-3J-HOTSPOT"
     pool_name = (payload.pool_name or "").strip() or f"POOL-3J-HOTSPOT-V{vlan_id}"
+    dhcp_server_name = (payload.dhcp_server_name or "").strip() or f"DHCP-3J-HOTSPOT-V{vlan_id}"
+    hotspot_profile_name = (payload.hotspot_profile_name or "").strip() or f"PROFILE-3J-HOTSPOT-V{vlan_id}"
+    hotspot_server_name = (payload.hotspot_server_name or "").strip() or f"HS-3J-HOTSPOT-V{vlan_id}"
+    ap_vlan_id = int(ap_management["vlan_id"]) if ap_management else None
+    ap_vlan_interface_name = ap_management["vlan_interface_name"] if ap_management else None
+    ap_pool_name = ap_management["pool_name"] if ap_management else None
+    ap_dhcp_server_name = ap_management["dhcp_server_name"] if ap_management else None
     for index, item in enumerate(payload.routers):
         router = fetch_one("SELECT id, router_name FROM mikrotik_routers WHERE id = %s", (item.router_id,))
         router_label = router["router_name"] if router else f"router #{index + 1}"
@@ -6404,9 +7683,13 @@ def station_validate_router_path(payload: MikrotikStationCreate, station_id: Opt
         for row in mikrotik_snapshot_items(snapshot, "interface_vlans"):
             existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-id")))
         for row in mikrotik_snapshot_items(snapshot, "bridge_vlans"):
+            if routeros_truthy(row.get("dynamic")):
+                continue
             existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-ids")))
         if vlan_id in existing_vlan_ids and not station_existing_vlan_is_managed(snapshot, vlan_id, vlan_interface_name):
             errors.append(f"{router_label}: VLAN {vlan_id} already exists in the latest scan and is not marked as this station's managed VLAN.")
+        if ap_management and ap_vlan_id in existing_vlan_ids and not station_existing_vlan_is_managed(snapshot, ap_vlan_id, ap_vlan_interface_name, f"3j ap management - vlan {ap_vlan_id}"):
+            errors.append(f"{router_label}: AP management VLAN {ap_vlan_id} already exists in the latest scan and is not marked as this station's managed AP management VLAN.")
         if index == 0:
             for row in mikrotik_snapshot_items(snapshot, "ip_addresses"):
                 existing_network = parse_routeros_ip_network(row.get("address"))
@@ -6414,13 +7697,50 @@ def station_validate_router_path(payload: MikrotikStationCreate, station_id: Opt
                 existing_comment = str(row.get("comment") or "").lower()
                 if existing_network and network.overlaps(existing_network) and existing_interface != vlan_interface_name and f"3j hotspot - vlan {vlan_id}" not in existing_comment:
                     errors.append(f"{router_label}: client subnet {network.with_prefixlen} overlaps existing router network {existing_network} on {existing_interface or 'unknown interface'}.")
+                if ap_management and existing_network and ap_management["network"].overlaps(existing_network) and existing_interface != ap_vlan_interface_name and f"3j ap management - vlan {ap_vlan_id}" not in existing_comment:
+                    errors.append(f"{router_label}: AP management subnet {ap_management['network'].with_prefixlen} overlaps existing router network {existing_network} on {existing_interface or 'unknown interface'}.")
             proposed_pool = (int(pool_start), int(pool_end))
+            proposed_ap_pool = (int(ap_management["pool_start"]), int(ap_management["pool_end"])) if ap_management else None
             for row in mikrotik_snapshot_items(snapshot, "ip_pools"):
                 if str(row.get("name") or "") == pool_name:
                     continue
                 for existing_range in parse_routeros_pool_ranges(row.get("ranges")):
                     if mikrotik_ranges_overlap(proposed_pool, existing_range):
                         errors.append(f"{router_label}: DHCP pool {pool_start}-{pool_end} overlaps existing pool {row.get('name')}: {row.get('ranges')}.")
+                    if proposed_ap_pool and str(row.get("name") or "") != ap_pool_name and mikrotik_ranges_overlap(proposed_ap_pool, existing_range):
+                        errors.append(f"{router_label}: AP management DHCP pool {ap_management['pool_start']}-{ap_management['pool_end']} overlaps existing pool {row.get('name')}: {row.get('ranges')}.")
+            if payload.create_dhcp_server:
+                for row in mikrotik_snapshot_items(snapshot, "dhcp_servers"):
+                    existing_name = str(row.get("name") or "")
+                    existing_interface = str(row.get("interface") or "")
+                    existing_comment = str(row.get("comment") or "").lower()
+                    if existing_name == dhcp_server_name:
+                        continue
+                    if existing_interface == vlan_interface_name and f"3j hotspot - dhcp server for vlan {vlan_id}" not in existing_comment:
+                        errors.append(f"{router_label}: DHCP server already exists on {vlan_interface_name}. Disable station DHCP creation or choose a different VLAN interface.")
+            if ap_management:
+                for row in mikrotik_snapshot_items(snapshot, "dhcp_servers"):
+                    existing_name = str(row.get("name") or "")
+                    existing_interface = str(row.get("interface") or "")
+                    existing_comment = str(row.get("comment") or "").lower()
+                    if existing_name == ap_dhcp_server_name:
+                        continue
+                    if existing_interface == ap_vlan_interface_name and f"3j ap management - dhcp server for vlan {ap_vlan_id}" not in existing_comment:
+                        errors.append(f"{router_label}: DHCP server already exists on AP management interface {ap_vlan_interface_name}. Choose a different AP management VLAN or disable the conflicting DHCP server first.")
+            if payload.create_hotspot_profile:
+                for row in mikrotik_snapshot_items(snapshot, "hotspot_profiles"):
+                    existing_name = str(row.get("name") or "")
+                    if existing_name == hotspot_profile_name:
+                        continue
+            if payload.create_hotspot_server:
+                for row in mikrotik_snapshot_items(snapshot, "hotspots"):
+                    existing_name = str(row.get("name") or "")
+                    existing_interface = str(row.get("interface") or "")
+                    existing_comment = str(row.get("comment") or "").lower()
+                    if existing_name == hotspot_server_name:
+                        continue
+                    if existing_interface == vlan_interface_name and existing_name != hotspot_server_name and f"3j hotspot - hotspot server for vlan {vlan_id}" not in existing_comment:
+                        errors.append(f"{router_label}: another HotSpot server already exists on {vlan_interface_name}. Choose a different VLAN/interface or remove the existing HotSpot server first.")
     if errors:
         raise HTTPException(status_code=400, detail=" ".join(errors))
 
@@ -6430,8 +7750,45 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
     network = ip_network(station["client_network_cidr"], strict=False)
     vlan_interface_name = station.get("vlan_interface_name") or f"VLAN{vlan_id}-3J-HOTSPOT"
     pool_name = station.get("pool_name") or f"POOL-3J-HOTSPOT-V{vlan_id}"
-    dns_servers = normalize_dns_servers(station.get("dns_servers"), str(station["gateway_ip"]))
+    dhcp_server_name = station.get("dhcp_server_name") or f"DHCP-3J-HOTSPOT-V{vlan_id}"
+    dhcp_lease_time = station.get("dhcp_lease_time") or "1h"
+    create_dhcp_server = bool(station.get("create_dhcp_server", True))
+    hotspot_profile_name = station.get("hotspot_profile_name") or f"PROFILE-3J-HOTSPOT-V{vlan_id}"
+    hotspot_html_directory = station.get("hotspot_html_directory") or "hotspot"
+    hotspot_dns_name = station.get("hotspot_dns_name") or default_hotspot_dns_name(station.get("station_code"))
+    hotspot_server_name = station.get("hotspot_server_name") or f"HS-3J-HOTSPOT-V{vlan_id}"
+    create_hotspot_profile = bool(station.get("create_hotspot_profile", True))
+    create_hotspot_server = bool(station.get("create_hotspot_server", True))
+    create_walled_garden = bool(station.get("create_walled_garden", True))
+    portal_url = station.get("portal_url") or "http://192.168.50.70:8080/portal"
+    ap_management_enabled = bool(station.get("ap_management_enabled"))
+    ap_management_vlan_id = int(station.get("ap_management_vlan_id") or 111)
+    ap_management_network = ip_network(station.get("ap_management_network_cidr") or "10.111.0.0/24", strict=False)
+    ap_management_vlan_interface_name = station.get("ap_management_vlan_interface_name") or f"VLAN{ap_management_vlan_id}-AP-MGMT"
+    ap_management_gateway_ip = station.get("ap_management_gateway_ip") or str(ip_address(int(ap_management_network.network_address) + 1))
+    ap_management_pool_start_ip = station.get("ap_management_pool_start_ip") or str(ip_address(min(int(ap_management_network.network_address) + 10, int(ap_management_network.broadcast_address) - 1)))
+    ap_management_pool_end_ip = station.get("ap_management_pool_end_ip") or str(ip_address(int(ap_management_network.broadcast_address) - 1))
+    ap_management_pool_name = station.get("ap_management_pool_name") or f"POOL-AP-MGMT-V{ap_management_vlan_id}"
+    ap_management_dhcp_server_name = station.get("ap_management_dhcp_server_name") or f"DHCP-AP-MGMT-V{ap_management_vlan_id}"
+    ap_management_dhcp_lease_time = station.get("ap_management_dhcp_lease_time") or "1h"
+    ap_management_dns_servers = normalize_upstream_dns_servers(station.get("ap_management_dns_servers"), ap_management_gateway_ip)
+    parsed_portal_url = portal_url if "://" in portal_url else f"http://{portal_url}"
+    parsed_portal = urlparse(parsed_portal_url)
+    portal_host = parsed_portal.hostname or "192.168.50.70"
+    portal_port = parsed_portal.port or (443 if parsed_portal.scheme == "https" else 80)
+    capport_url = station_capport_url(station)
+    capport_option_name = f"3J-CAPPORT-V{vlan_id}"
+    client_dns_servers = str(station["gateway_ip"])
+    upstream_dns_servers = normalize_upstream_dns_servers(station.get("dns_servers"), str(station["gateway_ip"]))
     local_interface_list = station.get("local_interface_list") or "LOCAL"
+    nat_comment = f"3J Hotspot - NAT for VLAN {vlan_id} clients"
+    dns_udp_redirect_comment = f"3J Hotspot - force DNS UDP to router for VLAN {vlan_id}"
+    dns_tcp_redirect_comment = f"3J Hotspot - force DNS TCP to router for VLAN {vlan_id}"
+    raw_client_tracking_comment = f"3J Hotspot - keep VLAN {vlan_id} client traffic tracked"
+    raw_return_tracking_comment = f"3J Hotspot - keep VLAN {vlan_id} return traffic tracked"
+    private_dns_reject_comment = f"3J Hotspot - reject Private DNS TLS for VLAN {vlan_id}"
+    legacy_http_probe_redirect_comment = f"3J Hotspot - send unauth HTTP to portal for VLAN {vlan_id}"
+    ipv6_ra_suppress_comment = f"3J Hotspot - suppress IPv6 RA on VLAN {vlan_id}"
     router_plans = []
     for index, router in enumerate(routers):
         bridge_name = (router.get("bridge_name") or "").strip()
@@ -6441,6 +7798,89 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
         role = "ROOT_GATEWAY" if is_root else "TRUNK_HELPER"
         commands = []
         if is_root:
+            if ap_management_enabled:
+                commands.extend([
+                    station_routeros_add_command(
+                        f"Create AP management VLAN {ap_management_vlan_id} interface",
+                        "/interface/vlan/add",
+                        {
+                            "comment": f"3J AP Management - VLAN {ap_management_vlan_id} interface on {bridge_name}",
+                            "interface": bridge_name,
+                            "name": ap_management_vlan_interface_name,
+                            "vlan-id": str(ap_management_vlan_id),
+                        },
+                        unique_field="name",
+                        unique_value=ap_management_vlan_interface_name,
+                    ),
+                    station_routeros_add_command(
+                        f"Tag AP management VLAN {ap_management_vlan_id} toward AP path",
+                        "/interface/bridge/vlan/add",
+                        {
+                            "bridge": bridge_name,
+                            "comment": f"3J AP Management - VLAN {ap_management_vlan_id} trunk to next station router",
+                            "tagged": effective_tagged_ports,
+                            "vlan-ids": str(ap_management_vlan_id),
+                        },
+                        existing_query={"bridge": bridge_name, "vlan-ids": str(ap_management_vlan_id)},
+                        merge_bridge_vlan_tagged=True,
+                    ),
+                    station_routeros_add_command(
+                        f"Add AP management VLAN {ap_management_vlan_id} gateway IP",
+                        "/ip/address/add",
+                        {
+                            "address": f"{ap_management_gateway_ip}/{ap_management_network.prefixlen}",
+                            "comment": f"3J AP Management - VLAN {ap_management_vlan_id} gateway",
+                            "interface": ap_management_vlan_interface_name,
+                            "network": str(ap_management_network.network_address),
+                        },
+                        unique_comment=f"3J AP Management - VLAN {ap_management_vlan_id} gateway",
+                    ),
+                    station_routeros_add_command(
+                        "Create AP management DHCP pool",
+                        "/ip/pool/add",
+                        {
+                            "name": ap_management_pool_name,
+                            "ranges": f"{ap_management_pool_start_ip}-{ap_management_pool_end_ip}",
+                        },
+                        unique_field="name",
+                        unique_value=ap_management_pool_name,
+                    ),
+                    station_routeros_add_command(
+                        "Create AP management DHCP server",
+                        "/ip/dhcp-server/add",
+                        {
+                            "name": ap_management_dhcp_server_name,
+                            "interface": ap_management_vlan_interface_name,
+                            "address-pool": ap_management_pool_name,
+                            "lease-time": ap_management_dhcp_lease_time,
+                            "disabled": "no",
+                            "comment": f"3J AP Management - DHCP server for VLAN {ap_management_vlan_id}",
+                        },
+                        unique_field="name",
+                        unique_value=ap_management_dhcp_server_name,
+                    ),
+                    station_routeros_add_command(
+                        "Add AP management DHCP network options",
+                        "/ip/dhcp-server/network/add",
+                        {
+                            "address": ap_management_network.with_prefixlen,
+                            "comment": f"3J AP Management - DHCP options for VLAN {ap_management_vlan_id}",
+                            "dns-server": ap_management_dns_servers,
+                            "gateway": ap_management_gateway_ip,
+                        },
+                        existing_query={"address": ap_management_network.with_prefixlen},
+                    ),
+                    station_routeros_add_command(
+                        "Allow AP management VLAN as local/LAN interface",
+                        "/interface/list/member/add",
+                        {
+                            "comment": f"3J AP Management - allow VLAN {ap_management_vlan_id} as local/LAN interface",
+                            "interface": ap_management_vlan_interface_name,
+                            "list": local_interface_list,
+                        },
+                        existing_query={"interface": ap_management_vlan_interface_name, "list": local_interface_list},
+                    ),
+                ])
             commands.extend([
                 station_routeros_add_command(
                     f"Create VLAN {vlan_id} interface",
@@ -6487,16 +7927,96 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                     unique_field="name",
                     unique_value=pool_name,
                 ),
+                *([
+                    station_routeros_add_command(
+                        "Create DHCP server on root gateway",
+                        "/ip/dhcp-server/add",
+                        {
+                            "name": dhcp_server_name,
+                            "interface": vlan_interface_name,
+                            "address-pool": pool_name,
+                            "lease-time": dhcp_lease_time,
+                            "disabled": "no",
+                            "comment": f"3J Hotspot - DHCP server for VLAN {vlan_id}",
+                        },
+                        unique_field="name",
+                        unique_value=dhcp_server_name,
+                    )
+                ] if create_dhcp_server else []),
                 station_routeros_add_command(
                     "Add DHCP network options",
                     "/ip/dhcp-server/network/add",
                     {
                         "address": network.with_prefixlen,
                         "comment": f"3J Hotspot - DHCP options for VLAN {vlan_id}",
-                        "dns-server": dns_servers,
+                        "dns-server": client_dns_servers,
                         "gateway": str(station["gateway_ip"]),
                     },
                     existing_query={"address": network.with_prefixlen},
+                ),
+                station_routeros_set_command(
+                    "Enable router DNS for captive portal popup detection",
+                    "/ip/dns/set",
+                    {
+                        "allow-remote-requests": "yes",
+                        "servers": upstream_dns_servers,
+                    },
+                    verify={
+                        "words": ["/ip/dns/print", "=.proplist=allow-remote-requests,servers"],
+                        "checks": [
+                            {"field": "allow-remote-requests", "value": "yes", "truthy": True},
+                            {"field": "servers", "value": upstream_dns_servers},
+                        ],
+                        "label": "/ip dns allow-remote-requests",
+                        "message": "RouterOS DNS is already enabled with the configured upstream DNS servers.",
+                        "not_found_message": "RouterOS DNS remote requests or upstream DNS servers need to be updated.",
+                    },
+                ),
+                station_routeros_set_existing_command(
+                    "Set DHCP DNS to HotSpot gateway only",
+                    "/ip/dhcp-server/network/print",
+                    {"address": network.with_prefixlen},
+                    "/ip/dhcp-server/network/set",
+                    {
+                        "dns-server": client_dns_servers,
+                    },
+                    verify={
+                        "words": ["/ip/dhcp-server/network/print", f"?address={network.with_prefixlen}", "=.proplist=.id,address,dns-server"],
+                        "field": "dns-server",
+                        "value": client_dns_servers,
+                        "label": "DHCP client DNS",
+                        "message": "DHCP clients already receive only the HotSpot gateway as DNS.",
+                        "not_found_message": "DHCP clients do not yet receive only the HotSpot gateway as DNS.",
+                    },
+                ),
+                station_routeros_add_command(
+                    "Create DHCP captive portal option",
+                    "/ip/dhcp-server/option/add",
+                    {
+                        "name": capport_option_name,
+                        "code": "114",
+                        "value": f"'{capport_url}'",
+                    },
+                    unique_field="name",
+                    unique_value=capport_option_name,
+                ),
+                station_routeros_set_existing_command(
+                    "Attach captive portal option to DHCP network",
+                    "/ip/dhcp-server/network/print",
+                    {"address": network.with_prefixlen},
+                    "/ip/dhcp-server/network/set",
+                    {
+                        "dhcp-option": capport_option_name,
+                    },
+                    verify={
+                        "words": ["/ip/dhcp-server/network/print", f"?address={network.with_prefixlen}", "=.proplist=.id,address,dhcp-option"],
+                        "field": "dhcp-option",
+                        "value": capport_option_name,
+                        "contains": True,
+                        "label": "DHCP network captive portal option",
+                        "message": "DHCP network already advertises the captive portal option.",
+                        "not_found_message": "DHCP network does not advertise the captive portal option yet.",
+                    },
                 ),
                 station_routeros_add_command(
                     "Allow VLAN as local/LAN interface",
@@ -6508,9 +8028,211 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                     },
                     existing_query={"interface": vlan_interface_name, "list": local_interface_list},
                 ),
+                station_routeros_add_command(
+                    "Create internet NAT for HotSpot clients",
+                    "/ip/firewall/nat/add",
+                    {
+                        "chain": "srcnat",
+                        "src-address": network.with_prefixlen,
+                        "action": "masquerade",
+                        "comment": nat_comment,
+                    },
+                    unique_comment=nat_comment,
+                ),
+                station_routeros_add_command(
+                    "Keep client traffic tracked before global raw notrack",
+                    "/ip/firewall/raw/add",
+                    {
+                        "chain": "prerouting",
+                        "src-address": network.with_prefixlen,
+                        "action": "accept",
+                        "comment": raw_client_tracking_comment,
+                    },
+                    unique_comment=raw_client_tracking_comment,
+                    place_before_query={
+                        "print_path": "/ip/firewall/raw/print",
+                        "query": {"chain": "prerouting", "action": "notrack"},
+                    },
+                ),
+                station_routeros_add_command(
+                    "Keep return traffic tracked before global raw notrack",
+                    "/ip/firewall/raw/add",
+                    {
+                        "chain": "prerouting",
+                        "dst-address": network.with_prefixlen,
+                        "action": "accept",
+                        "comment": raw_return_tracking_comment,
+                    },
+                    unique_comment=raw_return_tracking_comment,
+                    place_before_query={
+                        "print_path": "/ip/firewall/raw/print",
+                        "query": {"chain": "prerouting", "action": "notrack"},
+                    },
+                ),
+                station_routeros_add_command(
+                    "Force client DNS UDP to HotSpot gateway",
+                    "/ip/firewall/nat/add",
+                    {
+                        "chain": "dstnat",
+                        "src-address": network.with_prefixlen,
+                        "protocol": "udp",
+                        "dst-port": "53",
+                        "action": "redirect",
+                        "to-ports": "53",
+                        "comment": dns_udp_redirect_comment,
+                    },
+                    unique_comment=dns_udp_redirect_comment,
+                ),
+                station_routeros_add_command(
+                    "Force client DNS TCP to HotSpot gateway",
+                    "/ip/firewall/nat/add",
+                    {
+                        "chain": "dstnat",
+                        "src-address": network.with_prefixlen,
+                        "protocol": "tcp",
+                        "dst-port": "53",
+                        "action": "redirect",
+                        "to-ports": "53",
+                        "comment": dns_tcp_redirect_comment,
+                    },
+                    unique_comment=dns_tcp_redirect_comment,
+                ),
+                station_routeros_add_command(
+                    "Reject Android Private DNS TLS during captive check",
+                    "/ip/firewall/filter/add",
+                    {
+                        "chain": "input",
+                        "src-address": network.with_prefixlen,
+                        "protocol": "tcp",
+                        "dst-port": "853",
+                        "action": "reject",
+                        "reject-with": "tcp-reset",
+                        "comment": private_dns_reject_comment,
+                    },
+                    unique_comment=private_dns_reject_comment,
+                    place_before_query={
+                        "print_path": "/ip/firewall/filter/print",
+                        "query": {"chain": "input", "action": "jump"},
+                    },
+                ),
+                station_routeros_add_command(
+                    "Suppress IPv6 router advertisements on HotSpot VLAN",
+                    "/ipv6/nd/add",
+                    {
+                        "interface": vlan_interface_name,
+                        "ra-lifetime": "0s",
+                        "advertise-dns": "no",
+                        "disabled": "no",
+                        "comment": ipv6_ra_suppress_comment,
+                    },
+                    existing_query={"interface": vlan_interface_name},
+                ),
+                *([
+                    station_routeros_add_command(
+                        "Create HotSpot profile",
+                        "/ip/hotspot/profile/add",
+                        {
+                            "name": hotspot_profile_name,
+                            "hotspot-address": str(station["gateway_ip"]),
+                            "dns-name": hotspot_dns_name,
+                            "html-directory": hotspot_html_directory,
+                            "login-by": "http-chap,http-pap",
+                        },
+                        unique_field="name",
+                        unique_value=hotspot_profile_name,
+                    )
+                ] if create_hotspot_profile else []),
+                *([
+                    station_routeros_add_command(
+                        "Create HotSpot server on root gateway",
+                        "/ip/hotspot/add",
+                        {
+                            "name": hotspot_server_name,
+                            "interface": vlan_interface_name,
+                            "profile": hotspot_profile_name,
+                            "address-pool": "none",
+                            "disabled": "no",
+                        },
+                        unique_field="name",
+                        unique_value=hotspot_server_name,
+                    )
+                ] if create_hotspot_server else []),
+                *([
+                    station_routeros_add_command(
+                        "Allow portal server before login",
+                        "/ip/hotspot/walled-garden/ip/add",
+                        {
+                            "action": "accept",
+                            "dst-address": portal_host,
+                            "comment": f"3J Hotspot - portal server for VLAN {vlan_id}",
+                        },
+                        unique_comment=f"3J Hotspot - portal server for VLAN {vlan_id}",
+                    ),
+                    station_routeros_add_command(
+                        f"Allow portal URL TCP port {portal_port}",
+                        "/ip/hotspot/walled-garden/ip/add",
+                        {
+                            "action": "accept",
+                            "protocol": "tcp",
+                            "dst-address": portal_host,
+                            "dst-port": str(portal_port),
+                            "comment": f"3J Hotspot - portal URL for VLAN {vlan_id}",
+                        },
+                        unique_comment=f"3J Hotspot - portal URL for VLAN {vlan_id}",
+                    ),
+                    station_routeros_add_command(
+                        "Allow DNS UDP before login",
+                        "/ip/hotspot/walled-garden/ip/add",
+                        {
+                            "action": "accept",
+                            "protocol": "udp",
+                            "dst-port": "53",
+                            "comment": f"3J Hotspot - DNS UDP for VLAN {vlan_id}",
+                        },
+                        unique_comment=f"3J Hotspot - DNS UDP for VLAN {vlan_id}",
+                    ),
+                    station_routeros_add_command(
+                        "Allow DNS TCP before login",
+                        "/ip/hotspot/walled-garden/ip/add",
+                        {
+                            "action": "accept",
+                            "protocol": "tcp",
+                            "dst-port": "53",
+                            "comment": f"3J Hotspot - DNS TCP for VLAN {vlan_id}",
+                        },
+                        unique_comment=f"3J Hotspot - DNS TCP for VLAN {vlan_id}",
+                    ),
+                ] if create_walled_garden else []),
             ])
         else:
             previous_name = routers[index - 1].get("router_name") or "previous router"
+            if ap_management_enabled:
+                commands.extend([
+                    station_routeros_add_command(
+                        f"Create AP management VLAN {ap_management_vlan_id} monitoring interface",
+                        "/interface/vlan/add",
+                        {
+                            "comment": f"3J AP Management - VLAN {ap_management_vlan_id} monitor interface on {bridge_name}",
+                            "interface": bridge_name,
+                            "name": ap_management_vlan_interface_name,
+                            "vlan-id": str(ap_management_vlan_id),
+                        },
+                        unique_field="name",
+                        unique_value=ap_management_vlan_interface_name,
+                    ),
+                    station_routeros_add_command(
+                        f"Carry AP management VLAN {ap_management_vlan_id} through this router",
+                        "/interface/bridge/vlan/add",
+                        {
+                            "bridge": bridge_name,
+                            "comment": f"3J AP Management - VLAN {ap_management_vlan_id} trunk from {previous_name} to OLT/APs",
+                            "tagged": effective_tagged_ports,
+                            "vlan-ids": str(ap_management_vlan_id),
+                        },
+                        existing_query={"bridge": bridge_name, "vlan-ids": str(ap_management_vlan_id)},
+                        merge_bridge_vlan_tagged=True,
+                    ),
+                ])
             commands.extend([
                 station_routeros_add_command(
                     f"Create VLAN {vlan_id} monitoring interface",
@@ -6549,18 +8271,493 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
             "commands": commands,
         })
     return {
-        "summary": "Root router creates the customer VLAN gateway/DHCP network. Downstream routers carry the same VLAN as a tagged trunk toward OLT/AP paths.",
+        "summary": "Root router creates the AP management VLAN and customer HotSpot VLAN. Downstream routers carry both VLANs as tagged trunks toward OLT/AP paths.",
         "station_code": station.get("station_code"),
         "vlan_id": vlan_id,
         "client_network_cidr": network.with_prefixlen,
         "gateway_ip": str(station["gateway_ip"]),
         "pool_range": f"{station['pool_start_ip']}-{station['pool_end_ip']}",
-        "dns_servers": dns_servers,
-        "hotspot_dns_name": station.get("hotspot_dns_name"),
-        "hotspot_server_name": station.get("hotspot_server_name"),
-        "portal_url": station.get("portal_url"),
+        "dhcp_server_name": dhcp_server_name,
+        "dhcp_lease_time": dhcp_lease_time,
+        "create_dhcp_server": create_dhcp_server,
+        "dns_servers": client_dns_servers,
+        "router_upstream_dns_servers": upstream_dns_servers,
+        "hotspot_profile_name": hotspot_profile_name,
+        "hotspot_html_directory": hotspot_html_directory,
+        "hotspot_dns_name": hotspot_dns_name,
+        "hotspot_server_name": hotspot_server_name,
+        "create_hotspot_profile": create_hotspot_profile,
+        "create_hotspot_server": create_hotspot_server,
+        "create_walled_garden": create_walled_garden,
+        "portal_url": portal_url,
+        "portal_host": portal_host,
+        "portal_port": portal_port,
+        "capport_url": capport_url,
+        "capport_option_name": capport_option_name,
+        "ap_management_enabled": ap_management_enabled,
+        "ap_management_vlan_id": ap_management_vlan_id,
+        "ap_management_vlan_interface_name": ap_management_vlan_interface_name,
+        "ap_management_network_cidr": ap_management_network.with_prefixlen,
+        "ap_management_gateway_ip": ap_management_gateway_ip,
+        "ap_management_pool_range": f"{ap_management_pool_start_ip}-{ap_management_pool_end_ip}",
+        "ap_management_pool_name": ap_management_pool_name,
+        "ap_management_dhcp_server_name": ap_management_dhcp_server_name,
+        "ap_management_dhcp_lease_time": ap_management_dhcp_lease_time,
+        "ap_management_dns_servers": ap_management_dns_servers,
+        "nat_comment": nat_comment,
+        "dns_udp_redirect_comment": dns_udp_redirect_comment,
+        "dns_tcp_redirect_comment": dns_tcp_redirect_comment,
+        "raw_client_tracking_comment": raw_client_tracking_comment,
+        "raw_return_tracking_comment": raw_return_tracking_comment,
+        "private_dns_reject_comment": private_dns_reject_comment,
+        "ipv6_ra_suppress_comment": ipv6_ra_suppress_comment,
         "router_plans": router_plans,
     }
+
+
+def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> dict:
+    vlan_id = int(station["vlan_id"])
+    vlan_interface_name = station.get("vlan_interface_name") or f"VLAN{vlan_id}-3J-HOTSPOT"
+    pool_name = station.get("pool_name") or f"POOL-3J-HOTSPOT-V{vlan_id}"
+    dhcp_server_name = station.get("dhcp_server_name") or f"DHCP-3J-HOTSPOT-V{vlan_id}"
+    hotspot_profile_name = station.get("hotspot_profile_name") or f"PROFILE-3J-HOTSPOT-V{vlan_id}"
+    hotspot_server_name = station.get("hotspot_server_name") or f"HS-3J-HOTSPOT-V{vlan_id}"
+    local_interface_list = station.get("local_interface_list") or "LOCAL"
+    network = ip_network(station["client_network_cidr"], strict=False)
+    nat_comment = f"3J Hotspot - NAT for VLAN {vlan_id} clients"
+    dns_udp_redirect_comment = f"3J Hotspot - force DNS UDP to router for VLAN {vlan_id}"
+    dns_tcp_redirect_comment = f"3J Hotspot - force DNS TCP to router for VLAN {vlan_id}"
+    raw_client_tracking_comment = f"3J Hotspot - keep VLAN {vlan_id} client traffic tracked"
+    raw_return_tracking_comment = f"3J Hotspot - keep VLAN {vlan_id} return traffic tracked"
+    private_dns_reject_comment = f"3J Hotspot - reject Private DNS TLS for VLAN {vlan_id}"
+    legacy_http_probe_redirect_comment = f"3J Hotspot - send unauth HTTP to portal for VLAN {vlan_id}"
+    ipv6_ra_suppress_comment = f"3J Hotspot - suppress IPv6 RA on VLAN {vlan_id}"
+    ap_management_enabled = bool(station.get("ap_management_enabled"))
+    ap_management_vlan_id = int(station.get("ap_management_vlan_id") or 111)
+    ap_management_vlan_interface_name = station.get("ap_management_vlan_interface_name") or f"VLAN{ap_management_vlan_id}-AP-MGMT"
+    ap_management_pool_name = station.get("ap_management_pool_name") or f"POOL-AP-MGMT-V{ap_management_vlan_id}"
+    ap_management_dhcp_server_name = station.get("ap_management_dhcp_server_name") or f"DHCP-AP-MGMT-V{ap_management_vlan_id}"
+    router_plans = []
+    for index, router in reversed(list(enumerate(routers))):
+        bridge_name = (router.get("bridge_name") or "").strip()
+        is_root = index == 0
+        role = "ROOT_GATEWAY" if is_root else "TRUNK_HELPER"
+        previous_name = routers[index - 1].get("router_name") if index > 0 else None
+        commands = []
+        if is_root:
+            commands.extend([
+                station_routeros_remove_command(
+                    "Remove HotSpot server",
+                    "/ip/hotspot/print",
+                    "name",
+                    hotspot_server_name,
+                ),
+                station_routeros_remove_command(
+                    "Remove HotSpot profile",
+                    "/ip/hotspot/profile/print",
+                    "name",
+                    hotspot_profile_name,
+                ),
+                station_routeros_remove_command(
+                    "Remove walled garden DNS TCP",
+                    "/ip/hotspot/walled-garden/ip/print",
+                    "comment",
+                    f"3J Hotspot - DNS TCP for VLAN {vlan_id}",
+                ),
+                station_routeros_remove_command(
+                    "Remove walled garden DNS UDP",
+                    "/ip/hotspot/walled-garden/ip/print",
+                    "comment",
+                    f"3J Hotspot - DNS UDP for VLAN {vlan_id}",
+                ),
+                station_routeros_remove_command(
+                    "Remove walled garden portal URL",
+                    "/ip/hotspot/walled-garden/ip/print",
+                    "comment",
+                    f"3J Hotspot - portal URL for VLAN {vlan_id}",
+                ),
+                station_routeros_remove_command(
+                    "Remove walled garden portal server",
+                    "/ip/hotspot/walled-garden/ip/print",
+                    "comment",
+                    f"3J Hotspot - portal server for VLAN {vlan_id}",
+                ),
+                station_routeros_remove_command(
+                    "Remove VLAN from local/LAN interface list",
+                    "/interface/list/member/print",
+                    "comment",
+                    f"3J Hotspot - allow VLAN {vlan_id} as local/LAN interface",
+                ),
+                station_routeros_remove_command(
+                    "Remove internet NAT for HotSpot clients",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    nat_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove raw client tracking exception",
+                    "/ip/firewall/raw/print",
+                    "comment",
+                    raw_client_tracking_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove raw return tracking exception",
+                    "/ip/firewall/raw/print",
+                    "comment",
+                    raw_return_tracking_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove forced client DNS UDP redirect",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    dns_udp_redirect_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove forced client DNS TCP redirect",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    dns_tcp_redirect_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove Private DNS TLS reject rule",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    private_dns_reject_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove IPv6 RA suppression",
+                    "/ipv6/nd/print",
+                    "interface",
+                    vlan_interface_name,
+                ),
+                station_routeros_remove_command(
+                    "Remove legacy unauthenticated HTTP portal redirect",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    legacy_http_probe_redirect_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove DHCP network options",
+                    "/ip/dhcp-server/network/print",
+                    "comment",
+                    f"3J Hotspot - DHCP options for VLAN {vlan_id}",
+                ),
+                station_routeros_remove_command(
+                    "Remove DHCP captive portal option",
+                    "/ip/dhcp-server/option/print",
+                    "name",
+                    f"3J-CAPPORT-V{vlan_id}",
+                ),
+                *[
+                    station_routeros_remove_command(
+                        f"Remove captive-check DNS {host}",
+                        "/ip/dns/static/print",
+                        "comment",
+                        f"3J Hotspot - captive check DNS {host} for VLAN {vlan_id}",
+                    )
+                    for host in station_captive_dns_probe_hosts()
+                ],
+                station_routeros_remove_command(
+                    "Remove DHCP server",
+                    "/ip/dhcp-server/print",
+                    "name",
+                    dhcp_server_name,
+                ),
+                station_routeros_remove_command(
+                    "Remove DHCP pool",
+                    "/ip/pool/print",
+                    "name",
+                    pool_name,
+                ),
+                station_routeros_remove_command(
+                    f"Remove VLAN {vlan_id} gateway IP",
+                    "/ip/address/print",
+                    "comment",
+                    f"3J Hotspot - VLAN {vlan_id} gateway",
+                ),
+                station_routeros_remove_command(
+                    f"Remove station-created bridge VLAN {vlan_id}",
+                    "/interface/bridge/vlan/print",
+                    "comment",
+                    f"3J Hotspot - VLAN {vlan_id} trunk to next station router",
+                ),
+                station_routeros_remove_command(
+                    f"Remove VLAN {vlan_id} interface",
+                    "/interface/vlan/print",
+                    "name",
+                    vlan_interface_name,
+                ),
+            ])
+            if ap_management_enabled:
+                commands.extend([
+                    station_routeros_remove_command(
+                        "Remove AP management VLAN from local/LAN interface list",
+                        "/interface/list/member/print",
+                        "comment",
+                        f"3J AP Management - allow VLAN {ap_management_vlan_id} as local/LAN interface",
+                    ),
+                    station_routeros_remove_command(
+                        "Remove AP management DHCP server",
+                        "/ip/dhcp-server/print",
+                        "name",
+                        ap_management_dhcp_server_name,
+                    ),
+                    station_routeros_remove_command(
+                        "Remove AP management DHCP network options",
+                        "/ip/dhcp-server/network/print",
+                        "comment",
+                        f"3J AP Management - DHCP options for VLAN {ap_management_vlan_id}",
+                    ),
+                    station_routeros_remove_command(
+                        "Remove AP management DHCP pool",
+                        "/ip/pool/print",
+                        "name",
+                        ap_management_pool_name,
+                    ),
+                    station_routeros_remove_command(
+                        f"Remove AP management VLAN {ap_management_vlan_id} gateway IP",
+                        "/ip/address/print",
+                        "comment",
+                        f"3J AP Management - VLAN {ap_management_vlan_id} gateway",
+                    ),
+                    station_routeros_remove_command(
+                        f"Remove AP management bridge VLAN {ap_management_vlan_id}",
+                        "/interface/bridge/vlan/print",
+                        "comment",
+                        f"3J AP Management - VLAN {ap_management_vlan_id} trunk to next station router",
+                    ),
+                    station_routeros_remove_command(
+                        f"Remove AP management VLAN {ap_management_vlan_id} interface",
+                        "/interface/vlan/print",
+                        "name",
+                        ap_management_vlan_interface_name,
+                    ),
+                ])
+        else:
+            commands.extend([
+                station_routeros_remove_command(
+                    f"Remove station-created bridge VLAN {vlan_id}",
+                    "/interface/bridge/vlan/print",
+                    "comment",
+                    f"3J Hotspot - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
+                ),
+                station_routeros_remove_command(
+                    f"Remove VLAN {vlan_id} monitoring interface",
+                    "/interface/vlan/print",
+                    "name",
+                    vlan_interface_name,
+                ),
+            ])
+            if ap_management_enabled:
+                commands.extend([
+                    station_routeros_remove_command(
+                        f"Remove AP management bridge VLAN {ap_management_vlan_id}",
+                        "/interface/bridge/vlan/print",
+                        "comment",
+                        f"3J AP Management - VLAN {ap_management_vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
+                    ),
+                    station_routeros_remove_command(
+                        f"Remove AP management VLAN {ap_management_vlan_id} monitoring interface",
+                        "/interface/vlan/print",
+                        "name",
+                        ap_management_vlan_interface_name,
+                    ),
+                ])
+        router_plans.append({
+            "router_id": str(router["router_id"]),
+            "router_name": router.get("router_name"),
+            "host": router.get("host"),
+            "sequence_order": router.get("sequence_order", index),
+            "role": role,
+            "bridge_name": bridge_name,
+            "commands": commands,
+        })
+    return {
+        "summary": "Remove only station-created objects by exact station names/comments. Existing shared bridge VLAN rows are not deleted unless they carry the station-created comment.",
+        "station_code": station.get("station_code"),
+        "vlan_id": vlan_id,
+        "client_network_cidr": network.with_prefixlen,
+        "ap_management_enabled": ap_management_enabled,
+        "ap_management_vlan_id": ap_management_vlan_id,
+        "router_plans": router_plans,
+    }
+
+
+def mikrotik_hotspot_login_portal_url(station: Optional[dict] = None) -> str:
+    return station_portal_url(station)
+
+
+def mikrotik_hotspot_login_file_path(station: dict) -> str:
+    directory = re.sub(r"/+", "/", str(station.get("hotspot_html_directory") or "hotspot").strip().replace("\\", "/")).strip("/")
+    return f"{directory}/login.html" if directory else "login.html"
+
+
+def build_mikrotik_hotspot_login_html(station: Optional[dict] = None) -> str:
+    portal_url = mikrotik_hotspot_login_portal_url(station)
+    parsed_portal = urlparse(portal_url if "://" in portal_url else f"http://{portal_url}")
+    api_origin = f"{parsed_portal.scheme or 'http'}://{parsed_portal.netloc or '192.168.50.70'}"
+    external_portal_url = f"{api_origin}/portal"
+    escaped_portal_url = html.escape(external_portal_url, quote=True)
+    js_api_origin = json.dumps(api_origin)
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>3J WiFi Voucher Login</title>
+  <style>
+    :root {{ color-scheme: light; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: Arial, sans-serif; background: #eef4fb; color: #1f2937; }}
+    main {{ width: min(430px, calc(100% - 28px)); background: #fff; border: 1px solid #dbe3ed; border-radius: 14px; padding: 24px; box-shadow: 0 18px 48px rgba(15,23,42,.12); }}
+    .brand {{ text-align: center; margin-bottom: 18px; }}
+    .logo {{ width: 58px; height: 58px; margin: 0 auto 12px; border-radius: 16px; display: grid; place-items: center; background: #206bc4; color: #fff; font-weight: 800; font-size: 22px; }}
+    h1 {{ margin: 0 0 8px; font-size: 24px; }}
+    p {{ color: #64748b; line-height: 1.45; }}
+    label {{ display: block; margin: 12px 0 7px; font-size: 14px; font-weight: 700; }}
+    input {{ width: 100%; border: 1px solid #cbd5e1; border-radius: 10px; padding: 14px 12px; font-size: 20px; text-align: center; letter-spacing: 2px; text-transform: uppercase; }}
+    button, a.button {{ width: 100%; display: inline-flex; align-items: center; justify-content: center; border: 0; margin-top: 14px; padding: 13px 16px; border-radius: 10px; background: #206bc4; color: #fff; text-decoration: none; font-weight: 800; font-size: 16px; }}
+    button[disabled] {{ opacity: .72; }}
+    .secondary {{ background: #edf2f7 !important; color: #334155 !important; }}
+    .message {{ display: none; margin-top: 14px; padding: 12px; border-radius: 10px; font-weight: 700; line-height: 1.4; }}
+    .message.ok {{ display: block; background: #dcfce7; color: #166534; }}
+    .message.err {{ display: block; background: #fee2e2; color: #991b1b; }}
+    .help {{ margin-top: 16px; font-size: 13px; text-align: center; color: #64748b; }}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">
+      <div class="logo">3J</div>
+      <h1>3J WiFi</h1>
+      <p>Enter your voucher to connect</p>
+    </div>
+    <form id="voucher-form">
+      <label for="voucher-code">Voucher Code</label>
+      <input id="voucher-code" name="voucher_code" autocomplete="one-time-code" required>
+      <button id="submit-button" type="submit">Redeem / Connect</button>
+    </form>
+    <div id="message" class="message"></div>
+    <a class="button secondary" href="{escaped_portal_url}">Open full portal</a>
+    <div class="help">Need a voucher? Ask the nearest vendo/operator. If internet does not start after success, disconnect and reconnect to WiFi.</div>
+    <noscript><p><a href="{escaped_portal_url}">Open voucher portal</a></p></noscript>
+  </main>
+  <script>
+    (function () {{
+      var apiOrigin = {js_api_origin};
+      var values = {{
+        gateway: "mikrotik",
+        mac: "$(mac)",
+        ip: "$(ip)",
+        "server-name": "$(server-name)",
+        "link-login": "$(link-login)",
+        "link-login-only": "$(link-login-only)",
+        "link-orig": "$(link-orig)",
+        "chap-id": "$(chap-id)",
+        "chap-challenge": "$(chap-challenge)",
+        error: "$(error)"
+      }};
+      var context = {{
+        gateway: "mikrotik",
+        raw_query_params: {{}}
+      }};
+      Object.keys(values).forEach(function (key) {{
+        var value = values[key] || "";
+        if (value && value.indexOf("$(") !== 0) {{
+          context.raw_query_params[key] = value;
+          var normalized = key.replace(/-/g, "_");
+          context[normalized] = value;
+          if (key === "mac") context.client_mac = value;
+          if (key === "ip") context.client_ip = value;
+          if (key === "server-name") context.server_name = value;
+        }}
+      }});
+      var form = document.getElementById("voucher-form");
+      var input = document.getElementById("voucher-code");
+      var button = document.getElementById("submit-button");
+      var message = document.getElementById("message");
+      input.addEventListener("input", function () {{
+        input.value = input.value.toUpperCase();
+      }});
+      function show(type, text) {{
+        message.className = "message " + type;
+        message.textContent = text;
+      }}
+      form.addEventListener("submit", function (event) {{
+        event.preventDefault();
+        var code = (input.value || "").trim();
+        if (!code) return;
+        button.disabled = true;
+        button.textContent = "Checking...";
+        show("", "");
+        fetch(apiOrigin + "/api/portal/redeem", {{
+          method: "POST",
+          headers: {{ "Content-Type": "application/json" }},
+          body: JSON.stringify(Object.assign({{}}, context, {{ voucher_code: code }}))
+        }})
+          .then(function (response) {{ return response.json(); }})
+          .then(function (data) {{
+            if (data && data.status === "SUCCESS") {{
+              show("ok", data.message || "Voucher accepted. You may now use the internet.");
+              button.textContent = "Connected";
+            }} else {{
+              show("err", (data && (data.message || data.reason)) || "Voucher was not accepted.");
+              button.disabled = false;
+              button.textContent = "Redeem / Connect";
+            }}
+          }})
+          .catch(function () {{
+            show("err", "Could not contact the voucher server. Please ask the operator.");
+            button.disabled = false;
+            button.textContent = "Redeem / Connect";
+          }});
+      }});
+    }})();
+  </script>
+</body>
+</html>
+"""
+
+
+def mikrotik_hotspot_login_hash(station: Optional[dict] = None) -> str:
+    return sha256(build_mikrotik_hotspot_login_html(station).encode()).hexdigest()
+
+
+def latest_hotspot_login_sync_log(station_id: str) -> Optional[dict]:
+    return fetch_one(
+        """
+        SELECT *
+        FROM mikrotik_hotspot_login_sync_logs
+        WHERE station_id = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (station_id,),
+    )
+
+
+def record_hotspot_login_sync_log(
+    station_id: str,
+    router_id: Optional[str],
+    file_path: str,
+    content_hash: str,
+    status: str,
+    message: str,
+    result: Optional[dict],
+    admin_id: Optional[str],
+):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mikrotik_hotspot_login_sync_logs(
+                    station_id, router_id, file_path, content_hash, sync_status,
+                    message, result_json, synced_by_admin_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (station_id, router_id, file_path, content_hash, status, message, Json(sanitize_summary(result or {})), admin_id),
+            )
 
 
 def station_router_rows(station_id: str) -> list[dict]:
@@ -6578,6 +8775,9 @@ def station_router_rows(station_id: str) -> list[dict]:
 
 def public_mikrotik_station(row: dict) -> dict:
     routers = station_router_rows(str(row["id"]))
+    login_file_path = mikrotik_hotspot_login_file_path(row)
+    login_hash = mikrotik_hotspot_login_hash(row)
+    latest_login_sync = latest_hotspot_login_sync_log(str(row["id"]))
     return {
         "id": row["id"],
         "station_name": row["station_name"],
@@ -6590,11 +8790,41 @@ def public_mikrotik_station(row: dict) -> dict:
         "pool_start_ip": row["pool_start_ip"],
         "pool_end_ip": row["pool_end_ip"],
         "pool_name": row.get("pool_name") or f"POOL-3J-HOTSPOT-V{row['vlan_id']}",
+        "dhcp_server_name": row.get("dhcp_server_name") or f"DHCP-3J-HOTSPOT-V{row['vlan_id']}",
+        "dhcp_lease_time": row.get("dhcp_lease_time") or "1h",
+        "create_dhcp_server": bool(row.get("create_dhcp_server", True)),
         "dns_servers": row.get("dns_servers"),
         "local_interface_list": row.get("local_interface_list") or "LOCAL",
+        "create_hotspot_profile": bool(row.get("create_hotspot_profile", True)),
+        "create_hotspot_server": bool(row.get("create_hotspot_server", True)),
+        "create_walled_garden": bool(row.get("create_walled_garden", True)),
+        "hotspot_profile_name": row.get("hotspot_profile_name") or f"PROFILE-3J-HOTSPOT-V{row['vlan_id']}",
+        "hotspot_html_directory": row.get("hotspot_html_directory") or "hotspot",
         "hotspot_dns_name": row.get("hotspot_dns_name"),
-        "hotspot_server_name": row.get("hotspot_server_name"),
-        "portal_url": row.get("portal_url"),
+        "hotspot_server_name": row.get("hotspot_server_name") or f"HS-3J-HOTSPOT-V{row['vlan_id']}",
+        "portal_url": station_portal_url(row),
+        "ap_management_enabled": bool(row.get("ap_management_enabled")),
+        "ap_management_vlan_id": row.get("ap_management_vlan_id"),
+        "ap_management_vlan_interface_name": row.get("ap_management_vlan_interface_name") or (f"VLAN{row.get('ap_management_vlan_id')}-AP-MGMT" if row.get("ap_management_vlan_id") else None),
+        "ap_management_network_cidr": row.get("ap_management_network_cidr"),
+        "ap_management_gateway_ip": row.get("ap_management_gateway_ip"),
+        "ap_management_pool_start_ip": row.get("ap_management_pool_start_ip"),
+        "ap_management_pool_end_ip": row.get("ap_management_pool_end_ip"),
+        "ap_management_pool_name": row.get("ap_management_pool_name") or (f"POOL-AP-MGMT-V{row.get('ap_management_vlan_id')}" if row.get("ap_management_vlan_id") else None),
+        "ap_management_dhcp_server_name": row.get("ap_management_dhcp_server_name") or (f"DHCP-AP-MGMT-V{row.get('ap_management_vlan_id')}" if row.get("ap_management_vlan_id") else None),
+        "ap_management_dhcp_lease_time": row.get("ap_management_dhcp_lease_time") or "1h",
+        "ap_management_dns_servers": row.get("ap_management_dns_servers"),
+        "hotspot_login_file_path": login_file_path,
+        "hotspot_login_expected_hash": login_hash,
+        "hotspot_login_sync": {
+            "status": latest_login_sync.get("sync_status") if latest_login_sync else "NEVER_SYNCED",
+            "message": latest_login_sync.get("message") if latest_login_sync else "Managed login.html has not been uploaded yet.",
+            "file_path": latest_login_sync.get("file_path") if latest_login_sync else login_file_path,
+            "content_hash": latest_login_sync.get("content_hash") if latest_login_sync else None,
+            "expected_hash": login_hash,
+            "is_current": bool(latest_login_sync and latest_login_sync.get("sync_status") == "SUCCESS" and latest_login_sync.get("content_hash") == login_hash),
+            "created_at": latest_login_sync.get("created_at") if latest_login_sync else None,
+        },
         "status": row["status"],
         "routers": [
             {
@@ -6613,9 +8843,1117 @@ def public_mikrotik_station(row: dict) -> dict:
             for item in routers
         ],
         "plan": build_mikrotik_station_plan(row, routers),
+        "remove_plan": build_mikrotik_station_remove_plan(row, routers),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+def ap_management_router_rows(config_id: str) -> list[dict]:
+    return fetch_all(
+        """
+        SELECT ar.*, mr.router_name, mr.host, mr.api_port, mr.status AS api_status
+        FROM mikrotik_ap_management_routers ar
+        JOIN mikrotik_routers mr ON mr.id = ar.router_id
+        WHERE ar.config_id = %s
+        ORDER BY ar.sequence_order ASC
+        """,
+        (config_id,),
+    )
+
+
+def ap_management_default_config() -> dict:
+    return {
+        "id": None,
+        "config_name": "Central AP Management",
+        "vlan_id": 111,
+        "vlan_interface_name": "VLAN111-AP-MGMT",
+        "network_cidr": "10.111.0.0/24",
+        "gateway_ip": "10.111.0.1",
+        "pool_start_ip": "10.111.0.10",
+        "pool_end_ip": "10.111.0.254",
+        "pool_name": "POOL-AP-MGMT-V111",
+        "dhcp_server_name": "DHCP-AP-MGMT-V111",
+        "dhcp_lease_time": "1h",
+        "dns_servers": "8.8.8.8,1.1.1.1",
+        "local_interface_list": "LOCAL",
+        "status": "DRAFT",
+        "routers": [],
+        "plan": {"router_plans": [], "summary": "Save AP management details before reviewing RouterOS steps."},
+        "created_at": None,
+        "updated_at": None,
+    }
+
+
+def normalize_ap_management_config_payload(payload: MikrotikApManagementConfigPayload) -> dict:
+    defaults = station_default_ipv4_values(payload.network_cidr)
+    network = defaults["network"]
+    try:
+        gateway_ip = ip_address(payload.gateway_ip or str(defaults["gateway_ip"]))
+        pool_start = ip_address(payload.pool_start_ip or str(defaults["pool_start"]))
+        pool_end = ip_address(payload.pool_end_ip or str(defaults["pool_end"]))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="AP management gateway and pool values must be valid IPv4 addresses.")
+    if any(value.version != 4 for value in (gateway_ip, pool_start, pool_end)):
+        raise HTTPException(status_code=400, detail="AP management gateway and pool values must be IPv4 addresses.")
+    if gateway_ip not in network:
+        raise HTTPException(status_code=400, detail="AP management gateway IP must be inside the AP management subnet.")
+    if gateway_ip in (network.network_address, network.broadcast_address):
+        raise HTTPException(status_code=400, detail="AP management gateway IP cannot be the network or broadcast address.")
+    if pool_start not in network or pool_end not in network:
+        raise HTTPException(status_code=400, detail="AP management DHCP pool start and end must be inside the AP management subnet.")
+    if int(pool_start) > int(pool_end):
+        raise HTTPException(status_code=400, detail="AP management DHCP pool start must be lower than or equal to pool end.")
+    if int(pool_start) <= int(gateway_ip) <= int(pool_end):
+        raise HTTPException(status_code=400, detail="AP management DHCP pool cannot include the gateway IP.")
+    for station in fetch_all("SELECT station_name, vlan_id, client_network_cidr FROM mikrotik_stations WHERE status <> 'ARCHIVED'"):
+        if int(station["vlan_id"]) == int(payload.vlan_id):
+            raise HTTPException(status_code=400, detail=f"AP management VLAN {payload.vlan_id} is already used as customer VLAN by station {station['station_name']}.")
+        try:
+            station_network = ip_network(station["client_network_cidr"], strict=False)
+        except ValueError:
+            station_network = None
+        if station_network and network.overlaps(station_network):
+            raise HTTPException(status_code=400, detail=f"AP management subnet {network.with_prefixlen} overlaps customer subnet {station_network.with_prefixlen} from station {station['station_name']}.")
+    dns_servers = normalize_upstream_dns_servers(payload.dns_servers, str(gateway_ip))
+    vlan_id = int(payload.vlan_id)
+    return {
+        "config_name": payload.config_name.strip(),
+        "vlan_id": vlan_id,
+        "vlan_interface_name": (payload.vlan_interface_name or "").strip() or f"VLAN{vlan_id}-AP-MGMT",
+        "network": network,
+        "gateway_ip": gateway_ip,
+        "pool_start": pool_start,
+        "pool_end": pool_end,
+        "pool_name": (payload.pool_name or "").strip() or f"POOL-AP-MGMT-V{vlan_id}",
+        "dhcp_server_name": (payload.dhcp_server_name or "").strip() or f"DHCP-AP-MGMT-V{vlan_id}",
+        "dhcp_lease_time": (payload.dhcp_lease_time or "1h").strip() or "1h",
+        "dns_servers": dns_servers,
+        "local_interface_list": (payload.local_interface_list or "LOCAL").strip() or "LOCAL",
+    }
+
+
+def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayload, normalized: dict, config_id: Optional[str] = None):
+    if not payload.routers:
+        raise HTTPException(status_code=400, detail="Add at least one MikroTik router to the AP management chain.")
+    router_ids = [item.router_id for item in payload.routers]
+    if len(router_ids) != len(set(router_ids)):
+        raise HTTPException(status_code=400, detail="A MikroTik router can appear only once in the AP management chain.")
+    existing_routers = fetch_all("SELECT id, router_name FROM mikrotik_routers WHERE id = ANY(%s::uuid[])", (router_ids,))
+    existing_ids = {str(row["id"]) for row in existing_routers}
+    missing_ids = [router_id for router_id in router_ids if router_id not in existing_ids]
+    if missing_ids:
+        raise HTTPException(status_code=400, detail="One or more selected MikroTik routers no longer exist.")
+    errors = []
+    vlan_id = normalized["vlan_id"]
+    vlan_interface_name = normalized["vlan_interface_name"]
+    for index, item in enumerate(payload.routers):
+        router = fetch_one("SELECT id, router_name FROM mikrotik_routers WHERE id = %s", (item.router_id,))
+        router_label = router["router_name"] if router else f"router #{index + 1}"
+        if not (item.bridge_name or "").strip():
+            errors.append(f"{router_label}: bridge/interface is required.")
+        if not (item.tagged_ports or "").strip():
+            errors.append(f"{router_label}: tagged ports are required.")
+        scan, snapshot = station_snapshot_for_router(item.router_id)
+        if not scan:
+            errors.append(f"{router_label}: run a successful Preflight Scan before saving AP management.")
+            continue
+        if scan.get("scan_status") != "SUCCESS":
+            errors.append(f"{router_label}: latest Preflight Scan failed. Re-scan before saving AP management.")
+            continue
+        interfaces = station_interface_map(snapshot)
+        bridge_name = (item.bridge_name or "").strip()
+        if bridge_name and bridge_name not in interfaces:
+            errors.append(f"{router_label}: selected bridge/interface '{bridge_name}' was not found in the latest scan.")
+        elif bridge_name and station_interface_is_pppoe(interfaces[bridge_name]):
+            errors.append(f"{router_label}: '{bridge_name}' is PPPoE-related and cannot carry AP management VLAN.")
+        for port_name in [port.strip() for port in str(item.tagged_ports or "").split(",") if port.strip()]:
+            if port_name not in interfaces:
+                errors.append(f"{router_label}: tagged port '{port_name}' was not found in the latest scan.")
+            elif station_interface_is_pppoe(interfaces[port_name]):
+                errors.append(f"{router_label}: tagged port '{port_name}' is PPPoE-related and cannot carry AP management VLAN.")
+        existing_vlan_ids = set()
+        for row in mikrotik_snapshot_items(snapshot, "interface_vlans"):
+            existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-id")))
+        for row in mikrotik_snapshot_items(snapshot, "bridge_vlans"):
+            if routeros_truthy(row.get("dynamic")):
+                continue
+            existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-ids")))
+        if vlan_id in existing_vlan_ids and not station_existing_vlan_is_managed(snapshot, vlan_id, vlan_interface_name, f"3j ap management - vlan {vlan_id}"):
+            errors.append(f"{router_label}: AP management VLAN {vlan_id} already exists in the latest scan and is not marked as system-managed.")
+        if index == 0:
+            for row in mikrotik_snapshot_items(snapshot, "ip_addresses"):
+                existing_network = parse_routeros_ip_network(row.get("address"))
+                existing_interface = str(row.get("interface") or "")
+                existing_comment = str(row.get("comment") or "").lower()
+                if existing_network and normalized["network"].overlaps(existing_network) and existing_interface != vlan_interface_name and f"3j ap management - vlan {vlan_id}" not in existing_comment:
+                    errors.append(f"{router_label}: AP management subnet {normalized['network'].with_prefixlen} overlaps existing router network {existing_network} on {existing_interface or 'unknown interface'}.")
+            proposed_pool = (int(normalized["pool_start"]), int(normalized["pool_end"]))
+            for row in mikrotik_snapshot_items(snapshot, "ip_pools"):
+                if str(row.get("name") or "") == normalized["pool_name"]:
+                    continue
+                for existing_range in parse_routeros_pool_ranges(row.get("ranges")):
+                    if mikrotik_ranges_overlap(proposed_pool, existing_range):
+                        errors.append(f"{router_label}: AP management DHCP pool {normalized['pool_start']}-{normalized['pool_end']} overlaps existing pool {row.get('name')}: {row.get('ranges')}.")
+            for row in mikrotik_snapshot_items(snapshot, "dhcp_servers"):
+                existing_name = str(row.get("name") or "")
+                existing_interface = str(row.get("interface") or "")
+                existing_comment = str(row.get("comment") or "").lower()
+                if existing_name == normalized["dhcp_server_name"]:
+                    continue
+                if existing_interface == vlan_interface_name and f"3j ap management - dhcp server for vlan {vlan_id}" not in existing_comment:
+                    errors.append(f"{router_label}: DHCP server already exists on {vlan_interface_name}.")
+    if errors:
+        raise HTTPException(status_code=400, detail=" ".join(errors))
+
+
+def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict:
+    vlan_id = int(config["vlan_id"])
+    network = ip_network(config["network_cidr"], strict=False)
+    vlan_interface_name = config.get("vlan_interface_name") or f"VLAN{vlan_id}-AP-MGMT"
+    pool_name = config.get("pool_name") or f"POOL-AP-MGMT-V{vlan_id}"
+    dhcp_server_name = config.get("dhcp_server_name") or f"DHCP-AP-MGMT-V{vlan_id}"
+    dhcp_lease_time = config.get("dhcp_lease_time") or "1h"
+    dns_servers = normalize_upstream_dns_servers(config.get("dns_servers"), str(config["gateway_ip"]))
+    local_interface_list = config.get("local_interface_list") or "LOCAL"
+    router_plans = []
+    for index, router in enumerate(routers):
+        bridge_name = (router.get("bridge_name") or "").strip()
+        tagged_ports = (router.get("tagged_ports") or "").strip()
+        effective_tagged_ports = station_dedupe_csv(bridge_name, tagged_ports)
+        is_root = index == 0
+        role = "ROOT_GATEWAY" if is_root else "TRUNK_HELPER"
+        commands = []
+        if is_root:
+            commands.extend([
+                station_routeros_add_command(
+                    f"Create AP management VLAN {vlan_id} interface",
+                    "/interface/vlan/add",
+                    {
+                        "comment": f"3J AP Management - VLAN {vlan_id} interface on {bridge_name}",
+                        "interface": bridge_name,
+                        "name": vlan_interface_name,
+                        "vlan-id": str(vlan_id),
+                    },
+                    unique_field="name",
+                    unique_value=vlan_interface_name,
+                ),
+                station_routeros_add_command(
+                    f"Tag AP management VLAN {vlan_id} toward AP path",
+                    "/interface/bridge/vlan/add",
+                    {
+                        "bridge": bridge_name,
+                        "comment": f"3J AP Management - VLAN {vlan_id} trunk to AP path",
+                        "tagged": effective_tagged_ports,
+                        "vlan-ids": str(vlan_id),
+                    },
+                    existing_query={"bridge": bridge_name, "vlan-ids": str(vlan_id)},
+                    merge_bridge_vlan_tagged=True,
+                ),
+                station_routeros_add_command(
+                    f"Add AP management VLAN {vlan_id} gateway IP",
+                    "/ip/address/add",
+                    {
+                        "address": f"{config['gateway_ip']}/{network.prefixlen}",
+                        "comment": f"3J AP Management - VLAN {vlan_id} gateway",
+                        "interface": vlan_interface_name,
+                        "network": str(network.network_address),
+                    },
+                    unique_comment=f"3J AP Management - VLAN {vlan_id} gateway",
+                ),
+                station_routeros_add_command(
+                    "Create AP management DHCP pool",
+                    "/ip/pool/add",
+                    {
+                        "name": pool_name,
+                        "ranges": f"{config['pool_start_ip']}-{config['pool_end_ip']}",
+                    },
+                    unique_field="name",
+                    unique_value=pool_name,
+                ),
+                station_routeros_add_command(
+                    "Create AP management DHCP server",
+                    "/ip/dhcp-server/add",
+                    {
+                        "name": dhcp_server_name,
+                        "interface": vlan_interface_name,
+                        "address-pool": pool_name,
+                        "lease-time": dhcp_lease_time,
+                        "disabled": "no",
+                        "comment": f"3J AP Management - DHCP server for VLAN {vlan_id}",
+                    },
+                    unique_field="name",
+                    unique_value=dhcp_server_name,
+                ),
+                station_routeros_add_command(
+                    "Add AP management DHCP network options",
+                    "/ip/dhcp-server/network/add",
+                    {
+                        "address": network.with_prefixlen,
+                        "comment": f"3J AP Management - DHCP options for VLAN {vlan_id}",
+                        "dns-server": dns_servers,
+                        "gateway": str(config["gateway_ip"]),
+                    },
+                    existing_query={"address": network.with_prefixlen},
+                ),
+                station_routeros_add_command(
+                    "Allow AP management VLAN as local/LAN interface",
+                    "/interface/list/member/add",
+                    {
+                        "comment": f"3J AP Management - allow VLAN {vlan_id} as local/LAN interface",
+                        "interface": vlan_interface_name,
+                        "list": local_interface_list,
+                    },
+                    existing_query={"interface": vlan_interface_name, "list": local_interface_list},
+                ),
+            ])
+        else:
+            previous_name = routers[index - 1].get("router_name") or "previous router"
+            commands.extend([
+                station_routeros_add_command(
+                    f"Create AP management VLAN {vlan_id} monitoring interface",
+                    "/interface/vlan/add",
+                    {
+                        "comment": f"3J AP Management - VLAN {vlan_id} monitor interface on {bridge_name}",
+                        "interface": bridge_name,
+                        "name": vlan_interface_name,
+                        "vlan-id": str(vlan_id),
+                    },
+                    unique_field="name",
+                    unique_value=vlan_interface_name,
+                ),
+                station_routeros_add_command(
+                    f"Carry AP management VLAN {vlan_id} through this router",
+                    "/interface/bridge/vlan/add",
+                    {
+                        "bridge": bridge_name,
+                        "comment": f"3J AP Management - VLAN {vlan_id} trunk from {previous_name} to OLT/APs",
+                        "tagged": effective_tagged_ports,
+                        "vlan-ids": str(vlan_id),
+                    },
+                    existing_query={"bridge": bridge_name, "vlan-ids": str(vlan_id)},
+                    merge_bridge_vlan_tagged=True,
+                ),
+            ])
+        router_plans.append({
+            "router_id": str(router["router_id"]),
+            "router_name": router.get("router_name"),
+            "host": router.get("host"),
+            "sequence_order": router.get("sequence_order", index),
+            "role": role,
+            "bridge_name": bridge_name,
+            "tagged_ports": tagged_ports,
+            "effective_tagged_ports": effective_tagged_ports,
+            "commands": commands,
+        })
+    return {
+        "summary": "Central AP management creates one AP management VLAN/subnet on the root gateway and carries that VLAN through selected downstream routers toward OLT/AP paths.",
+        "vlan_id": vlan_id,
+        "vlan_interface_name": vlan_interface_name,
+        "network_cidr": network.with_prefixlen,
+        "gateway_ip": str(config["gateway_ip"]),
+        "pool_range": f"{config['pool_start_ip']}-{config['pool_end_ip']}",
+        "pool_name": pool_name,
+        "dhcp_server_name": dhcp_server_name,
+        "dhcp_lease_time": dhcp_lease_time,
+        "dns_servers": dns_servers,
+        "router_plans": router_plans,
+    }
+
+
+def public_mikrotik_ap_management_config(row: Optional[dict]) -> dict:
+    if not row:
+        return ap_management_default_config()
+    routers = ap_management_router_rows(str(row["id"]))
+    return {
+        "id": row["id"],
+        "config_name": row["config_name"],
+        "vlan_id": row["vlan_id"],
+        "vlan_interface_name": row.get("vlan_interface_name") or f"VLAN{row['vlan_id']}-AP-MGMT",
+        "network_cidr": row["network_cidr"],
+        "gateway_ip": row["gateway_ip"],
+        "pool_start_ip": row["pool_start_ip"],
+        "pool_end_ip": row["pool_end_ip"],
+        "pool_name": row.get("pool_name") or f"POOL-AP-MGMT-V{row['vlan_id']}",
+        "dhcp_server_name": row.get("dhcp_server_name") or f"DHCP-AP-MGMT-V{row['vlan_id']}",
+        "dhcp_lease_time": row.get("dhcp_lease_time") or "1h",
+        "dns_servers": row.get("dns_servers"),
+        "local_interface_list": row.get("local_interface_list") or "LOCAL",
+        "status": row["status"],
+        "routers": [
+            {
+                "id": item["id"],
+                "router_id": item["router_id"],
+                "router_name": item["router_name"],
+                "host": item["host"],
+                "api_port": item["api_port"],
+                "api_status": item["api_status"],
+                "sequence_order": item["sequence_order"],
+                "router_role": item["router_role"],
+                "bridge_name": item.get("bridge_name"),
+                "tagged_ports": item.get("tagged_ports"),
+                "notes": item.get("notes"),
+            }
+            for item in routers
+        ],
+        "plan": build_mikrotik_ap_management_plan(row, routers),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def record_ap_management_command_log(config_id: str, router_id: Optional[str], action: str, command_index: Optional[int], command: Optional[dict], status: str, message: str, result: Optional[dict], admin_id: Optional[str]):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mikrotik_ap_management_command_logs(
+                    config_id, router_id, action, command_index, command_label, command_preview,
+                    status, message, result_json, created_by_admin_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    config_id,
+                    router_id,
+                    action,
+                    command_index,
+                    (command or {}).get("label"),
+                    (command or {}).get("preview"),
+                    status,
+                    message,
+                    Json(sanitize_summary(result or {})),
+                    admin_id,
+                ),
+            )
+
+
+def public_ap_management_command_log(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "config_id": row["config_id"],
+        "router_id": row["router_id"],
+        "action": row["action"],
+        "command_index": row["command_index"],
+        "command_label": row["command_label"],
+        "command_preview": row["command_preview"],
+        "command_status": row["status"],
+        "message": row["message"],
+        "result": row.get("result_json") or {},
+        "router_name": row.get("router_name"),
+        "host": row.get("host"),
+        "created_at": row["created_at"],
+    }
+
+
+def record_station_command_log(
+    station_id: str,
+    router_id: Optional[str],
+    operation: str,
+    command_index: Optional[int],
+    command: Optional[dict],
+    status: str,
+    message: Optional[str],
+    result: Optional[dict],
+    admin_id: Optional[str],
+):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mikrotik_station_command_logs(
+                    station_id, router_id, operation, command_index, command_label,
+                    command_preview, command_status, message, result_json, created_by_admin_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    station_id,
+                    router_id,
+                    operation,
+                    command_index,
+                    (command or {}).get("label"),
+                    (command or {}).get("preview"),
+                    status,
+                    message,
+                    Json(sanitize_summary(result or {})),
+                    admin_id,
+                ),
+            )
+
+
+def public_station_command_log(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "station_id": row["station_id"],
+        "router_id": row["router_id"],
+        "operation": row["operation"],
+        "command_index": row["command_index"],
+        "command_label": row["command_label"],
+        "command_preview": row["command_preview"],
+        "command_status": row["command_status"],
+        "message": row["message"],
+        "result": row.get("result_json") or {},
+        "router_name": row.get("router_name"),
+        "host": row.get("host"),
+        "created_at": row["created_at"],
+    }
+
+
+def station_root_router(station_id: str) -> Optional[dict]:
+    routers = station_router_rows(station_id)
+    return routers[0] if routers else None
+
+
+def mikrotik_hotspot_login_sync_status_for_station(station: dict, remote_check: bool = True) -> dict:
+    station_id = str(station["id"])
+    root = station_root_router(station_id)
+    file_path = mikrotik_hotspot_login_file_path(station)
+    expected_hash = mikrotik_hotspot_login_hash(station)
+    latest_sync = latest_hotspot_login_sync_log(station_id)
+    base = {
+        "station_id": station_id,
+        "station_name": station.get("station_name"),
+        "router_id": root.get("router_id") if root else None,
+        "router_name": root.get("router_name") if root else None,
+        "host": root.get("host") if root else None,
+        "file_path": file_path,
+        "expected_hash": expected_hash,
+        "latest_sync": {
+            "status": latest_sync.get("sync_status") if latest_sync else "NEVER_SYNCED",
+            "message": latest_sync.get("message") if latest_sync else None,
+            "content_hash": latest_sync.get("content_hash") if latest_sync else None,
+            "created_at": latest_sync.get("created_at") if latest_sync else None,
+        },
+    }
+    if not root:
+        return {**base, "status": "NOT_READY", "message": "Station has no root gateway router."}
+    router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (root["router_id"],))
+    if not router or not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        return {**base, "status": "NOT_READY", "message": "Root gateway host, username, and password are required before checking login.html."}
+    if not remote_check:
+        if latest_sync and latest_sync.get("sync_status") == "SUCCESS" and latest_sync.get("content_hash") == expected_hash:
+            return {**base, "status": "SYNCED", "message": "Latest recorded sync matches the current managed login.html."}
+        return {**base, "status": "UNKNOWN", "message": "Run Check Sync to verify the file on MikroTik."}
+    try:
+        password = decrypt_secret(router.get("password_encrypted"))
+        rows = routeros_file_query(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), file_path)
+        if not rows:
+            return {**base, "status": "MISSING", "message": f"{file_path} was not detected on the root gateway."}
+        contents = rows[0].get("contents")
+        if contents is not None:
+            size_text = rows[0].get("size")
+            try:
+                remote_size = int(size_text) if size_text not in (None, "") else 0
+            except (TypeError, ValueError):
+                remote_size = 0
+            content_truncated = "[TRUNCATED]" in contents or (remote_size and len(contents) < remote_size)
+            if content_truncated and latest_sync and latest_sync.get("sync_status") == "SUCCESS" and latest_sync.get("content_hash") == expected_hash:
+                return {**base, "status": "SYNCED", "message": f"{file_path} exists. RouterOS returned truncated file contents, but the last recorded sync matches the current managed login.html."}
+            remote_hash = sha256(contents.encode()).hexdigest()
+            if remote_hash == expected_hash:
+                return {**base, "status": "SYNCED", "message": f"{file_path} exists and matches the current managed login.html.", "remote_hash": remote_hash}
+            return {**base, "status": "OUTDATED", "message": f"{file_path} exists but does not match the current managed login.html.", "remote_hash": remote_hash}
+        if latest_sync and latest_sync.get("sync_status") == "SUCCESS" and latest_sync.get("content_hash") == expected_hash:
+            return {**base, "status": "SYNCED", "message": f"{file_path} exists. RouterOS did not return file contents, but the last recorded sync matches the current template."}
+        return {**base, "status": "DETECTED", "message": f"{file_path} exists, but RouterOS did not return file contents for hash verification."}
+    except Exception as exc:
+        return {**base, "status": "ERROR", "message": sanitize_routeros_text(str(exc))}
+
+
+def mikrotik_station_hotspot_diagnostics(station: dict, client_ip: Optional[str] = None) -> dict:
+    station_id = str(station["id"])
+    root = station_root_router(station_id)
+    checks = []
+
+    def add_check(key: str, title: str, status: str, message: str, details: Optional[dict] = None):
+        checks.append({
+            "key": key,
+            "title": title,
+            "status": status,
+            "message": message,
+            "details": sanitize_summary(details or {}),
+        })
+
+    station_summary = {
+        "station_id": station_id,
+        "station_name": station.get("station_name"),
+        "vlan_id": station.get("vlan_id"),
+        "client_network_cidr": station.get("client_network_cidr"),
+        "gateway_ip": station.get("gateway_ip"),
+        "hotspot_server_name": station_hotspot_server_name(station),
+        "hotspot_profile_name": station.get("hotspot_profile_name") or f"PROFILE-3J-HOTSPOT-V{station['vlan_id']}",
+        "hotspot_interface": station.get("vlan_interface_name") or f"VLAN{station['vlan_id']}-3J-HOTSPOT",
+        "portal_url": station_portal_url(station),
+        "client_ip": client_ip,
+    }
+    if not root:
+        add_check("root_gateway", "Root gateway", "FAILED", "Station has no root gateway router.")
+        return {"status": "FAILED", "station": station_summary, "root_router": None, "checks": checks}
+
+    station_summary["root_router_id"] = str(root["router_id"])
+    station_summary["root_router_name"] = root.get("router_name")
+    station_summary["root_router_host"] = root.get("host")
+    router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (root["router_id"],))
+    if not router or not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        add_check("root_gateway", "Root gateway API", "FAILED", "Root gateway API credentials are incomplete.")
+        return {"status": "FAILED", "station": station_summary, "root_router": sanitize_summary(root), "checks": checks}
+
+    try:
+        password = decrypt_secret(router.get("password_encrypted"))
+        if not password:
+            raise RuntimeError("Saved MikroTik password could not be decrypted.")
+    except Exception as exc:
+        add_check("root_gateway", "Root gateway API", "FAILED", sanitize_routeros_text(str(exc)))
+        return {"status": "FAILED", "station": station_summary, "root_router": sanitize_summary(root), "checks": checks}
+
+    def query(path: str, *extra_words: str):
+        return routeros_readonly_query(
+            router["host"],
+            router["api_port"],
+            router.get("username"),
+            password,
+            router.get("use_tls"),
+            [path, *extra_words],
+        )
+
+    try:
+        identity = query("/system/identity/print")
+        add_check("api_login", "RouterOS API login", "OK", "Root gateway API login works.", {"identity": identity[:1]})
+    except Exception as exc:
+        add_check("api_login", "RouterOS API login", "FAILED", sanitize_routeros_text(str(exc)))
+        return {"status": "FAILED", "station": station_summary, "root_router": sanitize_summary(root), "checks": checks}
+
+    profile_name = station_summary["hotspot_profile_name"]
+    server_name = station_summary["hotspot_server_name"]
+    hotspot_interface = station_summary["hotspot_interface"]
+    portal_host = urlparse(station_summary["portal_url"] if "://" in station_summary["portal_url"] else f"http://{station_summary['portal_url']}").hostname
+    portal_port = urlparse(station_summary["portal_url"] if "://" in station_summary["portal_url"] else f"http://{station_summary['portal_url']}").port or 80
+
+    try:
+        rows = query("/ip/hotspot/profile/print", f"?name={profile_name}", "=.proplist=.id,name,dns-name,html-directory,login-by,hotspot-address")
+        add_check("hotspot_profile", "HotSpot profile", "OK" if rows else "FAILED", f"HotSpot profile {profile_name} {'exists' if rows else 'was not found'}.", {"rows": rows})
+    except Exception as exc:
+        add_check("hotspot_profile", "HotSpot profile", "FAILED", sanitize_routeros_text(str(exc)))
+
+    try:
+        rows = query("/ip/hotspot/print", f"?name={server_name}", "=.proplist=.id,name,interface,profile,address-pool,disabled")
+        if rows:
+            server = rows[0]
+            disabled = routeros_truthy(server.get("disabled"))
+            interface_matches = server.get("interface") == hotspot_interface
+            status = "OK" if not disabled and interface_matches else "WARNING"
+            message = f"HotSpot server {server_name} is {'disabled' if disabled else 'enabled'} on {server.get('interface') or 'unknown interface'}."
+            if not interface_matches:
+                message += f" Expected interface {hotspot_interface}."
+            add_check("hotspot_server", "HotSpot server", status, message, {"rows": rows})
+        else:
+            add_check("hotspot_server", "HotSpot server", "FAILED", f"HotSpot server {server_name} was not found.")
+    except Exception as exc:
+        add_check("hotspot_server", "HotSpot server", "FAILED", sanitize_routeros_text(str(exc)))
+
+    login_status = mikrotik_hotspot_login_sync_status_for_station(station, remote_check=True)
+    add_check(
+        "login_html",
+        "Managed login.html",
+        "OK" if login_status.get("status") == "SYNCED" else "WARNING",
+        login_status.get("message") or "Managed login.html status checked.",
+        login_status,
+    )
+
+    try:
+        dhcp_name = station.get("dhcp_server_name") or f"DHCP-3J-HOTSPOT-V{station['vlan_id']}"
+        rows = query("/ip/dhcp-server/print", f"?name={dhcp_name}", "=.proplist=.id,name,interface,address-pool,disabled")
+        add_check("dhcp_server", "DHCP server", "OK" if rows else "WARNING", "DHCP server exists on the root gateway." if rows else "DHCP server was not found by expected station name.", {"rows": rows})
+    except Exception as exc:
+        add_check("dhcp_server", "DHCP server", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        dhcp_name = station.get("dhcp_server_name") or f"DHCP-3J-HOTSPOT-V{station['vlan_id']}"
+        lease_rows = query(
+            "/ip/dhcp-server/lease/print",
+            "=.proplist=.id,address,mac-address,host-name,status,last-seen,server,dynamic",
+        )
+        station_leases_by_mac = {}
+        non_station_leases_by_mac = {}
+        ap_like_station_leases = []
+        for row in lease_rows:
+            mac = str(row.get("mac-address") or "").upper()
+            if not mac:
+                continue
+            host_name = str(row.get("host-name") or "")
+            if row.get("server") == dhcp_name:
+                station_leases_by_mac.setdefault(mac, []).append(row)
+                if re.search(r"(EAP\d*|^AP[-_]|OMADA|ACCESS[-_ ]?POINT)", host_name, re.IGNORECASE):
+                    ap_like_station_leases.append(row)
+            else:
+                non_station_leases_by_mac.setdefault(mac, []).append(row)
+        leaked_macs = []
+        for mac, station_rows in station_leases_by_mac.items():
+            other_rows = [
+                row for row in non_station_leases_by_mac.get(mac, [])
+                if str(row.get("status") or "").lower() == "bound"
+            ]
+            if other_rows:
+                leaked_macs.append({"mac": mask_mac(mac), "station_leases": station_rows, "other_leases": other_rows})
+        if leaked_macs:
+            add_check(
+                "client_vlan_isolation",
+                "Captive VLAN isolation",
+                "FAILED",
+                "At least one client MAC has both a HotSpot VLAN lease and a normal/non-station DHCP lease. The captive SSID is not isolated to the station VLAN, so phones can bypass the HotSpot popup path.",
+                {"dhcp_server": dhcp_name, "overlaps": leaked_macs[:10]},
+            )
+        elif ap_like_station_leases:
+            add_check(
+                "client_vlan_isolation",
+                "Captive VLAN isolation",
+                "WARNING",
+                "AP-looking devices are receiving leases from the captive client DHCP server. AP management should normally stay on the management/native network while only SSID client traffic uses the HotSpot VLAN.",
+                {"dhcp_server": dhcp_name, "ap_like_station_leases": ap_like_station_leases[:10]},
+            )
+        else:
+            add_check(
+                "client_vlan_isolation",
+                "Captive VLAN isolation",
+                "OK",
+                "No duplicate MAC was found between the station HotSpot DHCP server and other DHCP servers on the root gateway.",
+                {"dhcp_server": dhcp_name},
+            )
+    except Exception as exc:
+        add_check("client_vlan_isolation", "Captive VLAN isolation", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        rows = query("/ip/dns/print", "=.proplist=allow-remote-requests,servers")
+        dns_enabled = any(routeros_truthy(row.get("allow-remote-requests")) for row in rows)
+        add_check(
+            "dns_resolver",
+            "Router DNS for phone popup detection",
+            "OK" if dns_enabled else "FAILED",
+            "RouterOS DNS remote requests are enabled for captive-check lookups." if dns_enabled else "RouterOS DNS remote requests are disabled. Phones may not resolve captive-check domains, so the WiFi sign-in popup may not appear.",
+            {"rows": rows},
+        )
+    except Exception as exc:
+        add_check("dns_resolver", "Router DNS for phone popup detection", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        rows = query("/ip/dhcp-server/network/print", f"?address={station['client_network_cidr']}", "=.proplist=.id,address,gateway,dns-server,comment")
+        dns_text = ",".join(str(row.get("dns-server") or "") for row in rows)
+        expected_dns = str(station["gateway_ip"])
+        dns_values = [item.strip() for item in dns_text.split(",") if item.strip()]
+        dns_gateway_only = rows and dns_values == [expected_dns]
+        add_check(
+            "dhcp_dns_options",
+            "DHCP DNS options",
+            "OK" if dns_gateway_only else "WARNING",
+            "DHCP gives captive clients only the HotSpot gateway as DNS." if dns_gateway_only else "DHCP DNS should be only the station gateway IP. Public DNS should stay on the MikroTik resolver, not be handed directly to captive clients.",
+            {"expected_client_dns": expected_dns, "actual_client_dns": dns_values, "rows": rows},
+        )
+    except Exception as exc:
+        add_check("dhcp_dns_options", "DHCP DNS options", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        udp_comment = f"3J Hotspot - force DNS UDP to router for VLAN {station['vlan_id']}"
+        tcp_comment = f"3J Hotspot - force DNS TCP to router for VLAN {station['vlan_id']}"
+        udp_rows = query("/ip/firewall/nat/print", f"?comment={udp_comment}", "=.proplist=.id,chain,action,src-address,protocol,dst-port,to-ports,disabled,comment")
+        tcp_rows = query("/ip/firewall/nat/print", f"?comment={tcp_comment}", "=.proplist=.id,chain,action,src-address,protocol,dst-port,to-ports,disabled,comment")
+        udp_ok = any(row.get("chain") == "dstnat" and row.get("action") == "redirect" and row.get("src-address") == station["client_network_cidr"] and row.get("protocol") == "udp" and str(row.get("dst-port") or "") == "53" and not routeros_truthy(row.get("disabled")) for row in udp_rows)
+        tcp_ok = any(row.get("chain") == "dstnat" and row.get("action") == "redirect" and row.get("src-address") == station["client_network_cidr"] and row.get("protocol") == "tcp" and str(row.get("dst-port") or "") == "53" and not routeros_truthy(row.get("disabled")) for row in tcp_rows)
+        add_check(
+            "dns_redirect",
+            "Client DNS redirect",
+            "OK" if udp_ok and tcp_ok else "WARNING",
+            "Client DNS attempts are redirected to the HotSpot gateway." if udp_ok and tcp_ok else "DNS redirect rules are incomplete. Phones may bypass captive detection with public/private DNS.",
+            {"udp_rows": udp_rows, "tcp_rows": tcp_rows},
+        )
+    except Exception as exc:
+        add_check("dns_redirect", "Client DNS redirect", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        private_dns_comment = f"3J Hotspot - reject Private DNS TLS for VLAN {station['vlan_id']}"
+        rows = query(
+            "/ip/firewall/filter/print",
+            f"?comment={private_dns_comment}",
+            "=.proplist=.id,chain,action,src-address,protocol,dst-port,reject-with,disabled,comment",
+        )
+        has_reject = any(
+            row.get("chain") == "input"
+            and row.get("action") == "reject"
+            and row.get("src-address") == station["client_network_cidr"]
+            and row.get("protocol") == "tcp"
+            and str(row.get("dst-port") or "") == "853"
+            and str(row.get("reject-with") or "") == "tcp-reset"
+            and not routeros_truthy(row.get("disabled"))
+            for row in rows
+        )
+        add_check(
+            "private_dns_tls_reject",
+            "Private DNS captive fallback",
+            "OK" if has_reject else "WARNING",
+            "TCP 853 Private DNS is rejected with TCP reset for station clients, so Android can fall back to normal captive DNS checks." if has_reject else "No station rule rejects TCP 853 Private DNS. Some Android phones may keep trying DNS-over-TLS and never reach the normal captive portal HTTP check.",
+            {"rows": rows},
+        )
+    except Exception as exc:
+        add_check("private_dns_tls_reject", "Private DNS captive fallback", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        rows = query(
+            "/ip/firewall/nat/print",
+            "=.proplist=.id,chain,action,src-address,protocol,dst-port,to-ports,disabled,comment",
+        )
+        conflicting_rows = [
+            row for row in rows
+            if row.get("chain") == "dstnat"
+            and row.get("action") == "redirect"
+            and str(row.get("dst-port") or "") in {"80,443", "443,80"}
+            and str(row.get("to-ports") or "") == "8081"
+            and not row.get("src-address")
+            and not routeros_truthy(row.get("disabled"))
+        ]
+        add_check(
+            "legacy_web_proxy_redirect",
+            "Legacy web-proxy redirect",
+            "WARNING" if conflicting_rows else "OK",
+            "A global TCP 80/443 redirect to MikroTik web proxy port 8081 is enabled and can interfere with HotSpot captive portal redirects." if conflicting_rows else "No enabled global TCP 80/443 web-proxy redirect was detected.",
+            {"rows": conflicting_rows},
+        )
+    except Exception as exc:
+        add_check("legacy_web_proxy_redirect", "Legacy web-proxy redirect", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        rows = query(
+            "/ipv6/nd/print",
+            "=.proplist=.id,interface,disabled,advertise-dns,ra-lifetime,comment",
+        )
+        expected_interface = station.get("vlan_interface_name") or f"VLAN{station['vlan_id']}-3J-HOTSPOT"
+        suppress_ok = any(
+            row.get("interface") == expected_interface
+            and not routeros_truthy(row.get("disabled"))
+            and not routeros_truthy(row.get("advertise-dns"))
+            and str(row.get("ra-lifetime") or "").lower() in {"0s", "none"}
+            for row in rows
+        )
+        add_check(
+            "ipv6_ra_suppression",
+            "IPv6 RA suppression",
+            "OK" if suppress_ok else "WARNING",
+            "IPv6 router advertisements are suppressed on the station HotSpot VLAN. Captive portal enforcement remains IPv4-only." if suppress_ok else "IPv6 router advertisements may still be active on the station VLAN. Phones may try IPv6 and bypass the IPv4 HotSpot redirect path.",
+            {"expected_interface": expected_interface, "rows": rows},
+        )
+    except Exception as exc:
+        add_check("ipv6_ra_suppression", "IPv6 RA suppression", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        capport_option_name = f"3J-CAPPORT-V{station['vlan_id']}"
+        capport_url = station_capport_url(station)
+        option_rows = query("/ip/dhcp-server/option/print", f"?name={capport_option_name}", "=.proplist=.id,name,code,value")
+        network_rows = query("/ip/dhcp-server/network/print", f"?address={station['client_network_cidr']}", "=.proplist=.id,address,dhcp-option")
+        option_exists = bool(option_rows)
+        network_has_option = any(capport_option_name in str(row.get("dhcp-option") or "") for row in network_rows)
+        add_check(
+            "capport_dhcp_option",
+            "DHCP captive portal option",
+            "OK" if option_exists and network_has_option else "WARNING",
+            "DHCP option 114 advertises the captive portal API to supported phones." if option_exists and network_has_option else "DHCP option 114 is not fully attached. Some phones may not auto-open the captive portal popup.",
+            {"option_name": capport_option_name, "capport_url": capport_url, "option_rows": option_rows, "network_rows": network_rows},
+        )
+    except Exception as exc:
+        add_check("capport_dhcp_option", "DHCP captive portal option", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        nat_comment = f"3J Hotspot - NAT for VLAN {station['vlan_id']} clients"
+        rows = query(
+            "/ip/firewall/nat/print",
+            f"?comment={nat_comment}",
+            "=.proplist=.id,chain,action,src-address,out-interface,out-interface-list,comment,disabled",
+        )
+        enabled_rows = [row for row in rows if not routeros_truthy(row.get("disabled"))]
+        has_station_nat = any(
+            row.get("chain") == "srcnat"
+            and row.get("action") == "masquerade"
+            and row.get("src-address") == station["client_network_cidr"]
+            for row in enabled_rows
+        )
+        add_check(
+            "internet_nat",
+            "Internet NAT",
+            "OK" if has_station_nat else "FAILED",
+            "NAT masquerade exists for the station client subnet." if has_station_nat else "No enabled station NAT masquerade was found. Authorized clients may not have internet.",
+            {"expected_comment": nat_comment, "expected_src_address": station["client_network_cidr"], "rows": rows},
+        )
+    except Exception as exc:
+        add_check("internet_nat", "Internet NAT", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        client_tracking_comment = f"3J Hotspot - keep VLAN {station['vlan_id']} client traffic tracked"
+        return_tracking_comment = f"3J Hotspot - keep VLAN {station['vlan_id']} return traffic tracked"
+        client_rows = query("/ip/firewall/raw/print", f"?comment={client_tracking_comment}", "=.proplist=.id,chain,action,src-address,dst-address,disabled,comment")
+        return_rows = query("/ip/firewall/raw/print", f"?comment={return_tracking_comment}", "=.proplist=.id,chain,action,src-address,dst-address,disabled,comment")
+        broad_notrack_rows = [
+            row for row in query("/ip/firewall/raw/print", "=.proplist=.id,chain,action,src-address,dst-address,disabled,comment")
+            if row.get("chain") == "prerouting"
+            and row.get("action") == "notrack"
+            and not row.get("src-address")
+            and not row.get("dst-address")
+            and not routeros_truthy(row.get("disabled"))
+        ]
+        client_ok = any(row.get("chain") == "prerouting" and row.get("action") == "accept" and row.get("src-address") == station["client_network_cidr"] and not routeros_truthy(row.get("disabled")) for row in client_rows)
+        return_ok = any(row.get("chain") == "prerouting" and row.get("action") == "accept" and row.get("dst-address") == station["client_network_cidr"] and not routeros_truthy(row.get("disabled")) for row in return_rows)
+        if broad_notrack_rows and not (client_ok and return_ok):
+            status = "WARNING"
+            message = "A broad raw notrack rule exists. Station traffic should have raw accept exceptions before it so HotSpot redirect/NAT remains trackable."
+        else:
+            status = "OK"
+            message = "Station traffic has raw tracking exceptions, or no broad raw notrack rule was detected."
+        add_check(
+            "raw_tracking",
+            "Raw tracking for HotSpot redirect",
+            status,
+            message,
+            {"broad_notrack_rows": broad_notrack_rows, "client_rows": client_rows, "return_rows": return_rows},
+        )
+    except Exception as exc:
+        add_check("raw_tracking", "Raw tracking for HotSpot redirect", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        rows = query("/ip/hotspot/walled-garden/ip/print", "=.proplist=.id,action,dst-address,dst-port,protocol,disabled,comment")
+        relevant = [
+            row for row in rows
+            if (portal_host and row.get("dst-address") == portal_host)
+            or f"VLAN {station['vlan_id']}" in str(row.get("comment") or "")
+        ]
+        has_portal_host = any(row.get("dst-address") == portal_host for row in relevant)
+        has_portal_port = any(str(row.get("dst-port") or "") == str(portal_port) for row in relevant)
+        add_check(
+            "walled_garden",
+            "Pre-login portal access",
+            "OK" if has_portal_host and has_portal_port else "WARNING",
+            "Walled garden contains portal host and port allow rules." if has_portal_host and has_portal_port else "Portal walled garden rules may be incomplete.",
+            {"portal_host": portal_host, "portal_port": portal_port, "rows": relevant},
+        )
+    except Exception as exc:
+        add_check("walled_garden", "Pre-login portal access", "WARNING", sanitize_routeros_text(str(exc)))
+
+    if client_ip:
+        try:
+            host_rows = query("/ip/hotspot/host/print", f"?address={client_ip}", "=.proplist=.id,address,mac-address,authorized,bypassed,server")
+            active_rows = query("/ip/hotspot/active/print", f"?address={client_ip}", "=.proplist=.id,address,mac-address,user,server,uptime")
+            if active_rows:
+                add_check("client_status", "Client HotSpot status", "OK", f"Client {client_ip} is already active/authorized.", {"host_rows": host_rows, "active_rows": active_rows})
+            elif host_rows:
+                add_check("client_status", "Client HotSpot status", "WARNING", f"Client {client_ip} is visible in HotSpot hosts but is not authorized yet.", {"host_rows": host_rows, "active_rows": active_rows})
+            else:
+                add_check("client_status", "Client HotSpot status", "FAILED", f"Client {client_ip} is not visible in MikroTik HotSpot host table. Redirect will not work until HotSpot catches this client.", {"host_rows": [], "active_rows": []})
+        except Exception as exc:
+            add_check("client_status", "Client HotSpot status", "WARNING", sanitize_routeros_text(str(exc)))
+    else:
+        add_check("client_status", "Client HotSpot status", "WARNING", "Enter the phone/client IP to verify whether MikroTik sees it in the HotSpot host table.")
+
+    failed = sum(1 for item in checks if item["status"] == "FAILED")
+    warnings = sum(1 for item in checks if item["status"] == "WARNING")
+    status = "FAILED" if failed else "WARNING" if warnings else "READY"
+    return {
+        "status": status,
+        "station": station_summary,
+        "root_router": sanitize_summary(root),
+        "checks": checks,
+        "summary": {
+            "ready": sum(1 for item in checks if item["status"] == "OK"),
+            "warnings": warnings,
+            "failed": failed,
+            "total": len(checks),
+        },
+    }
+
+
+def sync_mikrotik_hotspot_login_for_station(station: dict, admin_id: Optional[str]) -> dict:
+    station_id = str(station["id"])
+    root = station_root_router(station_id)
+    file_path = mikrotik_hotspot_login_file_path(station)
+    content = build_mikrotik_hotspot_login_html(station)
+    content_hash = sha256(content.encode()).hexdigest()
+    if not root:
+        message = "Station has no root gateway router."
+        record_hotspot_login_sync_log(station_id, None, file_path, content_hash, "NOT_READY", message, {"error": message}, admin_id)
+        return {"station_id": station_id, "station_name": station.get("station_name"), "status": "NOT_READY", "message": message, "file_path": file_path}
+    router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (root["router_id"],))
+    if not router or not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        message = "Root gateway host, username, and password are required before uploading login.html."
+        record_hotspot_login_sync_log(station_id, root.get("router_id"), file_path, content_hash, "NOT_READY", message, {"error": message}, admin_id)
+        return {"station_id": station_id, "station_name": station.get("station_name"), "router_id": root.get("router_id"), "router_name": root.get("router_name"), "status": "NOT_READY", "message": message, "file_path": file_path}
+    try:
+        password = decrypt_secret(router.get("password_encrypted"))
+        if not password:
+            raise RuntimeError("Saved MikroTik password could not be decrypted.")
+        result = routeros_write_text_file(
+            router["host"],
+            router["api_port"],
+            router.get("username"),
+            password,
+            router.get("use_tls"),
+            file_path,
+            content,
+        )
+        status = "SUCCESS"
+        message = result.get("message") or f"Uploaded managed HotSpot login.html to {file_path}."
+        record_hotspot_login_sync_log(station_id, root["router_id"], file_path, content_hash, status, message, result, admin_id)
+        record_station_command_log(
+            station_id,
+            root["router_id"],
+            "APPLY",
+            None,
+            {"label": "Upload managed HotSpot login.html", "preview": f"/file set-or-add name={file_path} contents=<3J managed redirect template>"},
+            status,
+            message,
+            result,
+            admin_id,
+        )
+        return {
+            "station_id": station_id,
+            "station_name": station.get("station_name"),
+            "router_id": root["router_id"],
+            "router_name": root.get("router_name"),
+            "host": root.get("host"),
+            "status": status,
+            "message": message,
+            "file_path": file_path,
+            "content_hash": content_hash,
+            "result": sanitize_summary(result),
+        }
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        result = {"error": message}
+        record_hotspot_login_sync_log(station_id, root.get("router_id"), file_path, content_hash, "FAILED", message, result, admin_id)
+        record_station_command_log(
+            station_id,
+            root.get("router_id"),
+            "APPLY",
+            None,
+            {"label": "Upload managed HotSpot login.html", "preview": f"/file set-or-add name={file_path} contents=<3J managed redirect template>"},
+            "FAILED",
+            message,
+            result,
+            admin_id,
+        )
+        return {
+            "station_id": station_id,
+            "station_name": station.get("station_name"),
+            "router_id": root.get("router_id"),
+            "router_name": root.get("router_name"),
+            "host": root.get("host"),
+            "status": "FAILED",
+            "message": message,
+            "file_path": file_path,
+            "content_hash": content_hash,
+        }
+
+
+def latest_mikrotik_ap_management_config_row() -> Optional[dict]:
+    return fetch_one(
+        """
+        SELECT *
+        FROM mikrotik_ap_management_configs
+        WHERE status <> 'ARCHIVED'
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1
+        """
+    )
+
+
+def save_mikrotik_ap_management_payload(payload: MikrotikApManagementConfigPayload, admin: dict) -> dict:
+    normalized = normalize_ap_management_config_payload(payload)
+    validate_ap_management_router_path(payload, normalized)
+    existing = latest_mikrotik_ap_management_config_row()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if existing:
+                cur.execute(
+                    """
+                    UPDATE mikrotik_ap_management_configs
+                    SET config_name = %s,
+                        vlan_id = %s,
+                        vlan_interface_name = %s,
+                        network_cidr = %s,
+                        gateway_ip = %s,
+                        pool_start_ip = %s,
+                        pool_end_ip = %s,
+                        pool_name = %s,
+                        dhcp_server_name = %s,
+                        dhcp_lease_time = %s,
+                        dns_servers = %s,
+                        local_interface_list = %s,
+                        status = 'READY_FOR_REVIEW',
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (
+                        normalized["config_name"],
+                        normalized["vlan_id"],
+                        normalized["vlan_interface_name"],
+                        normalized["network"].with_prefixlen,
+                        str(normalized["gateway_ip"]),
+                        str(normalized["pool_start"]),
+                        str(normalized["pool_end"]),
+                        normalized["pool_name"],
+                        normalized["dhcp_server_name"],
+                        normalized["dhcp_lease_time"],
+                        normalized["dns_servers"],
+                        normalized["local_interface_list"],
+                        existing["id"],
+                    ),
+                )
+                config = cur.fetchone()
+                cur.execute("DELETE FROM mikrotik_ap_management_routers WHERE config_id = %s", (config["id"],))
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO mikrotik_ap_management_configs(
+                        config_name, vlan_id, vlan_interface_name, network_cidr, gateway_ip,
+                        pool_start_ip, pool_end_ip, pool_name, dhcp_server_name, dhcp_lease_time,
+                        dns_servers, local_interface_list, status, created_by_admin_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'READY_FOR_REVIEW', %s)
+                    RETURNING *
+                    """,
+                    (
+                        normalized["config_name"],
+                        normalized["vlan_id"],
+                        normalized["vlan_interface_name"],
+                        normalized["network"].with_prefixlen,
+                        str(normalized["gateway_ip"]),
+                        str(normalized["pool_start"]),
+                        str(normalized["pool_end"]),
+                        normalized["pool_name"],
+                        normalized["dhcp_server_name"],
+                        normalized["dhcp_lease_time"],
+                        normalized["dns_servers"],
+                        normalized["local_interface_list"],
+                        admin["id"],
+                    ),
+                )
+                config = cur.fetchone()
+            for index, item in enumerate(payload.routers):
+                cur.execute(
+                    """
+                    INSERT INTO mikrotik_ap_management_routers(
+                        config_id, router_id, sequence_order, router_role, bridge_name, tagged_ports, notes
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        config["id"],
+                        item.router_id,
+                        index,
+                        "ROOT_GATEWAY" if index == 0 else "TRUNK_HELPER",
+                        (item.bridge_name or "").strip(),
+                        (item.tagged_ports or "").strip(),
+                        (item.notes or "").strip() or None,
+                    ),
+                )
+    audit(admin["id"], "save_mikrotik_ap_management_config", "mikrotik_ap_management_configs", str(config["id"]), {"vlan_id": normalized["vlan_id"], "network_cidr": normalized["network"].with_prefixlen, "router_count": len(payload.routers)})
+    saved = fetch_one("SELECT * FROM mikrotik_ap_management_configs WHERE id = %s", (config["id"],))
+    return public_mikrotik_ap_management_config(saved)
 
 
 def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, station_id: Optional[str] = None) -> dict:
@@ -6637,18 +9975,28 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
             label = "root/primary router" if index == 0 else f"router #{index + 1}"
             raise HTTPException(status_code=400, detail=f"Tagged ports are required for the {label}.")
     network, gateway_ip, pool_start, pool_end, dns_servers = validate_station_network(payload)
+    ap_management = validate_station_ap_management_network(payload, network)
     station_code = station_code_from_text(payload.station_code or payload.station_name)
     vlan_interface_name = (payload.vlan_interface_name or "").strip() or f"VLAN{payload.vlan_id}-3J-HOTSPOT"
     pool_name = (payload.pool_name or "").strip() or f"POOL-3J-HOTSPOT-V{payload.vlan_id}"
-    hotspot_dns_name = (payload.hotspot_dns_name or "").strip() or f"wifi.{station_code}.local"
+    dhcp_server_name = (payload.dhcp_server_name or "").strip() or f"DHCP-3J-HOTSPOT-V{payload.vlan_id}"
+    dhcp_lease_time = (payload.dhcp_lease_time or "1h").strip() or "1h"
+    hotspot_profile_name = (payload.hotspot_profile_name or "").strip() or f"PROFILE-3J-HOTSPOT-V{payload.vlan_id}"
+    hotspot_html_directory = (payload.hotspot_html_directory or "hotspot").strip() or "hotspot"
+    hotspot_dns_name = (payload.hotspot_dns_name or "").strip() or default_hotspot_dns_name(station_code)
     hotspot_server_name = (payload.hotspot_server_name or "").strip() or f"HS-3J-HOTSPOT-V{payload.vlan_id}"
     portal_url = (payload.portal_url or "").strip() or "http://192.168.50.70:8080/portal"
-    station_validate_router_path(payload, station_id, network, pool_start, pool_end)
+    station_validate_router_path(payload, station_id, network, pool_start, pool_end, ap_management)
     duplicate_conditions = [
         ("station_code", "lower(btrim(station_code)) = lower(btrim(%s))", station_code, "Station code is already used by another active station."),
         ("vlan_id", "vlan_id = %s", payload.vlan_id, f"Customer VLAN {payload.vlan_id} is already used by another active station."),
         ("client_network_cidr", "lower(btrim(client_network_cidr)) = lower(btrim(%s))", network.with_prefixlen, f"Client network {network.with_prefixlen} is already used by another active station."),
     ]
+    if ap_management:
+        duplicate_conditions.extend([
+            ("ap_management_vlan_id", "ap_management_enabled = TRUE AND ap_management_vlan_id = %s", ap_management["vlan_id"], f"AP management VLAN {ap_management['vlan_id']} is already used by another active station."),
+            ("ap_management_network_cidr", "ap_management_enabled = TRUE AND lower(btrim(ap_management_network_cidr)) = lower(btrim(%s))", ap_management["network"].with_prefixlen, f"AP management network {ap_management['network'].with_prefixlen} is already used by another active station."),
+        ])
     for _, condition, value, message in duplicate_conditions:
         existing = fetch_one(
             f"""
@@ -6704,11 +10052,30 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         pool_start_ip = %s,
                         pool_end_ip = %s,
                         pool_name = %s,
+                        dhcp_server_name = %s,
+                        dhcp_lease_time = %s,
+                        create_dhcp_server = %s,
                         dns_servers = %s,
                         local_interface_list = %s,
+                        create_hotspot_profile = %s,
+                        create_hotspot_server = %s,
+                        create_walled_garden = %s,
+                        hotspot_profile_name = %s,
+                        hotspot_html_directory = %s,
                         hotspot_dns_name = %s,
                         hotspot_server_name = %s,
                         portal_url = %s,
+                        ap_management_enabled = %s,
+                        ap_management_vlan_id = %s,
+                        ap_management_vlan_interface_name = %s,
+                        ap_management_network_cidr = %s,
+                        ap_management_gateway_ip = %s,
+                        ap_management_pool_start_ip = %s,
+                        ap_management_pool_end_ip = %s,
+                        ap_management_pool_name = %s,
+                        ap_management_dhcp_server_name = %s,
+                        ap_management_dhcp_lease_time = %s,
+                        ap_management_dns_servers = %s,
                         status = 'READY_FOR_REVIEW',
                         updated_at = now()
                     WHERE id = %s
@@ -6725,11 +10092,30 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         str(pool_start),
                         str(pool_end),
                         pool_name,
+                        dhcp_server_name,
+                        dhcp_lease_time,
+                        payload.create_dhcp_server,
                         dns_servers,
                         (payload.local_interface_list or "LOCAL").strip() or "LOCAL",
+                        payload.create_hotspot_profile,
+                        payload.create_hotspot_server,
+                        payload.create_walled_garden,
+                        hotspot_profile_name,
+                        hotspot_html_directory,
                         hotspot_dns_name,
                         hotspot_server_name,
                         portal_url,
+                        bool(ap_management),
+                        ap_management["vlan_id"] if ap_management else None,
+                        ap_management["vlan_interface_name"] if ap_management else None,
+                        ap_management["network"].with_prefixlen if ap_management else None,
+                        str(ap_management["gateway_ip"]) if ap_management else None,
+                        str(ap_management["pool_start"]) if ap_management else None,
+                        str(ap_management["pool_end"]) if ap_management else None,
+                        ap_management["pool_name"] if ap_management else None,
+                        ap_management["dhcp_server_name"] if ap_management else None,
+                        ap_management["dhcp_lease_time"] if ap_management else None,
+                        ap_management["dns_servers"] if ap_management else None,
                         station["id"],
                     ),
                 )
@@ -6740,10 +10126,17 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                     """
                     INSERT INTO mikrotik_stations(
                         station_name, station_code, description, vlan_id, vlan_interface_name, client_network_cidr,
-                        gateway_ip, pool_start_ip, pool_end_ip, pool_name, dns_servers,
-                        local_interface_list, hotspot_dns_name, hotspot_server_name, portal_url, status, created_by_admin_id
+                        gateway_ip, pool_start_ip, pool_end_ip, pool_name, dhcp_server_name, dhcp_lease_time,
+                        create_dhcp_server, dns_servers,
+                        local_interface_list, create_hotspot_profile, create_hotspot_server, create_walled_garden,
+                        hotspot_profile_name, hotspot_html_directory, hotspot_dns_name, hotspot_server_name, portal_url,
+                        ap_management_enabled, ap_management_vlan_id, ap_management_vlan_interface_name,
+                        ap_management_network_cidr, ap_management_gateway_ip, ap_management_pool_start_ip,
+                        ap_management_pool_end_ip, ap_management_pool_name, ap_management_dhcp_server_name,
+                        ap_management_dhcp_lease_time, ap_management_dns_servers,
+                        status, created_by_admin_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'READY_FOR_REVIEW', %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'READY_FOR_REVIEW', %s)
                     RETURNING *
                     """,
                     (
@@ -6757,11 +10150,30 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         str(pool_start),
                         str(pool_end),
                         pool_name,
+                        dhcp_server_name,
+                        dhcp_lease_time,
+                        payload.create_dhcp_server,
                         dns_servers,
                         (payload.local_interface_list or "LOCAL").strip() or "LOCAL",
+                        payload.create_hotspot_profile,
+                        payload.create_hotspot_server,
+                        payload.create_walled_garden,
+                        hotspot_profile_name,
+                        hotspot_html_directory,
                         hotspot_dns_name,
                         hotspot_server_name,
                         portal_url,
+                        bool(ap_management),
+                        ap_management["vlan_id"] if ap_management else None,
+                        ap_management["vlan_interface_name"] if ap_management else None,
+                        ap_management["network"].with_prefixlen if ap_management else None,
+                        str(ap_management["gateway_ip"]) if ap_management else None,
+                        str(ap_management["pool_start"]) if ap_management else None,
+                        str(ap_management["pool_end"]) if ap_management else None,
+                        ap_management["pool_name"] if ap_management else None,
+                        ap_management["dhcp_server_name"] if ap_management else None,
+                        ap_management["dhcp_lease_time"] if ap_management else None,
+                        ap_management["dns_servers"] if ap_management else None,
                         admin["id"],
                     ),
                 )
@@ -6794,6 +10206,9 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
             "station_code": station_code,
             "vlan_id": payload.vlan_id,
             "client_network_cidr": network.with_prefixlen,
+            "ap_management_enabled": bool(ap_management),
+            "ap_management_vlan_id": ap_management["vlan_id"] if ap_management else None,
+            "ap_management_network_cidr": ap_management["network"].with_prefixlen if ap_management else None,
             "router_count": len(payload.routers),
         },
     )
@@ -6944,7 +10359,6 @@ def mikrotik_configuration_plan(router, settings):
         "name": hotspot_profile_name,
         "login-by": "http-chap,http-pap",
         "html-directory": hotspot_html_directory,
-        "comment": f"{managed_comment_prefix} HotSpot profile. Created by 3JCentralPisowifi.",
     }
     if hotspot_dns_name:
         hotspot_profile_params["dns-name"] = hotspot_dns_name
@@ -6954,7 +10368,6 @@ def mikrotik_configuration_plan(router, settings):
         "profile": hotspot_profile_name,
         "disabled": "no",
         "address-pool": hotspot_pool_name,
-        "comment": f"{managed_comment_prefix} HotSpot server. Created by 3JCentralPisowifi.",
     }
     dedicated_network_commands = []
     if hotspot_config:
@@ -7379,12 +10792,283 @@ def list_mikrotik_stations(admin=Depends(current_admin)):
     ]
 
 
+@app.get("/api/network/mikrotik/ap-management")
+def get_mikrotik_ap_management_config(admin=Depends(current_admin)):
+    return public_mikrotik_ap_management_config(latest_mikrotik_ap_management_config_row())
+
+
+@app.put("/api/network/mikrotik/ap-management")
+def save_mikrotik_ap_management_config(payload: MikrotikApManagementConfigPayload, admin=Depends(current_admin)):
+    return save_mikrotik_ap_management_payload(payload, admin)
+
+
+@app.get("/api/network/mikrotik/ap-management/{config_id}/command-logs")
+def list_mikrotik_ap_management_command_logs(config_id: str, admin=Depends(current_admin)):
+    config = fetch_one("SELECT id FROM mikrotik_ap_management_configs WHERE id = %s AND status <> 'ARCHIVED'", (config_id,))
+    if not config:
+        raise HTTPException(status_code=404, detail="AP management configuration not found")
+    return [
+        public_ap_management_command_log(row)
+        for row in fetch_all(
+            """
+            SELECT l.*, mr.router_name, mr.host
+            FROM mikrotik_ap_management_command_logs l
+            LEFT JOIN mikrotik_routers mr ON mr.id = l.router_id
+            WHERE l.config_id = %s
+            ORDER BY l.created_at DESC
+            LIMIT 100
+            """,
+            (config_id,),
+        )
+    ]
+
+
+def mikrotik_ap_management_config_for_id(config_id: str) -> tuple[dict, list[dict], dict]:
+    config = fetch_one("SELECT * FROM mikrotik_ap_management_configs WHERE id = %s AND status <> 'ARCHIVED'", (config_id,))
+    if not config:
+        raise HTTPException(status_code=404, detail="AP management configuration not found")
+    routers = ap_management_router_rows(config_id)
+    return config, routers, build_mikrotik_ap_management_plan(config, routers)
+
+
+@app.get("/api/network/mikrotik/ap-management/{config_id}/managed-configuration-status")
+def mikrotik_ap_management_managed_configuration_status(config_id: str, quiet: bool = False, admin=Depends(current_admin)):
+    config, routers, plan = mikrotik_ap_management_config_for_id(config_id)
+    total_steps = 0
+    pushed_steps = 0
+    router_statuses = []
+    for router_plan in plan.get("router_plans") or []:
+        commands = router_plan.get("commands") or []
+        total_steps += len(commands)
+        router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_plan["router_id"],))
+        if not router:
+            status = {"status": "ERROR", "message": "Router not found", "has_managed_config": False, "found_count": 0, "items": []}
+        elif not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+            status = {"status": "NOT_READY", "message": "Router host, username, and password are required before checking AP management config.", "has_managed_config": False, "found_count": 0, "items": []}
+        else:
+            try:
+                password = decrypt_secret(router.get("password_encrypted"))
+                status = routeros_detect_station_apply_targets(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    commands,
+                )
+            except Exception as exc:
+                status = {"status": "ERROR", "message": sanitize_routeros_text(str(exc)), "has_managed_config": False, "found_count": 0, "items": []}
+        pushed_steps += int(status.get("found_count") or 0)
+        router_statuses.append({
+            "router_id": router_plan["router_id"],
+            "router_name": router_plan.get("router_name"),
+            "host": router_plan.get("host"),
+            **status,
+        })
+    summary_status = "SUCCESS" if router_statuses and all(item.get("status") in ("SUCCESS", "NOT_READY") for item in router_statuses) else "ERROR" if any(item.get("status") == "ERROR" for item in router_statuses) else "SUCCESS"
+    result = {
+        "status": summary_status,
+        "config_id": config_id,
+        "config_name": config["config_name"],
+        "vlan_id": config["vlan_id"],
+        "has_managed_config": pushed_steps > 0,
+        "found_count": pushed_steps,
+        "push_progress": {
+            "pushed_steps": pushed_steps,
+            "total_steps": total_steps,
+            "routers": router_statuses,
+        },
+        "routers": router_statuses,
+    }
+    if not quiet:
+        record_ap_management_command_log(config_id, None, "CHECK", None, {"label": "Check existing AP management config", "preview": "Detect 3J AP management RouterOS objects"}, summary_status, f"Found {pushed_steps} AP management step(s).", result, admin["id"])
+        audit(admin["id"], "check_mikrotik_ap_management_config", "mikrotik_ap_management_configs", config_id, {"found_count": pushed_steps, "status": summary_status})
+    return result
+
+
+@app.post("/api/network/mikrotik/ap-management/{config_id}/implement-command")
+def implement_mikrotik_ap_management_command(config_id: str, payload: MikrotikStationCommandApply, admin=Depends(current_admin)):
+    config, routers, plan = mikrotik_ap_management_config_for_id(config_id)
+    router_plan = next((item for item in plan.get("router_plans") or [] if item.get("router_id") == payload.router_id), None)
+    if not router_plan:
+        raise HTTPException(status_code=404, detail="Router is not part of this AP management plan")
+    commands = router_plan.get("commands") or []
+    if payload.command_index >= len(commands):
+        raise HTTPException(status_code=404, detail="AP management command was not found")
+    command = commands[payload.command_index]
+    if not command.get("path") or not command.get("params"):
+        raise HTTPException(status_code=400, detail="This AP management command is preview-only and cannot be applied.")
+    router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (payload.router_id,))
+    if not router:
+        raise HTTPException(status_code=404, detail="MikroTik router not found")
+    if not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        raise HTTPException(status_code=400, detail="Router host, username, and password are required before applying AP management configuration.")
+    try:
+        password = decrypt_secret(router.get("password_encrypted"))
+        if not password:
+            raise RuntimeError("Saved MikroTik password could not be decrypted.")
+        result = routeros_execute_commands(
+            router["host"],
+            router["api_port"],
+            router.get("username"),
+            password,
+            router.get("use_tls"),
+            [command],
+        )
+        command_result = (result.get("results") or [{}])[0]
+        command_status = command_result.get("status") or result.get("status") or "SUCCESS"
+        all_commands = [
+            (item.get("router_id"), command_index)
+            for item in plan.get("router_plans") or []
+            for command_index, _ in enumerate(item.get("commands") or [])
+        ]
+        if all_commands and all_commands[-1] == (payload.router_id, payload.command_index) and command_status in ("SUCCESS", "SKIPPED"):
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE mikrotik_ap_management_configs SET status = 'ACTIVE', updated_at = now() WHERE id = %s", (config_id,))
+        log_captive_portal_test(
+            "IMPLEMENT_MIKROTIK_AP_MANAGEMENT_COMMAND",
+            command_status,
+            command_result.get("message") or result.get("message") or "AP management command completed.",
+            {"config_id": config_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command), "result": sanitize_summary(command_result)},
+        )
+        record_ap_management_command_log(
+            config_id,
+            payload.router_id,
+            "APPLY",
+            payload.command_index,
+            command,
+            command_status,
+            command_result.get("message") or result.get("message") or "AP management command completed.",
+            command_result,
+            admin["id"],
+        )
+        audit(
+            admin["id"],
+            "implement_mikrotik_ap_management_command",
+            "mikrotik_ap_management_configs",
+            config_id,
+            {
+                "router_id": payload.router_id,
+                "router_name": router_plan.get("router_name"),
+                "command_index": payload.command_index,
+                "label": command.get("label"),
+                "status": command_status,
+            },
+        )
+        return {
+            "status": command_status,
+            "message": command_result.get("message") or result.get("message") or "AP management command completed.",
+            "config_id": config_id,
+            "router_id": payload.router_id,
+            "command_index": payload.command_index,
+            "command": sanitize_summary(command),
+            "result": sanitize_summary(command_result),
+        }
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        record_ap_management_command_log(config_id, payload.router_id, "APPLY", payload.command_index, command, "FAILED", message, {"error": message}, admin["id"])
+        log_captive_portal_test(
+            "IMPLEMENT_MIKROTIK_AP_MANAGEMENT_COMMAND",
+            "FAILED",
+            message,
+            {"config_id": config_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command)},
+        )
+        audit(
+            admin["id"],
+            "implement_mikrotik_ap_management_command",
+            "mikrotik_ap_management_configs",
+            config_id,
+            {
+                "router_id": payload.router_id,
+                "router_name": router_plan.get("router_name"),
+                "command_index": payload.command_index,
+                "label": command.get("label"),
+                "status": "FAILED",
+                "error": message,
+            },
+        )
+        raise HTTPException(status_code=400, detail=message)
+
+
+@app.get("/api/network/mikrotik/stations/hotspot-login-sync-status")
+def mikrotik_hotspot_login_sync_status(remote: bool = False, admin=Depends(current_admin)):
+    stations = fetch_all("SELECT * FROM mikrotik_stations WHERE status <> 'ARCHIVED' ORDER BY updated_at DESC, created_at DESC")
+    statuses = [mikrotik_hotspot_login_sync_status_for_station(station, remote_check=remote) for station in stations]
+    synced = sum(1 for item in statuses if item.get("status") == "SYNCED")
+    needs_sync = sum(1 for item in statuses if item.get("status") in {"MISSING", "OUTDATED", "DETECTED", "UNKNOWN"})
+    failed = sum(1 for item in statuses if item.get("status") in {"ERROR", "FAILED", "NOT_READY"})
+    return {
+        "summary": {
+            "total": len(statuses),
+            "synced": synced,
+            "needs_sync": needs_sync,
+            "failed": failed,
+        },
+        "stations": statuses,
+    }
+
+
+@app.post("/api/network/mikrotik/stations/sync-hotspot-login")
+def sync_all_mikrotik_hotspot_login(payload: Optional[MikrotikHotspotLoginSyncPayload] = None, admin=Depends(current_admin)):
+    payload = payload or MikrotikHotspotLoginSyncPayload()
+    params = []
+    where = "status <> 'ARCHIVED'"
+    if payload.station_ids:
+        where += " AND id = ANY(%s::uuid[])"
+        params.append(payload.station_ids)
+    stations = fetch_all(f"SELECT * FROM mikrotik_stations WHERE {where} ORDER BY updated_at DESC, created_at DESC", tuple(params))
+    results = [sync_mikrotik_hotspot_login_for_station(station, admin["id"]) for station in stations]
+    success = sum(1 for item in results if item.get("status") == "SUCCESS")
+    failed = len(results) - success
+    status = "SUCCESS" if results and failed == 0 else "PARTIAL_SUCCESS" if success else "FAILED" if results else "NO_STATIONS"
+    message = "No MikroTik stations are available for login.html sync." if not results else f"Synced {success}/{len(results)} station HotSpot login.html file(s)."
+    log_captive_portal_test("SYNC_MIKROTIK_HOTSPOT_LOGIN_HTML", status, message, {"results": sanitize_summary(results)})
+    audit(admin["id"], "sync_mikrotik_hotspot_login_html", "mikrotik_stations", None, {"status": status, "success": success, "failed": failed})
+    return {"status": status, "message": message, "results": results}
+
+
+@app.post("/api/network/mikrotik/stations/{station_id}/sync-hotspot-login")
+def sync_one_mikrotik_hotspot_login(station_id: str, admin=Depends(current_admin)):
+    station = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
+    if not station:
+        raise HTTPException(status_code=404, detail="MikroTik station not found")
+    result = sync_mikrotik_hotspot_login_for_station(station, admin["id"])
+    log_captive_portal_test("SYNC_MIKROTIK_HOTSPOT_LOGIN_HTML", result.get("status") or "FAILED", result.get("message"), {"station_id": station_id, "result": sanitize_summary(result)})
+    audit(admin["id"], "sync_mikrotik_hotspot_login_html", "mikrotik_stations", station_id, {"status": result.get("status"), "file_path": result.get("file_path")})
+    if result.get("status") not in {"SUCCESS"}:
+        raise HTTPException(status_code=400, detail=result.get("message") or "HotSpot login.html sync failed.")
+    return result
+
+
 @app.get("/api/network/mikrotik/stations/{station_id}")
 def get_mikrotik_station(station_id: str, admin=Depends(current_admin)):
     row = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
     if not row:
         raise HTTPException(status_code=404, detail="MikroTik station not found")
     return public_mikrotik_station(row)
+
+
+@app.get("/api/network/mikrotik/stations/{station_id}/hotspot-login.html")
+def download_mikrotik_station_hotspot_login(station_id: str, admin=Depends(current_admin)):
+    row = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="MikroTik station not found")
+    return Response(
+        content=build_mikrotik_hotspot_login_html(row),
+        media_type="text/html",
+        headers={"Content-Disposition": 'attachment; filename="login.html"'},
+    )
+
+
+@app.get("/api/network/mikrotik/stations/{station_id}/hotspot-diagnostics")
+def get_mikrotik_station_hotspot_diagnostics(station_id: str, client_ip: Optional[str] = None, admin=Depends(current_admin)):
+    row = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="MikroTik station not found")
+    result = mikrotik_station_hotspot_diagnostics(row, client_ip)
+    audit(admin["id"], "run_mikrotik_station_hotspot_diagnostics", "mikrotik_stations", station_id, {"status": result.get("status"), "client_ip": client_ip})
+    return result
 
 
 @app.post("/api/network/mikrotik/stations")
@@ -7395,6 +11079,123 @@ def create_mikrotik_station(payload: MikrotikStationCreate, admin=Depends(curren
 @app.put("/api/network/mikrotik/stations/{station_id}")
 def update_mikrotik_station(station_id: str, payload: MikrotikStationCreate, admin=Depends(current_admin)):
     return save_mikrotik_station_payload(payload, admin, station_id=station_id)
+
+
+@app.get("/api/network/mikrotik/stations/{station_id}/command-logs")
+def list_mikrotik_station_command_logs(station_id: str, admin=Depends(current_admin)):
+    station = fetch_one("SELECT id FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
+    if not station:
+        raise HTTPException(status_code=404, detail="MikroTik station not found")
+    return [
+        public_station_command_log(row)
+        for row in fetch_all(
+            """
+            SELECT l.*, mr.router_name, mr.host
+            FROM mikrotik_station_command_logs l
+            LEFT JOIN mikrotik_routers mr ON mr.id = l.router_id
+            WHERE l.station_id = %s
+            ORDER BY l.created_at DESC
+            LIMIT 100
+            """,
+            (station_id,),
+        )
+    ]
+
+
+def station_remove_plan_for_id(station_id: str) -> tuple[dict, list[dict], dict]:
+    station = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
+    if not station:
+        raise HTTPException(status_code=404, detail="MikroTik station not found")
+    routers = station_router_rows(station_id)
+    return station, routers, build_mikrotik_station_remove_plan(station, routers)
+
+
+@app.get("/api/network/mikrotik/stations/{station_id}/managed-configuration-status")
+def mikrotik_station_managed_configuration_status(station_id: str, quiet: bool = False, admin=Depends(current_admin)):
+    station, routers, remove_plan = station_remove_plan_for_id(station_id)
+    apply_plan = build_mikrotik_station_plan(station, routers)
+    router_statuses = []
+    total_found = 0
+    total_steps = 1
+    pushed_steps = 0
+    apply_router_statuses = []
+    for router_plan in apply_plan.get("router_plans") or []:
+        commands = router_plan.get("commands") or []
+        total_steps += len(commands)
+        router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_plan["router_id"],))
+        if not router:
+            status = {"status": "ERROR", "message": "Router not found", "has_managed_config": False, "found_count": 0, "items": []}
+        elif not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+            status = {"status": "NOT_READY", "message": "Router host, username, and password are required before checking station config.", "has_managed_config": False, "found_count": 0, "items": []}
+        else:
+            try:
+                password = decrypt_secret(router.get("password_encrypted"))
+                status = routeros_detect_station_apply_targets(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    commands,
+                )
+            except Exception as exc:
+                status = {"status": "ERROR", "message": sanitize_routeros_text(str(exc)), "has_managed_config": False, "found_count": 0, "items": []}
+        pushed_steps += int(status.get("found_count") or 0)
+        apply_router_statuses.append({
+            "router_id": router_plan["router_id"],
+            "router_name": router_plan.get("router_name"),
+            "host": router_plan.get("host"),
+            **status,
+        })
+    login_status = mikrotik_hotspot_login_sync_status_for_station(station, remote_check=True)
+    if login_status.get("status") == "SYNCED":
+        pushed_steps += 1
+    for router_plan in remove_plan.get("router_plans") or []:
+        router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_plan["router_id"],))
+        if not router:
+            status = {"status": "ERROR", "message": "Router not found", "has_managed_config": False, "found_count": 0, "items": []}
+        elif not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+            status = {"status": "NOT_READY", "message": "Router host, username, and password are required before checking station config.", "has_managed_config": False, "found_count": 0, "items": []}
+        else:
+            try:
+                password = decrypt_secret(router.get("password_encrypted"))
+                status = routeros_detect_remove_targets(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    router_plan.get("commands") or [],
+                )
+            except Exception as exc:
+                status = {"status": "ERROR", "message": sanitize_routeros_text(str(exc)), "has_managed_config": False, "found_count": 0, "items": []}
+        total_found += int(status.get("found_count") or 0)
+        router_statuses.append({
+            "router_id": router_plan["router_id"],
+            "router_name": router_plan.get("router_name"),
+            "host": router_plan.get("host"),
+            **status,
+        })
+    combined_statuses = router_statuses + apply_router_statuses
+    summary_status = "SUCCESS" if combined_statuses and all(item.get("status") in ("SUCCESS", "NOT_READY") for item in combined_statuses) else "ERROR" if any(item.get("status") == "ERROR" for item in combined_statuses) else "SUCCESS"
+    result = {
+        "status": summary_status,
+        "station_id": station_id,
+        "station_name": station["station_name"],
+        "has_managed_config": total_found > 0,
+        "found_count": total_found,
+        "routers": router_statuses,
+        "push_progress": {
+            "pushed_steps": pushed_steps,
+            "total_steps": total_steps,
+            "login_html_status": login_status,
+            "routers": apply_router_statuses,
+        },
+    }
+    if not quiet:
+        record_station_command_log(station_id, None, "CHECK", None, {"label": "Check existing station config", "preview": "Detect station-created RouterOS objects"}, summary_status, f"Found {total_found} station-managed object(s).", result, admin["id"])
+        audit(admin["id"], "check_mikrotik_station_managed_configuration", "mikrotik_stations", station_id, {"found_count": total_found, "status": summary_status})
+    return result
 
 
 @app.post("/api/network/mikrotik/stations/{station_id}/implement-command")
@@ -7447,6 +11248,17 @@ def implement_mikrotik_station_command(station_id: str, payload: MikrotikStation
             command_result.get("message") or result.get("message") or "Station command completed.",
             {"station_id": station_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command), "result": sanitize_summary(command_result)},
         )
+        record_station_command_log(
+            station_id,
+            payload.router_id,
+            "APPLY",
+            payload.command_index,
+            command,
+            command_status,
+            command_result.get("message") or result.get("message") or "Station command completed.",
+            command_result,
+            admin["id"],
+        )
         audit(
             admin["id"],
             "implement_mikrotik_station_command",
@@ -7471,6 +11283,7 @@ def implement_mikrotik_station_command(station_id: str, payload: MikrotikStation
         }
     except Exception as exc:
         message = sanitize_routeros_text(str(exc))
+        record_station_command_log(station_id, payload.router_id, "APPLY", payload.command_index, command, "FAILED", message, {"error": message}, admin["id"])
         log_captive_portal_test(
             "IMPLEMENT_MIKROTIK_STATION_COMMAND",
             "FAILED",
@@ -7480,6 +11293,109 @@ def implement_mikrotik_station_command(station_id: str, payload: MikrotikStation
         audit(
             admin["id"],
             "implement_mikrotik_station_command",
+            "mikrotik_stations",
+            station_id,
+            {
+                "router_id": payload.router_id,
+                "router_name": router_plan.get("router_name"),
+                "command_index": payload.command_index,
+                "label": command.get("label"),
+                "status": "FAILED",
+                "error": message,
+            },
+        )
+        raise HTTPException(status_code=400, detail=message)
+
+
+@app.post("/api/network/mikrotik/stations/{station_id}/remove-command")
+def remove_mikrotik_station_command(station_id: str, payload: MikrotikStationCommandApply, admin=Depends(current_admin)):
+    station, _, remove_plan = station_remove_plan_for_id(station_id)
+    router_plan = next((item for item in remove_plan.get("router_plans") or [] if item.get("router_id") == payload.router_id), None)
+    if not router_plan:
+        raise HTTPException(status_code=404, detail="Router is not part of this station remove plan")
+    commands = router_plan.get("commands") or []
+    if payload.command_index >= len(commands):
+        raise HTTPException(status_code=404, detail="Station remove command was not found")
+    command = commands[payload.command_index]
+    router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (payload.router_id,))
+    if not router:
+        raise HTTPException(status_code=404, detail="MikroTik router not found")
+    if not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        raise HTTPException(status_code=400, detail="Router host, username, and password are required before removing station configuration.")
+    try:
+        password = decrypt_secret(router.get("password_encrypted"))
+        if not password:
+            raise RuntimeError("Saved MikroTik password could not be decrypted.")
+        result = routeros_execute_remove_commands(
+            router["host"],
+            router["api_port"],
+            router.get("username"),
+            password,
+            router.get("use_tls"),
+            [command],
+        )
+        command_result = (result.get("results") or [{}])[0]
+        command_status = command_result.get("status") or result.get("status") or "SUCCESS"
+        all_commands = [
+            (item.get("router_id"), command_index)
+            for item in remove_plan.get("router_plans") or []
+            for command_index, _ in enumerate(item.get("commands") or [])
+        ]
+        if all_commands and all_commands[-1] == (payload.router_id, payload.command_index) and command_status in ("SUCCESS", "SKIPPED"):
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE mikrotik_stations SET status = 'READY_FOR_REVIEW', updated_at = now() WHERE id = %s", (station_id,))
+        record_station_command_log(
+            station_id,
+            payload.router_id,
+            "REMOVE",
+            payload.command_index,
+            command,
+            command_status,
+            command_result.get("message") or result.get("message") or "Station remove command completed.",
+            command_result,
+            admin["id"],
+        )
+        log_captive_portal_test(
+            "REMOVE_MIKROTIK_STATION_COMMAND",
+            command_status,
+            command_result.get("message") or result.get("message") or "Station remove command completed.",
+            {"station_id": station_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command), "result": sanitize_summary(command_result)},
+        )
+        audit(
+            admin["id"],
+            "remove_mikrotik_station_command",
+            "mikrotik_stations",
+            station_id,
+            {
+                "router_id": payload.router_id,
+                "router_name": router_plan.get("router_name"),
+                "command_index": payload.command_index,
+                "label": command.get("label"),
+                "status": command_status,
+            },
+        )
+        return {
+            "status": command_status,
+            "message": command_result.get("message") or result.get("message") or "Station remove command completed.",
+            "station_id": station_id,
+            "router_id": payload.router_id,
+            "command_index": payload.command_index,
+            "command": sanitize_summary(command),
+            "result": sanitize_summary(command_result),
+        }
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        record_station_command_log(station_id, payload.router_id, "REMOVE", payload.command_index, command, "FAILED", message, {"error": message}, admin["id"])
+        log_captive_portal_test(
+            "REMOVE_MIKROTIK_STATION_COMMAND",
+            "FAILED",
+            message,
+            {"station_id": station_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command)},
+        )
+        audit(
+            admin["id"],
+            "remove_mikrotik_station_command",
             "mikrotik_stations",
             station_id,
             {
@@ -8243,7 +12159,7 @@ MIKROTIK_DEPLOYMENT_QUESTION_META = {
     "gateway_ip": {"category": "Client IP Network", "helper_text": "MikroTik IP inside the client subnet, for example 10.30.0.1. It should not be inside the DHCP pool.", "required_for_preview": True},
     "dhcp_pool": {"category": "Client IP Network", "helper_text": "Client IP range, for example 10.30.0.10-10.30.0.254. Both ends must be inside the client subnet.", "required_for_preview": True},
     "dns_servers": {"category": "HotSpot / Portal", "helper_text": "Comma-separated DNS IP addresses, for example 1.1.1.1,8.8.8.8.", "required_for_preview": True},
-    "hotspot_dns_name": {"category": "HotSpot / Portal", "helper_text": "Local HotSpot redirect name shown to clients. Example: wifi.3j.local.", "required_for_preview": True},
+    "hotspot_dns_name": {"category": "HotSpot / Portal", "helper_text": "Local HotSpot redirect name shown to clients. Avoid .local because phones may treat it as mDNS. Example: wifi.3j.3jportal.test.", "required_for_preview": True},
     "portal_url": {"category": "HotSpot / Portal", "helper_text": "Customer voucher portal URL. Staging is usually http://192.168.50.70:8080/portal.", "required_for_preview": True},
     "nat_enabled": {"category": "NAT / Internet", "helper_text": "Answer yes if this MikroTik should NAT voucher users to the internet directly. Answer no if upstream routing will handle it.", "required_for_preview": True},
     "wan_interface": {"category": "NAT / Internet", "helper_text": "Required only when NAT is yes. This is the internet/uplink interface, not the AP/customer VLAN interface.", "required_for_preview": False},
@@ -8863,7 +12779,7 @@ def build_mikrotik_deterministic_planning_suggestions(router_id: str, questions:
         add("dhcp_pool", network_preview.get("dhcp_pool"), "Auto-derived from the suggested client subnet, starting at network + 10.", "high", False)
 
     add("dns_servers", "1.1.1.1,8.8.8.8", "Safe public DNS defaults for captive portal clients. Change if the ISP requires local DNS.", "medium", True)
-    add("hotspot_dns_name", "wifi.3j.local", "Default local HotSpot DNS name for client browser redirects.", "medium", True)
+    add("hotspot_dns_name", default_hotspot_dns_name("3j"), "Default HotSpot DNS name for client browser redirects. Avoids .local so phones use normal DNS.", "medium", True)
     settings = public_captive_portal_settings()
     add("portal_url", settings.get("portal_url_staging") or "http://192.168.50.70:8080/portal", "Derived from Captive Portal staging settings.", "high", False)
 
@@ -10031,7 +13947,7 @@ def derive_mikrotik_deployment_questions(router_id: str, payload: MikrotikDeploy
     if vlan_name:
         derived["vlan_interface_name"] = vlan_name
     if not answers.get("hotspot_dns_name"):
-        derived["hotspot_dns_name"] = "wifi.3j.local"
+        derived["hotspot_dns_name"] = default_hotspot_dns_name("3j")
     if not answers.get("portal_url"):
         settings = public_captive_portal_settings()
         derived["portal_url"] = settings.get("portal_url_staging") or "http://192.168.50.70:8080/portal"
@@ -11192,7 +15108,7 @@ def captive_portal_sessions(admin=Depends(current_admin)):
         """
     )
     for row in rows:
-        row["client_mac_masked"] = mask_mac(row.get("client_mac") or row.get("omada_client_mac"))
+        row["client_mac_masked"] = mask_mac(row.get("client_mac") or row.get("omada_client_mac") or row.get("mikrotik_client_mac"))
         row["ap_mac_masked"] = mask_mac(row.get("ap_mac") or row.get("omada_ap_mac"))
         row.pop("omada_token_encrypted", None)
     return rows
@@ -11200,9 +15116,9 @@ def captive_portal_sessions(admin=Depends(current_admin)):
 
 @app.get("/api/captive-portal/authorizations")
 def captive_portal_authorizations(admin=Depends(current_admin)):
-    rows = fetch_all(
+    omada_rows = fetch_all(
         """
-        SELECT a.*, s.public_session_id, v.code AS voucher_code, u.username
+        SELECT 'OMADA' AS gateway_type, a.*, s.public_session_id, v.code AS voucher_code, u.username
         FROM omada_portal_authorizations a
         LEFT JOIN portal_sessions s ON s.id = a.portal_session_id
         LEFT JOIN vouchers v ON v.id = a.voucher_id
@@ -11211,6 +15127,25 @@ def captive_portal_authorizations(admin=Depends(current_admin)):
         LIMIT 200
         """
     )
+    mikrotik_rows = fetch_all(
+        """
+        SELECT 'MIKROTIK' AS gateway_type,
+               a.id, a.portal_session_id, a.voucher_id, a.user_id, a.client_mac, NULL::text AS ap_mac, NULL::text AS gateway_mac,
+               NULL::text AS site_name, a.station_id::text AS site_id, NULL::text AS ssid,
+               a.authorization_duration_seconds, a.access_expires_at,
+               a.mikrotik_request_summary AS omada_request_summary,
+               a.mikrotik_response_summary AS omada_response_summary,
+               a.status, a.error_message, a.created_at, a.updated_at,
+               s.public_session_id, v.code AS voucher_code, u.username
+        FROM mikrotik_portal_authorizations a
+        LEFT JOIN portal_sessions s ON s.id = a.portal_session_id
+        LEFT JOIN vouchers v ON v.id = a.voucher_id
+        LEFT JOIN users u ON u.id = a.user_id
+        ORDER BY a.created_at DESC
+        LIMIT 200
+        """
+    )
+    rows = sorted([*omada_rows, *mikrotik_rows], key=lambda row: row.get("created_at") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)[:200]
     for row in rows:
         row["client_mac_masked"] = mask_mac(row.get("client_mac"))
         row["ap_mac_masked"] = mask_mac(row.get("ap_mac"))
