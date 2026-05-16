@@ -3796,6 +3796,7 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [mikrotikCheckingConfig, setMikrotikCheckingConfig] = useState(null);
   const [mikrotikManagedConfig, setMikrotikManagedConfig] = useState({});
   const [mikrotikOptions, setMikrotikOptions] = useState({});
+  const [mikrotikOptionsLoading, setMikrotikOptionsLoading] = useState({});
   const [preflightRouterId, setPreflightRouterId] = useState('');
   const [preflightScan, setPreflightScan] = useState(null);
   const [preflightHistory, setPreflightHistory] = useState([]);
@@ -3860,6 +3861,8 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [stationRemoveMessage, setStationRemoveMessage] = useState('');
   const [stationRemoveCompleted, setStationRemoveCompleted] = useState(false);
   const [stationRemoveCloseCountdown, setStationRemoveCloseCountdown] = useState(10);
+  const [stationDeleteTarget, setStationDeleteTarget] = useState(null);
+  const [stationDeleting, setStationDeleting] = useState(false);
   const [stationManagedStatus, setStationManagedStatus] = useState(null);
   const [stationCheckingManaged, setStationCheckingManaged] = useState(false);
   const [stationCommandLogs, setStationCommandLogs] = useState([]);
@@ -3914,7 +3917,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     vlan_interface_name: 'VLAN77-3J-HOTSPOT',
     client_network_cidr: '10.77.0.0/24',
     gateway_ip: '10.77.0.1',
-    pool_start_ip: '10.77.0.2',
+    pool_start_ip: '10.77.0.10',
     pool_end_ip: '10.77.0.254',
     pool_name: 'POOL-3J-HOTSPOT-V77',
     create_dhcp_server: true,
@@ -4061,7 +4064,7 @@ function CaptivePortalPage({ mode = 'full' }) {
       vlan_interface_name: 'VLAN77-3J-HOTSPOT',
       client_network_cidr: '10.77.0.0/24',
       gateway_ip: '10.77.0.1',
-      pool_start_ip: '10.77.0.2',
+      pool_start_ip: '10.77.0.10',
       pool_end_ip: '10.77.0.254',
       pool_name: 'POOL-3J-HOTSPOT-V77',
       create_dhcp_server: true,
@@ -4117,7 +4120,7 @@ function CaptivePortalPage({ mode = 'full' }) {
       if (Number.isInteger(vlanNumber) && vlanNumber > 0 && vlanNumber < 255) {
         if (!current.client_network_cidr || /^10\.\d+\.0\.0\/24$/.test(current.client_network_cidr)) next.client_network_cidr = `10.${vlanNumber}.0.0/24`;
         if (!current.gateway_ip || /^10\.\d+\.0\.1$/.test(current.gateway_ip)) next.gateway_ip = `10.${vlanNumber}.0.1`;
-        if (!current.pool_start_ip || /^10\.\d+\.0\.2$/.test(current.pool_start_ip)) next.pool_start_ip = `10.${vlanNumber}.0.2`;
+        if (!current.pool_start_ip || /^10\.\d+\.0\.(2|10)$/.test(current.pool_start_ip)) next.pool_start_ip = `10.${vlanNumber}.0.10`;
         if (!current.pool_end_ip || /^10\.\d+\.0\.254$/.test(current.pool_end_ip)) next.pool_end_ip = `10.${vlanNumber}.0.254`;
         if (!current.dns_servers || /^(10\.\d+\.0\.1,)?8\.8\.8\.8,1\.1\.1\.1$/.test(current.dns_servers)) next.dns_servers = '8.8.8.8,1.1.1.1';
       }
@@ -4448,6 +4451,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     setApManagementPushCompleted(false);
     setApManagementPushCloseCountdown(10);
     setApManagementImplementationMessage('');
+    setMessage('Central AP management configuration push completed successfully.');
     setActionResult({ status: 'SUCCESS', message: 'Central AP management configuration push completed successfully.' });
     load().catch(() => null);
   }
@@ -4700,6 +4704,20 @@ function CaptivePortalPage({ mode = 'full' }) {
     setStationManagedStatus(null);
     setActionResult({ status: 'SUCCESS', message: `${stationName} configuration was removed successfully.` });
     if (station) refreshStationProgressSummaries([station]);
+  }
+  async function deleteStationPlan() {
+    if (!stationDeleteTarget?.id || stationDeleting) return;
+    setStationDeleting(true);
+    try {
+      const result = await request(`/network/mikrotik/stations/${stationDeleteTarget.id}`, { method: 'DELETE' });
+      setStationDeleteTarget(null);
+      setMessage(result.message || 'MikroTik station plan deleted.');
+      await load();
+    } catch (error) {
+      setActionResult({ status: 'FAILED', message: error.message || 'Station plan could not be deleted.' });
+    } finally {
+      setStationDeleting(false);
+    }
   }
   function stationDiagnosticStatusClass(status) {
     if (status === 'OK' || status === 'READY') return 'bg-green-lt text-green';
@@ -4955,6 +4973,92 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <div className="station-chain-popover-route">
                       <span className="badge bg-secondary-lt text-secondary">{routers[index + 1]?.bridge_name || 'No bridge/interface'}</span>
                       {stationPortBadges(routers[index + 1]?.tagged_ports, `${station.id}-${routers[index + 1]?.router_id}-to`)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+    );
+  }
+  function renderApManagementChainPath(config) {
+    const routers = config?.routers || [];
+    if (!routers.length) return <span className="text-muted small">No routers</span>;
+    return (
+      <div className="station-table-chain" aria-label={`${config.config_name || 'AP Management'} router chain`}>
+        {routers.map((router, index) => (
+          <React.Fragment key={router.id || `${config.id || 'ap-management'}-${router.router_id}-${index}`}>
+            <div className="station-table-chain-item" aria-label={apManagementRouterDisplay(router, index)}>
+              <span className={`station-chain-node station-table-chain-node ${index === 0 ? 'root' : ''}`}><IconRouter size={16} /></span>
+              <span className="station-table-chain-text">
+                <strong>{router.router_name || apManagementRouterDisplay(router, index)}</strong>
+                <small>{index === 0 ? 'Root' : `Hop ${index + 1}`} · {router.bridge_name || 'No bridge'}</small>
+              </span>
+              <div className="station-router-popover">
+                <div className="station-chain-popover-header">
+                  <IconRouter size={16} />
+                  <span>{router.router_name || apManagementRouterDisplay(router, index)}</span>
+                </div>
+                <div className="station-chain-popover-section">
+                  <div className="station-chain-popover-label"><IconActivity size={14} /> Router details</div>
+                  <div className="station-chain-popover-badges">
+                    <span className={`badge ${index === 0 ? 'bg-green-lt text-green' : 'bg-cyan-lt text-cyan'}`}>{index === 0 ? 'Root gateway' : `Hop ${index + 1}`}</span>
+                    <span className="badge bg-secondary-lt text-secondary">{index === 0 ? 'AP_MGMT_ROOT' : 'AP_MGMT_TRUNK'}</span>
+                    {router.api_status && <span className={`badge ${router.api_status === 'REACHABLE' ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{router.api_status}</span>}
+                  </div>
+                  <div className="station-chain-popover-meta">
+                    {router.host && <span><IconServer size={13} /> {router.host}{router.api_port ? `:${router.api_port}` : ''}</span>}
+                    <span><IconWifi size={13} /> {index === 0 ? `Creates AP management VLAN ${config.vlan_id}` : `Carries AP management VLAN ${config.vlan_id}`}</span>
+                  </div>
+                </div>
+                <div className="station-chain-popover-section mb-0">
+                  <div className="station-chain-popover-label"><IconRouter size={14} /> Selected bridge and tags</div>
+                  <div className="station-chain-popover-route">
+                    <span className="badge bg-secondary-lt text-secondary">{router.bridge_name || 'No bridge/interface'}</span>
+                    {stationPortBadges(router.tagged_ports, `${config.id || 'ap-management'}-${router.router_id}-router`)}
+                  </div>
+                </div>
+              </div>
+            </div>
+            {index < routers.length - 1 && (
+              <div className="station-table-chain-link">
+                <span className="station-table-chain-rail"><span /></span>
+                <button
+                  className="station-table-chain-dot"
+                  type="button"
+                  aria-label={`View AP management VLAN path between ${router.router_name || 'router'} and ${routers[index + 1]?.router_name || 'next router'}`}
+                />
+                <div className="station-chain-popover">
+                  <div className="station-chain-popover-header">
+                    <IconRouter size={16} />
+                    <span>{router.router_name || 'Router'} to {routers[index + 1]?.router_name || 'Next router'}</span>
+                  </div>
+                  <div className="station-chain-popover-section">
+                    <div className="station-chain-popover-label"><IconWifi size={14} /> Central AP Management VLAN</div>
+                    <div className="station-chain-popover-badges">
+                      <span className="badge bg-green-lt text-green">VLAN {config.vlan_id}</span>
+                      {config.vlan_interface_name && <span className="badge bg-cyan-lt text-cyan">{config.vlan_interface_name}</span>}
+                      <span className="badge bg-purple-lt text-purple">{config.network_cidr}</span>
+                    </div>
+                    <div className="station-chain-popover-meta">
+                      <span><IconServer size={13} /> Gateway {config.gateway_ip}</span>
+                      <span><IconDatabase size={13} /> Pool {config.pool_start_ip}-{config.pool_end_ip}</span>
+                    </div>
+                  </div>
+                  <div className="station-chain-popover-section">
+                    <div className="station-chain-popover-label"><IconRouter size={14} /> From router tags</div>
+                    <div className="station-chain-popover-route">
+                      <span className="badge bg-secondary-lt text-secondary">{router.bridge_name || 'No bridge/interface'}</span>
+                      {stationPortBadges(router.tagged_ports, `${config.id || 'ap-management'}-${router.router_id}-from`)}
+                    </div>
+                  </div>
+                  <div className="station-chain-popover-section mb-0">
+                    <div className="station-chain-popover-label"><IconRouter size={14} /> To router tags</div>
+                    <div className="station-chain-popover-route">
+                      <span className="badge bg-secondary-lt text-secondary">{routers[index + 1]?.bridge_name || 'No bridge/interface'}</span>
+                      {stationPortBadges(routers[index + 1]?.tagged_ports, `${config.id || 'ap-management'}-${routers[index + 1]?.router_id}-to`)}
                     </div>
                   </div>
                 </div>
@@ -5717,12 +5821,18 @@ function CaptivePortalPage({ mode = 'full' }) {
     openModal(true);
   }
 	  async function loadMikrotikRouterOptions(routerId) {
-	    if (!routerId) return;
+	    if (!routerId) return null;
+	    setMikrotikOptionsLoading((current) => ({ ...current, [routerId]: true }));
 	    try {
 	      const data = await request(`/captive-portal/mikrotik/${routerId}/routeros-options`);
 	      setMikrotikOptions((current) => ({ ...current, [routerId]: data }));
+	      return data;
 	    } catch (error) {
-	      setMikrotikOptions((current) => ({ ...current, [routerId]: { status: 'FAILED', error: error.message, interfaces: [], interface_lists: [] } }));
+	      const failed = { status: 'FAILED', error: error.message || 'Could not detect RouterOS ports.', interfaces: [], interface_lists: [] };
+	      setMikrotikOptions((current) => ({ ...current, [routerId]: failed }));
+	      return failed;
+	    } finally {
+	      setMikrotikOptionsLoading((current) => ({ ...current, [routerId]: false }));
 	    }
 	  }
 	  async function reviewMikrotikConfiguration(routerId) {
@@ -6318,7 +6428,7 @@ function CaptivePortalPage({ mode = 'full' }) {
           <div className="card">
             <div className="card-body border-bottom py-2">
               <ul className="nav nav-tabs flex-nowrap overflow-auto" role="tablist">
-                {['Overview', 'Configuration', ...(mikrotikTab === 'Scan Result' ? ['Scan Result'] : []), 'Add Router'].map((item) => (
+                {['Overview', 'Configuration', 'Portal Sync', 'AP Management', ...(mikrotikTab === 'Scan Result' ? ['Scan Result'] : []), 'Add Router'].map((item) => (
                   <li className="nav-item" role="presentation" key={item}>
                     <button type="button" className={`nav-link ${mikrotikTab === item ? 'active' : ''}`} onClick={() => setMikrotikTab(item)}>
                       {item}
@@ -6453,103 +6563,9 @@ function CaptivePortalPage({ mode = 'full' }) {
                 <div className="border rounded p-3 mb-3">
                   <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                     <div>
-                      <div className="fw-semibold">HTML and AP Management</div>
-                      <div className="text-muted small">The system uses one managed redirect file named <code>login.html</code> on every station root gateway. Central AP management VLAN/subnet is configured here once and pushed through the selected root/trunk routers.</div>
-                    </div>
-                    <div className="btn-list justify-content-end flex-nowrap">
-                      <button className="btn btn-outline-secondary btn-sm" type="button" onClick={openApManagementModal} disabled={!preflightEngaged}>
-                        <IconSettings size={15} className="me-1" />AP Management Details
-                      </button>
-                      <button className="btn btn-outline-primary btn-sm" type="button" onClick={openApManagementImplementation} disabled={!apManagementConfig?.id}>
-                        <IconCloudUpload size={15} className="me-1" />Push AP Management Config
-                      </button>
-                      <button className="btn btn-outline-primary btn-sm" type="button" onClick={checkHotspotLoginSync} disabled={hotspotLoginChecking || hotspotLoginSyncing || !mikrotikStations.length}>
-                        <IconSearch size={15} className="me-1" />{hotspotLoginChecking ? 'Checking...' : 'Check Sync'}
-                      </button>
-                      <button className="btn btn-primary btn-sm" type="button" onClick={() => syncHotspotLoginHtml()} disabled={hotspotLoginSyncing || !mikrotikStations.length}>
-                        <IconRefresh size={15} className="me-1" />{hotspotLoginSyncing ? 'Syncing...' : 'Sync login.html to MikroTik'}
-                      </button>
-                    </div>
-                  </div>
-                  <div className="row g-2 mb-3">
-                    {[
-                      { label: 'Stations', value: hotspotLoginSync.summary?.total ?? mikrotikStations.length, tone: 'bg-blue-lt text-blue' },
-                      { label: 'Synced', value: hotspotLoginSync.summary?.synced ?? 0, tone: 'bg-green-lt text-green' },
-                      { label: 'Needs Sync', value: hotspotLoginSync.summary?.needs_sync ?? 0, tone: 'bg-yellow-lt text-yellow' },
-                      { label: 'Errors', value: hotspotLoginSync.summary?.failed ?? 0, tone: 'bg-red-lt text-red' }
-                    ].map((item) => (
-                      <div className="col-6 col-md-3" key={`login-sync-kpi-${item.label}`}>
-                        <div className="border rounded p-2 h-100">
-                          <div className="text-muted small">{item.label}</div>
-                          <span className={`badge fs-6 ${item.tone}`}>{item.value}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="border rounded p-3 mb-3 bg-light">
-                    {(() => {
-                      const progress = apManagementProgressSummary(apManagementConfig);
-                      return (
-                        <div className="d-flex flex-column flex-lg-row align-items-start align-items-lg-center justify-content-between gap-3">
-                          <div>
-                            <div className="fw-semibold">{apManagementConfig?.config_name || 'Central AP Management'}</div>
-                            <div className="text-muted small">
-                              VLAN {apManagementConfig?.vlan_id || 111} · {apManagementConfig?.network_cidr || '10.111.0.0/24'} · {apManagementConfig?.routers?.length || 0} router(s) in path
-                            </div>
-                            <div className="text-muted small">Use this for Omada/AP management traffic. Customer voucher traffic stays in station HotSpot VLANs.</div>
-                          </div>
-                          <div className="d-flex flex-wrap align-items-center gap-2">
-                            <span className={`badge ${apManagementConfig?.id ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{apManagementConfig?.id ? apManagementConfig.status || 'READY' : 'Not saved'}</span>
-                            <span className="badge bg-blue-lt text-blue">{progress.pushed}/{progress.total || 0} pushed</span>
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                  {!!(hotspotLoginSync.stations || []).length && (
-                    <div className="table-responsive">
-                      <table className="table table-sm table-vcenter mb-0">
-                        <thead>
-                          <tr>
-                            <th>Station</th>
-                            <th>Root Gateway</th>
-                            <th>File</th>
-                            <th>Status</th>
-                            <th className="text-end">Action</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(hotspotLoginSync.stations || []).map((row) => (
-                            <tr key={`login-sync-${row.station_id}`}>
-                              <td>
-                                <div className="fw-semibold">{row.station_name}</div>
-                                <div className="text-muted small">{row.latest_sync?.created_at ? `Last sync: ${fmt(row.latest_sync.created_at)}` : 'Not synced yet'}</div>
-                              </td>
-                              <td>{row.router_name || '-'}</td>
-                              <td><code>{row.file_path || 'hotspot/login.html'}</code></td>
-                              <td>
-                                <span className={`badge ${hotspotLoginStatusClass(row.status)}`}>{row.status || 'UNKNOWN'}</span>
-                                {row.message && <div className="text-muted small text-truncate mt-1" title={row.message}>{row.message}</div>}
-                              </td>
-                              <td className="text-end">
-                                <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => syncHotspotLoginHtml(row.station_id)} disabled={hotspotLoginSyncing}>
-                                  <IconRefresh size={15} className="me-1" />Sync
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                  {!mikrotikStations.length && <div className="text-muted small">Create a station first. Sync status appears here after the station root gateway is saved.</div>}
-                </div>
-                <div className="border rounded p-3 mb-3">
-                  <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
-                    <div>
                       <div className="fw-semibold">Station-based MikroTik planning</div>
                       <div className="text-muted small">
-                        A station is the customer captive portal VLAN path: root gateway first, then CRS/switch/transport routers toward OLTs and APs. Central AP management is configured separately in HTML and AP Management.
+                        A station is the customer captive portal VLAN path: root gateway first, then CRS/switch/transport routers toward OLTs and APs. Central AP management is configured separately in the AP Management tab.
                       </div>
                     </div>
                     <span className="badge bg-blue-lt text-blue">Router chain</span>
@@ -6602,6 +6618,9 @@ function CaptivePortalPage({ mode = 'full' }) {
                                   <IconTrash size={16} className="me-1" />Remove Config
                                 </button>
                               )}
+                              <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => setStationDeleteTarget(station)} title="Delete station plan from the system">
+                                <IconTrash size={16} className="me-1" />Delete Station
+                              </button>
                             </div>
                           </div>
                           <div className="station-plan-card-body">
@@ -6797,6 +6816,147 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                    ))}
 	                  </div>
 	                </div>}
+              </>}
+              {mikrotikTab === 'Portal Sync' && <>
+                <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                  <div>
+                    <h3 className="card-title mb-1">Portal Sync</h3>
+                    <div className="text-muted small">Manage the single HotSpot redirect file named <code>login.html</code>. The same portal file is synced to every station root gateway.</div>
+                  </div>
+                  <div className="btn-list justify-content-end flex-nowrap">
+                    <button className="btn btn-outline-primary btn-sm" type="button" onClick={checkHotspotLoginSync} disabled={hotspotLoginChecking || hotspotLoginSyncing || !mikrotikStations.length}>
+                      <IconSearch size={15} className="me-1" />{hotspotLoginChecking ? 'Checking...' : 'Check Sync'}
+                    </button>
+                    <button className="btn btn-primary btn-sm" type="button" onClick={() => syncHotspotLoginHtml()} disabled={hotspotLoginSyncing || !mikrotikStations.length}>
+                      <IconRefresh size={15} className="me-1" />{hotspotLoginSyncing ? 'Syncing...' : 'Sync login.html to MikroTik'}
+                    </button>
+                  </div>
+                </div>
+                <div className="row g-2 mb-3">
+                  {[
+                    { label: 'Stations', value: hotspotLoginSync.summary?.total ?? mikrotikStations.length, tone: 'bg-blue-lt text-blue' },
+                    { label: 'Synced', value: hotspotLoginSync.summary?.synced ?? 0, tone: 'bg-green-lt text-green' },
+                    { label: 'Needs Sync', value: hotspotLoginSync.summary?.needs_sync ?? 0, tone: 'bg-yellow-lt text-yellow' },
+                    { label: 'Errors', value: hotspotLoginSync.summary?.failed ?? 0, tone: 'bg-red-lt text-red' }
+                  ].map((item) => (
+                    <div className="col-6 col-md-3" key={`portal-sync-kpi-${item.label}`}>
+                      <div className="border rounded p-3 h-100">
+                        <div className="text-muted small">{item.label}</div>
+                        <span className={`badge fs-6 ${item.tone}`}>{item.value}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {!!(hotspotLoginSync.stations || []).length ? (
+                  <div className="table-responsive">
+                    <table className="table table-sm table-vcenter mb-0">
+                      <thead>
+                        <tr>
+                          <th>Station</th>
+                          <th>Root Gateway</th>
+                          <th>File</th>
+                          <th>Status</th>
+                          <th className="text-end">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(hotspotLoginSync.stations || []).map((row) => (
+                          <tr key={`portal-sync-${row.station_id}`}>
+                            <td>
+                              <div className="fw-semibold">{row.station_name}</div>
+                              <div className="text-muted small">{row.latest_sync?.created_at ? `Last sync: ${fmt(row.latest_sync.created_at)}` : 'Not synced yet'}</div>
+                            </td>
+                            <td>{row.router_name || '-'}</td>
+                            <td><code>{row.file_path || 'hotspot/login.html'}</code></td>
+                            <td>
+                              <span className={`badge ${hotspotLoginStatusClass(row.status)}`}>{row.status || 'UNKNOWN'}</span>
+                              {row.message && <div className="text-muted small text-truncate mt-1" title={row.message}>{row.message}</div>}
+                            </td>
+                            <td className="text-end">
+                              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => syncHotspotLoginHtml(row.station_id)} disabled={hotspotLoginSyncing}>
+                                <IconRefresh size={15} className="me-1" />Sync
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="empty py-4">
+                    <div className="empty-icon"><IconCloudUpload size={32} /></div>
+                    <p className="empty-title">No station portal sync targets yet</p>
+                    <p className="empty-subtitle text-muted">Create a station first. The root gateway will appear here for login.html sync.</p>
+                  </div>
+                )}
+              </>}
+              {mikrotikTab === 'AP Management' && <>
+                <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                  <div>
+                    <h3 className="card-title mb-1">AP Management</h3>
+                    <div className="text-muted small">Plan and push the centralized AP/Omada management VLAN path separately from customer HotSpot station VLANs.</div>
+                  </div>
+                  <div className="btn-list justify-content-end flex-nowrap">
+                    <button className="btn btn-primary btn-sm" type="button" onClick={openApManagementModal} disabled={!preflightEngaged} title={preflightEngaged ? 'Create or edit the AP management router chain.' : 'Run at least one read-only preflight scan before adding AP management.'}>
+                      <IconSettings size={15} className="me-1" />{apManagementConfig?.id ? 'Edit AP Management' : 'Add AP Management'}
+                    </button>
+                    <button className="btn btn-outline-primary btn-sm" type="button" onClick={openApManagementImplementation} disabled={!apManagementConfig?.id}>
+                      <IconCloudUpload size={15} className="me-1" />Push AP Management Config
+                    </button>
+                  </div>
+                </div>
+                {apManagementConfig?.id ? (
+                  <div className="station-card-list">
+                    <div className="station-plan-card">
+                      {(() => {
+                        const progress = apManagementProgressSummary(apManagementConfig);
+                        const pct = progress.total ? Math.round((progress.pushed / progress.total) * 100) : 0;
+                        return (
+                          <div className="station-plan-progress">
+                            <div className="station-plan-progress-bar" style={{ width: `${pct}%` }} />
+                          </div>
+                        );
+                      })()}
+                      <div className="station-plan-card-header">
+                        <div className="station-plan-card-title">
+                          <span className="station-chain-node root"><IconRouter size={18} /></span>
+                          <div>
+                            <div className="fw-semibold">{apManagementConfig.config_name || 'Central AP Management'}</div>
+                            <div className="text-muted small">Hover the router links to view AP management VLAN, gateway, and DHCP pool details.</div>
+                          </div>
+                        </div>
+                        <div className="btn-list justify-content-end flex-nowrap">
+                          {(() => {
+                            const progress = apManagementProgressSummary(apManagementConfig);
+                            return <span className={`badge align-self-center ${progress.pushed >= progress.total && progress.total ? 'bg-green-lt text-green' : progress.pushed ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>{progress.pushed}/{progress.total} pushed</span>;
+                          })()}
+                          <span className={`badge align-self-center ${apManagementConfig.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{apManagementConfig.status || 'READY'}</span>
+                          <span className="badge bg-blue-lt text-blue align-self-center">VLAN {apManagementConfig.vlan_id}</span>
+                          <span className="badge bg-purple-lt text-purple align-self-center">{apManagementConfig.network_cidr}</span>
+                          <button className="btn btn-sm btn-outline-secondary" type="button" onClick={openApManagementModal} title="Edit AP management plan">
+                            <IconEdit size={16} className="me-1" />Edit
+                          </button>
+                          <button className="btn btn-sm btn-primary" type="button" onClick={openApManagementImplementation} title="Open AP management config push workflow">
+                            <IconPlayerPlay size={16} className="me-1" />Push Config
+                          </button>
+                        </div>
+                      </div>
+                      <div className="station-plan-card-body">
+                        {renderApManagementChainPath(apManagementConfig)}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="empty py-4">
+                    <div className="empty-icon"><IconRouter size={32} /></div>
+                    <p className="empty-title">No AP management plan yet</p>
+                    <p className="empty-subtitle text-muted">Create the centralized AP management VLAN path after preflight data is available.</p>
+                    <button className="btn btn-primary" type="button" onClick={openApManagementModal} disabled={!preflightEngaged}>
+                      <IconSettings size={18} className="me-2" />Add AP Management
+                    </button>
+                  </div>
+                )}
+              </>}
                 {false && mikrotikStepReview && (
                   <Modal title={`Review Step ${mikrotikStepReview.item.step_number || mikrotikStepReview.index + 1}: ${mikrotikStepReview.item.step}`} onClose={() => mikrotikApplyingStep ? null : setMikrotikStepReview(null)}>
                     <div className="alert alert-danger">
@@ -6828,7 +6988,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                 )}
                 {false && !mikrotikPlan && actionResult && <div className={`alert mt-3 mb-0 ${actionResult.status === 'REACHABLE' || actionResult.status === 'SUCCESS' ? 'alert-success' : actionResult.status === 'RUNNING' ? 'alert-info' : 'alert-warning'}`}>{actionResult.message || actionResult.status}</div>}
                 {apManagementModalOpen && (
-                  <Modal title="HTML and AP Management Setup" size="xl" onClose={() => apManagementSaving ? null : setApManagementModalOpen(false)}>
+                  <Modal title="AP Management Setup" size="xl" onClose={() => apManagementSaving ? null : setApManagementModalOpen(false)}>
                     <form onSubmit={saveApManagement}>
                       <div className="alert alert-info">
                         <div className="fw-semibold mb-1">Central AP management plan only</div>
@@ -6885,10 +7045,11 @@ function CaptivePortalPage({ mode = 'full' }) {
                           {(() => {
                             const root = apManagementForm.routers[0];
                             const routerOptions = root?.router_id ? (mikrotikOptions[root.router_id] || {}) : {};
+                            const rootOptionsLoading = Boolean(root?.router_id && mikrotikOptionsLoading[root.router_id]);
                             const lists = routerOptions.interface_lists || [];
                             return (
                               <select className="form-select" value={apManagementForm.local_interface_list} onChange={(e) => updateApManagementField('local_interface_list', e.target.value)} disabled={!root?.router_id}>
-                                <option value="">{root?.router_id ? 'Choose detected interface list' : 'Choose root router first'}</option>
+                                <option value="">{root?.router_id ? (rootOptionsLoading ? 'Detecting interface lists...' : 'Choose detected interface list') : 'Choose root router first'}</option>
                                 {apManagementForm.local_interface_list && !lists.some((item) => item.name === apManagementForm.local_interface_list) && <option value={apManagementForm.local_interface_list}>{apManagementForm.local_interface_list} (current/default)</option>}
                                 {lists.map((item) => <option value={item.name} key={`ap-mgmt-interface-list-${item.name}`}>{item.name}{item.comment ? ` - ${item.comment}` : ''}</option>)}
                               </select>
@@ -6903,12 +7064,13 @@ function CaptivePortalPage({ mode = 'full' }) {
                             <div className="text-muted small">Add the root gateway first, then CRS/switch/transport routers in the order the AP management VLAN travels toward OLTs and APs.</div>
                           </div>
                           <button className="btn btn-outline-primary btn-sm" type="button" onClick={addApManagementRouter}>
-                            <IconRouter size={16} className="me-1" />Add Router
+                            <IconRouter size={16} className="me-1" />Add Router to Chain
                           </button>
                         </div>
                         {apManagementForm.routers.length ? (
-                          <div className="station-chain-editor">
-                            <div className="station-chain-tabs">
+                          <div className="station-chain-builder">
+                            <div className="station-chain-sidebar">
+                              <div className="station-chain-flow-line"><span /></div>
                               {apManagementForm.routers.map((row, index) => (
                                 <button
                                   className={`station-chain-tab ${apManagementActiveRouterIndex === index ? 'active' : ''}`}
@@ -6939,6 +7101,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                               const activeIndex = Math.min(apManagementActiveRouterIndex, apManagementForm.routers.length - 1);
                               const row = apManagementForm.routers[activeIndex];
                               const routerOptions = row?.router_id ? (mikrotikOptions[row.router_id] || {}) : {};
+                              const routerOptionsLoading = Boolean(row?.router_id && mikrotikOptionsLoading[row.router_id]);
                               const routerInterfaces = routerOptions.interfaces || [];
                               const safeInterfaces = routerInterfaces.filter((iface) => !isPppoeInterface(iface));
                               const selectedTaggedPorts = String(row?.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
@@ -6965,79 +7128,122 @@ function CaptivePortalPage({ mode = 'full' }) {
                                     </button>
                                   </div>
                                   <div className="row g-3">
-                                    <div className="col-md-5">
-                                      <StationLabel hint="Select one of the MikroTik routers already saved in the system.">Router</StationLabel>
-                                      <select
-                                        className="form-select"
-                                        value={row.router_id}
-                                        onChange={(e) => {
-                                          updateApManagementRouter(activeIndex, { router_id: e.target.value, bridge_name: '', tagged_ports: '' });
-                                          if (e.target.value) loadMikrotikRouterOptions(e.target.value);
-                                        }}
-                                        required
-                                      >
-                                        <option value="">Choose router</option>
-                                        {mikrotiks.map((router) => <option value={router.id} key={`ap-management-router-${router.id}`}>{router.router_name} · {router.host}</option>)}
-                                      </select>
-                                    </div>
-                                    <div className="col-md-5">
-                                      <StationLabel hint="Bridge/interface where AP management VLAN traffic is carried. PPPoE interfaces are hidden.">Bridge / Interface</StationLabel>
-                                      <select className="form-select" value={row.bridge_name} onChange={(e) => updateApManagementRouter(activeIndex, { bridge_name: e.target.value })} disabled={!row.router_id} required>
-                                        <option value="">{row.router_id ? 'Choose detected bridge/interface' : 'Choose router first'}</option>
-                                        {safeInterfaces.map((iface) => <option value={iface.name} key={`ap-management-bridge-${activeIndex}-${iface.name}`}>{interfaceOptionLabel(iface)}</option>)}
-                                      </select>
-                                    </div>
-                                    <div className="col-md-2 d-flex align-items-end">
-                                      <button className="btn btn-outline-primary w-100" type="button" onClick={() => row.router_id && loadMikrotikRouterOptions(row.router_id)} disabled={!row.router_id}>
-                                        <IconSearch size={15} className="me-1" />Detect Ports
-                                      </button>
+                                    <div className="col-12">
+                                      <div className="station-subpanel">
+                                        <div className="station-subpanel-title">Step 1: Select Router</div>
+                                        <div className="row g-3">
+                                          <div className="col-md-6">
+                                            <StationLabel hint="Select one of the MikroTik routers already saved in the system.">MikroTik Router</StationLabel>
+                                            <select
+                                              className="form-select"
+                                              value={row.router_id}
+                                              onChange={(e) => {
+                                                updateApManagementRouter(activeIndex, { router_id: e.target.value, bridge_name: '', tagged_ports: '' });
+                                                if (e.target.value) loadMikrotikRouterOptions(e.target.value);
+                                              }}
+                                              required
+                                            >
+                                              <option value="">Choose router</option>
+                                              {mikrotiks.map((router) => <option value={router.id} key={`ap-management-router-${router.id}`}>{router.router_name} ({router.host})</option>)}
+                                            </select>
+                                            {routerOptions.error && <div className="text-danger small mt-1">{routerOptions.error}</div>}
+                                            {routerOptionsLoading && <div className="text-muted small mt-1">Fetching ports from RouterOS...</div>}
+                                          </div>
+                                        </div>
+                                      </div>
                                     </div>
                                     <div className="col-12">
-                                      <StationLabel hint="Check every detected RouterOS interface that should carry the centralized AP management VLAN on this router.">Tagged Ports</StationLabel>
-                                      <div className="input-icon mb-2">
-                                        <span className="input-icon-addon"><IconSearch size={16} /></span>
-                                        <input
-                                          className="form-control"
-                                          value={portSearchText}
-                                          onChange={(e) => setApManagementPortSearch((current) => ({ ...current, [portSearchKey]: e.target.value }))}
-                                          placeholder="Search tagged ports"
-                                          disabled={!row.router_id}
-                                        />
-                                        {portSearchText && (
-                                          <button className="btn btn-icon input-icon-addon end-0" type="button" onClick={() => setApManagementPortSearch((current) => ({ ...current, [portSearchKey]: '' }))} title="Clear search">
-                                            <IconX size={14} />
+                                      <div className="station-subpanel">
+                                        <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                                          <div>
+                                            <div className="station-subpanel-title mb-1">{activeIndex === 0 ? 'Step 2: Select Root Bridge and Tagged Ports' : 'Step 2: Select Bridge and Tagged Ports'}</div>
+                                            <div className="text-muted small">Select the bridge/interface and all ports that should carry AP management VLAN {apManagementForm.vlan_id || 'x'}.</div>
+                                          </div>
+                                          <button className="btn btn-outline-primary btn-sm" type="button" onClick={() => row.router_id && loadMikrotikRouterOptions(row.router_id)} disabled={!row.router_id || routerOptionsLoading}>
+                                            {routerOptionsLoading ? <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true" /> : <IconRefresh size={15} className="me-1" />}
+                                            {routerOptionsLoading ? 'Detecting...' : 'Detect Ports'}
                                           </button>
-                                        )}
-                                      </div>
-                                      <div className="station-port-checkbox-grid">
-                                        {visibleTaggedInterfaces.map((iface) => (
-                                          <label className="form-check station-port-check" key={`ap-management-port-${activeIndex}-${iface.name}`}>
-                                            <input
-                                              className="form-check-input"
-                                              type="checkbox"
-                                              checked={selectedTaggedPortSet.has(iface.name)}
-                                              onChange={(e) => toggleApManagementTaggedPort(activeIndex, iface.name, e.target.checked)}
-                                            />
-                                            <span className="form-check-label">
-                                              <span className="fw-semibold">{iface.name}</span>
-                                              <span className="text-muted small">{iface.type || 'interface'}{iface.bridge ? ` · ${iface.bridge}` : ''}</span>
-                                            </span>
-                                          </label>
-                                        ))}
-                                        {!visibleTaggedInterfaces.length && <div className="text-muted small">No detected non-PPPoE interfaces match this search.</div>}
-                                      </div>
-                                      {!!selectedTaggedPorts.length && (
-                                        <div className="d-flex flex-wrap gap-1 mt-2">
-                                          {selectedTaggedPorts.map((port) => (
-                                            <span className="badge bg-blue-lt text-blue station-selected-port-badge" key={`ap-management-selected-port-${activeIndex}-${port}`}>
-                                              <span>{port}</span>
-                                              <button className="station-selected-port-remove" type="button" onClick={() => toggleApManagementTaggedPort(activeIndex, port, false)} title={`Remove ${port}`} aria-label={`Remove ${port}`}>
-                                                <IconX size={12} />
-                                              </button>
-                                            </span>
-                                          ))}
                                         </div>
-                                      )}
+                                        <div className="row g-3">
+                                          <div className="col-md-6">
+                                            <StationLabel hint="Bridge/interface where AP management VLAN traffic is carried. PPPoE interfaces are hidden.">{activeIndex === 0 ? 'Root Bridge / Interface' : 'Bridge / Interface'}</StationLabel>
+                                            <select className="form-select" value={row.bridge_name} onChange={(e) => updateApManagementRouter(activeIndex, { bridge_name: e.target.value })} disabled={!row.router_id || routerOptionsLoading} required>
+                                              <option value="">{row.router_id ? (routerOptionsLoading ? 'Detecting bridge/interface list...' : 'Choose detected bridge/interface') : 'Choose router first'}</option>
+                                              {safeInterfaces.map((iface) => <option value={iface.name} key={`ap-management-bridge-${activeIndex}-${iface.name}`}>{interfaceOptionLabel(iface)}</option>)}
+                                            </select>
+                                            {!!(routerOptions.warnings || []).length && <div className="text-warning small mt-1">Some optional RouterOS option lists were unavailable, but interfaces loaded.</div>}
+                                            {!routerOptionsLoading && row.router_id && routerOptions.status === 'SUCCESS' && (
+                                              <div className="text-success small mt-1">Detected {safeInterfaces.length} usable non-PPPoE interface{safeInterfaces.length === 1 ? '' : 's'}.</div>
+                                            )}
+                                          </div>
+                                          <div className="col-12">
+                                            <StationLabel hint="Check every detected RouterOS interface that should carry the centralized AP management VLAN on this router.">Tagged Ports</StationLabel>
+                                            <div className="station-port-picker">
+                                              <div className="input-group station-port-search-group">
+                                                <input
+                                                  className="form-control station-port-search"
+                                                  value={portSearchText}
+                                                  onChange={(e) => setApManagementPortSearch((current) => ({ ...current, [portSearchKey]: e.target.value }))}
+                                                  placeholder="Search port, bridge, type, or comment"
+                                                  disabled={!row.router_id || routerOptionsLoading}
+                                                />
+                                                <button
+                                                  className="btn btn-outline-secondary station-port-search-clear"
+                                                  type="button"
+                                                  onClick={() => setApManagementPortSearch((current) => ({ ...current, [portSearchKey]: '' }))}
+                                                  disabled={!row.router_id || !portSearchText}
+                                                  title="Clear tagged port search"
+                                                  aria-label="Clear tagged port search"
+                                                >
+                                                  <IconX size={15} />
+                                                </button>
+                                              </div>
+                                              <div className="station-port-checkbox-list">
+                                                {visibleTaggedInterfaces.map((iface) => (
+                                                  <label className={`station-port-checkbox-item ${selectedTaggedPortSet.has(iface.name) ? 'selected' : ''}`} key={`ap-management-port-${activeIndex}-${iface.name}`}>
+                                                    <input
+                                                      className="form-check-input"
+                                                      type="checkbox"
+                                                      checked={selectedTaggedPortSet.has(iface.name)}
+                                                      onChange={(e) => toggleApManagementTaggedPort(activeIndex, iface.name, e.target.checked)}
+                                                      disabled={!row.router_id || routerOptionsLoading}
+                                                    />
+                                                    <span className="station-port-checkbox-text">
+                                                      <strong>{iface.name}</strong>
+                                                      <small>
+                                                        {[
+                                                          iface.type,
+                                                          iface.bridge ? `in ${iface.bridge}` : '',
+                                                          iface.disabled ? 'disabled' : '',
+                                                          iface.running ? 'running' : ''
+                                                        ].filter(Boolean).join(' · ') || 'interface'}
+                                                      </small>
+                                                    </span>
+                                                  </label>
+                                                ))}
+                                                {!visibleTaggedInterfaces.length && (
+                                                  <div className="text-muted small p-3">
+                                                    {routerOptionsLoading ? 'Fetching ports from RouterOS...' : row.router_id ? 'No matching non-PPPoE ports found.' : 'Choose a router first.'}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            </div>
+                                            <div className="text-muted small">Check every detected RouterOS interface that should carry VLAN {apManagementForm.vlan_id || 'x'} on this router. PPPoE interfaces are hidden.</div>
+                                            {!!selectedTaggedPorts.length && (
+                                              <div className="d-flex flex-wrap gap-1 mt-2">
+                                                {selectedTaggedPorts.map((port) => (
+                                                  <span className="badge bg-blue-lt text-blue station-selected-port-badge" key={`ap-management-selected-port-${activeIndex}-${port}`}>
+                                                    <span>{port}</span>
+                                                    <button className="station-selected-port-remove" type="button" onClick={() => toggleApManagementTaggedPort(activeIndex, port, false)} title={`Remove ${port}`} aria-label={`Remove ${port}`}>
+                                                      <IconX size={12} />
+                                                    </button>
+                                                  </span>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
                                     </div>
                                   </div>
                                 </div>
@@ -7092,47 +7298,61 @@ function CaptivePortalPage({ mode = 'full' }) {
                             </span>
                           </div>
                           <div className="progress"><div className={`progress-bar ${failedSteps ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${progressPct}%` }} /></div>
+                          {apManagementImplementationMessage && <div className="text-muted small mt-2">{apManagementImplementationMessage}</div>}
                         </div>
                       );
                     })()}
-                    {apManagementImplementationMessage && <div className={`alert ${apManagementPushCompleted ? 'alert-success' : 'alert-info'} py-2`}>{apManagementImplementationMessage}</div>}
-                    {apManagementPushCompleted && (
-                      <div className="text-center border rounded p-4 mb-3">
-                        <IconCircleCheck size={54} className="text-success mb-2" />
-                        <div className="h3 mb-1">AP management config pushed</div>
-                        <div className="text-muted">The modal will close automatically unless you keep reviewing the command results.</div>
-                      </div>
-                    )}
-                    <div className="station-command-list mb-3">
-                      {apManagementImplementationSteps.map((step, index) => (
-                        <div
-                          className={`station-command-step ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'is-success' : step.status === 'FAILED' ? 'is-failed' : step.status === 'RUNNING' ? 'is-running' : ''}`}
-                          key={step.id}
-                          ref={(node) => { apManagementStepRefs.current[step.id] = node; }}
-                        >
-                          <div className="station-command-step-icon">{stationImplementationStatusIcon(step.status)}</div>
-                          <div className="station-command-step-body">
-                            <div className="d-flex align-items-start justify-content-between gap-3">
-                              <div>
-                                <div className="fw-semibold">{index + 1}. {step.label}</div>
-                                <div className="text-muted small">{step.router_name || 'Router'} · {step.router_role || 'Router'}{step.detected ? ' · already detected' : ''}</div>
-                              </div>
-                              <span className={`badge ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'bg-green-lt text-green' : step.status === 'FAILED' ? 'bg-red-lt text-red' : step.status === 'RUNNING' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>{step.status}</span>
-                            </div>
-                            {step.message && <div className="small mt-1">{step.message}</div>}
-                            <pre className="mt-2 mb-0 small"><code>{step.preview || 'No command preview available.'}</code></pre>
+                    {apManagementPushCompleted ? (
+                      <div className="station-push-success">
+                        <div className="station-push-success-icon">
+                          <IconCircleCheck size={56} />
+                        </div>
+                        <div>
+                          <div className="h2 mb-2">AP management pushed successfully</div>
+                          <div className="text-muted">
+                            All planned AP management configuration steps completed or were already detected on MikroTik.
                           </div>
                         </div>
-                      ))}
-                    </div>
-                    <div className="modal-footer px-0 pb-0">
-                      <button type="button" className="btn" onClick={() => apManagementPushCompleted ? closeApManagementPushSuccess() : setApManagementImplementation(null)} disabled={apManagementImplementing}>
-                        {apManagementPushCompleted ? `Close (${apManagementPushCloseCountdown}s)` : 'Close'}
-                      </button>
-                      <button type="button" className="btn btn-primary" onClick={runApManagementImplementation} disabled={apManagementImplementing || apManagementPushCompleted}>
-                        <IconCloudUpload size={18} className="me-2" />{apManagementImplementing ? 'Pushing...' : 'Start Push'}
-                      </button>
-                    </div>
+                        <button type="button" className="btn btn-success btn-lg" onClick={closeApManagementPushSuccess}>
+                          Close ({apManagementPushCloseCountdown}s)
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="mb-3">
+                          <div className="fw-semibold mb-2">Router path</div>
+                          {renderApManagementChainPath(apManagementImplementation)}
+                        </div>
+                        <div className="station-implementation-list">
+                          {(apManagementImplementationSteps.length ? apManagementImplementationSteps : apManagementStepList(apManagementImplementation)).map((step, index) => (
+                            <div
+                              className={`station-implementation-step ${step.status?.toLowerCase() || 'pending'} ${step.detected ? 'detected' : ''}`}
+                              key={`${step.id}-${index}`}
+                              ref={(node) => { if (node) apManagementStepRefs.current[step.id] = node; }}
+                            >
+                              <div className="station-implementation-step-header">
+                                <span className="station-implementation-status-icon">{stationImplementationStatusIcon(step.status)}</span>
+                                <div className="min-w-0">
+                                  <div className="fw-semibold">{index + 1}. {step.label}</div>
+                                  <div className="text-muted small">{step.router_name || 'Router'}{step.host ? ` · ${step.host}` : ''} · {step.router_role || 'Router'}</div>
+                                </div>
+                                <span className={`badge ms-auto ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'bg-green-lt text-green' : step.status === 'FAILED' ? 'bg-red-lt text-red' : step.status === 'RUNNING' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
+                                  {step.detected ? 'Already pushed' : step.status === 'SKIPPED' ? 'Already exists' : step.status}
+                                </span>
+                              </div>
+                              <pre className="station-implementation-command mb-0"><code>{step.preview || 'No command preview available.'}</code></pre>
+                              {step.message && <div className={`small mt-2 ${step.status === 'FAILED' ? 'text-danger' : 'text-muted'}`}>{step.message}</div>}
+                            </div>
+                          ))}
+                        </div>
+                        <div className="modal-footer px-0 pb-0">
+                          <button type="button" className="btn" onClick={() => setApManagementImplementation(null)} disabled={apManagementImplementing}>Close</button>
+                          <button type="button" className="btn btn-danger" onClick={runApManagementImplementation} disabled={apManagementImplementing || !(apManagementImplementationSteps.length || apManagementStepList(apManagementImplementation).length)}>
+                            <IconPlayerPlay size={18} className="me-2" />{apManagementImplementing ? 'Pushing...' : 'Start Push'}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </Modal>
                 )}
                 {stationModalOpen && (
@@ -7140,7 +7360,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <form onSubmit={saveStation}>
 	                      <div className="alert alert-info">
 	                        <div className="fw-semibold mb-1">Station plan only</div>
-	                        <div>This does not configure MikroTik yet. It saves the root-to-downstream router chain and generates the same pattern as your tested VLAN 77 setup for customer HotSpot traffic. Central AP management is handled from HTML and AP Management.</div>
+	                        <div>This does not configure MikroTik yet. It saves the root-to-downstream router chain and generates the same pattern as your tested VLAN 77 setup for customer HotSpot traffic. Central AP management is handled from the AP Management tab.</div>
 	                      </div>
 	                      {stationError && <div className="alert alert-danger">{stationError}</div>}
 	                      <div className="station-process-steps mb-3">
@@ -7814,6 +8034,46 @@ function CaptivePortalPage({ mode = 'full' }) {
                       )}
                     </Modal>
                   )}
+                  {stationDeleteTarget && (
+                    <Modal title={`Delete Station: ${stationDeleteTarget.station_name}`} size="lg" onClose={() => !stationDeleting && setStationDeleteTarget(null)}>
+                      <div className="alert alert-warning">
+                        <div className="fw-semibold mb-1">This deletes the station plan only.</div>
+                        <div>RouterOS configuration is not removed by this action. Use <strong>Remove Config</strong> first if you want the system-created MikroTik objects removed from routers.</div>
+                      </div>
+                      <div className="row g-3 mb-3">
+                        <div className="col-sm-6">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Station Code</div>
+                            <div className="fw-semibold">{stationDeleteTarget.station_code || '-'}</div>
+                          </div>
+                        </div>
+                        <div className="col-sm-6">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Customer VLAN</div>
+                            <div className="fw-semibold">VLAN {stationDeleteTarget.vlan_id || '-'}</div>
+                          </div>
+                        </div>
+                        <div className="col-sm-6">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Client Network</div>
+                            <div className="fw-semibold">{stationDeleteTarget.client_network_cidr || '-'}</div>
+                          </div>
+                        </div>
+                        <div className="col-sm-6">
+                          <div className="border rounded p-3 h-100">
+                            <div className="text-muted small">Routers in Chain</div>
+                            <div className="fw-semibold">{(stationDeleteTarget.routers || []).length}</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="modal-footer px-0 pb-0">
+                        <button type="button" className="btn" onClick={() => setStationDeleteTarget(null)} disabled={stationDeleting}>Cancel</button>
+                        <button type="button" className="btn btn-danger" onClick={deleteStationPlan} disabled={stationDeleting}>
+                          <IconTrash size={18} className="me-2" />{stationDeleting ? 'Deleting...' : 'Delete Station Plan'}
+                        </button>
+                      </div>
+                    </Modal>
+                  )}
                   {stationDiagnostics && (
                     <Modal title={`HotSpot Diagnostics: ${stationDiagnostics.station?.station_name || 'Station'}`} size="xl" onClose={() => setStationDiagnostics(null)}>
                       <div className="alert alert-info">
@@ -7887,7 +8147,6 @@ function CaptivePortalPage({ mode = 'full' }) {
                       </div>
                     </Modal>
                   )}
-	              </>}
               {mikrotikTab === 'Scan Result' && <>
                 <div className="alert alert-info">
                   <div className="fw-semibold mb-1">Preflight scan is read-only</div>

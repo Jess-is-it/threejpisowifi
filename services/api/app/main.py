@@ -2,6 +2,7 @@ import os
 import base64
 import concurrent.futures
 import csv
+import ftplib
 import html
 import io
 import json
@@ -2003,6 +2004,55 @@ def routeros_write_text_file(host: str, port: int, username: Optional[str], pass
                 raw_sock.close()
             except Exception:
                 pass
+
+
+def routeros_hotspot_file_candidates(file_path: str) -> list[str]:
+    normalized = re.sub(r"/+", "/", str(file_path or "").strip().replace("\\", "/")).strip("/")
+    if not normalized:
+        normalized = "hotspot/login.html"
+    candidates = [normalized]
+    if not normalized.startswith("flash/"):
+        candidates.append(f"flash/{normalized}")
+    if normalized.startswith("flash/"):
+        candidates.append(normalized.removeprefix("flash/"))
+    deduped = []
+    for candidate in candidates:
+        if candidate and candidate not in deduped:
+            deduped.append(candidate)
+    return deduped
+
+
+def routeros_write_text_file_via_ftp(host: str, username: Optional[str], password: Optional[str], file_path: str, content: str, timeout: float = 12.0):
+    last_error = None
+    content_bytes = content.encode()
+    for candidate in routeros_hotspot_file_candidates(file_path):
+        directory, _, filename = candidate.rpartition("/")
+        try:
+            ftp = ftplib.FTP()
+            ftp.connect(host, 21, timeout=timeout)
+            ftp.login(username or "", password or "")
+            if directory:
+                ftp.cwd(directory)
+            ftp.storbinary(f"STOR {filename or 'login.html'}", io.BytesIO(content_bytes))
+            try:
+                ftp.quit()
+            except Exception:
+                pass
+            return {
+                "status": "SUCCESS",
+                "message": f"Uploaded managed HotSpot login.html using RouterOS FTP fallback to {candidate}.",
+                "file_path": candidate,
+                "action": "ftp_stor",
+                "content_hash": sha256(content_bytes).hexdigest(),
+                "content_verified": None,
+            }
+        except Exception as exc:
+            last_error = exc
+            try:
+                ftp.close()
+            except Exception:
+                pass
+    raise RuntimeError(f"RouterOS API file upload failed and FTP fallback could not upload login.html: {last_error}")
 
 
 def routeros_read_result_after_send(sock, words):
@@ -7622,6 +7672,74 @@ def station_interface_map(snapshot: dict) -> dict[str, dict]:
     }
 
 
+def mikrotik_live_interface_map(router_id: str) -> tuple[dict[str, dict], Optional[str]]:
+    """Read current RouterOS interfaces without changing the router.
+
+    Preflight scan remains required for conflict detection, but station/AP
+    management forms can use fresher Detect Ports data. This fallback prevents
+    saves from failing when the selected bridge/port exists live but the latest
+    preflight snapshot is stale.
+    """
+    row = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_id,))
+    if not row:
+        return {}, "MikroTik router not found."
+    if not row.get("username") or not row.get("password_encrypted"):
+        return {}, "RouterOS API username and password are required."
+    try:
+        password = decrypt_secret(row.get("password_encrypted"))
+        interfaces = sanitize_routeros_snapshot(routeros_readonly_query(
+            row["host"],
+            row["api_port"],
+            row.get("username"),
+            password,
+            row.get("use_tls"),
+            ["/interface/print"],
+        ))
+        try:
+            bridge_ports = sanitize_routeros_snapshot(routeros_readonly_query(
+                row["host"],
+                row["api_port"],
+                row.get("username"),
+                password,
+                row.get("use_tls"),
+                ["/interface/bridge/port/print"],
+            ))
+        except Exception:
+            bridge_ports = []
+        bridge_membership = {
+            sanitize_routeros_text(item.get("interface"), max_length=200): sanitize_routeros_text(item.get("bridge"), max_length=200)
+            for item in bridge_ports
+            if item.get("interface") and item.get("bridge")
+        }
+        mapped = {}
+        for item in interfaces:
+            name = sanitize_routeros_text(item.get("name"), max_length=200)
+            if not name:
+                continue
+            mapped[name] = {
+                **item,
+                "name": name,
+                "type": sanitize_routeros_text(item.get("type"), max_length=120),
+                "default-name": sanitize_routeros_text(item.get("default-name"), max_length=200),
+                "comment": sanitize_routeros_text(item.get("comment"), max_length=500),
+                "bridge": bridge_membership.get(name),
+            }
+        return mapped, None
+    except Exception as exc:
+        return {}, sanitize_routeros_text(str(exc), max_length=1000)
+
+
+def station_interface_map_with_live_fallback(router_id: str, snapshot: dict, selected_names: list[str]) -> tuple[dict[str, dict], Optional[str], bool]:
+    interfaces = station_interface_map(snapshot)
+    required_names = [name for name in [str(value or "").strip() for value in selected_names] if name]
+    if required_names and any(name not in interfaces for name in required_names):
+        live_interfaces, live_error = mikrotik_live_interface_map(router_id)
+        if live_interfaces:
+            return {**interfaces, **live_interfaces}, live_error, True
+        return interfaces, live_error, False
+    return interfaces, None, False
+
+
 def station_interface_is_pppoe(interface: dict) -> bool:
     text = " ".join(str(interface.get(key) or "").lower() for key in ("name", "type", "comment", "default-name"))
     return "pppoe" in text
@@ -7668,15 +7786,18 @@ def station_validate_router_path(payload: MikrotikStationCreate, station_id: Opt
         if scan.get("scan_status") != "SUCCESS":
             errors.append(f"{router_label}: latest Preflight Scan failed. Re-scan before saving this station.")
             continue
-        interfaces = station_interface_map(snapshot)
         bridge_name = (item.bridge_name or "").strip()
+        port_names = [port.strip() for port in str(item.tagged_ports or "").split(",") if port.strip()]
+        interfaces, live_interface_error, used_live_interfaces = station_interface_map_with_live_fallback(item.router_id, snapshot, [bridge_name, *port_names])
         if bridge_name not in interfaces:
-            errors.append(f"{router_label}: selected bridge/interface '{bridge_name}' was not found in the latest scan.")
+            suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
+            errors.append(f"{router_label}: selected bridge/interface '{bridge_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
         elif station_interface_is_pppoe(interfaces[bridge_name]):
             errors.append(f"{router_label}: '{bridge_name}' is PPPoE-related and cannot carry the station captive portal VLAN.")
-        for port_name in [port.strip() for port in str(item.tagged_ports or "").split(",") if port.strip()]:
+        for port_name in port_names:
             if port_name not in interfaces:
-                errors.append(f"{router_label}: tagged port '{port_name}' was not found in the latest scan.")
+                suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
+                errors.append(f"{router_label}: tagged port '{port_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
             elif station_interface_is_pppoe(interfaces[port_name]):
                 errors.append(f"{router_label}: tagged port '{port_name}' is PPPoE-related and cannot carry the station captive portal VLAN.")
         existing_vlan_ids = set()
@@ -7854,7 +7975,6 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                             "address-pool": ap_management_pool_name,
                             "lease-time": ap_management_dhcp_lease_time,
                             "disabled": "no",
-                            "comment": f"3J AP Management - DHCP server for VLAN {ap_management_vlan_id}",
                         },
                         unique_field="name",
                         unique_value=ap_management_dhcp_server_name,
@@ -7937,7 +8057,6 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                             "address-pool": pool_name,
                             "lease-time": dhcp_lease_time,
                             "disabled": "no",
-                            "comment": f"3J Hotspot - DHCP server for VLAN {vlan_id}",
                         },
                         unique_field="name",
                         unique_value=dhcp_server_name,
@@ -8136,7 +8255,7 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                             "hotspot-address": str(station["gateway_ip"]),
                             "dns-name": hotspot_dns_name,
                             "html-directory": hotspot_html_directory,
-                            "login-by": "http-chap,http-pap",
+                            "login-by": "cookie,http-chap",
                         },
                         unique_field="name",
                         unique_value=hotspot_profile_name,
@@ -8961,15 +9080,18 @@ def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayloa
         if scan.get("scan_status") != "SUCCESS":
             errors.append(f"{router_label}: latest Preflight Scan failed. Re-scan before saving AP management.")
             continue
-        interfaces = station_interface_map(snapshot)
         bridge_name = (item.bridge_name or "").strip()
+        port_names = [port.strip() for port in str(item.tagged_ports or "").split(",") if port.strip()]
+        interfaces, live_interface_error, used_live_interfaces = station_interface_map_with_live_fallback(item.router_id, snapshot, [bridge_name, *port_names])
         if bridge_name and bridge_name not in interfaces:
-            errors.append(f"{router_label}: selected bridge/interface '{bridge_name}' was not found in the latest scan.")
+            suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
+            errors.append(f"{router_label}: selected bridge/interface '{bridge_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
         elif bridge_name and station_interface_is_pppoe(interfaces[bridge_name]):
             errors.append(f"{router_label}: '{bridge_name}' is PPPoE-related and cannot carry AP management VLAN.")
-        for port_name in [port.strip() for port in str(item.tagged_ports or "").split(",") if port.strip()]:
+        for port_name in port_names:
             if port_name not in interfaces:
-                errors.append(f"{router_label}: tagged port '{port_name}' was not found in the latest scan.")
+                suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
+                errors.append(f"{router_label}: tagged port '{port_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
             elif station_interface_is_pppoe(interfaces[port_name]):
                 errors.append(f"{router_label}: tagged port '{port_name}' is PPPoE-related and cannot carry AP management VLAN.")
         existing_vlan_ids = set()
@@ -9080,7 +9202,6 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
                         "address-pool": pool_name,
                         "lease-time": dhcp_lease_time,
                         "disabled": "no",
-                        "comment": f"3J AP Management - DHCP server for VLAN {vlan_id}",
                     },
                     unique_field="name",
                     unique_value=dhcp_server_name,
@@ -9337,9 +9458,15 @@ def mikrotik_hotspot_login_sync_status_for_station(station: dict, remote_check: 
         return {**base, "status": "UNKNOWN", "message": "Run Check Sync to verify the file on MikroTik."}
     try:
         password = decrypt_secret(router.get("password_encrypted"))
-        rows = routeros_file_query(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), file_path)
+        rows = []
+        detected_file_path = file_path
+        for candidate in routeros_hotspot_file_candidates(file_path):
+            rows = routeros_file_query(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), candidate)
+            if rows:
+                detected_file_path = candidate
+                break
         if not rows:
-            return {**base, "status": "MISSING", "message": f"{file_path} was not detected on the root gateway."}
+            return {**base, "status": "MISSING", "message": f"{file_path} was not detected on the root gateway.", "checked_paths": routeros_hotspot_file_candidates(file_path)}
         contents = rows[0].get("contents")
         if contents is not None:
             size_text = rows[0].get("size")
@@ -9349,14 +9476,14 @@ def mikrotik_hotspot_login_sync_status_for_station(station: dict, remote_check: 
                 remote_size = 0
             content_truncated = "[TRUNCATED]" in contents or (remote_size and len(contents) < remote_size)
             if content_truncated and latest_sync and latest_sync.get("sync_status") == "SUCCESS" and latest_sync.get("content_hash") == expected_hash:
-                return {**base, "status": "SYNCED", "message": f"{file_path} exists. RouterOS returned truncated file contents, but the last recorded sync matches the current managed login.html."}
+                return {**base, "file_path": detected_file_path, "status": "SYNCED", "message": f"{detected_file_path} exists. RouterOS returned truncated file contents, but the last recorded sync matches the current managed login.html."}
             remote_hash = sha256(contents.encode()).hexdigest()
             if remote_hash == expected_hash:
-                return {**base, "status": "SYNCED", "message": f"{file_path} exists and matches the current managed login.html.", "remote_hash": remote_hash}
-            return {**base, "status": "OUTDATED", "message": f"{file_path} exists but does not match the current managed login.html.", "remote_hash": remote_hash}
+                return {**base, "file_path": detected_file_path, "status": "SYNCED", "message": f"{detected_file_path} exists and matches the current managed login.html.", "remote_hash": remote_hash}
+            return {**base, "file_path": detected_file_path, "status": "OUTDATED", "message": f"{detected_file_path} exists but does not match the current managed login.html.", "remote_hash": remote_hash}
         if latest_sync and latest_sync.get("sync_status") == "SUCCESS" and latest_sync.get("content_hash") == expected_hash:
-            return {**base, "status": "SYNCED", "message": f"{file_path} exists. RouterOS did not return file contents, but the last recorded sync matches the current template."}
-        return {**base, "status": "DETECTED", "message": f"{file_path} exists, but RouterOS did not return file contents for hash verification."}
+            return {**base, "file_path": detected_file_path, "status": "SYNCED", "message": f"{detected_file_path} exists. RouterOS did not return file contents, but the last recorded sync matches the current template."}
+        return {**base, "file_path": detected_file_path, "status": "DETECTED", "message": f"{detected_file_path} exists, but RouterOS did not return file contents for hash verification."}
     except Exception as exc:
         return {**base, "status": "ERROR", "message": sanitize_routeros_text(str(exc))}
 
@@ -9785,24 +9912,35 @@ def sync_mikrotik_hotspot_login_for_station(station: dict, admin_id: Optional[st
         password = decrypt_secret(router.get("password_encrypted"))
         if not password:
             raise RuntimeError("Saved MikroTik password could not be decrypted.")
-        result = routeros_write_text_file(
-            router["host"],
-            router["api_port"],
-            router.get("username"),
-            password,
-            router.get("use_tls"),
-            file_path,
-            content,
-        )
+        try:
+            result = routeros_write_text_file(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                password,
+                router.get("use_tls"),
+                file_path,
+                content,
+            )
+        except Exception as api_exc:
+            result = routeros_write_text_file_via_ftp(
+                router["host"],
+                router.get("username"),
+                password,
+                file_path,
+                content,
+            )
+            result["api_upload_error"] = sanitize_routeros_text(str(api_exc))
+        actual_file_path = result.get("file_path") or file_path
         status = "SUCCESS"
-        message = result.get("message") or f"Uploaded managed HotSpot login.html to {file_path}."
-        record_hotspot_login_sync_log(station_id, root["router_id"], file_path, content_hash, status, message, result, admin_id)
+        message = result.get("message") or f"Uploaded managed HotSpot login.html to {actual_file_path}."
+        record_hotspot_login_sync_log(station_id, root["router_id"], actual_file_path, content_hash, status, message, result, admin_id)
         record_station_command_log(
             station_id,
             root["router_id"],
             "APPLY",
             None,
-            {"label": "Upload managed HotSpot login.html", "preview": f"/file set-or-add name={file_path} contents=<3J managed redirect template>"},
+            {"label": "Upload managed HotSpot login.html", "preview": f"/file set-or-add name={actual_file_path} contents=<3J managed redirect template>"},
             status,
             message,
             result,
@@ -9816,7 +9954,7 @@ def sync_mikrotik_hotspot_login_for_station(station: dict, admin_id: Optional[st
             "host": root.get("host"),
             "status": status,
             "message": message,
-            "file_path": file_path,
+            "file_path": actual_file_path,
             "content_hash": content_hash,
             "result": sanitize_summary(result),
         }
@@ -11079,6 +11217,41 @@ def create_mikrotik_station(payload: MikrotikStationCreate, admin=Depends(curren
 @app.put("/api/network/mikrotik/stations/{station_id}")
 def update_mikrotik_station(station_id: str, payload: MikrotikStationCreate, admin=Depends(current_admin)):
     return save_mikrotik_station_payload(payload, admin, station_id=station_id)
+
+
+@app.delete("/api/network/mikrotik/stations/{station_id}")
+def delete_mikrotik_station(station_id: str, admin=Depends(current_admin)):
+    station = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
+    if not station:
+        raise HTTPException(status_code=404, detail="MikroTik station not found")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE mikrotik_stations
+                SET status = 'ARCHIVED', updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (station_id,),
+            )
+            archived = cur.fetchone()
+    audit(
+        admin["id"],
+        "delete_mikrotik_station",
+        "mikrotik_stations",
+        station_id,
+        {
+            "station_name": station.get("station_name"),
+            "station_code": station.get("station_code"),
+            "note": "Station plan was archived only. RouterOS objects are not removed by station delete.",
+        },
+    )
+    return {
+        "status": "SUCCESS",
+        "message": "Station plan deleted from the system. RouterOS configuration was not removed; use Remove Config before delete when router cleanup is needed.",
+        "station": public_mikrotik_station(archived),
+    }
 
 
 @app.get("/api/network/mikrotik/stations/{station_id}/command-logs")

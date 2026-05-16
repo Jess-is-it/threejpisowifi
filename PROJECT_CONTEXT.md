@@ -1037,3 +1037,14 @@ Safety:
 - AP management is not a HotSpot network. It exists so Omada/AP control traffic stays off the customer captive VLAN while the open SSID still tags the customer VLAN.
 - Validation rejects AP management VLANs/subnets that overlap station customer HotSpot VLAN/subnet or existing scanned router VLAN/subnet/pool state.
 - AP management config is not pushed automatically. It uses the same step-by-step RouterOS push pattern as Station Push Config: detect existing matching objects, show every command, push one command at a time, and stop on the first error.
+
+## Phase 5.16 — Tested MikroTik HotSpot Pattern Alignment
+
+- Live TestRouter validation proved the captive portal works with MikroTik HotSpot when the AP/client path is correctly isolated and bound to the HotSpot interface.
+- The verified no-VLAN test used `ether2` as the client side, `10.88.0.0/24`, DHCP DNS set to the MikroTik gateway, NAT, walled garden access to the portal server, `address-pool=none`, and the managed `login.html`.
+- The verified VLAN test used VLAN `33` for HotSpot clients and VLAN `222` for AP management. Phones received `10.33.0.x`, AP management received `10.222.0.x`, and the captive portal still opened.
+- Station Push Config keeps the proven rules: client DHCP DNS must be the HotSpot gateway only, RouterOS DNS remote requests must be enabled, HotSpot server `address-pool` must be `none`, and the managed `login.html` is uploaded as part of the push workflow.
+- RouterOS 6 hEX rejected API `/file` upload for `login.html`, but FTP upload to `flash/hotspot/login.html` worked. The system now attempts RouterOS API file upload first and falls back to FTP for older RouterOS devices.
+- Station-created DHCP servers are matched by name instead of relying on RouterOS `comment` support because RouterOS parameters vary by version.
+- Add Station remains focused on the customer HotSpot VLAN. Separate AP management VLAN setup remains in the HTML and AP Management workflow and will be refined next.
+- Station plans can now be deleted/archived from the system UI. Deleting a station plan does not remove RouterOS configuration; operators should use Remove Config first when router cleanup is needed.
