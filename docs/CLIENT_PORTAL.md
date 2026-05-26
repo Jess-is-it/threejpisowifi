@@ -1,91 +1,56 @@
 # Client Portal
 
-Phase 2B adds the customer-facing voucher redemption page.
-Phase 2C adds Omada captive portal context capture and authorization attempts.
-
-## What It Is
-
-The client portal is the page customers will use after connecting to the open WiFi SSID. For now it can be opened manually:
+The client portal is the customer-facing voucher page at:
 
 ```text
-http://192.168.50.70:8080/portal
+/portal
 ```
 
-Later, MikroTik HotSpot should redirect customers to this page automatically. Omada can still be used for AP/SSID management.
+It can be opened manually for testing, but the production path is Omada captive portal redirect from the open SSID.
 
-## What Works Now
+## Current Flow
 
-- `/portal` loads without admin login.
-- Customers can enter a voucher code.
+1. Customer connects to the Omada open SSID.
+2. Omada redirects the customer browser to `/portal`.
+3. The portal captures Omada query parameters when available.
+4. Customer enters a voucher code.
+5. 3JCentralPisowifi validates the voucher.
+6. Omada authorization is attempted for Omada-sourced sessions.
+7. After successful authorization, voucher credit is written to wallet/access state.
+
+## What The Browser Can And Cannot Know
+
+The browser cannot reliably detect the device MAC address by itself. Device identity must come from Omada captive portal query parameters or controller/API context.
+
+## Random MAC Handling
+
+After successful voucher redemption, the portal stores a local device-session token. PostgreSQL stores only a hash of that token.
+
+If the phone later changes its private/random WiFi MAC but keeps the same browser token, the backend silently authorizes the new MAC with the remaining time. The voucher is not redeemed again and no extra time is credited.
+
+If the token is lost because browser data or the WiFi profile was cleared, the system cannot safely prove it is the same device.
+
+## Portal Notifications
+
+Portal Notifs can show voucher success, remaining time, expired time, and restored-session messages. Messages support `<TIME>`, `<REMAINING>`, `<VOUCHER>`, `<SSID>`, `<EXPIRES_AT>`, `<BRAND>`, and `<STATUS>`.
+
+Native phone notification-bar behavior depends on the browser and captive portal WebView. When native Web Notifications are blocked or unsupported, the portal shows the notification message inside the page.
+
+## Voucher Redemption
+
 - Valid vouchers are redeemed with source `CLIENT_PORTAL`.
-- Voucher redemption credits the wallet/access of an internal portal customer account.
-- Portal sessions store browser/session context.
-- Portal sessions store Omada query parameters when Omada redirects a client.
-- Portal events log portal views, submissions, success, failure, and status checks.
-- Basic portal branding can be edited from Admin -> Captive Portal.
-- Portal HTML/CSS can be edited at `/admin/captive-portal/editor`.
-- Omada-sourced sessions can attempt Omada client authorization after voucher validation.
-- MikroTik router connection records can be stored and tested from Admin -> Network -> MikroTik.
-
-## What Is Not Built Yet
-
-- Production WiFi rollout.
-- Full MikroTik HotSpot enforcement/authorization automation.
-- WireGuard tunnel automation.
-- Payments, SMS, coinslot, or vendo integration.
-
-## Future Redirect Parameters
-
-The portal captures these optional query parameters:
-
-```text
-client_mac
-clientMac
-client_ip
-ap_mac
-apMac
-gatewayMac
-gateway_mac
-vid
-ssid
-site
-gateway
-redirect_url
-redirectUrl
-nas_id
-session_id
-token
-authToken
-```
-
-Example:
-
-```text
-/portal?client_mac=AA:BB:CC:DD:EE:FF&client_ip=10.0.0.25&ssid=YOUR-SITE-SSID&site=Centro
-```
-
-Browsers cannot reliably detect a device MAC address by themselves. Device identifiers will later come from MikroTik or Omada redirect parameters.
-
-If Omada parameters are present, the portal session source is `OMADA`. A valid voucher is checked first, Omada authorization is attempted, and the voucher is consumed only after authorization succeeds. If authorization fails, the voucher remains usable and the customer is told to ask the operator.
-
-## Manual Test Steps
-
-1. Create a time-based voucher in Admin -> Vouchers.
-2. Open `/portal` in a browser or phone.
-3. Enter the voucher code.
-4. Confirm success message and time remaining.
-5. Check Admin -> Captive Portal for portal events.
-6. Check Admin -> Vouchers -> Redemption Logs for source `CLIENT_PORTAL`.
-
-## Omada Test Steps
-
-1. Configure one test AP and the open SSID from APs Deployment -> Sites -> Configurations -> SSID and Security.
-2. Set the Omada external portal URL to `/portal`.
-3. Connect a phone and confirm the portal opens with Omada query parameters.
-4. Redeem a test voucher.
-5. Check Admin -> Captive Portal -> Portal Sessions.
-6. Check Admin -> Captive Portal -> Authorization Logs.
+- Used, expired, disabled, and voided vouchers show friendly errors.
+- Failed attempts are rate-limited.
+- Portal events are logged for troubleshooting.
 
 ## Source Of Truth
 
-Vouchers credit wallets. After redemption, wallet and session records remain the access source of truth.
+Vouchers and wallets are stored in PostgreSQL. Omada authorizes network access, but it does not own voucher or wallet state.
+
+## Not Active
+
+- RADIUS/WPA2-Enterprise customer login.
+- MikroTik HotSpot `login.html` redirect.
+- Payments.
+- SMS.
+- Coinslot/vendo integration.

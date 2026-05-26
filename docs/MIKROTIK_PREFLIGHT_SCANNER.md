@@ -18,11 +18,11 @@ The backend uses RouterOS API read-only print calls where available:
 - IP addresses and subnets
 - IP pools
 - DHCP servers and networks
-- HotSpot servers and profiles
+- legacy HotSpot servers and profiles, if present
 - firewall filter and NAT summary
 - routes
 - OSPF indicators, if supported by the RouterOS version
-- RADIUS entries
+- legacy RouterOS RADIUS indicators, if present
 - WireGuard indicators
 - PPPoE server indicators
 
@@ -36,7 +36,7 @@ The scanner detects:
 - proposed client subnet overlaps an existing subnet
 - proposed DHCP pool overlaps an existing pool
 - DHCP server already exists on the target interface
-- existing HotSpot servers/profiles
+- existing legacy HotSpot servers/profiles
 - PPPoE access concentrator risk
 - OSPF/routing sensitivity
 - WireGuard/tunnel sensitivity
@@ -141,7 +141,7 @@ PPPoE access concentrators are now classified as `PPPoE_ACCESS_CONCENTRATOR`, no
 
 Core routers are classified as `CORE_ROUTER_READ_ONLY` only when multiple strong core indicators exist, such as public IPs, core naming, many routes, multiple default routes, or OSPF/routing sensitivity.
 
-CRS/switch devices are classified as `SWITCH_TRUNK_HELPER` and recommended for `VLAN_TRUNK_HELPER`, not HotSpot Gateway.
+CRS/switch devices are classified as `SWITCH_TRUNK_HELPER` and should be used only for VLAN transport, not as a captive portal enforcement gateway.
 
 Each scan now includes role reasoning, deployment reasoning, and pilot suitability:
 
@@ -163,4 +163,4 @@ The active path is now:
 5. Use `Add Station` after scan data exists.
 6. Enter the required root gateway VLAN, client subnet, gateway, DHCP pool, DNS, local interface list, and per-router bridge/tagged ports in the station modal.
 7. Let deterministic validation use preflight data to warn about conflicts.
-8. Review and apply individual MikroTik setup steps only when a future apply phase is ready.
+8. Review and push individual MikroTik transport steps from the station/AP-management push modal.

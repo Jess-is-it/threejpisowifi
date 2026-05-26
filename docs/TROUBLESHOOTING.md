@@ -12,64 +12,17 @@ Check API health:
 curl http://127.0.0.1:8080/health
 ```
 
-Check FreeRADIUS logs:
-
-```bash
-docker logs centralwifi_staging-radius-1
-```
-
 Check PostgreSQL logs:
 
 ```bash
 docker logs centralwifi_staging-postgres-1
 ```
 
-Common auth failure reasons:
-- User does not exist.
-- Wrong password.
-- User is disabled.
-- Manual balance is empty or expired.
-- Same account already has an active session.
-- Router/AP uses the wrong shared secret.
-- Router/AP points to the wrong production or staging port.
-
-Real FreeRADIUS Packet Test notes:
-- The internal Admin Portal packet test is sent by the API container, not by a router/AP.
-- It must use the internal Docker client `Docker API Test NAS` and the `RADIUS_DEFAULT_SECRET` configured in FreeRADIUS.
-- Do not use a router/AP NAS record shared secret for the internal packet test.
-- If the result is `No Reply`, check the RADIUS host, UDP port, Docker networking, firewall, and FreeRADIUS container status.
-- If the result is `Wrong Secret`, confirm the internal Docker client secret matches `RADIUS_DEFAULT_SECRET`.
-- If the result is `Access-Reject`, use the displayed reason and suggestion in the Admin Portal.
-
-Reject reason mapping:
-- `Unknown user`: create the user or verify username spelling.
-- `Invalid password`: reset the user password and test again.
-- `User disabled`: enable the user account.
-- `No active wallet balance`: add manual balance or set unlimited access.
-- `Account expired`: extend the valid-until date.
-- `Active session already exists`: stop the active session or wait for the active session grace window.
-- `Database lookup failed`: check API/PostgreSQL/FreeRADIUS database connectivity.
-- `Unknown authorization failure`: check FreeRADIUS logs.
-
-Accounting troubleshooting:
-- `No reply from FreeRADIUS`: confirm the target is `radius:1813` for internal UI tests or `SERVER-IP:11813` for staging external tests.
-- `Wrong shared secret`: use the internal Docker test client secret for UI tests, or the NAS record secret for real router/AP tests.
-- `No matching active session found`: send Accounting Start first or verify username, Calling-Station-ID, and Acct-Session-Id.
-- `User not found`: create the user before sending accounting packets.
-- `Wallet already empty`: add manual balance or enable unlimited access.
-- `Wallet deducted successfully`: confirm the ACCOUNTING DEBIT transaction on the Wallet page.
-- `Accounting packet received but ignored`: verify Acct-Status-Type is Start, Interim-Update, or Stop.
-- `Database error`: check PostgreSQL health and the FreeRADIUS runtime environment file inside the radius container.
-
-Useful accounting checks:
-
-```bash
-docker exec centralwifi_staging-postgres-1 sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT username, acct_status_type, acct_session_id, result, diagnostic_reason, created_at FROM radius_accounting_logs ORDER BY created_at DESC LIMIT 20;"'
-```
-
-```bash
-docker exec centralwifi_staging-postgres-1 sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT username, acct_session_id, status, last_update_time, stop_time, acct_session_time FROM sessions ORDER BY last_update_time DESC LIMIT 20;"'
-```
+Current access troubleshooting:
+- The active customer flow is Omada open SSID captive portal -> `/portal` voucher entry -> Omada client authorization.
+- RADIUS packet tests, NAS client management, and old accounting sessions are removed from the active UI/API.
+- If a removed endpoint returns `410 Gone`, use Captive Portal sessions, Authorization Logs, Omada Controller, APs Deployment, or Network -> MikroTik instead.
+- Wallet remains active and should be checked when voucher credit or future balance behavior is suspected.
 
 Firewall checks:
 
@@ -80,7 +33,7 @@ sudo ufw status
 Port conflict checks:
 
 ```bash
-sudo ss -tulpn | grep -E ':(80|8080|1812|1813|11812|11813)'
+sudo ss -tulpn | grep -E ':(80|8080|8043|8088)'
 ```
 
 ## Omada Controller Troubleshooting
@@ -106,27 +59,17 @@ Omada UI not reachable:
 - If AP discovery/adoption is unreliable, host mode may be easier on local networks.
 
 AP cannot adopt:
-- Confirm required ports `29810/udp`, `29811/tcp`, `29812/tcp`, `29813/tcp`, and `29814/tcp`.
+- Confirm required ports `29810/udp`, `29811/tcp`, `29812/tcp`, `29813/tcp`, `29814/tcp`, and newer controller management ports `29815/tcp`, `29816/tcp`, `29817/tcp` when used by your Omada version.
 - Confirm the AP can reach `192.168.50.71`.
 - Confirm the Omada server firewall allows those ports.
 
-RADIUS no reply from Omada:
-- Confirm Omada points to RADIUS server `192.168.50.70`.
-- Use staging ports `11812/11813` or production ports `1812/1813`.
-- Confirm the NAS client shared secret matches the Omada RADIUS profile.
-- Check FreeRADIUS logs with `docker logs centralwifi_staging-radius-1`.
+Captive portal authorization failed:
+- Check Admin -> Captive Portal -> Authorization Logs.
+- Confirm Omada sent client MAC/site/session parameters to `/portal`.
+- Confirm the Omada API account can authorize captive portal clients.
+- If API authorization is unsupported for this Omada version, use the manual Omada portal flow and keep the failure visible in Authorization Logs.
 
-Wrong NAS source IP:
-- FreeRADIUS trusts the source IP of the RADIUS packet.
-- Add the Omada Controller IP or AP IP as a NAS client, depending on what FreeRADIUS logs show.
-
-Accounting not sent by AP:
-- Enable accounting in the Omada RADIUS profile if available.
-- Set the accounting port.
-- Set interim update to 300 seconds if available.
-- Confirm Accounting Start/Interim/Stop appear on the Sessions page.
-
-## Phase 1E Omada API Automation Troubleshooting
+## Omada API Automation Troubleshooting
 
 Omada API login failed:
 - Check username and password.
@@ -139,42 +82,32 @@ No Omada sites detected:
 - Confirm the account has permission to view sites.
 - Use the Manual Fallback Instructions panel if the Omada API version uses different endpoints.
 
-RADIUS profile automation failed:
-- Confirm Omada API login works.
-- Confirm an Omada site is selected.
-- Use the fallback values to create the profile manually in Omada.
-
 SSID creation failed:
-- Confirm the RADIUS profile exists in Omada.
-- Create SSID `3J-Test-WiFi` manually with WPA2-Enterprise and the staging RADIUS profile.
-- Do not enable captive portal, vouchers, guest network, or VLAN for Phase 1E.
-
-Unknown RADIUS client from Omada/AP:
-- Check FreeRADIUS logs for the source IP.
-- Add that IP as a NAS / Router / AP Client in 3JCentralPisowifi.
-- Use the same shared secret configured in Omada.
-
-Wrong shared secret:
-- The Omada RADIUS profile secret and the 3JCentralPisowifi NAS client secret must match exactly.
-
-Accounting not arriving:
-- Enable accounting in the Omada RADIUS profile.
-- Use staging accounting port `11813`.
-- Confirm the AP sends accounting packets.
-- Check FreeRADIUS logs and the Sessions page.
+- Confirm the AP is adopted in Omada and in the correct site.
+- Confirm Sites -> Configurations has the desired SSID/security/VLAN.
+- Use List of APs -> Push WiFi Config manually. The system no longer auto-applies SSID changes.
+- If Omada rejects the update endpoint, configure the SSID manually in Omada and keep the error visible in the AP details panel.
 
 ## Captive Portal Priority Notes
 
-The main customer access direction is now open SSID + Captive Portal + Voucher. WPA2-Enterprise and Omada RADIUS profile automation are advanced/lab tools.
+The main customer access direction is open SSID + Omada Captive Portal + Voucher. WPA2-Enterprise and Omada RADIUS profile automation are retired from the active system.
 
 If an operator expects customers to enter a WPA2 username/password:
 - Re-check the current project direction.
-- Customers should connect to an open SSID and enter a voucher on the portal once the captive portal phase is built.
+- Customers should connect to an open SSID and enter a voucher on the portal.
 
-If the Captive Portal page says features are not built yet:
-- This is expected after the UI cleanup.
-- Voucher Management is the next development phase.
-- Do not remove or rewrite working Phase 1C RADIUS/accounting foundations; they remain useful for backend session and accounting behavior.
+If the Captive Portal page shows authorization failures:
+- Confirm the phone was redirected by Omada, not by MikroTik HotSpot.
+- Confirm `/portal` captured Omada query parameters.
+- Confirm voucher redemption did not consume the voucher when Omada authorization failed.
+
+## Portal Notifications Do Not Show In Phone Notification Bar
+
+- Confirm Admin -> Captive Portal -> Portal Notifs is enabled.
+- Confirm the specific success/remaining/expired/restored notification switch is enabled.
+- Browser/Web Notifications usually require a secure context. Plain HTTP captive portal pages and captive portal mini-browsers may block native notification prompts.
+- The portal still shows the configured message inside the page as fallback.
+- Android/iOS controls the built-in `Sign in to WiFi network` notification text; 3JCentralPisowifi cannot customize that OS notification.
 
 ## Voucher Management Troubleshooting
 
@@ -216,6 +149,14 @@ Voucher not found:
 Voucher already used:
 - Single-use vouchers cannot be reused.
 - Ask the operator for a new voucher.
+- If the same phone changed its private/random WiFi MAC, the portal should reconnect automatically only when the browser still has the 3J device-session token.
+- If browser storage was cleared or the WiFi profile was forgotten, the system cannot safely prove it is the same phone.
+
+Phone changed MAC and lost access:
+- Reopen the captive portal from the same browser/captive popup if possible.
+- Check Admin -> Captive Portal -> Sessions and Authorization Logs for `MAC_REBIND_*` events.
+- Check `portal_mac_rebind_events` if operator-level detail is needed.
+- If the rebind limit was reached, issue a new voucher or handle the customer manually.
 
 Voucher expired:
 - The voucher expiry date has passed.
@@ -272,7 +213,15 @@ Client authorized but no internet:
 - Check upstream gateway/DNS outside 3JCentralPisowifi.
 - Confirm only one test AP is being used before wider rollout.
 
-## MikroTik Captive Portal Setup Troubleshooting
+Voucher works on one phone, then another phone gets internet through that phone's hotspot:
+- Re-open Network -> MikroTik -> Configuration and click Push Config for the affected station.
+- The station plan should include `Enable one-device voucher TTL guard`, `Block likely phone hotspot sharing traffic`, and `Block likely Windows-over-phone hotspot sharing traffic`.
+- If the root gateway has FastTrack enabled, the plan should also include station-scoped FastTrack bypass steps so the TTL guard is not skipped for established traffic.
+- These rules live on the station root gateway and are managed by exact `3J Station - ... VLAN {id}` comments.
+- After pushing, test again by redeeming a voucher on Phone A, enabling Phone A hotspot, and connecting Phone B to it. Normal tethered traffic should fail while Phone A remains online.
+- This is a practical fairness control for normal phones. A rooted/custom client may still attempt TTL manipulation, so investigate repeat abuse from the MikroTik rule counters and portal/session logs.
+
+## MikroTik Transport Setup Troubleshooting
 
 MikroTik API test failed:
 - Confirm RouterOS API service is enabled.
@@ -281,8 +230,8 @@ MikroTik API test failed:
 - Confirm the API username/password are correct.
 
 MikroTik API account requirement:
-- Use a dedicated full/write RouterOS API account for captive portal automation.
-- The account needs write access for HotSpot, walled garden, client authorization, and portal enforcement.
+- Use a dedicated full/write RouterOS API account for station transport automation.
+- The account needs write access for station VLAN, DHCP, NAT, interface-list, and AP-management transport objects.
 - Do not use the main MikroTik admin account.
 
 Portal design changed but voucher form disappeared:
@@ -322,10 +271,10 @@ High-risk/core router warning:
 
 PPPoE router shown as requires confirmation:
 - This is expected. PPPoE access concentrators are not automatically read-only/core anymore.
-- Use HotSpot Gateway only if captive portal users will be isolated on a new dedicated VLAN/subnet/interface and PPPoE objects will not be touched.
+- Use station transport only on a dedicated VLAN/subnet/interface and do not touch PPPoE objects.
 
 CRS/switch shown as VLAN trunk helper:
-- This is expected. CRS/switch devices should carry VLANs, not host HotSpot/DHCP/NAT.
+- This is expected. CRS/switch devices should carry VLANs. They should not own the customer gateway/DHCP/NAT role unless they are intentionally designed as the root station router.
 
 AI explanation unavailable:
 - This is expected. AI Explain was removed from the active workflow.
@@ -356,8 +305,8 @@ AP management push stops:
 - Reopen `Push AP Management Config`; the system rechecks already-pushed objects and marks detected steps as already existing.
 
 Router appears read-only/core:
-- Do not select HotSpot Gateway unless a network expert confirms a dedicated non-conflicting captive portal VLAN/network can be used.
-- Prefer Read-only/Core for ISP core routers and use a different pilot gateway.
+- Do not push station transport changes to a core router unless a network expert confirms the exact dedicated VLAN/network path.
+- Prefer a non-core station gateway for first rollout.
 
 Expert override is required:
 - Expert override only records risk acceptance.
@@ -396,3 +345,153 @@ MT-4 readiness is blocked by VLAN path:
 Large client subnet warning:
 - A subnet larger than `/22`, such as `/19`, is allowed only with a warning.
 - For the first pilot, prefer `/24` or `/22` unless the network design really needs a larger client pool.
+
+## OCP-2 Omada Station Portal Troubleshooting
+
+Omada Portal readiness is blocked:
+- Open Network -> MikroTik -> Configuration and click `Omada Portal` on the station.
+- Fix any item marked `BLOCKED` or `NEEDS_ACTION`.
+- The most common blocker is selected Omada site VLAN not matching the MikroTik station VLAN.
+
+Selected Omada site VLAN does not match station VLAN:
+- Go to APs Deployment -> Sites -> Configurations.
+- Set that Omada site's VLAN tag to the same customer VLAN shown in the station plan.
+- Reopen the station `Omada Portal` modal and refresh readiness.
+
+Omada API action fails:
+- The Omada Controller version may not support the endpoint attempted by the adapter.
+- Use the manual checklist in the station Omada Portal modal.
+- Configure the open SSID, external portal URL, and pre-auth/walled-garden entries directly in Omada Controller.
+
+Phone connects but does not redirect:
+- Confirm the AP is using the Omada SSID tied to the station VLAN.
+- Confirm Omada captive portal is enabled on that SSID/site.
+- Confirm pre-auth access allows `192.168.50.70` and `192.168.50.70:8080`.
+- Confirm the phone receives an IP from the MikroTik station client subnet.
+- Confirm MikroTik is not source-NATing station clients when they reach Omada/portal servers. The station root gateway must have a `srcnat accept` no-NAT rule from the station subnet to the office portal subnet before the station masquerade rule.
+- Confirm the station internet NAT is WAN-only. A broad `srcnat masquerade src-address=<station subnet>` can hide the real phone IP from Omada and break captive portal session matching.
+- Expected managed rules use comments `3J Station - preserve client IP for VLAN {vlan_id} to portal office subnet` and `3J Station - NAT for VLAN {vlan_id} clients`.
+
+Voucher works manually but Omada does not authorize:
+- Check Captive Portal -> Authorization Logs.
+- Confirm Omada redirect includes client parameters such as MAC/token/site.
+- Run `Verify Captive Portal Setup` from the station Omada Portal modal.
+
+Omada Portal says station site is not bound:
+- Open the station `Omada Portal` modal.
+- Select the Omada site that owns that station's APs.
+- Click `Save Binding`, then refresh readiness.
+
+Station Omada VLAN check is blocked:
+- The Omada/local site VLAN tag does not match the MikroTik station customer VLAN.
+- Update the site VLAN in APs Deployment -> Sites -> Configurations or edit the station customer VLAN if the station design is wrong.
+- Do not test the open SSID until Omada SSID VLAN and station customer VLAN match.
+
+Omada automation updates the wrong site:
+- Confirm the station has its own Omada site binding.
+- Reopen the `Omada Portal` modal and check the Omada Site card before running Create/Update Open SSID or Configure External Portal.
+- The station-bound site should be used for station automation; the global selected site is only a fallback/reference.
+
+Station Omada action button is disabled:
+- Open the station `Omada Portal` modal and check the disabled reason under Omada automation actions.
+- Common causes are missing Omada API credentials, no station-bound Omada site, or no Portal URL.
+- Save the Station Omada Site binding first, then refresh the modal.
+
+Station Omada action history shows failure:
+- Read the latest message in the station `Recent Omada action history`.
+- Omada Controller versions expose different API paths. If Create/Update Open SSID or Configure External Portal fails, use the manual checklist in the same modal.
+- Verify the existing Omada SSID VLAN manually if the action says the SSID already exists.
+
+Created Omada SSID has the wrong VLAN:
+- The station customer VLAN should match the Omada site/SSID VLAN.
+- Create/Update Open SSID now sends the station VLAN to Omada for new SSID creation, but existing SSID update behavior depends on Omada Controller version.
+- Open Omada Controller and verify the SSID VLAN before testing phones.
+
+List of APs shows `CONFIGURING`, but no one clicked Push WiFi Config:
+- List of APs now uses cached PostgreSQL AP rows only. Opening the page and pressing Refresh do not contact Omada Controller.
+- A `CONFIGURING` status can be an old cached Omada status from a previous sync/push/test.
+- Adopt or inspect the AP directly in Omada Controller. When ready, click `Push WiFi Config` in List of APs; that action is the only AP list workflow that refreshes Omada and pushes SSID/VLAN settings.
+- If the cached AP row is no longer relevant, delete it from List of APs. This removes the local row only and does not delete/forget the AP in Omada.
+
+AP has `10.111.x.x` but does not appear in Omada:
+- Push or re-check Network -> MikroTik -> AP Management after saving the Omada API controller host.
+- The AP management DHCP network should advertise DHCP option 138 with the Omada Controller IP, for example `3J-OMADA-CONTROLLER-V111 = 192.168.50.71`.
+- AP Management Push Config should also show MikroTik forward allow rules from the AP management subnet to the Omada Controller for `29810/udp` and `29811-29817/tcp`. Re-open Push Config after an Omada v6 update so the new `29817/tcp` rule is detected or added.
+- Renew the AP DHCP lease or reboot the AP after the option is pushed.
+- Confirm the Omada server can route back to `10.111.0.0/24`. If its default gateway is not the CCR/MikroTik, add a return route to the AP management subnet via the CCR office IP.
+- If the AP was previously adopted to another controller/site, reset/adopt it in Omada after discovery works.
+
+AP has AP management IP but GUI does not open:
+- Check Network -> MikroTik -> AP Management -> Push Config. The system now detects active broad `/ip firewall raw action=notrack` rules and adds managed raw accept exceptions for the AP management subnet when needed.
+- These exceptions keep AP GUI/control traffic connection-tracked without disabling or deleting the operator's existing raw rule.
+- AP Management Push Config no longer adds office-to-AP GUI source NAT. It manages AP management VLAN transport, DHCP, Omada discovery/control reachability, and raw tracking exceptions only.
+- If the AP management subnet was changed, re-open Push Config so stale managed raw exceptions are removed and the current subnet exceptions are shown.
+
+Factory-reset AP does not receive AP management IP:
+- Native/untagged AP-facing port automation is disabled for now.
+- Manually enable the AP management VLAN inside the AP before deploying it to the station path.
+
+Factory-reset AP should be adopted on office subnet first:
+- Office AP Path is retired from the active UI. Connect the AP directly to the office subnet, adopt it in Omada, then set the AP management VLAN after adoption before moving it to the station path.
+- If old Office AP Path RouterOS objects exist, remove them only after reviewing exact cleanup commands. Do not remove unmanaged VLAN/bridge objects by guess.
+- In Network -> MikroTik -> AP Management, use tagged ports only for router-to-router, CRS, OLT, ONU, and AP-path trunk links.
+- If a moved AP no longer appears in DHCP leases, confirm the AP is sending management traffic on the configured AP management VLAN and that every trunk in the path carries that VLAN.
+
+MikroTik plan save says an IP/subnet/VLAN is already used:
+- Run Network -> MikroTik -> Overview -> Prescan All Routers first so the system has current RouterOS state.
+- The system blocks planned gateways/subnets that duplicate or contain existing MikroTik router API/management host IPs.
+- Choose a new unused subnet/VLAN, or fix the saved MikroTik router host record if the router was added with the wrong access IP.
+- Do not force-save a duplicate gateway IP; it can make Winbox/API open the wrong router or break return routing.
+
+Edited AP Management or Station plan still has old RouterOS config:
+- Open Push Config again. If the plan changed, the modal should show `Remove old config first` steps before the updated apply steps.
+- The cleanup only targets system-managed names/comments from the previous plan.
+- If old config was created manually or comments were changed outside the system, remove or reconcile it manually before pushing the updated plan.
+- For central AP Management, only the root gateway owns the AP management subnet, gateway IP, pool, DHCP server, DHCP network, and Omada option 138. CRS/trunk routers only carry the VLAN tag. If you changed `10.88.0.0/24` to `10.55.0.0/24` but kept VLAN `88`, the CRS should still show VLAN `88`; it should not show an IP pool or DHCP subnet.
+
+Omada Portal readiness shows `0/x APs connected`:
+- The station modal now labels whether the count comes from live Omada API data or local saved AP records.
+- If it says live Omada and `0/0`, Omada currently does not see APs in that site. Fix AP management discovery first.
+- If it says local records, refresh/detect APs from Omada after the controller can see the APs.
+
+AP briefly shows `Adopt Failed` before becoming connected:
+- Confirm the AP state in Omada Controller first.
+- AP adoption is now handled manually in Omada Controller. If Omada reports `Adopt Failed`, fix/retry adoption there.
+- List of APs should mirror the Omada status instead of hiding it behind local adoption state.
+
+AP is connected but implementation checklist is not complete:
+- Open APs Deployment -> List of APs and click the AP row.
+- Check the AP Implementation Checklist. `2/2` means WiFi SSIDs and SSID customer VLAN are complete.
+- AP management VLAN is not auto-applied to the AP through Omada for now. Confirm Network -> MikroTik -> AP Management has been pushed, then manually set the AP management VLAN in the AP before station deployment.
+- Device Account Credentials are no longer part of the required AP implementation checklist. They are not needed for the current Omada-managed SSID/VLAN/captive-portal flow.
+
+AP adoption fails and Omada appears to change the AP username/password:
+- AP adoption is now performed manually in Omada Controller, not in 3JCentralPisowifi.
+- The system must not save AP login credentials, mark them applied, or send Omada `deviceAccountSetting` during site creation.
+- If adoption fails because Omada needs the AP login, handle that in Omada Controller. If the AP login is unknown or was changed by older testing, factory-reset the AP first.
+
+Sites configuration saved but AP WiFi/device settings did not change:
+- This is expected. Saving APs Deployment -> Sites -> Configurations only stores the desired SSID/security strategy.
+- Open APs Deployment -> List of APs and click `Push WiFi Config` for the site or AP when you want to push saved SSID/VLAN settings to connected APs.
+- If the AP row says `FAILED`, hover/view the error and check AP configuration logs; Omada Controller may have rejected an existing SSID update path.
+- If Omada rejects an existing SSID update, manually verify or update the SSID in Omada Controller until a supported API path is added for that controller version.
+- Central AP management VLAN transport is configured from Network -> MikroTik -> AP Management. The AP's own management VLAN is manual for now and is not changed by 3JCentralPisowifi after adoption.
+
+SSID was visible after adoption, then disappeared:
+- Check List of APs and Omada Controller status. If the AP reports `Managed by Others`, `Disconnected`, or is no longer cleanly managed, the AP may have lost controller reachability after its management VLAN changed.
+- Current workflow: manually configure the AP management VLAN in the AP before deploying it to the station path, then adopt it manually in Omada Controller.
+- 3JCentralPisowifi no longer pushes the AP's own management VLAN through Omada after adoption. It applies SSIDs and the station/customer VLAN only when the operator clicks Push WiFi Config.
+- If the AP was factory-reset and re-added with the same MAC, use List of APs -> Push WiFi Config after Omada reports Connected so SSID/VLAN settings are applied again.
+
+AP stays in Omada `Configuring` for a long time:
+- The system treats Omada status code `11` as `CONFIGURING`, not fully connected.
+- While an AP is configuring, List of APs keeps the AP visible with a provisioning animation and does not mark the SSID/VLAN checklist as complete.
+- If Omada stays in `Configuring`, focus on AP-to-controller reachability, AP management VLAN routing, and whether the AP can complete Omada config sync. SSIDs may not broadcast until Omada finishes applying the site configuration to the AP.
+- A Configuring state should not repeatedly reset an already-applied AP checklist. If the AP flips Connected -> Configuring -> Connected, the system must not keep recreating the same SSIDs on every cycle.
+- Check the MikroTik bridge host table for the AP MAC. If the AP management plan expects VLAN `88` but the AP MAC is learned on a different VID such as `201`, the AP is not actually using the AP management VLAN and the controller may show stale `Configuring`, `Pending`, or `Disconnected` state.
+- A stale DHCP lease is not enough proof that the AP is reachable. If the CCR shows a bound lease but ARP is `complete=false`, the AP IP is historical/stale and the AP is not currently reachable through that management VLAN.
+
+AP shows `Managed by Others`:
+- Omada can see the AP IP, but this controller is not managing the AP configuration.
+- SSIDs from the selected site will not broadcast while the AP is in this state.
+- Factory reset the AP if needed, then adopt it again manually in Omada Controller.

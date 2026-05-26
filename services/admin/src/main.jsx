@@ -6,6 +6,7 @@ import {
   IconActivity,
   IconAlertTriangle,
   IconBan,
+  IconBell,
   IconBrandOpenai,
   IconCash,
   IconChevronDown,
@@ -58,9 +59,8 @@ const DEFAULT_MAP_CENTER = { latitude: 17.5259771, longitude: 121.6882655 };
 const DEFAULT_MAP_ZOOM = 16;
 
 const DEFAULT_AP_SITE_CONFIG = {
-  auto_apply_enabled: true,
-  device_account_username: '',
-  device_account_password: '',
+  auto_apply_enabled: false,
+  ssid_scope: 'GLOBAL',
   use_same_ssid: true,
   same_ssid_name: '3J-FreeWiFi',
   ssid_2g: '3J-FreeWiFi-2G',
@@ -68,7 +68,8 @@ const DEFAULT_AP_SITE_CONFIG = {
   band_steering_enabled: true,
   security_mode: 'OPEN',
   security_password: '',
-  site_vlans: {}
+  site_vlans: {},
+  site_wifi_settings: {}
 };
 
 const DEV_LOGIN_PREFILL = {
@@ -170,6 +171,23 @@ function formatUptime(seconds = 0) {
   return `${minutes}m`;
 }
 
+function omadaPortalBadgeClass(status) {
+  const value = String(status || '').toUpperCase();
+  if (value === 'UP' || value === 'SUCCESS') return 'bg-green-lt text-green';
+  if (value === 'NEEDS_SETUP' || value === 'WARNING' || value === 'PARTIAL') return 'bg-yellow-lt text-yellow';
+  if (value === 'CHECKING') return 'bg-blue-lt text-blue';
+  return 'bg-red-lt text-red';
+}
+
+function omadaPortalStatusLabel(status) {
+  const value = String(status || '').toUpperCase();
+  if (value === 'UP' || value === 'SUCCESS') return 'UP';
+  if (value === 'NEEDS_SETUP') return 'Needs setup';
+  if (value === 'PARTIAL') return 'Partial';
+  if (value === 'CHECKING') return 'Checking';
+  return 'DOWN';
+}
+
 function slugify(page) {
   return page.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'dashboard';
 }
@@ -191,13 +209,11 @@ const routePages = {
   'location-management': 'Location Management',
   vouchers: 'Vouchers',
   'wallet-manual-top-up': 'Wallet / Manual Top-Up',
-  sessions: 'Sessions',
   'captive-portal': 'Captive Portal',
   'captive-portal/editor': 'Portal Editor',
   network: 'Network',
   'network/mikrotik/scan-result': 'MikroTik Scan Result',
   'nas-router-ap-clients': 'Network',
-  'radius-test-guide': 'Advanced RADIUS Lab',
   'system-settings': 'System Settings',
   'settings/omada-controller': 'Omada Controller',
   'omada-controller': 'Omada Controller',
@@ -219,7 +235,6 @@ function routeForPage(page) {
   if (page === 'Portal Editor') return '/admin/captive-portal/editor';
   if (page === 'MikroTik Scan Result') return '/admin/network/mikrotik/scan-result';
   if (page === 'Connected Devices') return '/admin/users';
-  if (page === 'Advanced RADIUS Lab') return '/admin/radius-test-guide';
   if (page === 'Sites' || page === 'Sites Deployments') return '/admin/aps-deployment/sites';
   if (page === 'List of APs') return '/admin/aps-deployment/list-of-aps';
   if (page === 'Long Lat') return '/admin/aps-deployment/long-lat';
@@ -334,6 +349,34 @@ function formatPortalDateTime(value) {
     hour: '2-digit',
     minute: '2-digit'
   });
+}
+
+function portalNotificationTemplate(template, values = {}) {
+  const replacements = {
+    '<TIME>': values.time || formatCountdown(values.remaining_time_seconds),
+    '<REMAINING>': values.time || formatCountdown(values.remaining_time_seconds),
+    '<VOUCHER>': values.voucher_code || '',
+    '<SSID>': values.ssid || '',
+    '<EXPIRES_AT>': values.expires_at ? formatPortalDateTime(values.expires_at) : '',
+    '<BRAND>': values.brand || '3J WiFi',
+    '<STATUS>': values.status || ''
+  };
+  return Object.entries(replacements).reduce((text, [tag, value]) => text.split(tag).join(value), String(template || '')).trim();
+}
+
+async function showPortalCustomerNotification(title, message) {
+  if (!message) return { shown: false, reason: 'empty' };
+  try {
+    if (!('Notification' in window) || !window.isSecureContext) return { shown: false, reason: 'unsupported' };
+    let permission = Notification.permission;
+    if (permission === 'default') permission = await Notification.requestPermission();
+    if (permission !== 'granted') return { shown: false, reason: permission };
+    const notification = new Notification(title || '3J WiFi', { body: message, tag: '3j-portal-status', renotify: true });
+    window.setTimeout(() => notification.close(), 8000);
+    return { shown: true };
+  } catch (error) {
+    return { shown: false, reason: error.message };
+  }
 }
 
 function formatUsdPerMTok(value) {
@@ -453,23 +496,28 @@ function renderPortalTemplate(template, slots) {
 function PortalApp() {
   const [settings, setSettings] = useState(null);
   const [sessionId, setSessionId] = useState(() => localStorage.getItem('centralwifi_portal_session') || '');
+  const [deviceToken, setDeviceToken] = useState(() => localStorage.getItem('centralwifi_portal_device_token') || '');
   const [voucherCode, setVoucherCode] = useState('');
   const [result, setResult] = useState(null);
   const [status, setStatus] = useState(null);
+  const [portalNotice, setPortalNotice] = useState(null);
   const [timerRemaining, setTimerRemaining] = useState(0);
   const [localTimerExpired, setLocalTimerExpired] = useState(false);
   const [loading, setLoading] = useState(false);
+  const remainingNoticeSentRef = useRef('');
+  const expiredNoticeSentRef = useRef('');
   const params = new URLSearchParams(window.location.search);
   const rawQueryParams = Object.fromEntries(params.entries());
   const context = {
     portal_session_id: sessionId || null,
+    device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || null,
     mac: params.get('mac') || null,
     ip: params.get('ip') || null,
-    client_mac: params.get('client_mac') || params.get('clientMac') || null,
-    clientMac: params.get('clientMac') || null,
-    client_ip: params.get('client_ip') || null,
-    ap_mac: params.get('ap_mac') || params.get('apMac') || null,
-    apMac: params.get('apMac') || null,
+    client_mac: params.get('client_mac') || params.get('clientMac') || params.get('cid') || null,
+    clientMac: params.get('clientMac') || params.get('cid') || null,
+    client_ip: params.get('client_ip') || params.get('clientIp') || null,
+    ap_mac: params.get('ap_mac') || params.get('apMac') || params.get('ap') || null,
+    apMac: params.get('apMac') || params.get('ap') || null,
     gateway_mac: params.get('gateway_mac') || params.get('gatewayMac') || null,
     gatewayMac: params.get('gatewayMac') || null,
     vlan_id: params.get('vlan_id') || params.get('vid') || null,
@@ -477,8 +525,8 @@ function PortalApp() {
     ssid: params.get('ssid') || null,
     site: params.get('site') || null,
     gateway: params.get('gateway') || null,
-    redirect_url: params.get('redirect_url') || params.get('redirectUrl') || null,
-    redirectUrl: params.get('redirectUrl') || null,
+    redirect_url: params.get('redirect_url') || params.get('redirectUrl') || params.get('u') || null,
+    redirectUrl: params.get('redirectUrl') || params.get('u') || null,
     nas_id: params.get('nas_id') || null,
     server_name: params.get('server-name') || params.get('server_name') || params.get('server') || null,
     link_login: params.get('link-login') || params.get('link_login') || null,
@@ -486,11 +534,31 @@ function PortalApp() {
     link_orig: params.get('link-orig') || params.get('link_orig') || null,
     chap_id: params.get('chap-id') || params.get('chap_id') || null,
     chap_challenge: params.get('chap-challenge') || params.get('chap_challenge') || null,
+    radioId: params.get('radioId') || params.get('rid') || null,
     token: params.get('token') || params.get('t') || null,
     authToken: params.get('authToken') || null,
     raw_query_params: rawQueryParams
   };
   const deviceDetected = Boolean(context.client_mac || context.mac || context.ip || context.ap_mac || context.gateway_mac || context.ssid || context.site || context.token || context.authToken || context.link_login_only || context.server_name);
+
+  async function emitPortalNotification(portalSettings, type, template, values = {}) {
+    const notificationSettings = portalSettings?.portal_notifications || {};
+    if (!notificationSettings.enabled) return;
+    const message = portalNotificationTemplate(template, {
+      brand: portalSettings?.portal_title || title || '3J WiFi',
+      ssid: context.ssid || status?.ssid || '',
+      status: type,
+      ...values
+    });
+    if (!message) return;
+    const notificationResult = await showPortalCustomerNotification(portalSettings?.portal_title || title || '3J WiFi', message);
+    setPortalNotice({
+      type,
+      message,
+      native_status: notificationResult.shown ? 'shown' : 'fallback',
+      native_reason: notificationResult.reason || null
+    });
+  }
 
   async function loadPortal() {
     const portalSettings = await publicRequest('/portal/settings');
@@ -498,8 +566,23 @@ function PortalApp() {
     const session = await publicApi('/portal/session', { method: 'POST', body: JSON.stringify(context) });
     setSessionId(session.portal_session_id);
     localStorage.setItem('centralwifi_portal_session', session.portal_session_id);
+    if (session.device_token) {
+      setDeviceToken(session.device_token);
+      localStorage.setItem('centralwifi_portal_device_token', session.device_token);
+    }
+    if (session.mac_rebind_status === 'SUCCESS') {
+      setResult({ status: 'SUCCESS', message: session.mac_rebind_message || 'Reconnected with remaining time.' });
+    } else if (session.mac_rebind_status === 'FAILED') {
+      setResult({ status: 'FAILED', message: session.mac_rebind_message || 'We recognized this device session, but could not reconnect it automatically.' });
+    }
     const nextStatus = await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(session.portal_session_id)}`);
     setStatus(nextStatus);
+    if (session.mac_rebind_status === 'SUCCESS' && portalSettings?.portal_notifications?.reconnect_enabled) {
+      emitPortalNotification(portalSettings, 'RECONNECTED', portalSettings.portal_notifications.reconnect_message, {
+        remaining_time_seconds: nextStatus?.remaining_time_seconds || 0,
+        expires_at: nextStatus?.access_expires_at,
+      });
+    }
   }
   useEffect(() => { loadPortal().catch((err) => setResult({ status: 'FAILED', message: err.message })); }, []);
   useEffect(() => {
@@ -519,7 +602,19 @@ function PortalApp() {
       if (data.portal_session_id) {
         localStorage.setItem('centralwifi_portal_session', data.portal_session_id);
         setSessionId(data.portal_session_id);
-        setStatus(await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(data.portal_session_id)}`));
+        if (data.device_token) {
+          localStorage.setItem('centralwifi_portal_device_token', data.device_token);
+          setDeviceToken(data.device_token);
+        }
+        const nextStatus = await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(data.portal_session_id)}`);
+        setStatus(nextStatus);
+        if (data.status === 'SUCCESS' && settings?.portal_notifications?.success_enabled) {
+          emitPortalNotification(settings, 'SUCCESS', settings.portal_notifications.success_message, {
+            remaining_time_seconds: data.remaining_time_seconds ?? nextStatus.remaining_time_seconds,
+            expires_at: data.access_expires_at ?? nextStatus.access_expires_at,
+            voucher_code: voucherCode,
+          });
+        }
       }
     } catch (err) {
       setResult({ status: 'FAILED', message: 'Something went wrong. Please try again or contact the operator.' });
@@ -579,6 +674,37 @@ function PortalApp() {
       .catch(() => {});
   }, [localTimerExpired, sessionId]);
 
+  useEffect(() => {
+    remainingNoticeSentRef.current = '';
+    expiredNoticeSentRef.current = '';
+  }, [accessExpiresAt, sessionId]);
+
+  useEffect(() => {
+    const notificationSettings = settings?.portal_notifications || {};
+    const trigger = Number(notificationSettings.remaining_trigger_seconds || 0);
+    const sendKey = `${sessionId}:${accessExpiresAt}:remaining:${trigger}`;
+    if (!notificationSettings.enabled || !notificationSettings.remaining_enabled || !connected || unlimited || timerExpired) return;
+    if (!trigger || timerRemaining <= 0 || timerRemaining > trigger) return;
+    if (remainingNoticeSentRef.current === sendKey) return;
+    remainingNoticeSentRef.current = sendKey;
+    emitPortalNotification(settings, 'REMAINING_TIME', notificationSettings.remaining_message, {
+      remaining_time_seconds: timerRemaining,
+      expires_at: accessExpiresAt,
+    });
+  }, [timerRemaining, settings, connected, unlimited, timerExpired, sessionId, accessExpiresAt]);
+
+  useEffect(() => {
+    const notificationSettings = settings?.portal_notifications || {};
+    const sendKey = `${sessionId}:${accessExpiresAt}:expired`;
+    if (!notificationSettings.enabled || !notificationSettings.expired_enabled || !timerExpired || !sessionId) return;
+    if (expiredNoticeSentRef.current === sendKey) return;
+    expiredNoticeSentRef.current = sendKey;
+    emitPortalNotification(settings, 'EXPIRED', notificationSettings.expired_message, {
+      remaining_time_seconds: 0,
+      expires_at: accessExpiresAt,
+    });
+  }, [timerExpired, settings, sessionId, accessExpiresAt]);
+
   const brandSlot = (
     <div className="client-portal-brand">
       {settings?.company_logo_url ? <img src={settings.company_logo_url} alt={title} /> : <div className="client-portal-logo">3J</div>}
@@ -596,6 +722,15 @@ function PortalApp() {
       <input className="form-control form-control-lg text-center voucher-input" autoComplete="one-time-code" value={voucherCode} onChange={(e) => setVoucherCode(e.target.value.toUpperCase())} placeholder="3J-ABCD-2345" required />
       <button className="btn btn-primary btn-lg w-100 mt-3" disabled={loading}>{loading ? 'Checking...' : 'Redeem / Connect'}</button>
       {result && !(timerExpired && result.status === 'SUCCESS') && <div className={`alert mt-3 mb-0 ${result.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'}`}>{result.message}</div>}
+      {portalNotice && <div className="alert alert-info py-2 mt-3 mb-0">
+        <div className="d-flex align-items-start gap-2">
+          <IconBell size={18} className="mt-1 flex-shrink-0" />
+          <div>
+            <div>{portalNotice.message}</div>
+            {portalNotice.native_status === 'fallback' && <div className="small text-muted">Phone notification bar support depends on the mobile browser. This message is also shown here.</div>}
+          </div>
+        </div>
+      </div>}
       {result?.authorization_status === 'FAILED' && <button className="btn btn-outline-primary w-100 mt-3" type="button" onClick={() => setResult(null)}>Try Again</button>}
       {result?.status === 'SUCCESS' && continueUrl && !timerExpired && <a className="btn btn-success w-100 mt-3" href={continueUrl}>Continue to Internet</a>}
       <button className="btn btn-outline-secondary w-100 mt-2" type="button" onClick={checkStatus} disabled={loading}>Check Status</button>
@@ -769,20 +904,20 @@ function Dashboard({ data }) {
     <div className="row row-cards">
       <div className="col-12">
         <div className="alert alert-info mb-0">
-          Current build focus: Captive Portal + Voucher access. WPA2-Enterprise testing is available under Advanced Tools.
+          Current build focus: Omada Captive Portal + Voucher access. MikroTik provides station VLAN/DHCP/NAT transport.
         </div>
       </div>
       <KpiCard icon={IconDatabase} label="System Status" value={health.database ? 'Online' : 'Offline'} tone="green" />
-      <KpiCard icon={IconActivity} label="Active Sessions" value={stats.active_sessions || 0} tone="red" />
+      <KpiCard icon={IconActivity} label="Active Portal Access" value={stats.active_sessions || 0} tone="red" />
       <KpiCard icon={IconWifi} label="Connected Devices" value={stats.active_sessions || 0} tone="purple" />
-      <KpiCard icon={IconKey} label="Vouchers" value="Next" tone="yellow" />
+      <KpiCard icon={IconKey} label="Vouchers" value={stats.vouchers || 0} tone="yellow" />
       <KpiCard icon={IconWallet} label="Wallet Credits" value="Tracked" tone="green" />
-      <KpiCard icon={IconWifi} label="Captive Portal Status" value="Planned" tone="blue" />
+      <KpiCard icon={IconWifi} label="Portal Sessions 24h" value={stats.portal_sessions_24h || 0} tone="blue" />
       <KpiCard icon={IconServer} label="Omada Controller Status" value="Operational" tone="cyan" />
-      <KpiCard icon={IconRouter} label="Network Devices" value={stats.nas_clients || 0} tone="orange" />
+      <KpiCard icon={IconRouter} label="MikroTik Routers" value={stats.network_devices || 0} tone="orange" />
       <div className="col-12">
-        <Card title="Recent Access Events" subtitle="Recent backend access decisions and test outcomes">
-          <Table rows={data?.recent_auth || []} columns={['username', 'nas_ip', 'calling_station_id', 'result', 'reply_message', 'created_at']} />
+        <Card title="Recent Portal Events" subtitle="Recent captive portal voucher and authorization activity">
+          <Table rows={data?.recent_access || []} columns={['event', 'ssid', 'site', 'voucher_code_masked', 'message', 'created_at']} />
         </Card>
       </div>
     </div>
@@ -1009,7 +1144,7 @@ function ConnectedDevicesPage() {
     <div className="row row-cards">
       <div className="col-12">
         <div className="alert alert-info">
-          Connected Devices shows devices detected from Omada/AP client data when available, plus local RADIUS accounting and portal session records. Voucher management is now the main customer workflow; account management is parked for later.
+          Connected Devices shows devices detected from Omada/AP client data and portal session records. Voucher management is now the main customer workflow; account management is parked for later.
         </div>
       </div>
       <KpiCard icon={IconWifi} label="Active Devices" value={data.summary?.active || 0} tone="green" />
@@ -1120,7 +1255,9 @@ function SitesDeploymentsPage() {
   const [locations, setLocations] = useState([]);
   const [options, setOptions] = useState({ general: { country_region: 'Philippines', time_zone: 'Asia/Manila' }, application_scenarios: ['Office'] });
   const [deploymentConfig, setDeploymentConfig] = useState({ configuration: DEFAULT_AP_SITE_CONFIG, sites: [], logs: [] });
+  const [apManagementConfig, setApManagementConfig] = useState(null);
   const [configForm, setConfigForm] = useState(DEFAULT_AP_SITE_CONFIG);
+  const [configSection, setConfigSection] = useState('WiFi Strategy');
   const [configBusy, setConfigBusy] = useState('');
   const [configResult, setConfigResult] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -1132,11 +1269,10 @@ function SitesDeploymentsPage() {
   const [deletingSite, setDeletingSite] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [syncingOmadaSites, setSyncingOmadaSites] = useState(false);
   const [form, setForm] = useState({
     site_name: '',
     application_scenario: 'Office',
-    device_account_username: 'threejap',
-    device_account_password: '',
     location_id: '',
     location: '',
     address: '',
@@ -1155,27 +1291,29 @@ function SitesDeploymentsPage() {
     notes: ''
   });
   async function load() {
-    const [siteRows, locationRows, optionRows, configRows] = await Promise.all([
+    const [siteRows, locationRows, optionRows, configRows, apManagementRows] = await Promise.all([
       request('/site-deployments'),
       request('/locations'),
       request('/site-deployments/options'),
-      request('/site-deployments/configuration')
+      request('/site-deployments/configuration'),
+      request('/network/mikrotik/ap-management').catch(() => null)
     ]);
     setSites(siteRows);
     setLocations(locationRows);
     setOptions(optionRows);
     setDeploymentConfig(configRows);
+    setApManagementConfig(apManagementRows);
     const site_vlans = {};
     (configRows.sites || []).forEach((site) => {
       site_vlans[site.id] = site.vlan_tag ?? '';
     });
     setConfigForm({
       ...DEFAULT_AP_SITE_CONFIG,
-      ...(configRows.configuration || {}),
-      device_account_password: '',
-      security_password: '',
-      site_vlans
-    });
+	      ...(configRows.configuration || {}),
+	      security_password: '',
+	      site_vlans,
+	      site_wifi_settings: configRows.site_wifi_settings || {}
+	    });
   }
   useEffect(() => { load(); }, []);
   const selectedLocation = locations.find((item) => item.id === form.location_id);
@@ -1183,6 +1321,14 @@ function SitesDeploymentsPage() {
   function goToAddLocation() {
     setModalOpen(false);
     window.history.pushState({ page: 'Location Management' }, '', '/admin/location-management?add=1');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }
+  function goToNetworkMikrotik(tab = 'AP Management') {
+    window.history.pushState({ page: 'Network' }, '', `/admin/network?mikrotik_tab=${encodeURIComponent(tab)}`);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }
+  function goToListOfAps() {
+    window.history.pushState({ page: 'List of APs' }, '', '/admin/aps-deployment/list-of-aps');
     window.dispatchEvent(new PopStateEvent('popstate'));
   }
   function applyLocation(locationId) {
@@ -1221,37 +1367,12 @@ function SitesDeploymentsPage() {
       notes: site.notes || ''
     });
   }
-  function generateDevicePassword() {
-    const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-    const lower = 'abcdefghijkmnopqrstuvwxyz';
-    const digits = '23456789';
-    const symbols = '!@#$%*';
-    const all = upper + lower + digits + symbols;
-    const bytes = new Uint32Array(14);
-    window.crypto.getRandomValues(bytes);
-    const chars = [
-      upper[bytes[0] % upper.length],
-      lower[bytes[1] % lower.length],
-      digits[bytes[2] % digits.length],
-      symbols[bytes[3] % symbols.length],
-      ...Array.from(bytes.slice(4), (value) => all[value % all.length])
-    ];
-    for (let i = chars.length - 1; i > 0; i -= 1) {
-      const j = bytes[i % bytes.length] % (i + 1);
-      [chars[i], chars[j]] = [chars[j], chars[i]];
-    }
-    setForm({ ...form, device_account_password: chars.join('') });
-  }
   async function createSite(e) {
     e.preventDefault();
     setError('');
     setMessage('');
     if (!form.location_id) {
       setError('Select a location first. Use + Add Location if the address is not saved yet.');
-      return;
-    }
-    if (!form.device_account_username || !form.device_account_password) {
-      setError('Enter the Omada Device Account username and password. Omada requires these when creating a site.');
       return;
     }
     try {
@@ -1263,12 +1384,33 @@ function SitesDeploymentsPage() {
         time_zone: options.general?.time_zone || 'Asia/Manila'
       };
       const created = await request('/site-deployments', { method: 'POST', body: JSON.stringify(body) });
-      setForm({ site_name: '', application_scenario: 'Office', device_account_username: 'threejap', device_account_password: '', location_id: '', location: '', address: '', municipality: '', barangay: '', latitude: '', longitude: '', contact_name: '', contact_phone: '', notes: '' });
+      setForm({ site_name: '', application_scenario: 'Office', location_id: '', location: '', address: '', municipality: '', barangay: '', latitude: '', longitude: '', contact_name: '', contact_phone: '', notes: '' });
       setModalOpen(false);
       setMessage(created.omada_created ? 'Site created in Omada and saved locally.' : 'Site linked to Omada and saved locally.');
       await load();
     } catch (err) {
       setError(err.message);
+    }
+  }
+  async function syncOmadaSites() {
+    setError('');
+    setMessage('');
+    setSyncingOmadaSites(true);
+    try {
+      const data = await request('/site-deployments/sync-omada', { method: 'POST', body: JSON.stringify({}) });
+      const detail = Array.isArray(data.results)
+        ? data.results.filter((item) => item.status === 'FAILED').map((item) => `${item.site_name}: ${item.message}`).join(' ')
+        : '';
+      if (data.status === 'SUCCESS') {
+        setMessage(data.message || 'Omada site sync completed.');
+      } else {
+        setError(`${data.message || 'Omada site sync completed with issues.'}${detail ? ` ${detail}` : ''}`);
+      }
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSyncingOmadaSites(false);
     }
   }
   async function updateSite(e) {
@@ -1312,7 +1454,7 @@ function SitesDeploymentsPage() {
       setDeleteSiteLoading(false);
     }
   }
-  async function confirmDeleteSite() {
+	  async function confirmDeleteSite() {
     if (!deleteSiteTarget) return;
     setDeletingSite(true);
     setDeleteSiteError('');
@@ -1331,26 +1473,69 @@ function SitesDeploymentsPage() {
       setDeleteSiteError(err.message);
     } finally {
       setDeletingSite(false);
-    }
-  }
-  async function saveDeploymentConfig(e) {
-    e.preventDefault();
+	    }
+	  }
+	  function siteWifiSettings(site) {
+	    const saved = configForm.site_wifi_settings?.[site.id] || {};
+	    return {
+	      use_same_ssid: saved.use_same_ssid ?? configForm.use_same_ssid ?? true,
+	      same_ssid_name: saved.same_ssid_name ?? configForm.same_ssid_name ?? '3J-FreeWiFi',
+	      ssid_2g: saved.ssid_2g ?? configForm.ssid_2g ?? '3J-FreeWiFi-2G',
+	      ssid_5g: saved.ssid_5g ?? configForm.ssid_5g ?? '3J-FreeWiFi-5G',
+	      band_steering_enabled: saved.band_steering_enabled ?? configForm.band_steering_enabled ?? true,
+	      security_mode: saved.security_mode ?? configForm.security_mode ?? 'OPEN',
+	      security_password: saved.security_password ?? '',
+	      has_security_password: saved.has_security_password ?? false
+	    };
+	  }
+	  function updateSiteWifi(siteId, patch) {
+	    const current = configForm.site_wifi_settings?.[siteId] || {};
+	    setConfigForm({
+	      ...configForm,
+	      site_wifi_settings: {
+	        ...(configForm.site_wifi_settings || {}),
+	        [siteId]: { ...current, ...patch }
+	      }
+	    });
+	  }
+	  async function saveDeploymentConfig(e) {
+	    e.preventDefault();
     setError('');
     setMessage('');
-    setConfigResult(null);
-    setConfigBusy('save');
-    try {
-      const site_vlans = {};
-      (deploymentConfig.sites || []).forEach((site) => {
-        const value = configForm.site_vlans?.[site.id];
-        site_vlans[site.id] = value === '' || value === null || value === undefined ? null : Number(value);
-      });
-      const payload = {
-        ...configForm,
-        site_vlans
-      };
+	    setConfigResult(null);
+	    setConfigBusy('save');
+	    try {
+	      const { site_vlans: _siteVlans, ...configPayload } = configForm;
+	      const siteWifiSettingsPayload = {};
+	      if ((configForm.ssid_scope || 'GLOBAL') === 'PER_SITE') {
+	        (deploymentConfig.sites || []).forEach((site) => {
+	          const values = siteWifiSettings(site);
+	          siteWifiSettingsPayload[site.id] = {
+	            use_same_ssid: values.use_same_ssid,
+	            same_ssid_name: values.same_ssid_name,
+	            ssid_2g: values.ssid_2g,
+	            ssid_5g: values.ssid_5g,
+	            band_steering_enabled: values.band_steering_enabled,
+	            security_mode: values.security_mode,
+	            security_password: values.security_password || undefined
+	          };
+	        });
+	      }
+	      const payload = {
+	        ...configPayload,
+	        apply_scope: 'WIFI',
+	        site_vlans: {},
+	        site_wifi_settings: siteWifiSettingsPayload
+	      };
       const data = await request('/site-deployments/configuration', { method: 'PUT', body: JSON.stringify(payload) });
-      setMessage(data.message || 'Sites configuration saved.');
+      if (data.apply_summary) {
+        setConfigResult(data.apply_summary);
+      }
+      if (data.apply_summary?.status === 'FAILED') {
+        setError(data.message || 'Sites configuration saved, but WiFi configuration push reported issues.');
+      } else {
+        setMessage(data.message || 'Sites configuration saved.');
+      }
       await load();
     } catch (err) {
       setError(err.message);
@@ -1375,23 +1560,24 @@ function SitesDeploymentsPage() {
       setConfigBusy('');
     }
   }
-  function setSiteVlan(siteId, value) {
-    setConfigForm({
-      ...configForm,
-      site_vlans: {
-        ...(configForm.site_vlans || {}),
-        [siteId]: value
-      }
-    });
-  }
   const counts = {
     total: sites.length,
     omadaLinked: sites.filter((site) => site.omada_site_id).length,
     savedLocations: locations.length,
     withCoordinates: sites.filter((site) => site.latitude !== null && site.latitude !== undefined && site.longitude !== null && site.longitude !== undefined).length
   };
-  const deleteConnectedAps = deleteSiteAps.filter((ap) => ap.local_status === 'CONNECTED').length;
+	  const apManagementConfigured = Boolean(apManagementConfig?.id);
+	  const apManagementActive = apManagementConfigured && apManagementConfig?.status === 'ACTIVE';
+	  const configSections = ['WiFi Strategy', 'Network Status', 'Logs'];
+	  const deleteConnectedAps = deleteSiteAps.filter((ap) => ap.local_status === 'CONNECTED').length;
   const deleteClientTotal = deleteSiteAps.reduce((sum, ap) => sum + Number(ap.client_count || 0), 0);
+  const syncBadgeForSite = (site) => {
+    const status = site.omada_sync_status || (site.omada_site_id ? 'SYNCED' : 'LOCAL_ONLY');
+    if (status === 'SYNCED') return <span className="badge bg-green-lt text-green">Synced</span>;
+    if (status === 'MISSING_IN_OMADA') return <span className="badge bg-orange-lt text-orange">Missing in Omada</span>;
+    if (status === 'NAME_MATCH_RELINK_NEEDED') return <span className="badge bg-yellow-lt text-yellow">Relink needed</span>;
+    return <span className="badge bg-blue-lt text-blue">Needs sync</span>;
+  };
   return (
     <div className="row row-cards">
       <div className="col-12">
@@ -1427,6 +1613,9 @@ function SitesDeploymentsPage() {
               <div className="text-muted small">Omada sites and their physical address details.</div>
             </div>
             <div className="card-actions">
+              <button className="btn btn-outline-primary" type="button" onClick={syncOmadaSites} disabled={syncingOmadaSites || !sites.some((site) => !site.is_omada_detected)}>
+                <IconRefresh size={18} className="me-2" />{syncingOmadaSites ? 'Syncing...' : 'Sync Omada Sites'}
+              </button>
               <button className="btn btn-primary" type="button" onClick={() => setModalOpen(true)}><IconUserPlus size={18} className="me-2" />Add Site</button>
             </div>
           </div>
@@ -1437,7 +1626,7 @@ function SitesDeploymentsPage() {
                   <th>Site Name</th>
                   <th>Scenario</th>
                   <th>Connected APs</th>
-                  <th>VLAN</th>
+                  <th>Customer VLAN</th>
                   <th>Address</th>
                   <th>Municipality</th>
                   <th>Barangay</th>
@@ -1463,13 +1652,18 @@ function SitesDeploymentsPage() {
                       {site.ap_total_count !== undefined && site.ap_total_count !== null && site.ap_total_count !== site.ap_connected_count && <span className="text-muted small ms-1">of {site.ap_total_count}</span>}
                       {site.ap_error && <span className="text-muted small ms-1">unavailable</span>}
                     </td>
-                    <td>{site.vlan_tag ? <span className="badge bg-blue-lt text-blue">VLAN {site.vlan_tag}</span> : <span className="badge bg-secondary-lt text-secondary">No VLAN</span>}</td>
+                    <td>{site.vlan_tag ? <span className="badge bg-blue-lt text-blue" title="Managed from Network - MikroTik station planning">VLAN {site.vlan_tag}</span> : <span className="badge bg-secondary-lt text-secondary" title="Bind a MikroTik station to this Omada site from Network">Not bound</span>}</td>
                     <td>{site.address || 'n/a'}</td>
                     <td>{site.municipality || 'n/a'}</td>
                     <td>{site.barangay || 'n/a'}</td>
                     <td>{site.latitude !== null && site.latitude !== undefined && site.longitude !== null && site.longitude !== undefined ? <code>{Number(site.latitude).toFixed(6)}, {Number(site.longitude).toFixed(6)}</code> : <span className="text-muted">n/a</span>}</td>
                     <td>{site.omada_site_id ? <code>{site.omada_site_id}</code> : <span className="text-muted">Not linked</span>}</td>
-                    <td><span className={`badge ${site.is_omada_detected ? 'bg-cyan-lt' : site.omada_site_id ? 'bg-green-lt' : 'bg-blue-lt'}`}>{site.is_omada_detected ? 'Omada' : site.omada_site_id ? 'Local + Omada' : 'Local'}</span></td>
+                    <td>
+                      <div className="d-flex flex-column align-items-start gap-1">
+                        <span className={`badge ${site.is_omada_detected ? 'bg-cyan-lt' : site.omada_site_id ? 'bg-green-lt' : 'bg-blue-lt'}`}>{site.is_omada_detected ? 'Omada' : site.omada_site_id ? 'Local + Omada' : 'Local'}</span>
+                        {!site.is_omada_detected && syncBadgeForSite(site)}
+                      </div>
+                    </td>
                     <td>{site.contact_name || site.contact_phone ? <><div>{site.contact_name || 'n/a'}</div><div className="text-muted small">{site.contact_phone || ''}</div></> : 'n/a'}</td>
                     <td><span className="text-muted">{site.notes || ''}</span></td>
                     <td>{fmt(site.created_at)}</td>
@@ -1492,146 +1686,321 @@ function SitesDeploymentsPage() {
         <div className="col-12">
           <form className="card" onSubmit={saveDeploymentConfig}>
             <div className="card-header">
-              <div>
-                <h3 className="card-title mb-1">AP Deployment Configurations</h3>
-                <div className="text-muted small">These settings are stored once and applied to APs after they are adopted and connected. Adoption credentials are not changed before adoption.</div>
-              </div>
-              <div className="card-actions">
-                <button className="btn btn-outline-primary me-2" type="button" onClick={applyDeploymentConfigNow} disabled={!!configBusy}>
-                  <IconRefresh size={18} className="me-2" />Apply Now
-                </button>
-                <button className="btn btn-primary" disabled={!!configBusy}>
-                  <IconDeviceFloppy size={18} className="me-2" />Save Configurations
-                </button>
-              </div>
-            </div>
+	              <div>
+	                <h3 className="card-title mb-1">AP Deployment Configurations</h3>
+	                <div className="text-muted small">These settings are stored for later manual push. AP adoption stays inside Omada Controller.</div>
+	              </div>
+	            </div>
             <div className="card-body">
               <div className="alert alert-info">
-                After an AP is added and Omada reports it as connected, 3JCentralPisowifi will apply the device account, SSID, security, and site VLAN tag. For captive portal, the AP site VLAN must match the Customer VLAN ID configured on the MikroTik router serving that site.
+                Adopt APs manually in Omada Controller first. Saving this page only stores the desired SSID/security strategy; it does not push changes to APs. Use <strong>APs Deployment - List of APs - Push WiFi Config</strong> when you are ready to apply the saved SSID and station/customer VLAN to connected APs.
               </div>
-              {configResult && <div className={`alert ${configResult.status === 'SUCCESS' ? 'alert-success' : 'alert-warning'}`}>{configResult.message}</div>}
-              <div className="row g-4">
-                <div className="col-lg-6">
-                  <div className="border rounded p-3 h-100">
-                    <div className="d-flex justify-content-between align-items-center mb-3">
-                      <div>
-                        <div className="fw-semibold">Device Account Credentials</div>
-                        <div className="text-muted small">Applied only after the AP is adopted and connected.</div>
-                      </div>
-                      <label className="form-check form-switch mb-0">
-                        <input className="form-check-input" type="checkbox" checked={configForm.auto_apply_enabled} onChange={(e) => setConfigForm({ ...configForm, auto_apply_enabled: e.target.checked })} />
-                        <span className="form-check-label">Auto apply</span>
-                      </label>
-                    </div>
-                    <div className="row g-3">
-                      <div className="col-md-6">
-                        <label className="form-label">Device Account Username</label>
-                        <input className="form-control" value={configForm.device_account_username || ''} onChange={(e) => setConfigForm({ ...configForm, device_account_username: e.target.value })} placeholder="threejap" />
-                      </div>
-                      <div className="col-md-6">
-                        <label className="form-label">Device Account Password</label>
-                        <input className="form-control" type="text" value={configForm.device_account_password || ''} onChange={(e) => setConfigForm({ ...configForm, device_account_password: e.target.value })} placeholder={deploymentConfig.configuration?.has_device_account_password ? 'Saved - enter to replace' : 'Enter password'} />
-                      </div>
-                    </div>
-                  </div>
+              {!apManagementConfigured && (
+                <div className="alert alert-warning">
+                  <div className="fw-semibold mb-1">Setup AP Management before field deployment</div>
+                  <div className="small mb-2">APs need a management VLAN/subnet that can reach the Omada Controller. Adoption is handled in Omada, but AP management transport should be ready before production deployment.</div>
+                  <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => goToNetworkMikrotik('AP Management')}>
+                    <IconRouter size={15} className="me-1" />Open Network AP Management
+                  </button>
                 </div>
-                <div className="col-lg-6">
-                  <div className="border rounded p-3 h-100">
-                    <div className="fw-semibold mb-1">SSID and Security</div>
-                    <div className="text-muted small mb-3">Use one SSID for both bands to enable band steering, or separate names for 2.4GHz and 5GHz.</div>
-                    <div className="row g-3">
-                      <div className="col-12">
-                        <label className="form-check">
-                          <input className="form-check-input" type="checkbox" checked={configForm.use_same_ssid} onChange={(e) => setConfigForm({ ...configForm, use_same_ssid: e.target.checked, band_steering_enabled: e.target.checked ? true : configForm.band_steering_enabled })} />
-                          <span className="form-check-label">Use the same SSID for 2.4GHz and 5GHz</span>
-                        </label>
-                      </div>
-                      {configForm.use_same_ssid ? (
-                        <div className="col-12">
-                          <label className="form-label">SSID Name</label>
-                          <input className="form-control" value={configForm.same_ssid_name || ''} onChange={(e) => setConfigForm({ ...configForm, same_ssid_name: e.target.value })} />
-                          <div className="text-muted small mt-1">Band steering will be requested from Omada for this SSID.</div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="col-md-6"><label className="form-label">2.4GHz SSID</label><input className="form-control" value={configForm.ssid_2g || ''} onChange={(e) => setConfigForm({ ...configForm, ssid_2g: e.target.value })} /></div>
-                          <div className="col-md-6"><label className="form-label">5GHz SSID</label><input className="form-control" value={configForm.ssid_5g || ''} onChange={(e) => setConfigForm({ ...configForm, ssid_5g: e.target.value })} /></div>
-                        </>
-                      )}
-                      <div className="col-md-6">
-                        <label className="form-label">Security</label>
-                        <select className="form-select" value={configForm.security_mode || 'OPEN'} onChange={(e) => setConfigForm({ ...configForm, security_mode: e.target.value })}>
-                          <option value="OPEN">Open</option>
-                          <option value="WPA2_PSK">WPA2 Personal</option>
-                          <option value="WPA_WPA2_PSK">WPA/WPA2 Personal</option>
-                        </select>
-                      </div>
-                      {configForm.security_mode !== 'OPEN' && (
-                        <div className="col-md-6">
-                          <label className="form-label">WiFi Password</label>
-                          <input className="form-control" type="text" value={configForm.security_password || ''} onChange={(e) => setConfigForm({ ...configForm, security_password: e.target.value })} placeholder={deploymentConfig.configuration?.has_security_password ? 'Saved - enter to replace' : 'Enter WiFi password'} />
-                        </div>
-                      )}
-                    </div>
-                  </div>
+              )}
+              {apManagementConfigured && !apManagementActive && (
+                <div className="alert alert-warning">
+                  <div className="fw-semibold mb-1">AP Management plan is saved but not active</div>
+                  <div className="small mb-2">Push AP Management Config in Network before adopting production APs. Current plan: VLAN {apManagementConfig.vlan_id}, {apManagementConfig.network_cidr}.</div>
+                  <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => goToNetworkMikrotik('AP Management')}>
+                    <IconCloudUpload size={15} className="me-1" />Push AP Management Config
+                  </button>
                 </div>
-                <div className="col-12">
-                  <div className="border rounded">
-	                    <div className="p-3 border-bottom">
-	                      <div className="fw-semibold">Site VLAN Tags</div>
-	                      <div className="text-muted small">Set each site to the same VLAN used by its MikroTik router. This VLAN is what the AP SSID will tag for customer captive portal traffic.</div>
-	                      {!!(deploymentConfig.mikrotik_vlans || []).length && (
-	                        <div className="mt-2 d-flex flex-wrap gap-2">
-	                          {(deploymentConfig.mikrotik_vlans || []).map((router) => (
-	                            <span className="badge bg-blue-lt text-blue" key={router.router_id}>
-	                              {router.router_name || router.host}: VLAN {router.vlan_id}
-	                            </span>
-	                          ))}
+              )}
+              {configResult && (
+                <div className={`alert ${configResult.status === 'SUCCESS' ? 'alert-success' : 'alert-warning'}`}>
+                  <div className="fw-semibold">{configResult.message}</div>
+                  {Array.isArray(configResult.results) && configResult.results.length > 0 && (
+                    <div className="mt-2 d-grid gap-2">
+                      {configResult.results.map((item, index) => {
+                        const ap = item.ap || {};
+                        const apName = ap.display_name || ap.name || ap.mac || `AP ${index + 1}`;
+                        const detailMessages = [
+                          item.message,
+                          ap.configuration_error,
+                          item.result?.wlan?.message ? `WiFi/SSID: ${item.result.wlan.message}` : ''
+                        ].filter(Boolean).filter((value, valueIndex, values) => {
+                          const duplicate = values.findIndex((candidate, candidateIndex) => (
+                            candidateIndex < valueIndex
+                            && (candidate === value || candidate.includes(value) || value.includes(candidate))
+                          ));
+                          return duplicate === -1;
+                        });
+                        const badgeClass = item.status === 'SUCCESS'
+                          ? 'bg-green-lt text-green'
+                          : item.status === 'SKIPPED'
+                            ? 'bg-yellow-lt text-yellow'
+                            : item.status === 'PARTIAL'
+                              ? 'bg-orange-lt text-orange'
+                              : 'bg-red-lt text-red';
+                        return (
+                          <div className="border rounded bg-white p-2" key={`${ap.id || ap.mac || index}`}>
+                            <div className="d-flex flex-wrap justify-content-between gap-2">
+                              <div className="fw-semibold">{apName}</div>
+                              <span className={`badge ${badgeClass}`}>{item.status}</span>
+                            </div>
+                            {detailMessages.length > 0 ? detailMessages.map((detail) => (
+                              <div className="small text-muted mt-1" key={detail}>{detail}</div>
+                            )) : <div className="small text-muted mt-1">No detail returned.</div>}
+                            {Array.isArray(item.result?.wlan?.ssids) && (
+                              <div className="small mt-1">
+                                <span className="text-muted">SSID result:</span>{' '}
+                                {item.result.wlan.ssids.map((ssid) => `${ssid.ssid}: ${ssid.updated ? 'updated' : ssid.created ? 'created' : ssid.existing ? 'already exists' : ssid.message || 'unchanged'}`).join(' · ')}
+                              </div>
+                            )}
+                            {Array.isArray(item.result?.wlan_cleanup?.cleanup) && item.result.wlan_cleanup.cleanup.length > 0 && (
+                              <div className="small mt-1">
+                                <span className="text-muted">Old SSID cleanup:</span>{' '}
+                                {item.result.wlan_cleanup.cleanup.map((ssid) => `${ssid.ssid}: ${ssid.status.toLowerCase()}`).join(' · ')}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+	              <div className="border rounded">
+	                <div className="px-3 pt-3">
+	                  <ul className="nav nav-tabs card-header-tabs">
+	                    {configSections.map((section) => (
+	                      <li className="nav-item" key={section}>
+	                        <button className={`nav-link ${configSection === section ? 'active' : ''}`} type="button" onClick={() => setConfigSection(section)}>{section}</button>
+	                      </li>
+	                    ))}
+	                  </ul>
+	                </div>
+	                <div className="p-3">
+	                  {configSection === 'WiFi Strategy' && (
+	                    <div className="row g-4">
+	                      <div className="col-12">
+	                        <div className="border rounded p-3">
+	                          <div className="fw-semibold mb-1">Site SSID Strategy</div>
+	                          <div className="text-muted small mb-3">Choose one strategy. Use the same SSID/security for every site, or manage different SSID/security values per site.</div>
+	                          <div className="row g-3">
+	                            <div className="col-md-6">
+	                              <label className={`border rounded p-3 d-block h-100 ${configForm.ssid_scope !== 'PER_SITE' ? 'border-primary' : ''}`}>
+	                                <input className="form-check-input me-2" type="radio" name="ssid_scope" checked={(configForm.ssid_scope || 'GLOBAL') === 'GLOBAL'} onChange={() => setConfigForm({ ...configForm, ssid_scope: 'GLOBAL' })} />
+	                                <span className="fw-semibold">Same SSID/security for all sites</span>
+	                                <div className="text-muted small mt-2">One WiFi profile is applied to every Omada site.</div>
+	                              </label>
+	                            </div>
+	                            <div className="col-md-6">
+	                              <label className={`border rounded p-3 d-block h-100 ${configForm.ssid_scope === 'PER_SITE' ? 'border-primary' : ''}`}>
+	                                <input className="form-check-input me-2" type="radio" name="ssid_scope" checked={configForm.ssid_scope === 'PER_SITE'} onChange={() => setConfigForm({ ...configForm, ssid_scope: 'PER_SITE' })} />
+	                                <span className="fw-semibold">Different SSID/security per site</span>
+	                                <div className="text-muted small mt-2">Each site can have its own 2.4GHz/5GHz names and security.</div>
+	                              </label>
+	                            </div>
+	                          </div>
 	                        </div>
-	                      )}
+	                      </div>
+	                      {(configForm.ssid_scope || 'GLOBAL') === 'GLOBAL' ? (
+	                        <div className="col-12">
+	                          <div className="border rounded p-3">
+	                            <div className="fw-semibold mb-1">Global SSID and Security</div>
+	                            <div className="text-muted small mb-3">Use one SSID for both bands to enable band steering, or separate names for 2.4GHz and 5GHz.</div>
+	                            <div className="row g-3">
+	                              <div className="col-12">
+	                                <label className="form-check">
+	                                  <input className="form-check-input" type="checkbox" checked={configForm.use_same_ssid} onChange={(e) => setConfigForm({ ...configForm, use_same_ssid: e.target.checked, band_steering_enabled: e.target.checked ? true : configForm.band_steering_enabled })} />
+	                                  <span className="form-check-label">Use the same SSID for 2.4GHz and 5GHz</span>
+	                                </label>
+	                              </div>
+	                              {configForm.use_same_ssid ? (
+	                                <div className="col-md-6">
+	                                  <label className="form-label">SSID Name</label>
+	                                  <input className="form-control" value={configForm.same_ssid_name || ''} onChange={(e) => setConfigForm({ ...configForm, same_ssid_name: e.target.value })} />
+	                                </div>
+	                              ) : (
+	                                <>
+	                                  <div className="col-md-6"><label className="form-label">2.4GHz SSID</label><input className="form-control" value={configForm.ssid_2g || ''} onChange={(e) => setConfigForm({ ...configForm, ssid_2g: e.target.value })} /></div>
+	                                  <div className="col-md-6"><label className="form-label">5GHz SSID</label><input className="form-control" value={configForm.ssid_5g || ''} onChange={(e) => setConfigForm({ ...configForm, ssid_5g: e.target.value })} /></div>
+	                                </>
+	                              )}
+	                              <div className="col-md-6">
+	                                <label className="form-label">Security</label>
+	                                <select className="form-select" value={configForm.security_mode || 'OPEN'} onChange={(e) => setConfigForm({ ...configForm, security_mode: e.target.value })}>
+	                                  <option value="OPEN">Open</option>
+	                                  <option value="WPA2_PSK">WPA2 Personal</option>
+	                                  <option value="WPA_WPA2_PSK">WPA/WPA2 Personal</option>
+	                                </select>
+	                              </div>
+	                              {configForm.security_mode !== 'OPEN' && (
+	                                <div className="col-md-6">
+	                                  <label className="form-label">WiFi Password</label>
+	                                  <input className="form-control" type="text" value={configForm.security_password || ''} onChange={(e) => setConfigForm({ ...configForm, security_password: e.target.value })} placeholder={deploymentConfig.configuration?.has_security_password ? 'Saved - enter to replace' : 'Enter WiFi password'} />
+	                                </div>
+	                              )}
+	                            </div>
+	                          </div>
+	                        </div>
+	                      ) : (
+	                        <div className="col-12">
+	                          <div className="border rounded">
+	                            <div className="p-3 border-bottom">
+	                              <div className="fw-semibold">Per-site SSID and Security</div>
+	                              <div className="text-muted small">These values are saved per Omada site. If a field has no saved value yet, it starts from the global defaults.</div>
+	                            </div>
+	                            <div className="p-3">
+	                              <div className="row g-3">
+	                                {(deploymentConfig.sites || []).map((site) => {
+	                                  const wifi = siteWifiSettings(site);
+	                                  return (
+	                                    <div className="col-12" key={site.id}>
+	                                      <div className="border rounded p-3">
+	                                        <div className="d-flex justify-content-between align-items-start gap-3 mb-3">
+	                                          <div>
+	                                            <div className="fw-semibold">{site.site_name}</div>
+	                                            <div className="text-muted small">{site.omada_site_id || 'Local site'} {site.vlan_tag ? `- VLAN ${site.vlan_tag}` : ''}</div>
+	                                          </div>
+	                                          <span className="badge bg-blue-lt text-blue">{wifi.security_mode || 'OPEN'}</span>
+	                                        </div>
+	                                        <div className="row g-3">
+	                                          <div className="col-12">
+	                                            <label className="form-check">
+	                                              <input className="form-check-input" type="checkbox" checked={wifi.use_same_ssid} onChange={(e) => updateSiteWifi(site.id, { use_same_ssid: e.target.checked, band_steering_enabled: e.target.checked ? true : wifi.band_steering_enabled })} />
+	                                              <span className="form-check-label">Use the same SSID for 2.4GHz and 5GHz at this site</span>
+	                                            </label>
+	                                          </div>
+	                                          {wifi.use_same_ssid ? (
+	                                            <div className="col-md-6"><label className="form-label">SSID Name</label><input className="form-control" value={wifi.same_ssid_name || ''} onChange={(e) => updateSiteWifi(site.id, { same_ssid_name: e.target.value })} /></div>
+	                                          ) : (
+	                                            <>
+	                                              <div className="col-md-6"><label className="form-label">2.4GHz SSID</label><input className="form-control" value={wifi.ssid_2g || ''} onChange={(e) => updateSiteWifi(site.id, { ssid_2g: e.target.value })} /></div>
+	                                              <div className="col-md-6"><label className="form-label">5GHz SSID</label><input className="form-control" value={wifi.ssid_5g || ''} onChange={(e) => updateSiteWifi(site.id, { ssid_5g: e.target.value })} /></div>
+	                                            </>
+	                                          )}
+	                                          <div className="col-md-6">
+	                                            <label className="form-label">Security</label>
+	                                            <select className="form-select" value={wifi.security_mode || 'OPEN'} onChange={(e) => updateSiteWifi(site.id, { security_mode: e.target.value })}>
+	                                              <option value="OPEN">Open</option>
+	                                              <option value="WPA2_PSK">WPA2 Personal</option>
+	                                              <option value="WPA_WPA2_PSK">WPA/WPA2 Personal</option>
+	                                            </select>
+	                                          </div>
+	                                          {wifi.security_mode !== 'OPEN' && (
+	                                            <div className="col-md-6"><label className="form-label">WiFi Password</label><input className="form-control" type="text" value={wifi.security_password || ''} onChange={(e) => updateSiteWifi(site.id, { security_password: e.target.value })} placeholder={wifi.has_security_password ? 'Saved - enter to replace' : 'Enter WiFi password'} /></div>
+	                                          )}
+	                                        </div>
+	                                      </div>
+	                                    </div>
+	                                  );
+	                                })}
+	                                {!(deploymentConfig.sites || []).length && <div className="col-12 text-muted">No sites available yet.</div>}
+	                              </div>
+	                            </div>
+		                          </div>
+		                        </div>
+		                      )}
+		                      <div className="col-12">
+		                        <div className="d-flex justify-content-end border-top pt-3">
+		                          <button className="btn btn-primary" type="submit" disabled={!!configBusy}>
+		                            <IconDeviceFloppy size={18} className="me-2" />{configBusy === 'save' ? 'Saving...' : 'Save WiFi Strategy'}
+		                          </button>
+		                        </div>
+		                      </div>
+		                    </div>
+		                  )}
+	                  {configSection === 'Network Status' && (
+	                    <div className="row g-4">
+	                      <div className="col-lg-5">
+	                        <div className="border rounded p-3 h-100">
+	                          <div className="d-flex justify-content-between align-items-start gap-3 mb-3">
+	                            <div>
+	                              <div className="fw-semibold">AP Management Transport</div>
+	                              <div className="text-muted small">Network config carries the AP management VLAN/DHCP path. Set the AP's own management VLAN manually before deploying it to the station path.</div>
+	                            </div>
+	                            <span className={`badge ${apManagementActive ? 'bg-green-lt text-green' : apManagementConfigured ? 'bg-yellow-lt text-yellow' : 'bg-red-lt text-red'}`}>
+	                              {apManagementActive ? 'Active' : apManagementConfigured ? 'Needs push' : 'Not set'}
+	                            </span>
+	                          </div>
+	                          {apManagementConfigured ? (
+	                            <div className="row g-2">
+	                              <div className="col-md-6"><span className="text-muted small">Management VLAN</span><div className="fw-semibold">VLAN {apManagementConfig.vlan_id}</div></div>
+	                              <div className="col-md-6"><span className="text-muted small">Subnet</span><div className="fw-semibold">{apManagementConfig.network_cidr}</div></div>
+	                              <div className="col-md-6"><span className="text-muted small">Gateway</span><div className="fw-semibold">{apManagementConfig.gateway_ip}</div></div>
+	                              <div className="col-md-6"><span className="text-muted small">DHCP Pool</span><div className="fw-semibold">{apManagementConfig.pool_start_ip} - {apManagementConfig.pool_end_ip}</div></div>
+	                              <div className="col-md-6"><span className="text-muted small">Omada Discovery</span><div className="fw-semibold">{apManagementConfig.plan?.omada_controller_discovery_ip || 'Not detected'}</div></div>
+	                              <div className="col-md-6"><span className="text-muted small">Router Chain</span><div className="fw-semibold">{(apManagementConfig.routers || []).length || 0} router{(apManagementConfig.routers || []).length === 1 ? '' : 's'}</div></div>
+	                            </div>
+	                          ) : (
+	                            <div className="text-muted">No AP Management plan exists yet.</div>
+	                          )}
+	                          <div className="btn-list mt-3">
+	                            <button className="btn btn-outline-primary btn-sm" type="button" onClick={() => goToNetworkMikrotik('AP Management')}>
+	                              <IconSettings size={15} className="me-1" />Manage in Network
+	                            </button>
+	                            <button className="btn btn-outline-secondary btn-sm" type="button" onClick={goToListOfAps} disabled={!apManagementActive}>
+	                              <IconWifi size={15} className="me-1" />Adopt APs
+	                            </button>
+	                          </div>
+	                        </div>
+	                      </div>
+	                      <div className="col-lg-7">
+	                        <div className="border rounded h-100">
+	                          <div className="p-3 border-bottom d-flex justify-content-between align-items-start gap-3">
+	                            <div>
+	                              <div className="fw-semibold">Customer VLAN Source</div>
+	                              <div className="text-muted small">Customer VLANs are managed in Network - MikroTik station planning. Bind each station to its Omada site there; Sites displays the saved result only.</div>
+	                            </div>
+	                            <button className="btn btn-outline-primary btn-sm" type="button" onClick={() => goToNetworkMikrotik('Configuration')}>
+	                              <IconRouter size={15} className="me-1" />Open Network Stations
+	                            </button>
+	                          </div>
+	                          <div className="table-responsive">
+	                            <table className="table table-vcenter mb-0">
+	                              <thead><tr><th>Site</th><th>Omada Site ID</th><th>Customer VLAN</th><th>Status</th></tr></thead>
+	                              <tbody>
+	                                {(deploymentConfig.sites || []).map((site) => (
+	                                  <tr key={site.id}>
+	                                    <td className="fw-semibold">{site.site_name}</td>
+	                                    <td>{site.omada_site_id ? <code>{site.omada_site_id}</code> : <span className="text-muted">Not linked</span>}</td>
+	                                    <td>{site.vlan_tag ? <span className="badge bg-blue-lt text-blue">VLAN {site.vlan_tag}</span> : <span className="badge bg-secondary-lt text-secondary">Not bound</span>}</td>
+	                                    <td>{site.vlan_tag ? <span className="badge bg-green-lt text-green">From Network</span> : <span className="badge bg-yellow-lt text-yellow">Bind station first</span>}</td>
+	                                  </tr>
+	                                ))}
+	                                {!(deploymentConfig.sites || []).length && <tr><td colSpan="4" className="text-muted p-4">No saved sites yet.</td></tr>}
+	                              </tbody>
+	                            </table>
+	                          </div>
+	                        </div>
+	                      </div>
 	                    </div>
-                    <div className="table-responsive">
-                      <table className="table table-vcenter mb-0">
-                        <thead><tr><th>Site</th><th>Omada Site ID</th><th style={{ width: '14rem' }}>VLAN Tag</th></tr></thead>
-                        <tbody>
-                          {(deploymentConfig.sites || []).map((site) => (
-                            <tr key={site.id}>
-                              <td className="fw-semibold">{site.site_name}</td>
-                              <td>{site.omada_site_id ? <code>{site.omada_site_id}</code> : <span className="text-muted">Not linked</span>}</td>
-                              <td><input className="form-control" type="number" min="1" max="4094" placeholder="Match MikroTik VLAN" value={configForm.site_vlans?.[site.id] ?? ''} onChange={(e) => setSiteVlan(site.id, e.target.value)} /></td>
-                            </tr>
-                          ))}
-                          {!(deploymentConfig.sites || []).length && <tr><td colSpan="3" className="text-muted p-4">No saved sites yet.</td></tr>}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-                <div className="col-12">
-                  <div className="border rounded">
-                    <div className="p-3 border-bottom">
-                      <div className="fw-semibold">Recent Configuration Logs</div>
-                    </div>
-                    <div className="table-responsive">
-                      <table className="table table-vcenter mb-0">
-                        <thead><tr><th>Time</th><th>Site</th><th>AP</th><th>Status</th><th>Message</th></tr></thead>
-                        <tbody>
-                          {(deploymentConfig.logs || []).map((log) => (
-                            <tr key={log.id}>
-                              <td>{fmt(log.created_at)}</td>
-                              <td>{log.site_name || log.omada_site_id || 'n/a'}</td>
-                              <td>{log.ap_mac_masked || 'n/a'}</td>
-                              <td><span className={`badge ${log.status === 'SUCCESS' ? 'bg-green-lt text-green' : log.status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-blue-lt text-blue'}`}>{log.status}</span></td>
-                              <td>{log.message || ''}</td>
-                            </tr>
-                          ))}
-                          {!(deploymentConfig.logs || []).length && <tr><td colSpan="5" className="text-muted p-4">No AP configuration logs yet.</td></tr>}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </div>
-              </div>
+	                  )}
+	                  {configSection === 'Logs' && (
+	                    <div className="border rounded">
+	                      <div className="p-3 border-bottom">
+	                        <div className="fw-semibold">Recent Configuration Logs</div>
+	                      </div>
+	                      <div className="table-responsive">
+	                        <table className="table table-vcenter mb-0">
+	                          <thead><tr><th>Time</th><th>Site</th><th>AP</th><th>Status</th><th>Message</th></tr></thead>
+	                          <tbody>
+	                            {(deploymentConfig.logs || []).map((log) => (
+	                              <tr key={log.id}>
+	                                <td>{fmt(log.created_at)}</td>
+	                                <td>{log.site_name || log.omada_site_id || 'n/a'}</td>
+	                                <td>{log.ap_mac_masked || 'n/a'}</td>
+	                                <td><span className={`badge ${log.status === 'SUCCESS' ? 'bg-green-lt text-green' : log.status === 'PARTIAL' ? 'bg-orange-lt text-orange' : log.status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-blue-lt text-blue'}`}>{log.status}</span></td>
+	                                <td>{log.message || ''}</td>
+	                              </tr>
+	                            ))}
+	                            {!(deploymentConfig.logs || []).length && <tr><td colSpan="5" className="text-muted p-4">No AP configuration logs yet.</td></tr>}
+	                          </tbody>
+	                        </table>
+	                      </div>
+	                    </div>
+	                  )}
+	                </div>
+	              </div>
             </div>
           </form>
         </div>
@@ -1646,16 +2015,7 @@ function SitesDeploymentsPage() {
               <div className="col-md-6"><label className="form-label">Application Scenario</label><select className="form-select" required value={form.application_scenario} onChange={(e) => setForm({ ...form, application_scenario: e.target.value })}>{(options.application_scenarios || ['Office']).map((scenario) => <option key={scenario} value={scenario}>{scenario}</option>)}</select></div>
               <div className="col-12"><div className="alert alert-secondary mb-0">Country / Region and Time Zone come from System Settings - General: {options.general?.country_region || 'Philippines'} / {options.general?.time_zone || 'Asia/Manila'}.</div></div>
               <div className="col-12">
-                <div className="border rounded p-3">
-                  <div className="fw-semibold mb-1">Omada Device Account</div>
-                  <div className="text-muted small mb-3">Omada requires this per-site device account when creating a site. It is sent to Omada for site creation and is not displayed after saving.</div>
-                  <div className="row g-3">
-                    <div className="col-md-5"><label className="form-label">Device Account Username</label><input className="form-control" required value={form.device_account_username} onChange={(e) => setForm({ ...form, device_account_username: e.target.value })} /></div>
-                    <div className="col-md-5"><label className="form-label">Device Account Password</label><input className="form-control" type="text" required value={form.device_account_password} onChange={(e) => setForm({ ...form, device_account_password: e.target.value })} /></div>
-                    <div className="col-md-2 d-flex align-items-end"><button type="button" className="btn w-100" onClick={generateDevicePassword}>Generate</button></div>
-                    <div className="col-12"><div className="text-muted small">Password must include uppercase, lowercase, number, and symbol.</div></div>
-                  </div>
-                </div>
+                <div className="alert alert-info mb-0">The system creates the Omada site only. It does not set or change AP GUI/device account credentials during site creation or AP adoption.</div>
               </div>
               <div className="col-12">
                 <label className="form-label">Location</label>
@@ -1715,7 +2075,7 @@ function SitesDeploymentsPage() {
             Confirm that you want to delete this site. {deleteSiteTarget.omada_site_id ? 'This will attempt to delete the site from Omada Controller. If Omada does not support remote deletion, the site will still be hidden from this system and the Omada limitation will be shown as a warning.' : 'This site is local only.'}
           </div>
           {deleteSiteError && <div className="alert alert-warning">{deleteSiteError}</div>}
-          <div className="row g-3 mb-3">
+	                      <div className="row g-3 mb-3">
             <div className="col-md-4">
               <div className="border rounded p-3 h-100">
                 <div className="text-muted small">APs in this Site</div>
@@ -1765,7 +2125,7 @@ function SitesDeploymentsPage() {
                       <td>{apStatusBadge(ap.status)}</td>
                       <td>{ap.client_count ?? 0}</td>
                       <td>
-                        <span className={`badge ${ap.configuration_status === 'APPLIED' ? 'bg-green-lt text-green' : ap.configuration_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-blue-lt text-blue'}`}>
+                        <span className={`badge ${ap.configuration_status === 'APPLIED' ? 'bg-green-lt text-green' : ap.configuration_status === 'PARTIAL' ? 'bg-orange-lt text-orange' : ap.configuration_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-blue-lt text-blue'}`}>
                           {ap.configuration_status || 'PENDING'}
                         </span>
                       </td>
@@ -1797,24 +2157,91 @@ function formatOmadaTimestamp(value) {
   return fmt(value);
 }
 
-function apStatusBadge(status) {
+function apStatusBadge(status, title = '') {
   const text = String(status || 'Unknown');
   const lower = text.toLowerCase();
-  if (lower.includes('connected') || lower.includes('online')) return <span className="badge bg-green-lt text-green">{text}</span>;
-  if (lower.includes('pending')) return <span className="badge bg-yellow-lt text-yellow">{text}</span>;
-  if (lower.includes('failed')) return <span className="badge bg-red-lt text-red">{text}</span>;
-  if (lower.includes('managed')) return <span className="badge bg-orange-lt text-orange">{text}</span>;
-  if (lower.includes('disconnected')) return <span className="badge bg-secondary-lt text-secondary">{text}</span>;
-  return <span className="badge bg-blue-lt text-blue">{text}</span>;
+  if (lower.includes('connected') || lower.includes('online')) return <span className="badge bg-green-lt text-green" title={title || text}>{text}</span>;
+  if (lower.includes('configuring')) return <span className="badge bg-blue-lt text-blue" title={title || text}>{text}</span>;
+  if (lower.includes('pending')) return <span className="badge bg-yellow-lt text-yellow" title={title || text}>{text}</span>;
+  if (lower.includes('failed')) return <span className="badge bg-red-lt text-red" title={title || text}>{text}</span>;
+  if (lower.includes('managed')) return <span className="badge bg-orange-lt text-orange" title={title || text}>{text}</span>;
+  if (lower.includes('disconnected')) return <span className="badge bg-secondary-lt text-secondary" title={title || text}>{text}</span>;
+  return <span className="badge bg-blue-lt text-blue" title={title || text}>{text}</span>;
+}
+
+function apConfigComponentList(ap) {
+  const components = ap?.configuration_components || {};
+  return Object.values(components).filter(Boolean);
+}
+
+function apConfigComponentStatus(ap, key) {
+  return String(ap?.configuration_components?.[key]?.status || 'PENDING').toUpperCase();
+}
+
+function apConfigSectionStatus(ap, section) {
+  if (section === 'wifi') {
+    const wifi = apConfigComponentStatus(ap, 'wifi_ssids');
+    const vlan = apConfigComponentStatus(ap, 'ssid_customer_vlan');
+    const portal = apConfigComponentStatus(ap, 'portal_ssid_binding');
+    if (wifi === 'SUCCESS' && vlan === 'SUCCESS' && portal === 'SUCCESS') return 'SUCCESS';
+    if ([wifi, vlan, portal].some((status) => ['FAILED', 'ERROR'].includes(status))) return 'FAILED';
+    if ([wifi, vlan, portal].some((status) => status === 'SUCCESS')) return 'PARTIAL';
+    return 'PENDING';
+  }
+  if (section === 'ap_management') {
+    return apConfigComponentStatus(ap, 'ap_management_vlan');
+  }
+  return 'PENDING';
+}
+
+function apConfigSectionSummary(ap) {
+  const sections = [
+    { key: 'wifi', label: 'WiFi + SSID VLAN', status: apConfigSectionStatus(ap, 'wifi') },
+    { key: 'ap_management', label: 'AP Management VLAN', status: apConfigSectionStatus(ap, 'ap_management') }
+  ];
+  const completed = sections.filter((section) => section.status === 'SUCCESS').length;
+  const failed = sections.filter((section) => ['FAILED', 'ERROR'].includes(section.status)).length;
+  const state = failed ? 'FAILED' : completed === sections.length ? 'SUCCESS' : completed ? 'PARTIAL' : 'PENDING';
+  return { completed, total: sections.length, failed, state, sections };
+}
+
+function apConfigProgressBadge(ap) {
+  const summary = apConfigSectionSummary(ap);
+  const state = summary.state;
+  const label = `${summary.completed}/${summary.total} config`;
+  const title = [
+    ...summary.sections.map((section) => `${section.label}: ${section.status}`),
+    ...apConfigComponentList(ap).map((component) => `${component.label || component.key}: ${component.status || 'PENDING'}${component.message ? ` - ${component.message}` : ''}`)
+  ].join('\n') || 'AP configuration has not been checked yet.';
+  let className = 'bg-blue-lt text-blue';
+  if (state === 'SUCCESS') className = 'bg-green-lt text-green';
+  if (state === 'PARTIAL') className = 'bg-orange-lt text-orange';
+  if (state === 'FAILED') className = 'bg-red-lt text-red';
+  return (
+    <span className={`badge ap-config-progress-badge ${className}`} title={title}>
+      {state === 'SUCCESS' ? <IconCircleCheck size={14} /> : state === 'FAILED' ? <IconAlertTriangle size={14} /> : <IconClock size={14} />}
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function apConfigComponentBadge(status) {
+  const value = String(status || 'PENDING').toUpperCase();
+  if (value === 'SUCCESS') return <span className="badge bg-green-lt text-green"><IconCircleCheck size={13} /> Success</span>;
+  if (value === 'FAILED' || value === 'ERROR') return <span className="badge bg-red-lt text-red"><IconAlertTriangle size={13} /> Failed</span>;
+  if (value === 'SKIPPED') return <span className="badge bg-secondary-lt text-secondary">Skipped</span>;
+  return <span className="badge bg-blue-lt text-blue"><IconClock size={13} /> Pending</span>;
 }
 
 function isConnectedAp(ap) {
   const status = String(ap?.status || '').toLowerCase();
-  return status === 'connected' || status === 'online' || ap?.status_code === 14 || ap?.status_category === 1;
+  const code = Number(ap?.status_code);
+  if ([10, 11, 12, 13].includes(code) || ap?.local_status === 'CONFIGURING') return false;
+  return status === 'connected' || status === 'online' || [14, 15, 16, 17].includes(code);
 }
 
 function isVisibleAp(ap) {
-  return isConnectedAp(ap) || ['ADOPTING', 'ADOPT_FAILED'].includes(ap?.local_status);
+  return Boolean(ap?.mac || ap?.id || ap?.name);
 }
 
 function ListOfApsPage() {
@@ -1832,17 +2259,49 @@ function ListOfApsPage() {
   const [error, setError] = useState('');
   const [detectError, setDetectError] = useState('');
   const [adoptCredentials, setAdoptCredentials] = useState({ username: '', password: '' });
+  const [pushResult, setPushResult] = useState(null);
+  const [pushBusy, setPushBusy] = useState('');
+  const [configPushProgress, setConfigPushProgress] = useState(null);
+  const [selectedApDetails, setSelectedApDetails] = useState(null);
+  const [configPushTarget, setConfigPushTarget] = useState(null);
+  const [siteWifiEdit, setSiteWifiEdit] = useState(null);
+  const [siteWifiForm, setSiteWifiForm] = useState({
+    use_same_ssid: true,
+    same_ssid_name: '3J-FreeWiFi',
+    ssid_2g: '3J-FreeWiFi-2G',
+    ssid_5g: '3J-FreeWiFi-5G',
+    band_steering_enabled: true,
+    security_mode: 'OPEN',
+    security_password: ''
+  });
+  const [siteWifiSaving, setSiteWifiSaving] = useState(false);
 
   async function load(silent = false) {
     if (!silent) setLoading(true);
     if (!silent) setError('');
     try {
       const data = await request('/ap-deployments/sites');
-      setSites(data.sites || []);
-      if (data.omada_error) setError(`Omada API is not ready: ${data.omada_error}`);
-    } catch (err) {
-      if (!silent) setError(err.message);
-    } finally {
+      const nextSites = data.sites || [];
+      setSites(nextSites);
+	      setSelectedApDetails((current) => {
+	        if (!current?.ap?.id) return current;
+	        for (const site of nextSites) {
+	          const ap = (site.aps || []).find((item) => item.id === current.ap.id);
+	          if (ap) return { site, ap };
+	        }
+	        return current;
+	      });
+	      setConfigPushTarget((current) => {
+	        if (!current?.ap?.id) return current;
+	        for (const site of nextSites) {
+	          const ap = (site.aps || []).find((item) => item.id === current.ap.id);
+	          if (ap) return { site, ap };
+	        }
+	        return current;
+	      });
+	    } catch (err) {
+	      if (!silent) setError(err.message);
+	    } finally {
       if (!silent) setLoading(false);
     }
   }
@@ -1923,6 +2382,66 @@ function ListOfApsPage() {
     setEditName(ap.display_name || ap.name || ap.mac_bound_name || '');
   }
 
+  function openApDetails(ap, site) {
+    setSelectedApDetails({ ap, site });
+  }
+
+  function mergeUpdatedAp(updatedAp) {
+    if (!updatedAp?.id) return;
+    setSites((current) => current.map((site) => ({
+      ...site,
+      aps: (site.aps || []).map((ap) => (ap.id === updatedAp.id ? { ...ap, ...updatedAp } : ap)),
+    })));
+    setSelectedApDetails((current) => {
+      if (!current?.ap?.id || current.ap.id !== updatedAp.id) return current;
+      return { ...current, ap: { ...current.ap, ...updatedAp } };
+    });
+    setConfigPushTarget((current) => {
+      if (!current?.ap?.id || current.ap.id !== updatedAp.id) return current;
+      return { ...current, ap: { ...current.ap, ...updatedAp } };
+    });
+  }
+
+  function siteWifiFormFromSite(site) {
+    const wifi = site?.ssid_configuration || {};
+    return {
+      use_same_ssid: wifi.use_same_ssid !== false,
+      same_ssid_name: wifi.same_ssid_name || (wifi.desired_ssids || [])[0] || '3J-FreeWiFi',
+      ssid_2g: wifi.ssid_2g || '3J-FreeWiFi-2G',
+      ssid_5g: wifi.ssid_5g || '3J-FreeWiFi-5G',
+      band_steering_enabled: wifi.band_steering_enabled !== false,
+      security_mode: wifi.security_mode || 'OPEN',
+      security_password: ''
+    };
+  }
+
+  function openSiteWifiEdit(site) {
+    setSiteWifiEdit(site);
+    setSiteWifiForm(siteWifiFormFromSite(site));
+  }
+
+  async function saveSiteWifi(e) {
+    e.preventDefault();
+    if (!siteWifiEdit?.id && !siteWifiEdit?.omada_site_id) return;
+    setSiteWifiSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const siteId = siteWifiEdit.id || siteWifiEdit.omada_site_id;
+      const result = await request(`/site-deployments/${siteId}/wifi-configuration`, {
+        method: 'PATCH',
+        body: JSON.stringify(siteWifiForm)
+      });
+      setMessage(result.message || `WiFi settings saved for ${siteWifiEdit.site_name}.`);
+      setSiteWifiEdit(null);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSiteWifiSaving(false);
+    }
+  }
+
   async function saveApName(e) {
     e.preventDefault();
     if (!editAp) return;
@@ -1940,64 +2459,128 @@ function ListOfApsPage() {
     }
   }
 
-  async function retryAp(ap) {
-    setError('');
-    try {
-      const result = await request(`/ap-deployments/${ap.id}/retry`, { method: 'POST' });
-      if (result.status === 'FAILED') setError(result.message);
-      else setMessage('AP adoption retry submitted.');
-      await load();
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
   async function deleteAp(ap) {
-    if (!window.confirm(`Delete AP "${ap.display_name || ap.name}" from this site?`)) return;
+    if (!window.confirm(`Delete AP "${ap.display_name || ap.name}" from this site and forget it in Omada Controller?`)) return;
     setError('');
     try {
       const result = await request(`/ap-deployments/${ap.id}`, { method: 'DELETE' });
       if (result.omada_error) setError(`AP was removed from this system, but Omada delete/forget was not confirmed: ${result.omada_error}`);
-      else setMessage('AP deleted.');
+      else setMessage(result.omada_deleted ? 'AP deleted and forgotten in Omada.' : 'AP deleted.');
       await load();
     } catch (err) {
       setError(err.message);
     }
   }
 
-  useEffect(() => { load(); }, []);
+  async function pushApConfig(scope, id, label, section = 'WIFI') {
+    setError('');
+    setMessage('');
+    setPushResult(null);
+    const normalizedSection = section || 'WIFI';
+    const actionLabel = normalizedSection === 'AP_MANAGEMENT' ? 'AP management' : 'WiFi';
+    setPushBusy(`${normalizedSection}:${scope}:${id || 'all'}`);
+    setConfigPushProgress({
+      section: normalizedSection,
+      status: 'RUNNING',
+      percent: 12,
+      title: `Pushing ${actionLabel} config`,
+      message: 'Preparing request...'
+    });
+    const progressTimers = [
+      window.setTimeout(() => setConfigPushProgress((current) => current?.section === normalizedSection && current.status === 'RUNNING' ? { ...current, percent: Math.max(current.percent, 35), message: 'Sending config to Omada Controller...' } : current), 250),
+      window.setTimeout(() => setConfigPushProgress((current) => current?.section === normalizedSection && current.status === 'RUNNING' ? { ...current, percent: Math.max(current.percent, 65), message: normalizedSection === 'AP_MANAGEMENT' ? 'Omada is applying AP management VLAN. The AP may disconnect after this.' : 'Waiting for Omada API response...' } : current), 1200),
+      window.setTimeout(() => setConfigPushProgress((current) => current?.section === normalizedSection && current.status === 'RUNNING' ? { ...current, percent: Math.max(current.percent, 82), message: 'Finalizing push result...' } : current), 3000),
+    ];
+    try {
+      const body = scope === 'site' ? { site_id: id, section: normalizedSection } : scope === 'ap' ? { ap_id: id, section: normalizedSection } : { section: normalizedSection };
+      const data = await request('/site-deployments/configuration/apply', { method: 'POST', body: JSON.stringify(body) });
+      setPushResult(data);
+      const updatedAp = Array.isArray(data.results) ? data.results.find((item) => item?.ap)?.ap : null;
+      if (updatedAp) mergeUpdatedAp(updatedAp);
+      if (data.status === 'SUCCESS') {
+        const successMessage = data.message || `${actionLabel} configuration pushed${label ? ` to ${label}` : ''}.`;
+        setMessage(successMessage);
+        setConfigPushProgress({
+          section: normalizedSection,
+          status: 'SUCCESS',
+          percent: 100,
+          title: `${actionLabel} config pushed`,
+          message: normalizedSection === 'AP_MANAGEMENT'
+            ? 'Omada accepted the AP management VLAN push. The AP may disconnect while moving to the AP management subnet.'
+            : successMessage
+        });
+      } else {
+        const issueMessage = data.message || `${actionLabel} configuration push completed with issues${label ? ` for ${label}` : ''}.`;
+        setError(issueMessage);
+        setConfigPushProgress({
+          section: normalizedSection,
+          status: 'WARNING',
+          percent: 100,
+          title: `${actionLabel} config needs review`,
+          message: issueMessage
+        });
+      }
+      if (normalizedSection !== 'AP_MANAGEMENT') {
+        await load();
+      }
+    } catch (err) {
+      setError(err.message);
+      setConfigPushProgress({
+        section: normalizedSection,
+        status: 'FAILED',
+        percent: 100,
+        title: `${actionLabel} config failed`,
+        message: err.message
+      });
+    } finally {
+      progressTimers.forEach((timer) => window.clearTimeout(timer));
+      setPushBusy('');
+    }
+  }
+
+	  useEffect(() => { load(); }, []);
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      load(true).catch(() => {});
-    }, 5000);
+    const timer = window.setInterval(() => load(true), 10000);
     return () => window.clearInterval(timer);
   }, []);
 
   const totalSites = sites.length;
   const connectedAps = sites.reduce((sum, site) => sum + (site.aps || []).filter(isConnectedAp).length, 0);
-  const provisioningAps = sites.reduce((sum, site) => sum + (site.aps || []).filter((ap) => ap.local_status === 'ADOPTING').length, 0);
+	  const provisioningAps = sites.reduce((sum, site) => sum + (site.aps || []).filter((ap) => ['ADOPTING', 'CONFIGURING'].includes(ap.local_status)).length, 0);
+  const configuredAps = sites.reduce((sum, site) => sum + (site.aps || []).filter((ap) => ap.configuration_status === 'APPLIED').length, 0);
   const pendingAps = sites.reduce((sum, site) => sum + Number(site.pending_ap_count || 0), 0);
   const selectedCount = Object.values(selected).filter(Boolean).length;
   const adoptableDetectedCount = detected.filter((ap) => ap.adoptable !== false).length;
 
   return (
     <div className="row row-cards">
-      <div className="col-12">
-        <div className="alert alert-info">
-          List of APs shows connected Omada access points grouped by site. APs that are pending adoption are only shown after clicking Add APs.
-        </div>
-      </div>
+	      <div className="col-12">
+	        <div className="alert alert-info">
+	          Add APs detects pending Omada APs and submits adoption only. For successful adoption, factory-reset the AP and connect it first to the same office subnet where the Omada Controller is connected. After the AP is added to a site and connected, use the AP row actions to push WiFi config or AP management when you are ready.
+	        </div>
+	      </div>
       {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
       {error && <div className="col-12"><div className="alert alert-warning">{error}</div></div>}
+      {pushResult && Array.isArray(pushResult.results) && (
+        <div className="col-12">
+          <div className={`alert ${pushResult.status === 'SUCCESS' ? 'alert-success' : 'alert-warning'}`}>
+            <div className="fw-semibold">{pushResult.message}</div>
+	            <div className="small mt-1">
+	              Success: {pushResult.summary?.success || 0} · Partial: {pushResult.summary?.partial || 0} · Failed: {pushResult.summary?.failed || 0} · Skipped: {pushResult.summary?.skipped || 0}
+	            </div>
+	            {pushResult.sync_result && (
+	              <div className="small mt-1">
+	                Omada sync during push: {pushResult.sync_result.message || pushResult.sync_result.status}
+	              </div>
+	            )}
+	          </div>
+	        </div>
+	      )}
       <KpiCard icon={IconMapPin} label="Sites" value={totalSites} tone="blue" />
       <KpiCard icon={IconActivity} label="Connected APs" value={connectedAps} tone="green" />
-      <KpiCard icon={IconRefresh} label="Provisioning APs" value={provisioningAps} tone="orange" />
+	      <KpiCard icon={IconRefresh} label="Cached Provisioning" value={provisioningAps} tone="orange" />
       <KpiCard icon={IconWifi} label="Pending APs" value={pendingAps} tone="yellow" />
-      <div className="col-12">
-        <div className="d-flex justify-content-end mb-2">
-          <button className="btn btn-outline-primary" type="button" onClick={load} disabled={loading}><IconRefresh size={18} className="me-2" />Refresh</button>
-        </div>
-      </div>
+      <KpiCard icon={IconCircleCheck} label="Configured APs" value={configuredAps} tone="green" />
       {sites.map((site) => (
         <div className="col-12" key={site.id || site.omada_site_id || site.site_name}>
           <div className="card ap-site-card">
@@ -2006,10 +2589,15 @@ function ListOfApsPage() {
                 <h3 className="card-title mb-1">{site.site_name}</h3>
                 <div className="text-muted small">{site.address || site.location || 'No saved address'}{site.omada_site_id ? ` · Omada site ${site.omada_site_id}` : ''}</div>
               </div>
-              <div className="card-actions">
-                <button className="btn btn-primary" type="button" onClick={() => openAddAps(site)} disabled={!site.omada_site_id}>
-                  <IconWifi size={18} className="me-2" />Add APs | Pending: {site.pending_ap_count ?? 0}
-                </button>
+              <div className="card-actions ap-site-actions">
+	                {site.ssid_configuration?.scope === 'PER_SITE' && (
+	                  <button className="btn btn-outline-secondary" type="button" onClick={() => openSiteWifiEdit(site)}>
+	                    <IconSettings size={18} className="me-2" />Edit Site WiFi
+	                  </button>
+	                )}
+	                <button className="btn btn-outline-primary" type="button" onClick={() => openAddAps(site)} disabled={!site.omada_site_id}>
+	                  <IconWifi size={18} className="me-2" />Add APs | Pending: {site.pending_ap_count ?? 0}
+	                </button>
               </div>
             </div>
             {site.ap_error && <div className="alert alert-warning m-3 mb-0">AP list unavailable from Omada: {site.ap_error}</div>}
@@ -2021,62 +2609,361 @@ function ListOfApsPage() {
                     <th className="ap-col-name">AP</th>
                     <th className="ap-col-mac">MAC</th>
                     <th className="ap-col-model">Model</th>
-                    <th className="ap-col-ip">IP</th>
-                    <th className="ap-col-status">Status</th>
-                    <th className="ap-col-clients text-center">Clients</th>
-                    <th className="ap-col-firmware">Firmware</th>
-                    <th className="ap-col-uptime">Uptime</th>
-                    <th className="ap-col-last-seen">Last Seen</th>
-                    <th className="ap-col-actions text-end">Actions</th>
+	                    <th className="ap-col-ip">IP</th>
+	                    <th className="ap-col-status">Status</th>
+	                    <th className="ap-col-config">Config</th>
+	                    <th className="ap-col-clients text-center">Clients</th>
+	                    <th className="ap-col-firmware">Firmware</th>
+	                    <th className="ap-col-uptime">Uptime</th>
+	                    <th className="ap-col-last-seen">Last Seen</th>
+	                    <th className="ap-col-actions text-end">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(site.aps || []).filter(isVisibleAp).map((ap) => (
-                    <tr key={ap.id || ap.mac || ap.name} className={ap.local_status === 'ADOPTING' ? 'ap-row-provisioning' : ''}>
+                    <tr
+                      key={ap.id || ap.mac || ap.name}
+	                      className={`ap-clickable-row ${ap.local_status === 'ADOPT_FAILED' ? 'ap-row-failed' : ''}`}
+                      onClick={() => openApDetails(ap, site)}
+                    >
                       <td>
                         <div className="fw-semibold">{ap.display_name || ap.name || ap.mac_bound_name || 'Unnamed AP'}</div>
+	                        {(ap.local_status === 'ADOPTING' || ap.local_status === 'CONFIGURING') && (
+	                          <div className="text-muted small">Refreshing read-only status from Omada...</div>
+	                        )}
                         {ap.serial_number && <div className="text-muted small">SN {ap.serial_number}</div>}
-                        {ap.last_error && <div className="text-danger small">{ap.last_error}</div>}
                       </td>
                       <td><code>{ap.mac || 'n/a'}</code></td>
-                      <td>{ap.model || 'n/a'}</td>
-                      <td>{ap.ip || 'n/a'}</td>
-                      <td>{apStatusBadge(ap.status)}</td>
-                      <td className="text-center">{ap.client_count ?? 0}</td>
-                      <td title={ap.firmware_version || 'n/a'}>
-                        <span className="ap-firmware-text">{truncateWithEllipsis(ap.firmware_version, 10)}</span>
+	                      <td>{ap.model || 'n/a'}</td>
+	                      <td>{ap.ip || 'n/a'}</td>
+	                      <td>{apStatusBadge(ap.status, ['ADOPT_FAILED', 'CONFIGURING', 'DISCONNECTED'].includes(ap.local_status) ? ap.last_error : '')}</td>
+	                      <td>{apConfigProgressBadge(ap)}</td>
+	                      <td className="text-center">{ap.client_count ?? 0}</td>
+	                      <td title={ap.firmware_version || 'n/a'}>
+	                        <span className="ap-firmware-text">{truncateWithEllipsis(ap.firmware_version, 10)}</span>
                       </td>
                       <td>{ap.uptime || 'n/a'}</td>
                       <td>{formatOmadaTimestamp(ap.last_seen)}</td>
                       <td className="text-end">
                         <div className="ap-action-list" aria-label="AP actions">
-                          <button className="ap-action-badge" type="button" onClick={() => openEditAp(ap)} title="Edit AP name" aria-label="Edit AP name">
+                          <button className="ap-action-badge" type="button" onClick={(event) => { event.stopPropagation(); openEditAp(ap); }} title="Edit AP name" aria-label="Edit AP name">
                             <IconEdit size={15} />
                           </button>
-                          {ap.local_status === 'ADOPT_FAILED' && (
-                            <button className="ap-action-badge ap-action-badge-warning" type="button" onClick={() => retryAp(ap)} title="Retry adoption" aria-label="Retry adoption">
-                              <IconRefresh size={15} />
-                            </button>
-                          )}
-                          <button className="ap-action-badge ap-action-badge-danger" type="button" onClick={() => deleteAp(ap)} title="Delete AP" aria-label="Delete AP">
-                            <IconTrash size={15} />
+                          <button
+                            className="ap-action-badge ap-action-badge-primary"
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setPushResult(null);
+                              setConfigPushProgress(null);
+                              setConfigPushTarget({ site, ap });
+                            }}
+                            disabled={ap.local_status !== 'CONNECTED'}
+                            title={ap.local_status === 'CONNECTED' ? 'Open AP config push steps' : 'AP must be connected before config can be pushed'}
+                            aria-label="Push AP config"
+                          >
+                            <IconCloudUpload size={15} />
+                          </button>
+                          <button className="ap-action-badge ap-action-badge-danger" type="button" onClick={(event) => { event.stopPropagation(); deleteAp(ap); }} title={ap.local_status === 'ADOPT_FAILED' ? 'Remove from site table' : 'Delete AP'} aria-label={ap.local_status === 'ADOPT_FAILED' ? 'Remove from site table' : 'Delete AP'}>
+                            {ap.local_status === 'ADOPT_FAILED' ? <IconX size={15} /> : <IconTrash size={15} />}
                           </button>
                         </div>
                       </td>
                     </tr>
                   ))}
-                  {!(site.aps || []).filter(isVisibleAp).length && <tr><td colSpan="10" className="text-muted p-4">No connected or provisioning APs for this site yet. Pending APs are available through Add APs.</td></tr>}
+		                  {!(site.aps || []).filter(isVisibleAp).length && <tr><td colSpan="11" className="text-muted p-4">No local AP records yet. Use Add APs after the AP is visible in Omada, then push WiFi or AP management from the AP row actions.</td></tr>}
                 </tbody>
               </table>
             </div>
           </div>
         </div>
       ))}
+      {selectedApDetails && (
+        <div className="ap-detail-backdrop" onClick={() => setSelectedApDetails(null)}>
+          <aside className="ap-detail-panel" onClick={(event) => event.stopPropagation()} aria-label="AP details">
+            <div className="ap-detail-header">
+              <div>
+                <div className="text-muted small">Access Point Details</div>
+                <h3 className="mb-0">{selectedApDetails.ap.display_name || selectedApDetails.ap.name || selectedApDetails.ap.mac_bound_name || 'Unnamed AP'}</h3>
+              </div>
+              <button className="ap-action-badge" type="button" onClick={() => setSelectedApDetails(null)} title="Close AP details" aria-label="Close AP details">
+                <IconX size={16} />
+              </button>
+            </div>
+            <div className="ap-detail-body">
+              {selectedApDetails.site.network_warning && (
+                <div className="alert alert-warning mb-3">
+                  <div className="fw-semibold">SSID is currently untagged</div>
+                  <div className="small">{selectedApDetails.site.network_warning}</div>
+                  <div className="small mt-1">A phone receiving `10.88.0.x` means it is using the AP management/native network, not a separate station customer VLAN.</div>
+                </div>
+              )}
+              <div className="ap-detail-card">
+                <div className="ap-detail-card-title"><IconWifi size={17} /> AP Status</div>
+                <div className="ap-detail-grid">
+                  <div><span>Status</span>{apStatusBadge(selectedApDetails.ap.status, selectedApDetails.ap.last_error || '')}</div>
+                  <div><span>Omada Status</span><strong>{selectedApDetails.ap.omada_status || 'n/a'}</strong></div>
+                  <div><span>Local State</span><strong>{selectedApDetails.ap.local_status || 'n/a'}</strong></div>
+                  <div><span>IP Address</span><strong>{selectedApDetails.ap.ip || 'n/a'}</strong></div>
+                  <div><span>Clients</span><strong>{selectedApDetails.ap.client_count ?? 0}</strong></div>
+                  <div><span>Model</span><strong>{selectedApDetails.ap.model || 'n/a'}</strong></div>
+                  <div><span>MAC</span><code>{selectedApDetails.ap.mac || 'n/a'}</code></div>
+                  <div><span>Firmware</span><strong title={selectedApDetails.ap.firmware_version || 'n/a'}>{selectedApDetails.ap.firmware_version || 'n/a'}</strong></div>
+	                  <div><span>Serial</span><strong>{selectedApDetails.ap.serial_number || 'n/a'}</strong></div>
+	                </div>
+	              </div>
+	              <div className="ap-detail-card">
+	                <div className="ap-detail-card-title"><IconListDetails size={17} /> AP Implementation Checklist</div>
+	                <div className="ap-config-summary">
+	                  <div>
+	                    <span className="text-muted small">Implemented</span>
+	                    <strong>{apConfigSectionSummary(selectedApDetails.ap).completed}/{apConfigSectionSummary(selectedApDetails.ap).total} config</strong>
+	                  </div>
+	                  <div>
+	                    <span className="text-muted small">Overall Status</span>
+	                    <span className={`badge ${selectedApDetails.ap.configuration_status === 'APPLIED' ? 'bg-green-lt text-green' : selectedApDetails.ap.configuration_status === 'PARTIAL' ? 'bg-orange-lt text-orange' : selectedApDetails.ap.configuration_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-blue-lt text-blue'}`}>{selectedApDetails.ap.configuration_status || 'PENDING'}</span>
+	                  </div>
+	                </div>
+	                <div className="ap-config-component-list">
+	                  {apConfigComponentList(selectedApDetails.ap).map((component) => (
+	                    <div className="ap-config-component" key={component.key || component.label}>
+	                      <div>
+	                        <div className="fw-semibold">{component.label || component.key}</div>
+	                        {component.message && <div className="text-muted small">{component.message}</div>}
+	                      </div>
+	                      {apConfigComponentBadge(component.status)}
+	                    </div>
+	                  ))}
+	                  {!apConfigComponentList(selectedApDetails.ap).length && (
+	                    <div className="text-muted small">No AP implementation checklist has been recorded yet. Use the AP row actions to push WiFi or AP management when this AP is connected.</div>
+	                  )}
+	                </div>
+	                {selectedApDetails.ap.configuration_error && <div className="alert alert-warning mt-3 mb-0 small">{selectedApDetails.ap.configuration_error}</div>}
+	              </div>
+	              <div className="ap-detail-card">
+	                <div className="ap-detail-card-title"><IconRouter size={17} /> Site and VLANs</div>
+	                <div className="ap-detail-grid">
+                  <div><span>Site</span><strong>{selectedApDetails.site.site_name}</strong></div>
+                  <div><span>Omada Site ID</span><code>{selectedApDetails.site.omada_site_id || 'n/a'}</code></div>
+                  <div>
+                    <span>SSID VLAN</span>
+                    {selectedApDetails.site.ssid_configuration?.customer_vlan_id
+                      ? <strong>VLAN {selectedApDetails.site.ssid_configuration.customer_vlan_id}</strong>
+                      : <strong className="text-warning">Untagged / not set</strong>}
+                  </div>
+                  <div><span>SSID VLAN Mode</span><strong>{selectedApDetails.site.ssid_configuration?.vlan_mode || 'n/a'}</strong></div>
+                  <div><span>AP Management VLAN</span><strong>{selectedApDetails.site.ap_management_configuration?.vlan_id ? `VLAN ${selectedApDetails.site.ap_management_configuration.vlan_id}` : 'Not configured'}</strong></div>
+                  <div><span>AP Management Subnet</span><strong>{selectedApDetails.site.ap_management_configuration?.network_cidr || 'n/a'}</strong></div>
+                </div>
+              </div>
+              <div className="ap-detail-card">
+                <div className="ap-detail-card-title"><IconSettings size={17} /> Configured SSIDs</div>
+                <div className="ap-ssid-list">
+                  {(selectedApDetails.site.ssid_configuration?.desired_ssids || []).map((ssid) => (
+                    <div className="ap-ssid-item" key={ssid}>
+                      <span className="badge bg-blue-lt text-blue">{ssid}</span>
+                      <span className="text-muted small">
+                        {selectedApDetails.site.ssid_configuration?.customer_vlan_id ? `VLAN ${selectedApDetails.site.ssid_configuration.customer_vlan_id}` : 'untagged'}
+                      </span>
+                    </div>
+                  ))}
+                  {!(selectedApDetails.site.ssid_configuration?.desired_ssids || []).length && <div className="text-muted small">No SSID configuration was returned for this site.</div>}
+                </div>
+                <div className="ap-detail-grid mt-3">
+                  <div><span>Strategy</span><strong>{selectedApDetails.site.ssid_configuration?.use_same_ssid ? 'Same SSID both bands' : 'Separate 2.4GHz / 5GHz SSIDs'}</strong></div>
+                  <div><span>Security</span><strong>{selectedApDetails.site.ssid_configuration?.security_mode || 'OPEN'}</strong></div>
+	                  <div><span>Band Steering</span><strong>{selectedApDetails.site.ssid_configuration?.band_steering_enabled ? 'Enabled' : 'Disabled'}</strong></div>
+	                  <div><span>Configuration Status</span><span className={`badge ${selectedApDetails.ap.configuration_status === 'APPLIED' ? 'bg-green-lt text-green' : selectedApDetails.ap.configuration_status === 'PARTIAL' ? 'bg-orange-lt text-orange' : selectedApDetails.ap.configuration_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-blue-lt text-blue'}`}>{selectedApDetails.ap.configuration_status || 'PENDING'}</span></div>
+	                </div>
+	              </div>
+              <div className="ap-detail-card">
+                <div className="ap-detail-card-title"><IconInfoCircle size={17} /> Current Interpretation</div>
+                <div className="small text-muted">
+                  {selectedApDetails.site.ssid_configuration?.customer_vlan_id
+                    ? `Clients joining this site's configured SSID should be tagged to VLAN ${selectedApDetails.site.ssid_configuration.customer_vlan_id}.`
+                    : 'Clients joining this SSID are not being tagged to a station customer VLAN yet. Bind the MikroTik station customer VLAN to this Omada site, then save WiFi Strategy again.'}
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
       {!sites.length && !loading && <div className="col-12"><div className="card"><div className="card-body text-muted">No Omada sites found yet. Add a site under APs Deployment &gt; Sites first.</div></div></div>}
+      {configPushTarget && (() => {
+        const ap = configPushTarget.ap;
+        const site = configPushTarget.site;
+        const apName = ap.display_name || ap.name || ap.mac;
+        const wifiStatus = apConfigSectionStatus(ap, 'wifi');
+        const apManagementStatus = apConfigSectionStatus(ap, 'ap_management');
+        const wifiDetails = [ap.configuration_components?.wifi_ssids?.message, ap.configuration_components?.ssid_customer_vlan?.message, ap.configuration_components?.portal_ssid_binding?.message].filter(Boolean).join(' ');
+        const apManagementMessage = ap.configuration_components?.ap_management_vlan?.message;
+        const connected = ap.local_status === 'CONNECTED';
+        return (
+          <Modal title={`Push Config: ${apName}`} onClose={() => { setConfigPushTarget(null); setConfigPushProgress(null); }}>
+            <div className="alert alert-warning">
+              <div className="fw-semibold mb-1">Push AP management last</div>
+              <div>Push WiFi Config first. Only push AP Management after SSID/customer VLAN is correct, because the AP may move from the office/adoption subnet to the AP management VLAN after this step.</div>
+            </div>
+            {configPushProgress && (
+              <div className={`alert ${configPushProgress.status === 'SUCCESS' ? 'alert-success' : configPushProgress.status === 'FAILED' ? 'alert-danger' : configPushProgress.status === 'WARNING' ? 'alert-warning' : 'alert-info'}`}>
+                <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
+                  <div className="fw-semibold">{configPushProgress.title}</div>
+                  <div className="badge bg-white text-muted">{configPushProgress.percent}%</div>
+                </div>
+                <div className="progress progress-sm mb-2">
+                  <div
+                    className={`progress-bar ${configPushProgress.status === 'SUCCESS' ? 'bg-success' : configPushProgress.status === 'FAILED' ? 'bg-danger' : configPushProgress.status === 'WARNING' ? 'bg-warning' : ''}`}
+                    style={{ width: `${configPushProgress.percent}%` }}
+                  />
+                </div>
+                <div className="small">{configPushProgress.message}</div>
+              </div>
+            )}
+            <div className="border rounded p-3 mb-3">
+              <div className="row g-3">
+                <div className="col-md-6">
+                  <div className="text-muted small">AP</div>
+                  <div className="fw-semibold">{apName}</div>
+                </div>
+                <div className="col-md-6">
+                  <div className="text-muted small">Site</div>
+                  <div className="fw-semibold">{site.site_name}</div>
+                </div>
+                <div className="col-md-6">
+                  <div className="text-muted small">SSID VLAN</div>
+                  <div className="fw-semibold">{site.ssid_configuration?.customer_vlan_id ? `VLAN ${site.ssid_configuration.customer_vlan_id}` : 'Not bound'}</div>
+                </div>
+                <div className="col-md-6">
+                  <div className="text-muted small">AP Management</div>
+                  <div className="fw-semibold">{site.ap_management_configuration?.vlan_id ? `VLAN ${site.ap_management_configuration.vlan_id} · ${site.ap_management_configuration.network_cidr || 'no subnet'}` : 'Not configured'}</div>
+                </div>
+              </div>
+            </div>
+            <div className="row g-3">
+              <div className="col-md-6">
+                <div className="border rounded p-3 h-100">
+                  <div className="d-flex justify-content-between align-items-start gap-2 mb-2">
+                    <div>
+                      <div className="fw-semibold">1. WiFi Config</div>
+                      <div className="text-muted small">SSID names, security, and station/customer VLAN.</div>
+                    </div>
+                    {apConfigComponentBadge(wifiStatus)}
+                  </div>
+                  <div className="small mb-3">{wifiDetails || 'No WiFi push result has been recorded yet.'}</div>
+                  <button
+                    className="btn btn-primary w-100"
+                    type="button"
+                    onClick={() => pushApConfig('ap', ap.id, apName, 'WIFI')}
+                    disabled={!connected || pushBusy === `WIFI:ap:${ap.id}`}
+                  >
+                    <IconCloudUpload size={18} className="me-2" />{pushBusy === `WIFI:ap:${ap.id}` ? 'Pushing WiFi...' : 'Push WiFi Config'}
+                  </button>
+                </div>
+              </div>
+              <div className="col-md-6">
+                <div className="border rounded p-3 h-100">
+                  <div className="d-flex justify-content-between align-items-start gap-2 mb-2">
+                    <div>
+                      <div className="fw-semibold">2. AP Management</div>
+                      <div className="text-muted small">Management VLAN applied to the AP. Do this last.</div>
+                    </div>
+                    {apConfigComponentBadge(apManagementStatus)}
+                  </div>
+                  <div className="small mb-3">{apManagementMessage || 'After success, move/keep the AP on the AP management VLAN path.'}</div>
+                  <button
+                    className="btn btn-success w-100"
+                    type="button"
+                    onClick={() => pushApConfig('ap', ap.id, apName, 'AP_MANAGEMENT')}
+                    disabled={!connected || !site.ap_management_configuration?.configured || pushBusy === `AP_MANAGEMENT:ap:${ap.id}`}
+                    title={site.ap_management_configuration?.configured ? 'Push AP management VLAN to this AP' : 'Configure Network -> MikroTik -> AP Management before pushing AP management.'}
+                  >
+                    <IconRouter size={18} className="me-2" />{pushBusy === `AP_MANAGEMENT:ap:${ap.id}` ? 'Pushing AP management...' : 'Push AP Management'}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer px-0 pb-0">
+              <button type="button" className="btn" onClick={() => { setConfigPushTarget(null); setConfigPushProgress(null); }}>Close</button>
+            </div>
+          </Modal>
+        );
+      })()}
+      {siteWifiEdit && (
+        <Modal title={`Edit Site WiFi: ${siteWifiEdit.site_name}`} onClose={() => setSiteWifiEdit(null)}>
+          <form onSubmit={saveSiteWifi}>
+            <div className="alert alert-info">
+              Saving here updates the same per-site SSID/security settings used by Sites - Configurations. It does not push to Omada until you click Push WiFi Config on each connected AP.
+            </div>
+            <div className="row g-3">
+              <div className="col-12">
+                <label className="form-check">
+                  <input
+                    className="form-check-input"
+                    type="checkbox"
+                    checked={siteWifiForm.use_same_ssid}
+                    onChange={(e) => setSiteWifiForm({ ...siteWifiForm, use_same_ssid: e.target.checked, band_steering_enabled: e.target.checked ? true : siteWifiForm.band_steering_enabled })}
+                  />
+                  <span className="form-check-label">Use the same SSID for 2.4GHz and 5GHz</span>
+                </label>
+              </div>
+              {siteWifiForm.use_same_ssid ? (
+                <div className="col-12">
+                  <label className="form-label">SSID Name</label>
+                  <input className="form-control" value={siteWifiForm.same_ssid_name || ''} onChange={(e) => setSiteWifiForm({ ...siteWifiForm, same_ssid_name: e.target.value })} />
+                </div>
+              ) : (
+                <>
+                  <div className="col-md-6">
+                    <label className="form-label">2.4GHz SSID</label>
+                    <input className="form-control" value={siteWifiForm.ssid_2g || ''} onChange={(e) => setSiteWifiForm({ ...siteWifiForm, ssid_2g: e.target.value })} />
+                  </div>
+                  <div className="col-md-6">
+                    <label className="form-label">5GHz SSID</label>
+                    <input className="form-control" value={siteWifiForm.ssid_5g || ''} onChange={(e) => setSiteWifiForm({ ...siteWifiForm, ssid_5g: e.target.value })} />
+                  </div>
+                </>
+              )}
+              <div className="col-md-6">
+                <label className="form-label">Security</label>
+                <select className="form-select" value={siteWifiForm.security_mode || 'OPEN'} onChange={(e) => setSiteWifiForm({ ...siteWifiForm, security_mode: e.target.value })}>
+                  <option value="OPEN">Open</option>
+                  <option value="WPA2_PSK">WPA2 Personal</option>
+                  <option value="WPA_WPA2_PSK">WPA/WPA2 Personal</option>
+                </select>
+              </div>
+              {siteWifiForm.security_mode !== 'OPEN' && (
+                <div className="col-md-6">
+                  <label className="form-label">WiFi Password</label>
+                  <input
+                    className="form-control"
+                    type="text"
+                    value={siteWifiForm.security_password || ''}
+                    onChange={(e) => setSiteWifiForm({ ...siteWifiForm, security_password: e.target.value })}
+                    placeholder={siteWifiEdit.ssid_configuration?.has_security_password ? 'Saved - enter to replace' : 'Enter WiFi password'}
+                  />
+                </div>
+              )}
+              <div className="col-12">
+                <label className="form-check">
+                  <input className="form-check-input" type="checkbox" checked={siteWifiForm.band_steering_enabled} onChange={(e) => setSiteWifiForm({ ...siteWifiForm, band_steering_enabled: e.target.checked })} disabled={siteWifiForm.use_same_ssid} />
+                  <span className="form-check-label">Band steering enabled</span>
+                </label>
+              </div>
+            </div>
+            <div className="modal-footer px-0 pb-0">
+              <button type="button" className="btn" onClick={() => setSiteWifiEdit(null)} disabled={siteWifiSaving}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={siteWifiSaving}>
+                <IconDeviceFloppy size={18} className="me-2" />{siteWifiSaving ? 'Saving...' : 'Save Site WiFi'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
       {modalSite && (
         <Modal title={`Add APs to ${modalSite.site_name}`} onClose={() => setModalSite(null)}>
-          <div className="alert alert-info">
-            Automatic detection checks Omada for APs waiting to be adopted. Factory-reset APs must be powered on and reachable on the same management network.
+          <div className="alert alert-warning">
+            <div className="fw-semibold mb-1">Adoption prerequisite</div>
+            <div>For successful adoption, the AP should be factory reset and connected to the same office subnet where the Omada Controller is connected. Adopt first on the office subnet, then set the AP management VLAN after adoption before moving it to the field path.</div>
           </div>
           {detectError && <div className="alert alert-danger">{detectError}</div>}
           <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
@@ -2124,13 +3011,13 @@ function ListOfApsPage() {
                     <td>{apStatusBadge(ap.status)}</td>
                   </tr>
                 ))}
-                {!detected.length && <tr><td colSpan="6" className="text-muted p-4">No APs are currently pending adoption in Omada.</td></tr>}
+                {!detected.length && <tr><td colSpan="6" className="text-muted p-4">No APs are currently pending adoption in Omada. Confirm the AP is factory reset and connected to the Omada Controller office subnet, then run detection again.</td></tr>}
               </tbody>
             </table>
           </div>
           <div className="border rounded p-3 mb-3">
-            <div className="fw-semibold mb-1">Device Account Credentials</div>
-            <div className="text-muted small mb-3">Optional for adoption only. The deployment device account from Sites &gt; Configurations is applied after the AP is adopted and connected.</div>
+            <div className="fw-semibold mb-1">Adoption Credentials</div>
+            <div className="text-muted small mb-3">Optional and used only for this adoption request. The system does not change AP device-account credentials after adoption.</div>
             <div className="row g-3">
               <div className="col-md-6"><label className="form-label">Username</label><input className="form-control" value={adoptCredentials.username} onChange={(e) => setAdoptCredentials({ ...adoptCredentials, username: e.target.value })} /></div>
               <div className="col-md-6"><label className="form-label">Password</label><input className="form-control" type="text" value={adoptCredentials.password} onChange={(e) => setAdoptCredentials({ ...adoptCredentials, password: e.target.value })} /></div>
@@ -3779,14 +4666,20 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [portalSettings, setPortalSettings] = useState(null);
   const [mikrotiks, setMikrotiks] = useState([]);
   const [mikrotikRows, setMikrotikRows] = useState([]);
+  const [siteDeployments, setSiteDeployments] = useState([]);
   const [portalEvents, setPortalEvents] = useState([]);
   const [redemptions, setRedemptions] = useState([]);
   const [voucherSummary, setVoucherSummary] = useState({});
   const [sessions, setSessions] = useState([]);
   const [authorizations, setAuthorizations] = useState([]);
   const [actionResult, setActionResult] = useState(null);
+  const [omadaPortalStatus, setOmadaPortalStatus] = useState(null);
+  const [omadaPortalEnabling, setOmadaPortalEnabling] = useState(false);
   const [message, setMessage] = useState('');
-  const [mikrotikTab, setMikrotikTab] = useState('Overview');
+  const [mikrotikTab, setMikrotikTab] = useState(() => {
+    const requested = new URLSearchParams(window.location.search).get('mikrotik_tab');
+    return ['Overview', 'Configuration', 'AP Management', 'Add Router'].includes(requested || '') ? requested : 'Overview';
+  });
   const [mikrotikPlan, setMikrotikPlan] = useState(null);
   const [mikrotikPlanRouterId, setMikrotikPlanRouterId] = useState(null);
   const [mikrotikStepIndex, setMikrotikStepIndex] = useState(0);
@@ -3863,6 +4756,13 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [stationRemoveCloseCountdown, setStationRemoveCloseCountdown] = useState(10);
   const [stationDeleteTarget, setStationDeleteTarget] = useState(null);
   const [stationDeleting, setStationDeleting] = useState(false);
+  const [stationOmadaPlan, setStationOmadaPlan] = useState(null);
+  const [stationOmadaPlanLoading, setStationOmadaPlanLoading] = useState(false);
+  const [stationOmadaActionLoading, setStationOmadaActionLoading] = useState('');
+  const [stationOmadaActionResult, setStationOmadaActionResult] = useState(null);
+  const [stationOmadaBindingResult, setStationOmadaBindingResult] = useState(null);
+  const [stationOmadaBindingForm, setStationOmadaBindingForm] = useState({ omada_site_id: '', omada_site_name: '' });
+  const [stationOmadaBindingSaving, setStationOmadaBindingSaving] = useState(false);
   const [stationManagedStatus, setStationManagedStatus] = useState(null);
   const [stationCheckingManaged, setStationCheckingManaged] = useState(false);
   const [stationCommandLogs, setStationCommandLogs] = useState([]);
@@ -3876,18 +4776,52 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [apManagementModalOpen, setApManagementModalOpen] = useState(false);
   const [apManagementSaving, setApManagementSaving] = useState(false);
   const [apManagementError, setApManagementError] = useState('');
+  const [apManagementSaveSuccess, setApManagementSaveSuccess] = useState('');
   const [apManagementImplementation, setApManagementImplementation] = useState(null);
   const [apManagementImplementationSteps, setApManagementImplementationSteps] = useState([]);
   const [apManagementImplementing, setApManagementImplementing] = useState(false);
   const [apManagementImplementationMessage, setApManagementImplementationMessage] = useState('');
   const [apManagementPushCompleted, setApManagementPushCompleted] = useState(false);
   const [apManagementPushCloseCountdown, setApManagementPushCloseCountdown] = useState(10);
+  const [apManagementRemove, setApManagementRemove] = useState(null);
+  const [apManagementRemoveSteps, setApManagementRemoveSteps] = useState([]);
+  const [apManagementRemoving, setApManagementRemoving] = useState(false);
+  const [apManagementRemoveMessage, setApManagementRemoveMessage] = useState('');
+  const [apManagementRemoveCompleted, setApManagementRemoveCompleted] = useState(false);
+  const [apManagementRemoveCloseCountdown, setApManagementRemoveCloseCountdown] = useState(10);
   const [apManagementManagedStatus, setApManagementManagedStatus] = useState(null);
   const [apManagementCheckingManaged, setApManagementCheckingManaged] = useState(false);
+  const [apManagementGuidePanel, setApManagementGuidePanel] = useState(null);
   const [apManagementActiveRouterIndex, setApManagementActiveRouterIndex] = useState(0);
   const [apManagementPortSearch, setApManagementPortSearch] = useState({});
   const [apManagementDragIndex, setApManagementDragIndex] = useState(null);
+  const [officeApPathConfig, setOfficeApPathConfig] = useState(null);
+  const [officeApPathModalOpen, setOfficeApPathModalOpen] = useState(false);
+  const [officeApPathSaving, setOfficeApPathSaving] = useState(false);
+  const [officeApPathError, setOfficeApPathError] = useState('');
+  const [officeApPathSaveSuccess, setOfficeApPathSaveSuccess] = useState('');
+  const [officeApPathImplementation, setOfficeApPathImplementation] = useState(null);
+  const [officeApPathImplementationSteps, setOfficeApPathImplementationSteps] = useState([]);
+  const [officeApPathImplementing, setOfficeApPathImplementing] = useState(false);
+  const [officeApPathImplementationMessage, setOfficeApPathImplementationMessage] = useState('');
+  const [officeApPathPushCompleted, setOfficeApPathPushCompleted] = useState(false);
+  const [officeApPathPushCloseCountdown, setOfficeApPathPushCloseCountdown] = useState(10);
+  const [officeApPathRemove, setOfficeApPathRemove] = useState(null);
+  const [officeApPathRemoveSteps, setOfficeApPathRemoveSteps] = useState([]);
+  const [officeApPathRemoving, setOfficeApPathRemoving] = useState(false);
+  const [officeApPathRemoveMessage, setOfficeApPathRemoveMessage] = useState('');
+  const [officeApPathRemoveCompleted, setOfficeApPathRemoveCompleted] = useState(false);
+  const [officeApPathRemoveCloseCountdown, setOfficeApPathRemoveCloseCountdown] = useState(10);
+  const [officeApPathManagedStatus, setOfficeApPathManagedStatus] = useState(null);
+  const [officeApPathCheckingManaged, setOfficeApPathCheckingManaged] = useState(false);
+  const [officeApPathActiveRouterIndex, setOfficeApPathActiveRouterIndex] = useState(0);
+  const [officeApPathPortSearch, setOfficeApPathPortSearch] = useState({});
+  const [officeApPathDragIndex, setOfficeApPathDragIndex] = useState(null);
+  const messageAlertRef = useRef(null);
+  const apManagementErrorRef = useRef(null);
+  const apManagementSuccessRef = useRef(null);
   const apManagementStepRefs = useRef({});
+  const officeApPathStepRefs = useRef({});
   const [apManagementForm, setApManagementForm] = useState({
     config_name: 'Central AP Management',
     vlan_id: '111',
@@ -3903,6 +4837,13 @@ function CaptivePortalPage({ mode = 'full' }) {
     local_interface_list: 'LOCAL',
     routers: []
   });
+  const [officeApPathForm, setOfficeApPathForm] = useState({
+    config_name: 'Office AP Path',
+    office_bridge_name: 'MANAGEMENT LAN',
+    transport_vlan_id: '1030',
+    transport_vlan_interface_name: 'VLAN1030-OFFICE-AP-PATH',
+    routers: []
+  });
   const [stationProgressMap, setStationProgressMap] = useState({});
   const stationStepRefs = useRef({});
   const [stationError, setStationError] = useState('');
@@ -3914,28 +4855,51 @@ function CaptivePortalPage({ mode = 'full' }) {
     station_code: '',
     description: '',
     vlan_id: '77',
-    vlan_interface_name: 'VLAN77-3J-HOTSPOT',
+    vlan_interface_name: 'VLAN77-3J-CLIENTS',
     client_network_cidr: '10.77.0.0/24',
     gateway_ip: '10.77.0.1',
     pool_start_ip: '10.77.0.10',
     pool_end_ip: '10.77.0.254',
-    pool_name: 'POOL-3J-HOTSPOT-V77',
+    pool_name: 'POOL-3J-CLIENTS-V77',
     create_dhcp_server: true,
-    dhcp_server_name: 'DHCP-3J-HOTSPOT-V77',
+    dhcp_server_name: 'DHCP-3J-CLIENTS-V77',
     dhcp_lease_time: '1h',
     dns_servers: '8.8.8.8,1.1.1.1',
     local_interface_list: 'LOCAL',
-    create_hotspot_profile: true,
-    create_hotspot_server: true,
-    create_walled_garden: true,
-    hotspot_profile_name: 'PROFILE-3J-HOTSPOT-V77',
+    create_hotspot_profile: false,
+    create_hotspot_server: false,
+    create_walled_garden: false,
+    hotspot_profile_name: '',
     hotspot_html_directory: 'hotspot',
-    hotspot_dns_name: 'wifi.3j.3jportal.test',
-    hotspot_server_name: 'HS-3J-HOTSPOT-V77',
+    hotspot_dns_name: '',
+    hotspot_server_name: '',
     portal_url: 'http://192.168.50.70:8080/portal',
+    omada_site_id: '',
+    omada_site_name: '',
     routers: []
   });
-  const tabs = isMikrotikOnly ? ['MikroTik'] : ['Portal', 'Portal Settings', 'Sanity Check', 'Portal Sessions', 'Authorization Logs', 'Manual Setup Guide'];
+  const tabs = isMikrotikOnly ? ['MikroTik'] : ['Portal', 'Portal Notifs', 'Portal Settings', 'Sanity Check', 'Portal Sessions', 'Authorization Logs'];
+  useEffect(() => {
+    if (!message || !messageAlertRef.current) return;
+    window.setTimeout(() => {
+      messageAlertRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      messageAlertRef.current?.focus({ preventScroll: true });
+    }, 80);
+  }, [message]);
+  useEffect(() => {
+    if (!apManagementError || !apManagementModalOpen || !apManagementErrorRef.current) return;
+    window.setTimeout(() => {
+      apManagementErrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      apManagementErrorRef.current?.focus({ preventScroll: true });
+    }, 80);
+  }, [apManagementError, apManagementModalOpen]);
+  useEffect(() => {
+    if (!apManagementSaveSuccess || !apManagementModalOpen || !apManagementSuccessRef.current) return;
+    window.setTimeout(() => {
+      apManagementSuccessRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      apManagementSuccessRef.current?.focus({ preventScroll: true });
+    }, 80);
+  }, [apManagementSaveSuccess, apManagementModalOpen]);
   function editableMikrotikRows(rows) {
     return rows.map((router) => ({
       ...router,
@@ -3975,6 +4939,36 @@ function CaptivePortalPage({ mode = 'full' }) {
     const router = mikrotiks.find((item) => item.id === row?.router_id);
     return row?.router_name || router?.router_name || row?.router_id || `Router ${index + 1}`;
   }
+  function siteOptionKey(site) {
+    return `${site?.omada_site_id || ''}|||${site?.site_name || ''}`;
+  }
+  function selectedStationSiteKey(source = stationForm) {
+    return `${source?.omada_site_id || ''}|||${source?.omada_site_name || ''}`;
+  }
+  function findSiteOptionByKey(value) {
+    return siteDeployments.find((site) => siteOptionKey(site) === value);
+  }
+  function selectedStationSite(source = stationForm) {
+    return siteDeployments.find((site) => (
+      (source?.omada_site_id && site.omada_site_id === source.omada_site_id) ||
+      (source?.omada_site_name && String(site.site_name || '').toLowerCase() === String(source.omada_site_name).toLowerCase())
+    ));
+  }
+  function updateStationOmadaSite(value) {
+    const site = findSiteOptionByKey(value);
+    setStationForm((current) => ({
+      ...current,
+      omada_site_id: site?.omada_site_id || '',
+      omada_site_name: site?.site_name || ''
+    }));
+  }
+  function omadaSiteVlanStatus(site, vlanId) {
+    if (!site) return { status: 'missing', label: 'No station Omada site selected', className: 'bg-yellow-lt text-yellow' };
+    if (!site.vlan_tag) return { status: 'unknown', label: 'Site VLAN not saved', className: 'bg-yellow-lt text-yellow' };
+    return Number(site.vlan_tag) === Number(vlanId)
+      ? { status: 'match', label: `Site VLAN ${site.vlan_tag} matches`, className: 'bg-green-lt text-green' }
+      : { status: 'mismatch', label: `Site VLAN ${site.vlan_tag} does not match VLAN ${vlanId || '-'}`, className: 'bg-red-lt text-red' };
+  }
   function apManagementRouterTemplate(router = null) {
     return {
       router_id: router?.id || '',
@@ -3984,6 +4978,18 @@ function CaptivePortalPage({ mode = 'full' }) {
     };
   }
   function apManagementRouterDisplay(row, index) {
+    const router = mikrotiks.find((item) => item.id === row?.router_id);
+    return row?.router_name || router?.router_name || row?.router_id || `Router ${index + 1}`;
+  }
+  function officeApPathRouterTemplate(router = null) {
+    return {
+      router_id: router?.id || '',
+      bridge_name: '',
+      tagged_ports: '',
+      notes: ''
+    };
+  }
+  function officeApPathRouterDisplay(row, index) {
     const router = mikrotiks.find((item) => item.id === row?.router_id);
     return row?.router_name || router?.router_name || row?.router_id || `Router ${index + 1}`;
   }
@@ -4010,6 +5016,21 @@ function CaptivePortalPage({ mode = 'full' }) {
       }))
     };
   }
+  function officeApPathToForm(config = {}) {
+    const vlan = config.transport_vlan_id ? String(config.transport_vlan_id) : '1030';
+    return {
+      config_name: config.config_name || 'Office AP Path',
+      office_bridge_name: config.office_bridge_name || 'MANAGEMENT LAN',
+      transport_vlan_id: vlan,
+      transport_vlan_interface_name: config.transport_vlan_interface_name || `VLAN${vlan}-OFFICE-AP-PATH`,
+      routers: (config.routers || []).map((router) => ({
+        router_id: router.router_id || '',
+        bridge_name: router.bridge_name || '',
+        tagged_ports: router.tagged_ports || '',
+        notes: router.notes || ''
+      }))
+    };
+  }
   function stationToForm(station) {
     return {
       station_name: station.station_name || '',
@@ -4027,14 +5048,16 @@ function CaptivePortalPage({ mode = 'full' }) {
       dhcp_lease_time: station.dhcp_lease_time || '1h',
       dns_servers: station.dns_servers || '',
       local_interface_list: station.local_interface_list || 'LOCAL',
-      create_hotspot_profile: station.create_hotspot_profile !== false,
-      create_hotspot_server: station.create_hotspot_server !== false,
-      create_walled_garden: station.create_walled_garden !== false,
+      create_hotspot_profile: false,
+      create_hotspot_server: false,
+      create_walled_garden: false,
       hotspot_profile_name: station.hotspot_profile_name || '',
       hotspot_html_directory: station.hotspot_html_directory || 'hotspot',
-      hotspot_dns_name: station.hotspot_dns_name || 'wifi.3j.3jportal.test',
+      hotspot_dns_name: station.hotspot_dns_name || '',
       hotspot_server_name: station.hotspot_server_name || '',
       portal_url: station.portal_url || portalSettings.portal_url_staging || 'http://192.168.50.70:8080/portal',
+      omada_site_id: station.omada_site_id || '',
+      omada_site_name: station.omada_site_name || '',
       routers: (station.routers || []).map((router) => ({
         router_id: router.router_id || '',
         bridge_name: router.bridge_name || '',
@@ -4061,25 +5084,27 @@ function CaptivePortalPage({ mode = 'full' }) {
       station_code: '',
       description: '',
       vlan_id: '77',
-      vlan_interface_name: 'VLAN77-3J-HOTSPOT',
+      vlan_interface_name: 'VLAN77-3J-CLIENTS',
       client_network_cidr: '10.77.0.0/24',
       gateway_ip: '10.77.0.1',
       pool_start_ip: '10.77.0.10',
       pool_end_ip: '10.77.0.254',
-      pool_name: 'POOL-3J-HOTSPOT-V77',
+      pool_name: 'POOL-3J-CLIENTS-V77',
       create_dhcp_server: true,
-      dhcp_server_name: 'DHCP-3J-HOTSPOT-V77',
+      dhcp_server_name: 'DHCP-3J-CLIENTS-V77',
       dhcp_lease_time: '1h',
       dns_servers: '8.8.8.8,1.1.1.1',
       local_interface_list: 'LOCAL',
-      create_hotspot_profile: true,
-      create_hotspot_server: true,
-      create_walled_garden: true,
-      hotspot_profile_name: 'PROFILE-3J-HOTSPOT-V77',
+      create_hotspot_profile: false,
+      create_hotspot_server: false,
+      create_walled_garden: false,
+      hotspot_profile_name: '',
       hotspot_html_directory: 'hotspot',
-      hotspot_dns_name: 'wifi.3j.3jportal.test',
-      hotspot_server_name: 'HS-3J-HOTSPOT-V77',
+      hotspot_dns_name: '',
+      hotspot_server_name: '',
       portal_url: portalSettings.portal_url_staging || 'http://192.168.50.70:8080/portal',
+      omada_site_id: '',
+      omada_site_name: '',
       routers: []
     });
     setStationActiveRouterIndex(0);
@@ -4102,20 +5127,14 @@ function CaptivePortalPage({ mode = 'full' }) {
     setStationForm((current) => {
       const next = { ...current, vlan_id: value };
       const vlanNumber = Number(value);
-      if (!current.vlan_interface_name || /^VLAN\d+-3J-HOTSPOT$/i.test(current.vlan_interface_name)) {
-        next.vlan_interface_name = value ? `VLAN${value}-3J-HOTSPOT` : '';
+      if (!current.vlan_interface_name || /^VLAN\d+-3J-(HOTSPOT|CLIENTS)$/i.test(current.vlan_interface_name)) {
+        next.vlan_interface_name = value ? `VLAN${value}-3J-CLIENTS` : '';
       }
-      if (!current.pool_name || /^POOL-3J-HOTSPOT-V\d+$/i.test(current.pool_name)) {
-        next.pool_name = value ? `POOL-3J-HOTSPOT-V${value}` : '';
+      if (!current.pool_name || /^POOL-3J-(HOTSPOT|CLIENTS)-V\d+$/i.test(current.pool_name)) {
+        next.pool_name = value ? `POOL-3J-CLIENTS-V${value}` : '';
       }
-      if (!current.dhcp_server_name || /^DHCP-3J-HOTSPOT-V\d+$/i.test(current.dhcp_server_name)) {
-        next.dhcp_server_name = value ? `DHCP-3J-HOTSPOT-V${value}` : '';
-      }
-      if (!current.hotspot_profile_name || /^PROFILE-3J-HOTSPOT-V\d+$/i.test(current.hotspot_profile_name)) {
-        next.hotspot_profile_name = value ? `PROFILE-3J-HOTSPOT-V${value}` : '';
-      }
-      if (!current.hotspot_server_name || /^HS-3J-HOTSPOT-V\d+$/i.test(current.hotspot_server_name)) {
-        next.hotspot_server_name = value ? `HS-3J-HOTSPOT-V${value}` : '';
+      if (!current.dhcp_server_name || /^DHCP-3J-(HOTSPOT|CLIENTS)-V\d+$/i.test(current.dhcp_server_name)) {
+        next.dhcp_server_name = value ? `DHCP-3J-CLIENTS-V${value}` : '';
       }
       if (Number.isInteger(vlanNumber) && vlanNumber > 0 && vlanNumber < 255) {
         if (!current.client_network_cidr || /^10\.\d+\.0\.0\/24$/.test(current.client_network_cidr)) next.client_network_cidr = `10.${vlanNumber}.0.0/24`;
@@ -4359,14 +5378,19 @@ function CaptivePortalPage({ mode = 'full' }) {
     e.preventDefault();
     setApManagementSaving(true);
     setApManagementError('');
+    setApManagementSaveSuccess('');
     try {
       const saved = await request('/network/mikrotik/ap-management', { method: 'PUT', body: JSON.stringify(apManagementForm) });
       setApManagementConfig(saved);
-      setApManagementModalOpen(false);
-      setMessage('Central AP management plan saved.');
+      const successMessage = 'Central AP management plan saved successfully. Review it below, then use Push AP Management Config when ready.';
+      setApManagementSaveSuccess(successMessage);
+      setMessage('Central AP management plan saved successfully.');
+      setActionResult({ status: 'SUCCESS', message: 'Central AP management plan saved successfully. Review it below, then use Push AP Management Config when ready.' });
       await load();
     } catch (error) {
-      setApManagementError(error.message || 'AP management details could not be saved.');
+      const detail = error.message || 'AP management details could not be saved.';
+      setApManagementError(detail);
+      setActionResult({ status: 'FAILED', message: detail });
     } finally {
       setApManagementSaving(false);
     }
@@ -4380,13 +5404,161 @@ function CaptivePortalPage({ mode = 'full' }) {
         router_role: routerPlan.role,
         host: routerPlan.host,
         command_index: commandIndex,
+        global_sequence: Number.isFinite(Number(command.global_sequence)) ? Number(command.global_sequence) : 9999,
+        phase: command.phase || 'APPLY_NEW',
+        operation: command.operation || 'APPLY_NEW',
         label: command.label || `Command ${commandIndex + 1}`,
         preview: command.preview || '',
+        command,
+        status: 'PENDING',
+        message: '',
+        result: null
+      }))
+    )).sort((left, right) => (left.global_sequence - right.global_sequence) || String(left.router_name || '').localeCompare(String(right.router_name || '')));
+  }
+  function apManagementRemoveStepList(config) {
+    return (config?.remove_plan?.router_plans || []).flatMap((routerPlan) => (
+      (routerPlan.commands || []).map((command, commandIndex) => ({
+        id: `ap-management-remove-${routerPlan.router_id}-${commandIndex}`,
+        router_id: routerPlan.router_id,
+        router_name: routerPlan.router_name,
+        router_role: routerPlan.role,
+        host: routerPlan.host,
+        command_index: commandIndex,
+        label: command.label || `Remove ${commandIndex + 1}`,
+        preview: command.preview || '',
+        command,
         status: 'PENDING',
         message: '',
         result: null
       }))
     ));
+  }
+  function apManagementDetectedRemoveSteps(config, status) {
+    const removeRouters = status?.remove_progress?.routers || status?.routers || [];
+    const foundKeys = new Set();
+    const foundLabels = new Set();
+    removeRouters.forEach((router) => {
+      (router.items || []).forEach((item) => {
+        if (item.status !== 'FOUND' || !Number(item.found_count || 0)) return;
+        if (Number.isFinite(Number(item.command_index))) {
+          foundKeys.add(`${router.router_id}-${Number(item.command_index)}`);
+        }
+        if (item.label) foundLabels.add(`${router.router_id}-${item.label}`);
+      });
+    });
+    return apManagementRemoveStepList(config)
+      .filter((step) => foundKeys.has(`${step.router_id}-${step.command_index}`) || foundLabels.has(`${step.router_id}-${step.label}`))
+      .map((step) => ({
+        ...step,
+        status: 'PENDING',
+        detected: true,
+        message: 'Detected on MikroTik. This remove step is ready.'
+      }));
+  }
+  function commandTargetsSameRouterOsObject(applyCommand = {}, cleanupCommand = {}) {
+    const field = cleanupCommand.query_field;
+    const value = cleanupCommand.query_value;
+    if (!field || value === undefined || value === null || value === '') return false;
+    const textValue = String(value);
+    const params = applyCommand.params || {};
+    const existingQuery = applyCommand.existing_query || {};
+    const setExistingQuery = applyCommand.set_existing_query?.query || {};
+    if (String(applyCommand.unique_value || '') === textValue) return true;
+    if (String(applyCommand.unique_comment || '') === textValue) return true;
+    if (String(params[field] || '') === textValue) return true;
+    if (String(existingQuery[field] || '') === textValue) return true;
+    if (String(setExistingQuery[field] || '') === textValue) return true;
+    if (field === 'name' && String(params.name || '') === textValue) return true;
+    if (field === 'comment' && String(params.comment || '') === textValue) return true;
+    return false;
+  }
+  function apManagementPushStepsForStatus(config, status) {
+    const progress = status?.push_progress;
+    if (!progress) return [];
+    const itemMap = new Map();
+    (progress.routers || []).forEach((router) => {
+      (router.items || []).forEach((item) => {
+        if (Number.isFinite(Number(item.command_index))) {
+          itemMap.set(`${router.router_id}-${Number(item.command_index)}`, item);
+        }
+      });
+    });
+    const allSteps = apManagementStepList(config);
+    const currentDetectedApplySteps = allSteps.filter((step) => {
+      const item = itemMap.get(`${step.router_id}-${step.command_index}`);
+      return step.phase !== 'CLEANUP_OLD' && item?.status === 'FOUND';
+    });
+    return allSteps.flatMap((step) => {
+      const detected = itemMap.get(`${step.router_id}-${step.command_index}`);
+      if (step.phase === 'CLEANUP_OLD') {
+        const currentDesiredObjectExists = currentDetectedApplySteps.some((applyStep) => (
+          applyStep.router_id === step.router_id && commandTargetsSameRouterOsObject(applyStep.command, step.command)
+        ));
+        if (currentDesiredObjectExists) return [];
+        if (detected?.status === 'NOT_FOUND' || detected?.status === 'UNKNOWN') {
+          return [{
+            ...step,
+            status: 'PENDING',
+            cleanupRequired: true,
+            message: detected.message || 'Old managed config is still detected and must be removed before applying the updated plan.'
+          }];
+        }
+        return [];
+      }
+      if (detected?.status === 'FOUND') {
+        return [{
+          ...step,
+          status: 'SKIPPED',
+          detected: true,
+          message: detected.message || 'Detected on MikroTik. This step will be skipped/kept during push.'
+        }];
+      }
+      return {
+        ...step,
+        status: 'PENDING',
+        detected: false,
+        message: detected?.message || ''
+      };
+    });
+  }
+  function apManagementStepGuide(step, config = apManagementImplementation) {
+    const label = String(step?.label || '').toLowerCase();
+    const controllerIp = config?.plan?.omada_controller_discovery_ip || '192.168.50.71';
+    const optionName = config?.plan?.omada_dhcp_option_name || `3J-OMADA-CONTROLLER-V${config?.vlan_id || 111}`;
+    const optionValue = config?.plan?.omada_dhcp_option_value || '0xC0A83247';
+    const networkCidr = config?.network_cidr || '10.111.0.0/24';
+    if (label.includes('omada controller dhcp discovery option')) {
+      return {
+        title: 'Omada DHCP Discovery Option',
+        subtitle: 'Step creates DHCP Option 138 on MikroTik.',
+        badges: ['DHCP Option 138', controllerIp, optionValue],
+        body: [
+          'This step creates a MikroTik DHCP option that tells TP-Link/Omada APs where the Omada Controller is located.',
+          `The controller IP is ${controllerIp}. MikroTik stores DHCP option IP values as hexadecimal bytes, so ${controllerIp} becomes ${optionValue}.`,
+          'For example, 192.168.50.71 becomes C0 A8 32 47, written in RouterOS as 0xC0A83247.',
+          'This step only creates the reusable option object. It does not yet attach it to the AP management DHCP network.'
+        ],
+        command: `/ip dhcp-server option\nadd name=${optionName} code=138 value=${optionValue}`,
+        important: 'After this is created, APs will not receive it until the next step attaches it to the AP management DHCP network.'
+      };
+    }
+    if (label.includes('attach omada discovery option')) {
+      return {
+        title: 'Attach Omada Discovery to AP DHCP',
+        subtitle: 'Step sends Option 138 to APs in the management subnet.',
+        badges: [networkCidr, optionName, controllerIp],
+        body: [
+          `This step attaches ${optionName} to the AP management DHCP network ${networkCidr}.`,
+          'After this, any AP that renews DHCP from this management network receives the Omada Controller IP automatically.',
+          'This is needed because your AP management subnet is separate from the office subnet where Omada runs.',
+          'After pushing this step, renew the AP DHCP lease or reboot the AP so it receives the new option.'
+        ],
+        command: `/ip dhcp-server network\nset [find address=${networkCidr}] dhcp-option=${optionName}`,
+        important: 'Routing must also work both ways. If the Omada server does not use the CCR/MikroTik as its gateway, add a return route to the AP management subnet via the CCR office IP.'
+      };
+    }
+    return null;
   }
   function apManagementStepsWithDetectedProgress(steps, progress) {
     if (!progress) return steps;
@@ -4422,10 +5594,7 @@ function CaptivePortalPage({ mode = 'full' }) {
       const status = await request(`/network/mikrotik/ap-management/${config.id}/managed-configuration-status${options.quiet ? '?quiet=true' : ''}`);
       setApManagementManagedStatus(status);
       if (status.push_progress && options.updatePushSteps) {
-        setApManagementImplementationSteps((current) => apManagementStepsWithDetectedProgress(
-          current.length ? current : apManagementStepList(config),
-          status.push_progress
-        ));
+        setApManagementImplementationSteps(apManagementPushStepsForStatus(config, status));
       }
       return status;
     } catch (error) {
@@ -4439,12 +5608,40 @@ function CaptivePortalPage({ mode = 'full' }) {
   function openApManagementImplementation() {
     if (!apManagementConfig?.id) return;
     setApManagementImplementation(apManagementConfig);
-    setApManagementImplementationSteps(apManagementStepList(apManagementConfig));
-    setApManagementImplementationMessage('Validating already pushed AP management config...');
+    setApManagementImplementationSteps([]);
+    setApManagementImplementationMessage('Checking MikroTik routers before showing push steps...');
     setApManagementPushCompleted(false);
     setApManagementPushCloseCountdown(10);
     setApManagementManagedStatus(null);
-    checkApManagementConfiguration(apManagementConfig, { updatePushSteps: true });
+    checkApManagementConfiguration(apManagementConfig, { updatePushSteps: true }).then((status) => {
+      if (!status) return;
+      if (status.status === 'ERROR') {
+        setApManagementImplementationMessage(status.message || 'Could not check AP management RouterOS state.');
+        return;
+      }
+      const steps = apManagementPushStepsForStatus(apManagementConfig, status);
+      const cleanupCount = steps.filter((step) => step.phase === 'CLEANUP_OLD').length;
+      setApManagementImplementationMessage(cleanupCount
+        ? `${cleanupCount} old AP management cleanup step(s) still detected. Review them before starting.`
+        : 'MikroTik check complete. Already removed cleanup steps are hidden.');
+    });
+  }
+  function openApManagementRemove() {
+    if (!apManagementConfig?.id) return;
+    setApManagementRemove(apManagementConfig);
+    setApManagementRemoveSteps([]);
+    setApManagementRemoveMessage('Checking MikroTik routers for AP management-created config...');
+    setApManagementRemoveCompleted(false);
+    setApManagementRemoveCloseCountdown(10);
+    setApManagementManagedStatus(null);
+    checkApManagementConfiguration(apManagementConfig).then((status) => {
+      if (!status) return;
+      const detectedSteps = apManagementDetectedRemoveSteps(apManagementConfig, status);
+      setApManagementRemoveSteps(detectedSteps);
+      setApManagementRemoveMessage(status.has_removable_config
+        ? `${status.remove_progress?.found_steps || detectedSteps.length || 0} AP management object(s) detected. Review the detected remove steps before starting.`
+        : 'No AP management RouterOS config was detected for this plan.');
+    });
   }
   function closeApManagementPushSuccess() {
     setApManagementImplementation(null);
@@ -4455,21 +5652,34 @@ function CaptivePortalPage({ mode = 'full' }) {
     setActionResult({ status: 'SUCCESS', message: 'Central AP management configuration push completed successfully.' });
     load().catch(() => null);
   }
+  function closeApManagementRemoveSuccess() {
+    const configName = apManagementRemove?.config_name || 'AP Management';
+    setApManagementRemove(null);
+    setApManagementRemoveCompleted(false);
+    setApManagementRemoveCloseCountdown(10);
+    setApManagementRemoveMessage('');
+    setApManagementManagedStatus(null);
+    setActionResult({ status: 'SUCCESS', message: `${configName} RouterOS configuration was removed successfully.` });
+    load().catch(() => null);
+  }
   async function runApManagementImplementation() {
     if (!apManagementImplementation || apManagementImplementing) return;
-    const progress = apManagementManagedStatus?.push_progress;
-    const steps = apManagementStepsWithDetectedProgress(apManagementStepList(apManagementImplementation), progress);
+    setApManagementImplementationMessage('Rechecking MikroTik routers before push starts...');
+    const status = await checkApManagementConfiguration(apManagementImplementation, { quiet: true });
+    const steps = apManagementPushStepsForStatus(apManagementImplementation, status);
     if (!steps.length) {
-      setApManagementImplementationMessage('No RouterOS commands are available for AP management.');
+      setApManagementImplementationMessage(status?.status === 'ERROR'
+        ? (status.message || 'Could not check AP management RouterOS state.')
+        : 'No AP management push steps are available after checking MikroTik.');
       return;
     }
     setApManagementImplementing(true);
     setApManagementImplementationMessage('AP management config push started. Commands are sent one at a time.');
     setApManagementImplementationSteps(steps);
     let failed = false;
-    for (let index = 0; index < steps.length; index += 1) {
-      const step = steps[index];
-      if (step.status === 'SKIPPED') continue;
+	    for (let index = 0; index < steps.length; index += 1) {
+	      const step = steps[index];
+		      if (step.status === 'SKIPPED') continue;
       setApManagementImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: 'Sending to MikroTik...' } : item));
       scrollApManagementStepIntoView(step.id);
       try {
@@ -4505,6 +5715,393 @@ function CaptivePortalPage({ mode = 'full' }) {
       await load().catch(() => null);
     }
   }
+  async function runApManagementRemove() {
+    if (!apManagementRemove || apManagementRemoving) return;
+    setApManagementRemoveMessage('Rechecking MikroTik routers before remove starts...');
+    const status = await checkApManagementConfiguration(apManagementRemove, { quiet: true });
+    const steps = apManagementDetectedRemoveSteps(apManagementRemove, status);
+    setApManagementRemoveSteps(steps);
+    if (!steps.length) {
+      setApManagementRemoveMessage('No AP management-created RouterOS config was detected. Nothing will be removed.');
+      return;
+    }
+    setApManagementRemoving(true);
+    setApManagementRemoveMessage('Remove config started. Commands are sent one at a time in reverse order.');
+    setApManagementRemoveSteps(steps);
+    let failed = false;
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      setApManagementRemoveSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: 'Removing from MikroTik...' } : item));
+      scrollApManagementStepIntoView(step.id);
+      try {
+        const result = await request(`/network/mikrotik/ap-management/${apManagementRemove.id}/remove-command`, {
+          method: 'POST',
+          body: JSON.stringify({ router_id: step.router_id, command_index: step.command_index })
+        });
+        const status = result.status || 'SUCCESS';
+        setApManagementRemoveSteps((current) => current.map((item, itemIndex) => itemIndex === index ? {
+          ...item,
+          status,
+          message: result.message || (status === 'SKIPPED' ? 'No matching AP management object found.' : 'Remove command completed.'),
+          result
+        } : item));
+      } catch (error) {
+        failed = true;
+        setApManagementRemoveSteps((current) => current.map((item, itemIndex) => itemIndex === index ? {
+          ...item,
+          status: 'FAILED',
+          message: error.message || 'Remove command failed.',
+          result: null
+        } : item));
+        setApManagementRemoveMessage(`Stopped at ${step.router_name || 'router'}: ${error.message || 'remove command failed.'}`);
+        break;
+      }
+    }
+    setApManagementRemoving(false);
+    if (!failed) {
+      setApManagementRemoveMessage('AP management remove config completed. Existing shared objects may have been skipped safely.');
+      setApManagementRemoveCompleted(true);
+      setApManagementRemoveCloseCountdown(10);
+      setApManagementManagedStatus(null);
+      await load().catch((refreshError) => {
+        setActionResult({ status: 'FAILED', message: `Remove completed, but refresh failed: ${refreshError.message}` });
+      });
+    }
+  }
+  function openOfficeApPathModal() {
+    setOfficeApPathForm(officeApPathToForm(officeApPathConfig || {}));
+    setOfficeApPathActiveRouterIndex(0);
+    setOfficeApPathPortSearch({});
+    setOfficeApPathError('');
+    setOfficeApPathSaveSuccess('');
+    setOfficeApPathModalOpen(true);
+    (officeApPathConfig?.routers || []).forEach((router) => {
+      if (router.router_id && !mikrotikOptions[router.router_id]) loadMikrotikRouterOptions(router.router_id);
+    });
+  }
+  function updateOfficeApPathField(key, value) {
+    setOfficeApPathForm((current) => ({ ...current, [key]: value }));
+  }
+  function updateOfficeApPathVlan(value) {
+    setOfficeApPathForm((current) => {
+      const next = { ...current, transport_vlan_id: value };
+      if (!current.transport_vlan_interface_name || /^VLAN\d+-OFFICE-AP-PATH$/i.test(current.transport_vlan_interface_name)) {
+        next.transport_vlan_interface_name = value ? `VLAN${value}-OFFICE-AP-PATH` : '';
+      }
+      return next;
+    });
+  }
+  function updateOfficeApPathRouter(index, patch) {
+    setOfficeApPathForm((current) => ({
+      ...current,
+      routers: current.routers.map((router, routerIndex) => routerIndex === index ? { ...router, ...patch } : router)
+    }));
+  }
+  function addOfficeApPathRouter() {
+    setOfficeApPathForm((current) => {
+      setOfficeApPathActiveRouterIndex(current.routers.length);
+      return { ...current, routers: [...current.routers, officeApPathRouterTemplate()] };
+    });
+  }
+  function removeOfficeApPathRouter(index) {
+    setOfficeApPathForm((current) => {
+      const routers = current.routers.filter((_, routerIndex) => routerIndex !== index);
+      setOfficeApPathActiveRouterIndex((active) => Math.max(0, Math.min(active >= index ? active - 1 : active, Math.max(routers.length - 1, 0))));
+      return { ...current, routers };
+    });
+  }
+  function moveOfficeApPathRouter(fromIndex, toIndex) {
+    setOfficeApPathForm((current) => {
+      if (toIndex < 0 || toIndex >= current.routers.length || fromIndex === toIndex) return current;
+      const routers = [...current.routers];
+      const [item] = routers.splice(fromIndex, 1);
+      routers.splice(toIndex, 0, item);
+      setOfficeApPathActiveRouterIndex(toIndex);
+      return { ...current, routers };
+    });
+  }
+  function toggleOfficeApPathTaggedPort(index, portName, checked) {
+    setOfficeApPathForm((current) => ({
+      ...current,
+      routers: current.routers.map((router, routerIndex) => {
+        if (routerIndex !== index) return router;
+        const existing = String(router.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+        const next = checked
+          ? Array.from(new Set([...existing, portName]))
+          : existing.filter((item) => item !== portName);
+        return { ...router, tagged_ports: next.join(',') };
+      })
+    }));
+  }
+  async function saveOfficeApPath(e) {
+    e.preventDefault();
+    setOfficeApPathSaving(true);
+    setOfficeApPathError('');
+    setOfficeApPathSaveSuccess('');
+    try {
+      const saved = await request('/network/mikrotik/office-ap-path', { method: 'PUT', body: JSON.stringify(officeApPathForm) });
+      setOfficeApPathConfig(saved);
+      setOfficeApPathSaveSuccess('Office AP path plan saved successfully. Review it below, then use Push Config when ready.');
+      setMessage('Office AP path plan saved successfully.');
+      setActionResult({ status: 'SUCCESS', message: 'Office AP path plan saved successfully. Review it below, then use Push Config when ready.' });
+      await load();
+    } catch (error) {
+      const detail = error.message || 'Office AP path details could not be saved.';
+      setOfficeApPathError(detail);
+      setActionResult({ status: 'FAILED', message: detail });
+    } finally {
+      setOfficeApPathSaving(false);
+    }
+  }
+  function officeApPathStepList(config) {
+    return (config?.plan?.router_plans || []).flatMap((routerPlan) => (
+      (routerPlan.commands || []).map((command, commandIndex) => ({
+        id: `${routerPlan.router_id}-${commandIndex}-${command.global_sequence ?? commandIndex}`,
+        router_id: routerPlan.router_id,
+        router_name: routerPlan.router_name,
+        host: routerPlan.host,
+        router_role: routerPlan.role,
+        command_index: commandIndex,
+        label: command.label,
+        preview: command.preview,
+        command,
+        phase: command.phase || 'APPLY_NEW',
+        status: 'PENDING'
+      }))
+    ));
+  }
+  function officeApPathRemoveStepList(config) {
+    return (config?.remove_plan?.router_plans || []).flatMap((routerPlan) => (
+      (routerPlan.commands || []).map((command, commandIndex) => ({
+        id: `remove-${routerPlan.router_id}-${commandIndex}`,
+        router_id: routerPlan.router_id,
+        router_name: routerPlan.router_name,
+        host: routerPlan.host,
+        router_role: routerPlan.role,
+        command_index: commandIndex,
+        label: command.label,
+        preview: command.preview,
+        command,
+        status: 'PENDING'
+      }))
+    ));
+  }
+  function officeApPathDetectedRemoveSteps(config, status) {
+    const foundKeys = new Set();
+    const foundLabels = new Set();
+    (status?.remove_progress?.routers || status?.routers || []).forEach((router) => {
+      (router.items || []).forEach((item) => {
+        if (item.status === 'FOUND') {
+          if (Number.isFinite(Number(item.command_index))) foundKeys.add(`${router.router_id}-${Number(item.command_index)}`);
+          if (item.label) foundLabels.add(`${router.router_id}-${item.label}`);
+        }
+      });
+    });
+    return officeApPathRemoveStepList(config)
+      .filter((step) => foundKeys.has(`${step.router_id}-${step.command_index}`) || foundLabels.has(`${step.router_id}-${step.label}`))
+      .map((step) => ({ ...step, status: 'PENDING', detected: true, message: 'Detected on MikroTik. This remove step is ready.' }));
+  }
+  function officeApPathPushStepsForStatus(config, status) {
+    const progress = status?.push_progress;
+    if (!progress) return [];
+    const itemMap = new Map();
+    (progress.routers || []).forEach((router) => {
+      (router.items || []).forEach((item) => {
+        if (Number.isFinite(Number(item.command_index))) itemMap.set(`${router.router_id}-${Number(item.command_index)}`, item);
+      });
+    });
+    const allSteps = officeApPathStepList(config);
+    const currentDetectedApplySteps = allSteps.filter((step) => {
+      const item = itemMap.get(`${step.router_id}-${step.command_index}`);
+      return step.phase !== 'CLEANUP_OLD' && item?.status === 'FOUND';
+    });
+    return allSteps.flatMap((step) => {
+      const detected = itemMap.get(`${step.router_id}-${step.command_index}`);
+      if (step.phase === 'CLEANUP_OLD') {
+        const currentDesiredObjectExists = currentDetectedApplySteps.some((applyStep) => (
+          applyStep.router_id === step.router_id && commandTargetsSameRouterOsObject(applyStep.command, step.command)
+        ));
+        if (currentDesiredObjectExists) return [];
+        if (detected?.status === 'NOT_FOUND' || detected?.status === 'UNKNOWN') {
+          return [{ ...step, status: 'PENDING', cleanupRequired: true, message: detected.message || 'Old office AP path config is still detected and must be removed before applying the updated plan.' }];
+        }
+        return [];
+      }
+      if (detected?.status === 'FOUND') {
+        return [{ ...step, status: 'SKIPPED', detected: true, message: detected.message || 'Detected on MikroTik. This step will be skipped/kept during push.' }];
+      }
+      return { ...step, status: 'PENDING', detected: false, message: detected?.message || '' };
+    });
+  }
+  function officeApPathProgressSummary(config = officeApPathConfig) {
+    const progress = officeApPathManagedStatus?.push_progress || config?.push_progress;
+    const fallbackTotal = officeApPathStepList(config).length;
+    if (progress) return { pushed: progress.pushed_steps || 0, total: progress.total_steps || fallbackTotal };
+    return { pushed: 0, total: fallbackTotal };
+  }
+  function scrollOfficeApPathStepIntoView(stepId) {
+    setTimeout(() => {
+      const node = officeApPathStepRefs.current[stepId];
+      if (node?.scrollIntoView) node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 80);
+  }
+  async function checkOfficeApPathConfiguration(config = officeApPathImplementation || officeApPathConfig, options = {}) {
+    if (!config?.id || officeApPathCheckingManaged) return null;
+    setOfficeApPathCheckingManaged(true);
+    try {
+      const status = await request(`/network/mikrotik/office-ap-path/${config.id}/managed-configuration-status${options.quiet ? '?quiet=true' : ''}`);
+      setOfficeApPathManagedStatus(status);
+      if (status.push_progress && options.updatePushSteps) setOfficeApPathImplementationSteps(officeApPathPushStepsForStatus(config, status));
+      return status;
+    } catch (error) {
+      const status = { status: 'ERROR', message: error.message || 'Office AP path config check failed.', found_count: 0, routers: [] };
+      setOfficeApPathManagedStatus(status);
+      return status;
+    } finally {
+      setOfficeApPathCheckingManaged(false);
+    }
+  }
+  function openOfficeApPathImplementation() {
+    if (!officeApPathConfig?.id) return;
+    setOfficeApPathImplementation(officeApPathConfig);
+    setOfficeApPathImplementationSteps([]);
+    setOfficeApPathImplementationMessage('Checking MikroTik routers before showing push steps...');
+    setOfficeApPathPushCompleted(false);
+    setOfficeApPathPushCloseCountdown(10);
+    setOfficeApPathManagedStatus(null);
+    checkOfficeApPathConfiguration(officeApPathConfig, { updatePushSteps: true }).then((status) => {
+      if (!status) return;
+      if (status.status === 'ERROR') {
+        setOfficeApPathImplementationMessage(status.message || 'Could not check office AP path RouterOS state.');
+        return;
+      }
+      const steps = officeApPathPushStepsForStatus(officeApPathConfig, status);
+      const cleanupCount = steps.filter((step) => step.phase === 'CLEANUP_OLD').length;
+      setOfficeApPathImplementationMessage(cleanupCount
+        ? `${cleanupCount} old office AP path cleanup step(s) still detected. Review them before starting.`
+        : 'MikroTik check complete. Already removed cleanup steps are hidden.');
+    });
+  }
+  function openOfficeApPathRemove() {
+    if (!officeApPathConfig?.id) return;
+    setOfficeApPathRemove(officeApPathConfig);
+    setOfficeApPathRemoveSteps([]);
+    setOfficeApPathRemoveMessage('Checking MikroTik routers for office AP path-created config...');
+    setOfficeApPathRemoveCompleted(false);
+    setOfficeApPathRemoveCloseCountdown(10);
+    setOfficeApPathManagedStatus(null);
+    checkOfficeApPathConfiguration(officeApPathConfig).then((status) => {
+      if (!status) return;
+      const detectedSteps = officeApPathDetectedRemoveSteps(officeApPathConfig, status);
+      setOfficeApPathRemoveSteps(detectedSteps);
+      setOfficeApPathRemoveMessage(status.has_removable_config
+        ? `${status.remove_progress?.found_steps || detectedSteps.length || 0} office AP path object(s) detected. Review the detected remove steps before starting.`
+        : 'No office AP path RouterOS config was detected for this plan.');
+    });
+  }
+  function closeOfficeApPathPushSuccess() {
+    setOfficeApPathImplementation(null);
+    setOfficeApPathPushCompleted(false);
+    setOfficeApPathPushCloseCountdown(10);
+    setOfficeApPathImplementationMessage('');
+    setMessage('Office AP path configuration push completed successfully.');
+    setActionResult({ status: 'SUCCESS', message: 'Office AP path configuration push completed successfully.' });
+    load().catch(() => null);
+  }
+  function closeOfficeApPathRemoveSuccess() {
+    const configName = officeApPathRemove?.config_name || 'Office AP Path';
+    setOfficeApPathRemove(null);
+    setOfficeApPathRemoveCompleted(false);
+    setOfficeApPathRemoveCloseCountdown(10);
+    setOfficeApPathRemoveMessage('');
+    setOfficeApPathManagedStatus(null);
+    setActionResult({ status: 'SUCCESS', message: `${configName} RouterOS configuration was removed successfully.` });
+    load().catch(() => null);
+  }
+  async function runOfficeApPathImplementation() {
+    if (!officeApPathImplementation || officeApPathImplementing) return;
+    setOfficeApPathImplementationMessage('Rechecking MikroTik routers before push starts...');
+    const status = await checkOfficeApPathConfiguration(officeApPathImplementation, { quiet: true });
+    const steps = officeApPathPushStepsForStatus(officeApPathImplementation, status);
+    if (!steps.length) {
+      setOfficeApPathImplementationMessage(status?.status === 'ERROR' ? (status.message || 'Could not check office AP path RouterOS state.') : 'No office AP path push steps are available after checking MikroTik.');
+      return;
+    }
+    setOfficeApPathImplementing(true);
+    setOfficeApPathImplementationMessage('Office AP path push started. Commands are sent one at a time.');
+    setOfficeApPathImplementationSteps(steps);
+    let failed = false;
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      if (step.status === 'SKIPPED') continue;
+      setOfficeApPathImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: 'Sending to MikroTik...' } : item));
+      scrollOfficeApPathStepIntoView(step.id);
+      try {
+        const result = await request(`/network/mikrotik/office-ap-path/${officeApPathImplementation.id}/implement-command`, {
+          method: 'POST',
+          body: JSON.stringify({ router_id: step.router_id, command_index: step.command_index })
+        });
+        const status = result.status || 'SUCCESS';
+        setOfficeApPathImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status, message: result.message || (status === 'SKIPPED' ? 'Existing office AP path config found; skipped.' : 'Command completed.'), result } : item));
+      } catch (error) {
+        failed = true;
+        setOfficeApPathImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'FAILED', message: error.message || 'Command failed.', result: null } : item));
+        setOfficeApPathImplementationMessage(`Stopped at ${step.router_name || 'router'}: ${error.message || 'command failed.'}`);
+        break;
+      }
+    }
+    setOfficeApPathImplementing(false);
+    if (!failed) {
+      setOfficeApPathImplementationMessage('Office AP path config push completed. Existing matching objects may have been skipped safely.');
+      setOfficeApPathPushCompleted(true);
+      setOfficeApPathPushCloseCountdown(10);
+      await checkOfficeApPathConfiguration(officeApPathImplementation, { updatePushSteps: true });
+      await load().catch(() => null);
+    }
+  }
+  async function runOfficeApPathRemove() {
+    if (!officeApPathRemove || officeApPathRemoving) return;
+    setOfficeApPathRemoveMessage('Rechecking MikroTik routers before remove starts...');
+    const status = await checkOfficeApPathConfiguration(officeApPathRemove, { quiet: true });
+    const steps = officeApPathDetectedRemoveSteps(officeApPathRemove, status);
+    setOfficeApPathRemoveSteps(steps);
+    if (!steps.length) {
+      setOfficeApPathRemoveMessage('No office AP path-created RouterOS config was detected. Nothing will be removed.');
+      return;
+    }
+    setOfficeApPathRemoving(true);
+    setOfficeApPathRemoveMessage('Remove config started. Commands are sent one at a time in reverse order.');
+    setOfficeApPathRemoveSteps(steps);
+    let failed = false;
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      setOfficeApPathRemoveSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: 'Removing from MikroTik...' } : item));
+      scrollOfficeApPathStepIntoView(step.id);
+      try {
+        const result = await request(`/network/mikrotik/office-ap-path/${officeApPathRemove.id}/remove-command`, {
+          method: 'POST',
+          body: JSON.stringify({ router_id: step.router_id, command_index: step.command_index })
+        });
+        const status = result.status || 'SUCCESS';
+        setOfficeApPathRemoveSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status, message: result.message || (status === 'SKIPPED' ? 'No matching office AP path object found.' : 'Remove command completed.'), result } : item));
+      } catch (error) {
+        failed = true;
+        setOfficeApPathRemoveSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'FAILED', message: error.message || 'Remove command failed.', result: null } : item));
+        setOfficeApPathRemoveMessage(`Stopped at ${step.router_name || 'router'}: ${error.message || 'remove command failed.'}`);
+        break;
+      }
+    }
+    setOfficeApPathRemoving(false);
+    if (!failed) {
+      setOfficeApPathRemoveMessage('Office AP path remove config completed. Existing shared objects may have been skipped safely.');
+      setOfficeApPathRemoveCompleted(true);
+      setOfficeApPathRemoveCloseCountdown(10);
+      setOfficeApPathManagedStatus(null);
+      await load().catch((refreshError) => {
+        setActionResult({ status: 'FAILED', message: `Remove completed, but refresh failed: ${refreshError.message}` });
+      });
+    }
+  }
   function stationRouterTooltip(station, router, index) {
     const ports = String(router.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
     const lines = [
@@ -4515,17 +6112,17 @@ function CaptivePortalPage({ mode = 'full' }) {
     ].filter(Boolean);
     return lines.join('\n');
   }
-  function stationPortBadges(value, prefix) {
+  function stationPortBadges(value, prefix, emptyText = 'No tagged ports selected', badgeClass = 'bg-blue-lt text-blue') {
     const ports = String(value || '').split(',').map((item) => item.trim()).filter(Boolean);
-    if (!ports.length) return <span className="text-muted small">No tagged ports selected</span>;
+    if (!ports.length) return <span className="text-muted small">{emptyText}</span>;
     return ports.map((port) => (
-      <span className="badge bg-blue-lt text-blue station-link-port-badge" key={`${prefix}-${port}`}>
+      <span className={`badge ${badgeClass} station-link-port-badge`} key={`${prefix}-${port}`}>
         {port}
       </span>
     ));
   }
   function stationImplementationStepList(station) {
-    const routerSteps = (station?.plan?.router_plans || []).flatMap((routerPlan) => (
+    return (station?.plan?.router_plans || []).flatMap((routerPlan) => (
       (routerPlan.commands || []).map((command, commandIndex) => ({
         id: `${routerPlan.router_id}-${commandIndex}`,
         router_id: routerPlan.router_id,
@@ -4533,32 +6130,17 @@ function CaptivePortalPage({ mode = 'full' }) {
         router_role: routerPlan.role,
         host: routerPlan.host,
         command_index: commandIndex,
+        global_sequence: Number.isFinite(Number(command.global_sequence)) ? Number(command.global_sequence) : 9999,
+        phase: command.phase || 'APPLY_NEW',
+        operation: command.operation || 'APPLY_NEW',
         label: command.label || `Command ${commandIndex + 1}`,
         preview: command.preview || '',
+        command,
         status: 'PENDING',
         message: '',
         result: null
       }))
-    ));
-    if (!station?.id) return routerSteps;
-    const rootRouter = (station.plan?.router_plans || [])[0] || (station.routers || [])[0] || {};
-    return [
-      ...routerSteps,
-      {
-        id: `${station.id}-sync-login-html`,
-        action: 'sync_login_html',
-        router_id: rootRouter.router_id,
-        router_name: rootRouter.router_name,
-        router_role: 'ROOT_GATEWAY',
-        host: rootRouter.host,
-        command_index: null,
-        label: 'Upload managed HotSpot login.html',
-        preview: `/file set-or-add name=${station.hotspot_login_file_path || 'hotspot/login.html'} contents=<3J managed redirect template>`,
-        status: 'PENDING',
-        message: '',
-        result: null
-      }
-    ];
+    )).sort((left, right) => (left.global_sequence - right.global_sequence) || String(left.router_name || '').localeCompare(String(right.router_name || '')));
   }
   function stepsWithDetectedProgress(steps, progress) {
     if (!progress) return steps;
@@ -4568,23 +6150,67 @@ function CaptivePortalPage({ mode = 'full' }) {
         if (item.status === 'FOUND') foundKeys.add(`${router.router_id}-${item.command_index}`);
       });
     });
-    const loginSynced = progress.login_html_status?.status === 'SYNCED';
     return steps.map((step) => {
-      if (step.action === 'sync_login_html' && loginSynced) {
-        return { ...step, status: 'SKIPPED', detected: true, message: 'Managed login.html is already synced on the root gateway.' };
-      }
       if (foundKeys.has(`${step.router_id}-${step.command_index}`)) {
         return { ...step, status: 'SKIPPED', detected: true, message: 'Detected on MikroTik. This step will be skipped/kept during push.' };
       }
       return step.status === 'SKIPPED' && step.detected ? { ...step, status: 'PENDING', detected: false, message: '' } : step;
     });
   }
+  function stationPushStepsForStatus(station, status) {
+    const progress = status?.push_progress;
+    if (!progress) return [];
+    const itemMap = new Map();
+    (progress.routers || []).forEach((router) => {
+      (router.items || []).forEach((item) => {
+        if (Number.isFinite(Number(item.command_index))) {
+          itemMap.set(`${router.router_id}-${Number(item.command_index)}`, item);
+        }
+      });
+    });
+    const allSteps = stationImplementationStepList(station);
+    const currentDetectedApplySteps = allSteps.filter((step) => {
+      const item = itemMap.get(`${step.router_id}-${step.command_index}`);
+      return step.phase !== 'CLEANUP_OLD' && item?.status === 'FOUND';
+    });
+    return allSteps.flatMap((step) => {
+      const detected = itemMap.get(`${step.router_id}-${step.command_index}`);
+      if (step.phase === 'CLEANUP_OLD') {
+        const currentDesiredObjectExists = currentDetectedApplySteps.some((applyStep) => (
+          applyStep.router_id === step.router_id && commandTargetsSameRouterOsObject(applyStep.command, step.command)
+        ));
+        if (currentDesiredObjectExists) return [];
+        if (detected?.status === 'NOT_FOUND' || detected?.status === 'UNKNOWN') {
+          return [{
+            ...step,
+            status: 'PENDING',
+            cleanupRequired: true,
+            message: detected.message || 'Old managed config is still detected and must be removed before applying the updated plan.'
+          }];
+        }
+        return [];
+      }
+      if (detected?.status === 'FOUND') {
+        return [{
+          ...step,
+          status: 'SKIPPED',
+          detected: true,
+          message: detected.message || 'Detected on MikroTik. This step will be skipped/kept during push.'
+        }];
+      }
+      return {
+        ...step,
+        status: 'PENDING',
+        detected: false,
+        message: detected?.message || ''
+      };
+    });
+  }
   function stationProgressSummary(station) {
     const progress = stationProgressMap[station.id] || station.push_progress;
     const fallbackTotal = stationImplementationStepList(station).length;
     if (progress) return { pushed: progress.pushed_steps || 0, total: progress.total_steps || fallbackTotal };
-    const synced = station.hotspot_login_sync?.is_current ? 1 : 0;
-    return { pushed: synced, total: fallbackTotal };
+    return { pushed: 0, total: fallbackTotal };
   }
   function scrollStationStepIntoView(stepId) {
     setTimeout(() => {
@@ -4622,16 +6248,13 @@ function CaptivePortalPage({ mode = 'full' }) {
     if (!station?.id || stationCheckingManaged) return null;
     setStationCheckingManaged(true);
     try {
-      const status = await request(`/network/mikrotik/stations/${station.id}/managed-configuration-status`);
+      const status = await request(`/network/mikrotik/stations/${station.id}/managed-configuration-status${options.quiet ? '?quiet=true' : ''}`);
       setStationManagedStatus(status);
       if (status.push_progress) {
         setStationProgressMap((current) => ({ ...current, [station.id]: status.push_progress }));
         setMikrotikStations((current) => current.map((item) => item.id === station.id ? { ...item, push_progress: status.push_progress } : item));
         if (options.updatePushSteps) {
-          setStationImplementationSteps((current) => stepsWithDetectedProgress(
-            current.length ? current : stationImplementationStepList(station),
-            status.push_progress
-          ));
+          setStationImplementationSteps(stationPushStepsForStatus(station, status));
         }
       }
       await loadStationCommandLogs(station.id);
@@ -4660,14 +6283,24 @@ function CaptivePortalPage({ mode = 'full' }) {
   }
   function openStationImplementation(station) {
     setStationImplementation(station);
-    const cachedProgress = stationProgressMap[station.id] || station.push_progress;
-    setStationImplementationSteps(stepsWithDetectedProgress(stationImplementationStepList(station), cachedProgress));
-    setStationImplementationMessage('Validating already pushed RouterOS config...');
+    setStationImplementationSteps([]);
+    setStationImplementationMessage('Checking MikroTik routers before showing push steps...');
     setStationPushCompleted(false);
     setStationPushCloseCountdown(10);
     setStationManagedStatus(null);
     loadStationCommandLogs(station.id);
-    checkStationManagedConfiguration(station, { updatePushSteps: true });
+    checkStationManagedConfiguration(station, { updatePushSteps: true }).then((status) => {
+      if (!status) return;
+      if (status.status === 'ERROR') {
+        setStationImplementationMessage(status.message || 'Could not check station RouterOS state.');
+        return;
+      }
+      const steps = stationPushStepsForStatus(station, status);
+      const cleanupCount = steps.filter((step) => step.phase === 'CLEANUP_OLD').length;
+      setStationImplementationMessage(cleanupCount
+        ? `${cleanupCount} old station cleanup step(s) still detected. Review them before starting.`
+        : 'MikroTik check complete. Already removed cleanup steps are hidden.');
+    });
   }
   function closeStationPushSuccess() {
     const stationName = stationImplementation?.station_name || 'Station';
@@ -4678,6 +6311,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     setStationImplementationMessage('');
     setActionResult({ status: 'SUCCESS', message: `${stationName} configuration push completed successfully.` });
     if (station) refreshStationProgressSummaries([station]);
+    load().catch(() => null);
   }
   function openStationRemove(station) {
     setStationRemove(station);
@@ -4717,6 +6351,91 @@ function CaptivePortalPage({ mode = 'full' }) {
       setActionResult({ status: 'FAILED', message: error.message || 'Station plan could not be deleted.' });
     } finally {
       setStationDeleting(false);
+    }
+  }
+  function omadaReadinessClass(status) {
+    if (status === 'READY' || status === 'SUCCESS') return 'bg-green-lt text-green';
+    if (status === 'BLOCKED' || status === 'FAILED') return 'bg-red-lt text-red';
+    if (status === 'WARNING') return 'bg-yellow-lt text-yellow';
+    return 'bg-blue-lt text-blue';
+  }
+  async function openStationOmadaPortalPlan(station) {
+    if (!station?.id) return;
+    setStationOmadaPlan({ station, plan: null });
+    setStationOmadaActionResult(null);
+    setStationOmadaBindingResult(null);
+    setStationOmadaPlanLoading(true);
+    try {
+      const plan = await request(`/network/mikrotik/stations/${station.id}/omada-portal-plan`);
+      setStationOmadaPlan({ station, plan });
+      setStationOmadaBindingForm({
+        omada_site_id: plan.station?.omada_site_id || '',
+        omada_site_name: plan.station?.omada_site_name || ''
+      });
+    } catch (error) {
+      setStationOmadaPlan({ station, plan: null, error: error.message || 'Could not load Omada captive portal plan.' });
+    } finally {
+      setStationOmadaPlanLoading(false);
+    }
+  }
+  async function refreshStationOmadaPortalPlan() {
+    const station = stationOmadaPlan?.station || stationOmadaPlan?.plan?.station;
+    if (!station?.id) return;
+    setStationOmadaPlanLoading(true);
+    try {
+      const plan = await request(`/network/mikrotik/stations/${station.id}/omada-portal-plan`);
+      setStationOmadaPlan({ station, plan });
+      setStationOmadaBindingForm({
+        omada_site_id: plan.station?.omada_site_id || '',
+        omada_site_name: plan.station?.omada_site_name || ''
+      });
+    } catch (error) {
+      setStationOmadaPlan((current) => ({ ...(current || {}), error: error.message || 'Could not refresh Omada captive portal plan.' }));
+    } finally {
+      setStationOmadaPlanLoading(false);
+    }
+  }
+  async function saveStationOmadaBinding() {
+    const station = stationOmadaPlan?.station || stationOmadaPlan?.plan?.station;
+    if (!station?.id || stationOmadaBindingSaving) return;
+    setStationOmadaBindingSaving(true);
+    setStationOmadaBindingResult(null);
+    try {
+      const plan = await request(`/network/mikrotik/stations/${station.id}/omada-site`, {
+        method: 'PUT',
+        body: JSON.stringify(stationOmadaBindingForm)
+      });
+      setStationOmadaPlan({ station: plan.station || station, plan });
+      const siteName = plan.station?.omada_site_name || stationOmadaBindingForm.omada_site_name || 'selected Omada site';
+      const successMessage = `${plan.station?.station_name || station.station_name || 'Station'} was bound to ${siteName}.`;
+      setStationOmadaBindingResult({ status: 'SUCCESS', message: successMessage });
+      setMessage('Station Omada site binding saved.');
+      await load();
+    } catch (error) {
+      setStationOmadaBindingResult({ status: 'FAILED', message: error.message || 'Station Omada site binding could not be saved.' });
+    } finally {
+      setStationOmadaBindingSaving(false);
+    }
+  }
+  async function runStationOmadaAction(action) {
+    const station = stationOmadaPlan?.station || stationOmadaPlan?.plan?.station;
+    if (!station?.id || stationOmadaActionLoading) return;
+    setStationOmadaActionLoading(action);
+    setStationOmadaActionResult(null);
+    try {
+      const result = await request(`/network/mikrotik/stations/${station.id}/omada-actions/${action}`, { method: 'POST' });
+      setStationOmadaActionResult(result);
+      if (result.plan) {
+        setStationOmadaPlan({ station: result.plan.station || station, plan: result.plan });
+      }
+      setMessage(result.message || 'Omada captive portal action completed.');
+      if (!result.plan) {
+        await refreshStationOmadaPortalPlan();
+      }
+    } catch (error) {
+      setStationOmadaActionResult({ status: 'FAILED', message: error.message || 'Omada captive portal action failed.' });
+    } finally {
+      setStationOmadaActionLoading('');
     }
   }
   function stationDiagnosticStatusClass(status) {
@@ -4787,10 +6506,13 @@ function CaptivePortalPage({ mode = 'full' }) {
   }
   async function runStationImplementation() {
     if (!stationImplementation || stationImplementing) return;
-    const progress = stationProgressMap[stationImplementation.id] || stationManagedStatus?.push_progress;
-    const steps = stepsWithDetectedProgress(stationImplementationStepList(stationImplementation), progress);
+    setStationImplementationMessage('Rechecking MikroTik routers before push starts...');
+    const status = await checkStationManagedConfiguration(stationImplementation, { quiet: true });
+    const steps = stationPushStepsForStatus(stationImplementation, status);
     if (!steps.length) {
-      setStationImplementationMessage('No RouterOS commands are available for this station plan.');
+      setStationImplementationMessage(status?.status === 'ERROR'
+        ? (status.message || 'Could not check station RouterOS state.')
+        : 'No station push steps are available after checking MikroTik.');
       return;
     }
     setStationImplementing(true);
@@ -4800,20 +6522,18 @@ function CaptivePortalPage({ mode = 'full' }) {
     for (let index = 0; index < steps.length; index += 1) {
       const step = steps[index];
       if (step.status === 'SKIPPED') continue;
-      setStationImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: step.action === 'sync_login_html' ? 'Uploading managed login.html...' : 'Sending to MikroTik...' } : item));
+      setStationImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: 'Sending to MikroTik...' } : item));
       scrollStationStepIntoView(step.id);
       try {
-        const result = step.action === 'sync_login_html'
-          ? await request(`/network/mikrotik/stations/${stationImplementation.id}/sync-hotspot-login`, { method: 'POST', body: JSON.stringify({}) })
-          : await request(`/network/mikrotik/stations/${stationImplementation.id}/implement-command`, {
-            method: 'POST',
-            body: JSON.stringify({ router_id: step.router_id, command_index: step.command_index })
-          });
+        const result = await request(`/network/mikrotik/stations/${stationImplementation.id}/implement-command`, {
+          method: 'POST',
+          body: JSON.stringify({ router_id: step.router_id, command_index: step.command_index })
+        });
         const status = result.status || 'SUCCESS';
         setStationImplementationSteps((current) => current.map((item, itemIndex) => itemIndex === index ? {
           ...item,
           status,
-          message: result.message || (step.action === 'sync_login_html' ? 'Managed login.html uploaded.' : status === 'SKIPPED' ? 'Existing configuration found; skipped.' : 'Command completed.'),
+          message: result.message || (status === 'SKIPPED' ? 'Existing configuration found; skipped.' : 'Command completed.'),
           result
         } : item));
       } catch (error) {
@@ -4838,8 +6558,6 @@ function CaptivePortalPage({ mode = 'full' }) {
       } catch (refreshError) {
         setActionResult({ status: 'FAILED', message: `Config push completed, but refresh failed: ${refreshError.message}` });
       }
-      const syncStatus = await request('/network/mikrotik/stations/hotspot-login-sync-status?remote=true').catch(() => null);
-      if (syncStatus) setHotspotLoginSync(syncStatus);
       await checkStationManagedConfiguration(stationImplementation);
       await loadStationCommandLogs(stationImplementation.id);
     }
@@ -4924,7 +6642,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                   </div>
                   <div className="station-chain-popover-meta">
                     {router.host && <span><IconServer size={13} /> {router.host}{router.api_port ? `:${router.api_port}` : ''}</span>}
-                    <span><IconWifi size={13} /> {index === 0 ? `Creates HotSpot VLAN ${station.vlan_id}` : `Carries HotSpot VLAN ${station.vlan_id}`}</span>
+	                    <span><IconWifi size={13} /> {index === 0 ? `Creates customer VLAN ${station.vlan_id}` : `Carries customer VLAN ${station.vlan_id}`}</span>
                   </div>
                 </div>
                 <div className="station-chain-popover-section mb-0">
@@ -4950,7 +6668,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <span>{router.router_name || 'Router'} to {routers[index + 1]?.router_name || 'Next router'}</span>
                   </div>
                   <div className="station-chain-popover-section">
-                    <div className="station-chain-popover-label"><IconWifi size={14} /> Customer HotSpot VLAN</div>
+	                    <div className="station-chain-popover-label"><IconWifi size={14} /> Customer VLAN for Omada SSID</div>
                     <div className="station-chain-popover-badges">
                       <span className="badge bg-green-lt text-green">VLAN {station.vlan_id}</span>
                       {station.vlan_interface_name && <span className="badge bg-cyan-lt text-cyan">{station.vlan_interface_name}</span>}
@@ -5014,7 +6732,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                   </div>
                 </div>
                 <div className="station-chain-popover-section mb-0">
-                  <div className="station-chain-popover-label"><IconRouter size={14} /> Selected bridge and tags</div>
+                  <div className="station-chain-popover-label"><IconRouter size={14} /> Selected bridge and AP management ports</div>
                   <div className="station-chain-popover-route">
                     <span className="badge bg-secondary-lt text-secondary">{router.bridge_name || 'No bridge/interface'}</span>
                     {stationPortBadges(router.tagged_ports, `${config.id || 'ap-management'}-${router.router_id}-router`)}
@@ -5042,22 +6760,28 @@ function CaptivePortalPage({ mode = 'full' }) {
                       {config.vlan_interface_name && <span className="badge bg-cyan-lt text-cyan">{config.vlan_interface_name}</span>}
                       <span className="badge bg-purple-lt text-purple">{config.network_cidr}</span>
                     </div>
-                    <div className="station-chain-popover-meta">
-                      <span><IconServer size={13} /> Gateway {config.gateway_ip}</span>
-                      <span><IconDatabase size={13} /> Pool {config.pool_start_ip}-{config.pool_end_ip}</span>
+	                    <div className="station-chain-popover-meta">
+	                      <span><IconServer size={13} /> Gateway {config.gateway_ip}</span>
+	                      <span><IconDatabase size={13} /> Pool {config.pool_start_ip}-{config.pool_end_ip}</span>
+	                      {config.plan?.omada_controller_discovery_ip && <span><IconWifi size={13} /> Omada option 138 {config.plan.omada_controller_discovery_ip}</span>}
+	                    </div>
+                    <div className="text-muted small mt-2">
+                      Subnet/DHCP is root-only. Tagged ports carry VLAN {config.vlan_id} between routers. APs must have the management VLAN configured before deployment.
                     </div>
                   </div>
                   <div className="station-chain-popover-section">
-                    <div className="station-chain-popover-label"><IconRouter size={14} /> From router tags</div>
+                    <div className="station-chain-popover-label"><IconRouter size={14} /> From router ports</div>
                     <div className="station-chain-popover-route">
                       <span className="badge bg-secondary-lt text-secondary">{router.bridge_name || 'No bridge/interface'}</span>
+                      <span className="badge bg-blue-lt text-blue">Tagged</span>
                       {stationPortBadges(router.tagged_ports, `${config.id || 'ap-management'}-${router.router_id}-from`)}
                     </div>
                   </div>
                   <div className="station-chain-popover-section mb-0">
-                    <div className="station-chain-popover-label"><IconRouter size={14} /> To router tags</div>
+                    <div className="station-chain-popover-label"><IconRouter size={14} /> To router ports</div>
                     <div className="station-chain-popover-route">
                       <span className="badge bg-secondary-lt text-secondary">{routers[index + 1]?.bridge_name || 'No bridge/interface'}</span>
+                      <span className="badge bg-blue-lt text-blue">Tagged</span>
                       {stationPortBadges(routers[index + 1]?.tagged_ports, `${config.id || 'ap-management'}-${routers[index + 1]?.router_id}-to`)}
                     </div>
                   </div>
@@ -5069,14 +6793,98 @@ function CaptivePortalPage({ mode = 'full' }) {
       </div>
     );
   }
+  function renderOfficeApPathChainPath(config) {
+    const routers = config?.routers || [];
+    if (!routers.length) return <span className="text-muted small">No routers</span>;
+    return (
+      <div className="station-table-chain" aria-label={`${config.config_name || 'Office AP Path'} router chain`}>
+        {routers.map((router, index) => (
+          <React.Fragment key={router.id || `${config.id || 'office-ap-path'}-${router.router_id}-${index}`}>
+            <div className="station-table-chain-item" aria-label={officeApPathRouterDisplay(router, index)}>
+              <span className={`station-chain-node station-table-chain-node ${index === 0 ? 'root' : ''}`}><IconRouter size={16} /></span>
+              <span className="station-table-chain-text">
+                <strong>{router.router_name || officeApPathRouterDisplay(router, index)}</strong>
+                <small>{index === 0 ? 'Root bridge gateway' : `Hop ${index + 1}`} · {router.bridge_name || 'No bridge'}</small>
+              </span>
+              <div className="station-router-popover">
+                <div className="station-chain-popover-header">
+                  <IconRouter size={16} />
+                  <span>{router.router_name || officeApPathRouterDisplay(router, index)}</span>
+                </div>
+                <div className="station-chain-popover-section">
+                  <div className="station-chain-popover-label"><IconActivity size={14} /> Router details</div>
+                  <div className="station-chain-popover-badges">
+                    <span className={`badge ${index === 0 ? 'bg-green-lt text-green' : 'bg-cyan-lt text-cyan'}`}>{index === 0 ? 'Root bridge' : `Hop ${index + 1}`}</span>
+                    <span className="badge bg-secondary-lt text-secondary">{index === 0 ? 'OFFICE_AP_ROOT' : 'OFFICE_AP_TRUNK'}</span>
+                    {router.api_status && <span className={`badge ${router.api_status === 'REACHABLE' ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{router.api_status}</span>}
+                  </div>
+                  <div className="station-chain-popover-meta">
+                    {router.host && <span><IconServer size={13} /> {router.host}{router.api_port ? `:${router.api_port}` : ''}</span>}
+                    <span><IconWifi size={13} /> {index === 0 ? `Bridges office LAN to VLAN ${config.transport_vlan_id}` : `Carries office AP VLAN ${config.transport_vlan_id}`}</span>
+                  </div>
+                </div>
+                <div className="station-chain-popover-section mb-0">
+                  <div className="station-chain-popover-label"><IconRouter size={14} /> Selected bridge and tagged ports</div>
+                  <div className="station-chain-popover-route">
+                    <span className="badge bg-secondary-lt text-secondary">{router.bridge_name || 'No bridge/interface'}</span>
+                    {stationPortBadges(router.tagged_ports, `${config.id || 'office-ap-path'}-${router.router_id}-router`)}
+                  </div>
+                </div>
+              </div>
+            </div>
+            {index < routers.length - 1 && (
+              <div className="station-table-chain-link">
+                <span className="station-table-chain-rail"><span /></span>
+                <button className="station-table-chain-dot" type="button" aria-label={`View office AP path between ${router.router_name || 'router'} and ${routers[index + 1]?.router_name || 'next router'}`} />
+                <div className="station-chain-popover">
+                  <div className="station-chain-popover-header">
+                    <IconRouter size={16} />
+                    <span>{router.router_name || 'Router'} to {routers[index + 1]?.router_name || 'Next router'}</span>
+                  </div>
+                  <div className="station-chain-popover-section">
+                    <div className="station-chain-popover-label"><IconWifi size={14} /> Office AP management path</div>
+                    <div className="station-chain-popover-badges">
+                      <span className="badge bg-green-lt text-green">Transport VLAN {config.transport_vlan_id}</span>
+                      {config.transport_vlan_interface_name && <span className="badge bg-cyan-lt text-cyan">{config.transport_vlan_interface_name}</span>}
+                      <span className="badge bg-purple-lt text-purple">Office bridge: {config.office_bridge_name}</span>
+                    </div>
+                    <div className="text-muted small mt-2">
+                      This carries the existing office subnet to the AP path. The ONU/AP-facing port must make this VLAN native/untagged; customer SSID VLANs remain separate.
+                    </div>
+                  </div>
+                  <div className="station-chain-popover-section">
+                    <div className="station-chain-popover-label"><IconRouter size={14} /> From router ports</div>
+                    <div className="station-chain-popover-route">
+                      <span className="badge bg-secondary-lt text-secondary">{router.bridge_name || 'No bridge/interface'}</span>
+                      <span className="badge bg-blue-lt text-blue">Tagged</span>
+                      {stationPortBadges(router.tagged_ports, `${config.id || 'office-ap-path'}-${router.router_id}-from`)}
+                    </div>
+                  </div>
+                  <div className="station-chain-popover-section mb-0">
+                    <div className="station-chain-popover-label"><IconRouter size={14} /> To router ports</div>
+                    <div className="station-chain-popover-route">
+                      <span className="badge bg-secondary-lt text-secondary">{routers[index + 1]?.bridge_name || 'No bridge/interface'}</span>
+                      <span className="badge bg-blue-lt text-blue">Tagged</span>
+                      {stationPortBadges(routers[index + 1]?.tagged_ports, `${config.id || 'office-ap-path'}-${routers[index + 1]?.router_id}-to`)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+    );
+  }
   async function load() {
-    const [system, portalCfg, routerRows, stationRows, apManagementRow, loginSyncRows, events, voucherData, voucherLogs, portalSessions, authLogs] = await Promise.all([
+    const [system, portalCfg, omadaPortal, routerRows, stationRows, apManagementRow, siteRows, events, voucherData, voucherLogs, portalSessions, authLogs] = await Promise.all([
       request('/system/settings'),
       request('/captive-portal/settings'),
+      request('/captive-portal/omada/status').catch(() => null),
       request('/captive-portal/mikrotik'),
       request('/network/mikrotik/stations'),
       request('/network/mikrotik/ap-management').catch(() => null),
-      request('/network/mikrotik/stations/hotspot-login-sync-status').catch(() => ({ summary: {}, stations: [] })),
+      request('/site-deployments').catch(() => []),
       request('/portal/events'),
       request('/vouchers'),
       request('/voucher-redemptions?source=CLIENT_PORTAL'),
@@ -5085,17 +6893,19 @@ function CaptivePortalPage({ mode = 'full' }) {
     ]);
     setSettings(system);
     setPortalSettings(portalCfg);
+    setOmadaPortalStatus(omadaPortal);
     const safeRouterRows = Array.isArray(routerRows) ? routerRows : [];
     setMikrotiks(safeRouterRows);
     setMikrotikRows(editableMikrotikRows(safeRouterRows));
     const safeStationRows = Array.isArray(stationRows) ? stationRows : [];
     setMikrotikStations(safeStationRows);
+    setSiteDeployments(Array.isArray(siteRows) ? siteRows : []);
     refreshStationProgressSummaries(safeStationRows);
     if (apManagementRow) {
       setApManagementConfig(apManagementRow);
       if (apManagementRow.id) checkApManagementConfiguration(apManagementRow, { quiet: true });
     }
-    setHotspotLoginSync(loginSyncRows || { summary: {}, stations: [] });
+    setHotspotLoginSync({ summary: {}, stations: [] });
     setPreflightRouterId((current) => current || safeRouterRows[0]?.id || '');
     setAiRouterId((current) => safeRouterRows.some((router) => router.id === current) ? current : '');
     setPortalEvents(Array.isArray(events) ? events : []);
@@ -5103,6 +6913,22 @@ function CaptivePortalPage({ mode = 'full' }) {
     setRedemptions(Array.isArray(voucherLogs) ? voucherLogs : []);
     setSessions(Array.isArray(portalSessions) ? portalSessions : []);
     setAuthorizations(Array.isArray(authLogs) ? authLogs : []);
+  }
+  async function enableOmadaPortal() {
+    setOmadaPortalEnabling(true);
+    setActionResult(null);
+    try {
+      const result = await request('/captive-portal/omada/enable', { method: 'POST', body: JSON.stringify({}) });
+      setOmadaPortalStatus(result.omada_status || null);
+      setActionResult({ ...result, action: 'ENABLE_OMADA_PORTAL' });
+      if (result.status === 'SUCCESS') setMessage(result.message || 'Omada captive portal enabled.');
+      else setActionResult({ ...result, action: 'ENABLE_OMADA_PORTAL', status: result.status || 'FAILED', message: result.message || 'Omada captive portal enable completed with issues.' });
+      await load();
+    } catch (error) {
+      setActionResult({ action: 'ENABLE_OMADA_PORTAL', status: 'FAILED', message: error.message || 'Omada captive portal enable failed.' });
+    } finally {
+      setOmadaPortalEnabling(false);
+    }
   }
   useEffect(() => { load(); }, []);
   useEffect(() => {
@@ -5116,6 +6942,39 @@ function CaptivePortalPage({ mode = 'full' }) {
     }, 1000);
     return () => window.clearTimeout(timer);
   }, [apManagementPushCompleted, apManagementPushCloseCountdown, apManagementImplementation]);
+  useEffect(() => {
+    if (!apManagementRemoveCompleted || !apManagementRemove) return undefined;
+    if (apManagementRemoveCloseCountdown <= 0) {
+      closeApManagementRemoveSuccess();
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setApManagementRemoveCloseCountdown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [apManagementRemoveCompleted, apManagementRemoveCloseCountdown, apManagementRemove]);
+  useEffect(() => {
+    if (!officeApPathPushCompleted || !officeApPathImplementation) return undefined;
+    if (officeApPathPushCloseCountdown <= 0) {
+      closeOfficeApPathPushSuccess();
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setOfficeApPathPushCloseCountdown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [officeApPathPushCompleted, officeApPathPushCloseCountdown, officeApPathImplementation]);
+  useEffect(() => {
+    if (!officeApPathRemoveCompleted || !officeApPathRemove) return undefined;
+    if (officeApPathRemoveCloseCountdown <= 0) {
+      closeOfficeApPathRemoveSuccess();
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setOfficeApPathRemoveCloseCountdown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [officeApPathRemoveCompleted, officeApPathRemoveCloseCountdown, officeApPathRemove]);
   useEffect(() => {
     if (!stationPushCompleted || !stationImplementation) return undefined;
     if (stationPushCloseCountdown <= 0) {
@@ -6048,7 +7907,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     UNKNOWN: 'Unknown'
   }[value] || value || 'Unknown');
   const deploymentModeLabel = (mode) => ({
-    HOTSPOT_GATEWAY: 'HotSpot Gateway',
+    HOTSPOT_GATEWAY: 'Station Gateway',
     VLAN_TRUNK_HELPER: 'VLAN Trunk Helper',
     READ_ONLY_CORE: 'Read-only/Core',
     ISP_BACKUP_TRANSPORT: 'ISP Backup/Transport',
@@ -6056,7 +7915,7 @@ function CaptivePortalPage({ mode = 'full' }) {
   }[mode] || mode || 'Not confirmed');
   const routerRoleLabel = (role) => ({
     PPPoE_ACCESS_CONCENTRATOR: 'PPPoE Access Concentrator',
-    HOTSPOT_GATEWAY_CANDIDATE: 'HotSpot Gateway Candidate',
+    HOTSPOT_GATEWAY_CANDIDATE: 'Station Gateway Candidate',
     CORE_ROUTER_READ_ONLY: 'Core Router',
     SWITCH_TRUNK_HELPER: 'Switch/CRS/Trunk',
     ISP_BACKUP_TRANSPORT: 'ISP Backup/Transport',
@@ -6201,8 +8060,8 @@ function CaptivePortalPage({ mode = 'full' }) {
     );
   }
   const stationFieldHints = {
-    stationName: 'Friendly name for this deployment path. Example: CCR2116-Roma to CRS317 or Roma/Batu/GK HotSpot VLAN.',
-    stationCode: 'Short unique code for this substation/station. It helps keep VLAN, HotSpot, logs, and future reports tied to one location.',
+    stationName: 'Friendly name for this deployment path. Example: CCR2116-Roma to CRS317 or Roma/Batu/GK customer VLAN.',
+    stationCode: 'Short unique code for this substation/station. It helps keep VLAN, logs, and future reports tied to one location.',
     stationDescription: 'Optional note describing where the VLAN travels, for example root gateway to CRS, OLT, ONU, and APs.',
     routerChain: 'Add routers in the exact order customer VLAN traffic travels. The first router is the root gateway; following routers only carry the same VLAN downstream.',
     mikrotikRouter: 'Choose one of the MikroTik routers already saved in the system. The system uses read-only scan/API data to list its ports and bridges.',
@@ -6211,29 +8070,22 @@ function CaptivePortalPage({ mode = 'full' }) {
     taggedPortsRoot: 'Select the root bridge itself plus the trunk port going to the next router. In your working example this was SwAC and sfp-sfpplus3. PPPoE interfaces are hidden here.',
     taggedPortsDownstream: 'Select the port from the previous router and the ports going toward OLTs/APs. In your CRS317 example these were sfp-sfpplus2, sfp-sfpplus3, and the OLT/AP-facing ports. PPPoE interfaces are hidden here.',
     vlanId: 'Customer VLAN used by the open captive portal SSID. In your tested setup this is VLAN 77.',
-    vlanInterfaceName: 'RouterOS VLAN interface name created on the root gateway. In your example this is VLAN77-3J-HOTSPOT.',
+    vlanInterfaceName: 'RouterOS VLAN interface name created on the root gateway. Example: VLAN77-3J-CLIENTS.',
     clientNetwork: 'Network used by WiFi voucher clients. In your example this is 10.77.0.0/24.',
     gatewayIp: 'IP address of the root MikroTik on the customer VLAN. In your example this is 10.77.0.1.',
     poolStart: 'First DHCP address given to WiFi clients. In your example this is 10.77.0.2.',
     poolEnd: 'Last DHCP address given to WiFi clients. In your example this is 10.77.0.254.',
-    poolName: 'RouterOS IP pool name for customer devices. In your example this is POOL-3J-HOTSPOT-V77.',
+    poolName: 'RouterOS IP pool name for customer devices. Example: POOL-3J-CLIENTS-V77.',
     createDhcpServer: 'Keep this enabled when the root gateway should hand IP addresses to voucher WiFi clients. CRS/trunk routers do not create DHCP servers.',
     dhcpServerName: 'RouterOS DHCP server name created on the root gateway for this station VLAN. In your example this maps to /ip dhcp-server add using the VLAN interface and pool.',
     dhcpLeaseTime: 'How long voucher clients keep their DHCP address before renewal. A short value such as 1h is practical during pilot testing.',
     localInterfaceList: 'Interface list where the new VLAN interface is added so existing LAN/local firewall logic can recognize it. In your example this is LOCAL.',
-    dnsServers: 'Router upstream DNS servers. Captive clients receive only the MikroTik gateway as DNS; the router forwards lookups to these upstream servers after controlling captive detection.',
-    createHotspotProfile: 'Keep this enabled to create a station-specific MikroTik HotSpot profile on the root gateway.',
-    createHotspotServer: 'Keep this enabled to create the MikroTik HotSpot server on the root gateway VLAN interface. CRS/trunk routers do not create HotSpot servers.',
-    createWalledGarden: 'Adds pre-login allow rules so clients can reach the 3J portal server and DNS before they redeem a voucher.',
-    hotspotProfileName: 'RouterOS HotSpot profile name for this station. The HotSpot server uses this profile.',
-    hotspotHtmlDirectory: 'RouterOS HotSpot HTML directory. Use hotspot unless you have uploaded a custom directory to the MikroTik.',
-    hotspotDnsName: 'MikroTik HotSpot DNS name for this station. Clients can be redirected to this local name during HotSpot login.',
-    hotspotServerName: 'MikroTik HotSpot server name for the root gateway. This is not used by CRS/trunk routers.',
+    dnsServers: 'DNS servers handed to customer devices by DHCP. Omada handles captive portal redirect/enforcement.',
     portalUrl: 'Customer portal URL clients should reach before login. Staging usually uses http://192.168.50.70:8080/portal.',
-    apManagementEnabled: 'Enable this when APs should receive management IPs from a dedicated AP management VLAN instead of the customer HotSpot VLAN.',
+    apManagementEnabled: 'Enable this when APs should receive management IPs from a dedicated AP management VLAN instead of the customer captive VLAN.',
     apManagementVlanId: 'VLAN tag used by AP management. Configure the same management VLAN on Omada/APs. Default for new stations is VLAN 111.',
     apManagementInterfaceName: 'RouterOS VLAN interface name for AP management on the root gateway and monitoring interfaces on trunk routers.',
-    apManagementNetwork: 'Dedicated subnet for AP management IP addresses. Default is 10.111.0.0/24. Do not reuse the customer HotSpot subnet.',
+    apManagementNetwork: 'Dedicated subnet for AP management IP addresses. Default is 10.111.0.0/24. Do not reuse the customer captive subnet.',
     apManagementGateway: 'Root MikroTik IP address inside the AP management subnet. APs use this as their gateway.',
     apManagementPoolStart: 'First DHCP address for AP management. Leave room before this range for static AP/router addresses.',
     apManagementPoolEnd: 'Last DHCP address for AP management.',
@@ -6253,8 +8105,42 @@ function CaptivePortalPage({ mode = 'full' }) {
     const text = [iface.name, iface.type, iface.comment].map((value) => String(value || '').toLowerCase()).join(' ');
     return text.includes('pppoe');
   }
+  function isPhysicalPortInterface(iface = {}) {
+    const name = String(iface.name || '').toLowerCase();
+    const type = String(iface.type || '').toLowerCase();
+    return type.includes('ether') || /^(ether|sfp|combo)/.test(name);
+  }
   function interfaceOptionLabel(iface = {}) {
     return [iface.name, iface.type, iface.bridge ? `bridge: ${iface.bridge}` : '', iface.comment].filter(Boolean).join(' - ');
+  }
+  function bridgeInterfaceChoicesFromOptions(routerOptions = {}) {
+    const interfaceRows = Array.isArray(routerOptions.interfaces) ? routerOptions.interfaces : [];
+    const bridgeRows = Array.isArray(routerOptions.bridges) ? routerOptions.bridges : [];
+    const byName = new Map();
+    bridgeRows.forEach((bridge) => {
+      const name = bridge?.name;
+      if (!name) return;
+      byName.set(name, {
+        name,
+        type: 'bridge',
+        running: Boolean(bridge.running),
+        disabled: Boolean(bridge.disabled),
+        bridge: null,
+        is_bridge: true,
+        comment: bridge.comment || ''
+      });
+    });
+    interfaceRows.forEach((iface) => {
+      if (!iface?.name || isPppoeInterface(iface)) return;
+      const existing = byName.get(iface.name) || {};
+      byName.set(iface.name, { ...iface, is_bridge: Boolean(iface.is_bridge || existing.is_bridge) });
+    });
+    return Array.from(byName.values()).sort((left, right) => {
+      const leftBridge = left.is_bridge || String(left.type || '').toLowerCase() === 'bridge';
+      const rightBridge = right.is_bridge || String(right.type || '').toLowerCase() === 'bridge';
+      if (leftBridge !== rightBridge) return leftBridge ? -1 : 1;
+      return String(left.name || '').localeCompare(String(right.name || ''));
+    });
   }
   const stationChainReady = stationForm.routers.length > 0;
   const stationRouterPathReady = stationForm.routers.length > 0 && stationForm.routers.every((router) => router.router_id && router.bridge_name && router.tagged_ports);
@@ -6262,13 +8148,11 @@ function CaptivePortalPage({ mode = 'full' }) {
     stationForm.vlan_id
     && stationForm.client_network_cidr
     && stationForm.gateway_ip
-    && stationForm.pool_start_ip
-    && stationForm.pool_end_ip
-    && (!stationForm.create_dhcp_server || stationForm.dhcp_server_name)
-    && (!stationForm.create_hotspot_profile || stationForm.hotspot_profile_name)
-    && (!stationForm.create_hotspot_server || stationForm.hotspot_server_name)
-    && stationForm.portal_url
-  );
+	    && stationForm.pool_start_ip
+	    && stationForm.pool_end_ip
+	    && (!stationForm.create_dhcp_server || stationForm.dhcp_server_name)
+	    && stationForm.portal_url
+	  );
   const stationStepItems = [
     { label: '1. Name Station', ready: Boolean(stationForm.station_name.trim() && stationForm.station_code.trim()), detail: 'Identify this substation network.' },
     { label: '2. Build Router Chain', ready: stationChainReady, detail: 'Root gateway first, downstream routers after.' },
@@ -6287,7 +8171,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     dhcpServerName: 'Optional MikroTik DHCP server label. Leave blank for a system-generated name.',
     leaseTime: 'How long a client keeps its assigned IP address, for example 1h.',
     dnsServers: 'DNS servers sent to clients after they connect, for example 1.1.1.1,8.8.8.8.',
-    hotspotDnsName: 'Optional local HotSpot DNS name. Leave blank if you are not sure.',
+    hotspotDnsName: 'Legacy MikroTik HotSpot DNS name. Current Omada captive portal path does not use this.',
     wanInterface: 'Internet or uplink side of the MikroTik. Used only when NAT masquerade is enabled.',
     nat: 'Enable this when this MikroTik will send voucher users to the internet directly.'
   };
@@ -6306,14 +8190,14 @@ function CaptivePortalPage({ mode = 'full' }) {
     { key: 'router-vlan', group: 'MikroTik', title: 'MikroTik customer VLAN is assigned', details: `${mikrotiksWithCustomerVlan}/${mikrotiks.length || 0} router${mikrotiks.length === 1 ? '' : 's'} have a customer VLAN ID and VLAN parent interface. This VLAN must also be used on the AP SSID.`, mode: 'auto', state: mikrotiks.length && mikrotiksWithCustomerVlan === mikrotiks.length ? 'ready' : 'needs_action' },
     { key: 'router-reachable', group: 'MikroTik', title: 'MikroTik API connection works', details: `${reachableMikrotiks}/${mikrotiks.length || 0} router${mikrotiks.length === 1 ? '' : 's'} reachable.`, mode: 'auto', state: reachableMikrotiks > 0 ? 'ready' : 'needs_action' },
     { key: 'station-plan', group: 'MikroTik', title: 'MikroTik station plan exists', details: `${mikrotikStations.length} station plan${mikrotikStations.length === 1 ? '' : 's'} saved under Network -> MikroTik -> Configuration.`, mode: 'auto', state: mikrotikStations.length ? 'ready' : 'needs_action' },
-    { key: 'router-applied', group: 'MikroTik', title: 'MikroTik apply phase', details: 'RouterOS write/apply is not the primary action in this screen yet. Station plans must be reviewed first.', mode: 'auto', state: hasAppliedMikrotik ? 'ready' : 'placeholder' },
+    { key: 'router-applied', group: 'MikroTik', title: 'Station transport push', details: 'RouterOS writes are limited to reviewed station transport/AP-management changes. Omada handles captive portal enforcement.', mode: 'auto', state: hasAppliedMikrotik ? 'ready' : 'placeholder' },
     { key: 'voucher-stock', group: 'Voucher', title: 'Unused voucher exists for testing', details: `${voucherSummary?.unused || 0} unused voucher${Number(voucherSummary?.unused || 0) === 1 ? '' : 's'} available.`, mode: 'auto', state: hasUnusedVouchers ? 'ready' : 'needs_action' },
     { key: 'portal-redemption', group: 'Voucher', title: 'Portal voucher redemption has succeeded before', details: hasSuccessfulPortalRedemption ? 'At least one CLIENT_PORTAL redemption exists.' : 'Create a test voucher and redeem it from /portal.', mode: 'auto', state: hasSuccessfulPortalRedemption ? 'ready' : 'needs_action' },
     { key: 'portal-session', group: 'Session', title: 'Portal sessions are being recorded', details: `${sessions.length} portal session${sessions.length === 1 ? '' : 's'} recorded.`, mode: 'auto', state: hasPortalSession ? 'ready' : 'needs_action' },
-    { key: 'gateway-auth', group: 'Gateway', title: 'Gateway authorization has succeeded', details: hasGatewayAuthorizationSuccess ? 'At least one gateway authorization log succeeded.' : 'Redeem a voucher from a MikroTik HotSpot redirect to test gateway authorization.', mode: 'auto', state: hasGatewayAuthorizationSuccess ? 'ready' : 'needs_action' },
+    { key: 'gateway-auth', group: 'Gateway', title: 'Gateway authorization has succeeded', details: hasGatewayAuthorizationSuccess ? 'At least one gateway authorization log succeeded.' : 'Omada captive portal authorization will be validated after OCP integration is enabled.', mode: 'auto', state: hasGatewayAuthorizationSuccess ? 'ready' : 'placeholder' },
     { key: 'phone-redirect', group: 'Field Test', title: 'Phone redirects to the portal from the test SSID', details: 'Manual operator check. Connect a phone to the AP SSID and confirm it opens the voucher portal.', mode: 'manual', state: sanityProgress['phone-redirect'] ? 'ready' : 'manual' },
-    { key: 'internet-after-voucher', group: 'Field Test', title: 'Internet works after a valid voucher', details: 'Manual operator check. This remains blocked until MikroTik enforcement/authorization is fully wired.', mode: 'manual', state: sanityProgress['internet-after-voucher'] ? 'ready' : 'placeholder' },
-    { key: 'expired-blocked', group: 'Field Test', title: 'Expired or invalid voucher stays blocked', details: 'Manual operator check after gateway enforcement is active.', mode: 'manual', state: sanityProgress['expired-blocked'] ? 'ready' : 'placeholder' },
+    { key: 'internet-after-voucher', group: 'Field Test', title: 'Internet works after a valid voucher', details: 'Manual operator check after Omada captive portal enforcement is wired to the voucher portal.', mode: 'manual', state: sanityProgress['internet-after-voucher'] ? 'ready' : 'placeholder' },
+    { key: 'expired-blocked', group: 'Field Test', title: 'Expired or invalid voucher stays blocked', details: 'Manual operator check after Omada enforcement is active.', mode: 'manual', state: sanityProgress['expired-blocked'] ? 'ready' : 'placeholder' },
     { key: 'payments', group: 'Future', title: 'Payments integration', details: 'Placeholder only. Payments are not part of the current captive portal phase.', mode: 'placeholder', state: 'placeholder' },
     { key: 'sms', group: 'Future', title: 'SMS integration', details: 'Placeholder only. SMS is not part of the current captive portal phase.', mode: 'placeholder', state: 'placeholder' },
     { key: 'coinslot', group: 'Future', title: 'Coinslot / vendo integration', details: 'Placeholder only. Vendo hardware integration is not part of the current captive portal phase.', mode: 'placeholder', state: 'placeholder' }
@@ -6329,7 +8213,7 @@ function CaptivePortalPage({ mode = 'full' }) {
   return (
     <div className="row row-cards">
       {message && (
-        <div className="col-12">
+        <div className="col-12" ref={messageAlertRef} tabIndex={-1}>
           <AutoDismissAlert message={message} onDismiss={() => setMessage('')} />
         </div>
       )}
@@ -6337,10 +8221,10 @@ function CaptivePortalPage({ mode = 'full' }) {
           <div className="card captive-portal-panel">
             <div className="card-header">
               <div>
-              <h3 className="card-title mb-1">{isMikrotikOnly ? 'MikroTik Gateway Management' : 'Captive Portal'}</h3>
+              <h3 className="card-title mb-1">{isMikrotikOnly ? 'MikroTik Transport Management' : 'Captive Portal'}</h3>
               <div className="text-muted small">
                 {isMikrotikOnly
-                  ? 'Plan station router chains, run preflight scans, and manage MikroTik gateway setup from the Network workspace.'
+                  ? 'Plan station router chains, run preflight scans, and manage MikroTik VLAN/DHCP/NAT transport from the Network workspace.'
                   : 'Manage portal URLs, customer portal design, sessions, and integration tools from one workspace.'}
               </div>
             </div>
@@ -6365,8 +8249,8 @@ function CaptivePortalPage({ mode = 'full' }) {
           <div className="card-body">
             <div className="alert alert-info">
               {isMikrotikOnly
-                ? 'MikroTik is the preferred gateway/enforcement layer. Use stations to model root gateway and downstream trunk routers before any RouterOS change is reviewed.'
-                : 'Captive Portal + Voucher is the primary customer flow. MikroTik is now the preferred gateway for redirect, allow/block, and future substation tunnel setups. Omada remains for AP/SSID management.'}
+                ? 'MikroTik is used for station transport: VLAN, DHCP, NAT, AP management transport, and downstream trunk paths. Omada handles captive portal redirect and client authorization.'
+                : 'Captive Portal + Voucher is the primary customer flow. Omada handles open SSID captive portal redirect/enforcement, while MikroTik provides station transport and routing.'}
             </div>
             <div className="row row-cards">
       {activeTab === 'Portal' && <>
@@ -6391,6 +8275,103 @@ function CaptivePortalPage({ mode = 'full' }) {
               )}
               <div className="text-muted small mt-1">Managed in APs Deployment - Sites - Configurations - SSID and Security.</div>
             </div>
+          </Card>
+        </div>
+        <div className="col-md-6">
+          <Card title={<CardHeaderContent><div className="d-flex align-items-center justify-content-between gap-2 w-100"><h3 className="card-title mb-0">Omada Captive Portal</h3>
+            <span className={`badge ${omadaPortalBadgeClass(omadaPortalStatus?.status)}`}>
+              <IconWifi size={14} className="me-1" />{omadaPortalStatusLabel(omadaPortalStatus?.status)}
+              <span className="ms-1">{omadaPortalStatus?.portal_ap_ratio || '0/0'}</span>
+            </span></div></CardHeaderContent>}>
+            <div className="d-flex align-items-start justify-content-between gap-3 flex-wrap mb-3">
+              <div>
+                <div className="fw-semibold">{omadaPortalStatus?.message || 'Checking Omada captive portal setup status...'}</div>
+                <div className="text-muted small mt-1">
+                  Bound stations: {omadaPortalStatus?.bound_station_count ?? 0}
+                  {omadaPortalStatus?.controller ? ` · Controller: ${omadaPortalStatus.controller}` : ''}
+                </div>
+              </div>
+            </div>
+            <div className="row g-2 mb-3">
+              <div className="col-sm-4">
+                <div className="border rounded p-2 h-100">
+                  <div className="text-muted small">Portal APs</div>
+                  <div className="h2 mb-0">{omadaPortalStatus?.portal_ap_count ?? 0}</div>
+                </div>
+              </div>
+              <div className="col-sm-4">
+                <div className="border rounded p-2 h-100">
+                  <div className="text-muted small">Connected</div>
+                  <div className="h2 mb-0 text-green">{omadaPortalStatus?.portal_ap_connected_count ?? 0}</div>
+                </div>
+              </div>
+              <div className="col-sm-4">
+                <div className="border rounded p-2 h-100">
+                  <div className="text-muted small">Not Connected</div>
+                  <div className="h2 mb-0 text-red">{omadaPortalStatus?.portal_ap_not_connected_count ?? 0}</div>
+                </div>
+              </div>
+            </div>
+            <div className="alert alert-warning mb-3">
+              If Omada captive portal is down or not enabled on the SSID, clients will pass through the station VLAN/DHCP/NAT like normal WiFi and can get internet without voucher enforcement. The fix is to enable Omada Portal Authentication / External Portal on the open SSID and keep the station VLAN as transport only.
+            </div>
+            <div className="border rounded">
+              <div className="table-responsive">
+                <table className="table table-sm card-table mb-0">
+                  <thead>
+                    <tr>
+                      <th>AP</th>
+                      <th>Site</th>
+                      <th>SSID(s)</th>
+                      <th>VLAN</th>
+                      <th>Portal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(omadaPortalStatus?.portal_aps || []).length ? (omadaPortalStatus.portal_aps || []).map((ap) => (
+                      <tr key={ap.id || `${ap.site_id}-${ap.mac}`}>
+                        <td>
+                          <div className="fw-semibold">{ap.name || ap.mac || 'AP'}</div>
+                          <div className="text-muted small">{ap.ip || ap.model || ''}</div>
+                        </td>
+                        <td>{ap.site_name || 'Unlinked'}</td>
+                        <td>
+                          <div className="d-flex flex-wrap gap-1">
+                            {(ap.desired_ssids || []).length ? (ap.desired_ssids || []).map((ssid) => (
+                              <span className="badge bg-blue-lt text-blue" key={`${ap.id}-${ssid}`}>{ssid}</span>
+                            )) : <span className="text-muted small">No SSID configured</span>}
+                          </div>
+                        </td>
+                        <td>{ap.vlan_id ? <span className="badge bg-purple-lt text-purple">VLAN {ap.vlan_id}</span> : <span className="text-muted">None</span>}</td>
+                        <td>
+                          <span className={`badge ${ap.portal_connected ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`} title={ap.reason || ap.portal_status}>
+                            {ap.portal_connected ? <IconCircleCheck size={13} className="me-1" /> : <IconAlertTriangle size={13} className="me-1" />}
+                            {ap.portal_connected ? 'Connected' : 'Not connected'}
+                          </span>
+                        </td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td colSpan={5} className="text-muted text-center py-4">
+                          No APs are linked to Omada portal status yet. Push WiFi config from List of APs after the AP is connected.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            {omadaPortalStatus?.latest_enable_action && (
+              <div className="small text-muted mt-3">
+                Last portal action: <strong>{omadaPortalStatus.latest_enable_action.status}</strong> · {omadaPortalStatus.latest_enable_action.action} · {fmt(omadaPortalStatus.latest_enable_action.created_at)}
+              </div>
+            )}
+            {actionResult?.action === 'ENABLE_OMADA_PORTAL' && (
+              <div className={`alert mt-3 mb-0 ${actionResult.status === 'SUCCESS' ? 'alert-success' : actionResult.status === 'PARTIAL' ? 'alert-warning' : 'alert-danger'}`}>
+                <div className="fw-semibold">{actionResult.status}</div>
+                <div>{actionResult.message || 'Omada portal action completed.'}</div>
+              </div>
+            )}
           </Card>
         </div>
         <div className="col-md-6">
@@ -6423,12 +8404,12 @@ function CaptivePortalPage({ mode = 'full' }) {
           </Card>
         </div>
       </>}
-      {activeTab === 'MikroTik' && <>
+	      {activeTab === 'MikroTik' && <>
         <div className="col-12">
           <div className="card">
             <div className="card-body border-bottom py-2">
               <ul className="nav nav-tabs flex-nowrap overflow-auto" role="tablist">
-                {['Overview', 'Configuration', 'Portal Sync', 'AP Management', ...(mikrotikTab === 'Scan Result' ? ['Scan Result'] : []), 'Add Router'].map((item) => (
+                {['Overview', 'Configuration', 'AP Management', ...(mikrotikTab === 'Scan Result' ? ['Scan Result'] : []), 'Add Router'].map((item) => (
                   <li className="nav-item" role="presentation" key={item}>
                     <button type="button" className={`nav-link ${mikrotikTab === item ? 'active' : ''}`} onClick={() => setMikrotikTab(item)}>
                       {item}
@@ -6442,7 +8423,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                 <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                   <div>
                     <h3 className="card-title mb-1">MikroTik Overview</h3>
-                    <div className="text-muted small">Review router readiness, latest preflight status, and scan results before building or editing station plans.</div>
+                    <div className="text-muted small">Review router readiness, latest preflight status, and scan results before building or editing station transport plans.</div>
                   </div>
                   <div className="btn-list">
                     <button className="btn btn-outline-secondary btn-sm" type="button" onClick={loadPreflightSummary}>
@@ -6488,7 +8469,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                       <div>
                         {preflightEngaged
                           ? `${successfulPreflightRouters.length}/${mikrotiks.length} routers have a successful latest scan. Latest scan: ${fmt(latestPreflightTimestamp) || 'Unknown'}. Use the router list below to review scan details or re-scan a router.`
-                          : 'Run Prescan All Routers or scan one router from the list below before adding a station. The scan is read-only and lets the system validate VLANs, subnets, pools, DHCP, HotSpot, PPPoE, OSPF, WireGuard, routing, and firewall conflict indicators.'}
+                          : 'Run Prescan All Routers or scan one router from the list below before adding a station. The scan is read-only and lets the system validate VLANs, subnets, pools, DHCP, existing legacy HotSpot objects, PPPoE, OSPF, WireGuard, routing, and firewall conflict indicators.'}
                       </div>
                     </div>
                   </div>
@@ -6553,7 +8534,7 @@ function CaptivePortalPage({ mode = 'full' }) {
               {mikrotikTab === 'Configuration' && <>
                 <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                   <div>
-                    <h3 className="card-title mb-1">MikroTik Configuration</h3>
+                    <h3 className="card-title mb-1">MikroTik Transport Configuration</h3>
 	                    <div className="text-muted small">Station-based MikroTik setup is the active path. Build the root-to-downstream router chain first, then review the station plan before any RouterOS configuration is applied.</div>
                   </div>
                   <button className="btn btn-primary" type="button" onClick={openStationModal} disabled={!preflightEngaged} title={preflightEngaged ? 'Create a station router chain.' : 'Run at least one read-only preflight scan before adding a station.'}>
@@ -6589,28 +8570,35 @@ function CaptivePortalPage({ mode = 'full' }) {
                               <div>
                                 <div className="fw-semibold">{station.station_name}</div>
                                 <div className="text-muted small">{station.station_code ? `${station.station_code} · ` : ''}Hover the router links to view customer VLAN, gateway, and pool details.</div>
+                                {(station.has_pending_cleanup || station.plan?.has_pending_cleanup) && (
+                                  <div className="text-orange small mt-1">
+                                    <IconAlertTriangle size={14} className="me-1" />Edited plan: Push Config removes old managed station objects before applying the updated config.
+                                  </div>
+                                )}
                               </div>
                             </div>
                             <div className="btn-list justify-content-end flex-nowrap">
                               <span className="badge bg-secondary-lt text-secondary align-self-center">{station.status}</span>
-                              {(() => {
-                                const progress = stationProgressSummary(station);
-                                return <span className={`badge align-self-center ${progress.pushed >= progress.total && progress.total ? 'bg-green-lt text-green' : progress.pushed ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>{progress.pushed}/{progress.total} pushed</span>;
-                              })()}
-                              {(() => {
-                                const syncRow = stationLoginSyncRow(station.id) || station.hotspot_login_sync || {};
-                                return <span className={`badge align-self-center ${hotspotLoginStatusClass(syncRow.status)}`}>login.html {syncRow.status || 'UNKNOWN'}</span>;
-                              })()}
-                              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => setStationReview(station)} title="View generated station plan">
-                                <IconEye size={16} className="me-1" />View
+	                              {(() => {
+	                                const progress = stationProgressSummary(station);
+	                                return <span className={`badge align-self-center ${progress.pushed >= progress.total && progress.total ? 'bg-green-lt text-green' : progress.pushed ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>{progress.pushed}/{progress.total} pushed</span>;
+	                              })()}
+                              {(station.has_pending_cleanup || station.plan?.has_pending_cleanup) && (
+                                <span className="badge bg-orange-lt text-orange align-self-center">Cleanup pending</span>
+                              )}
+                              <span className={`badge align-self-center ${station.omada_site_id || station.omada_site_name ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>
+                                {station.omada_site_name || station.omada_site_id ? `Omada: ${station.omada_site_name || station.omada_site_id}` : 'Omada site not bound'}
+                              </span>
+			                              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => setStationReview(station)} title="View generated station plan">
+		                                <IconEye size={16} className="me-1" />View
+		                              </button>
+                              <button className="btn btn-sm btn-outline-info" type="button" onClick={() => openStationOmadaPortalPlan(station)} title="Review Omada captive portal setup for this station">
+                                <IconWifi size={16} className="me-1" />Omada Portal
                               </button>
-                              <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => openEditStation(station)} title="Edit station plan">
-                                <IconEdit size={16} className="me-1" />Edit
-                              </button>
-                              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openStationDiagnostics(station)} title="Run HotSpot diagnostics">
-                                <IconActivity size={16} className="me-1" />Diagnostics
-                              </button>
-                              <button className="btn btn-sm btn-primary" type="button" onClick={() => openStationImplementation(station)} title="Open config push workflow">
+	                              <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => openEditStation(station)} title="Edit station plan">
+	                                <IconEdit size={16} className="me-1" />Edit
+	                              </button>
+	                              <button className="btn btn-sm btn-primary" type="button" onClick={() => openStationImplementation(station)} title="Open config push workflow">
                                 <IconPlayerPlay size={16} className="me-1" />Push Config
                               </button>
                               {station.status === 'ACTIVE' && (
@@ -6817,84 +8805,11 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                  </div>
 	                </div>}
               </>}
-              {mikrotikTab === 'Portal Sync' && <>
-                <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
-                  <div>
-                    <h3 className="card-title mb-1">Portal Sync</h3>
-                    <div className="text-muted small">Manage the single HotSpot redirect file named <code>login.html</code>. The same portal file is synced to every station root gateway.</div>
-                  </div>
-                  <div className="btn-list justify-content-end flex-nowrap">
-                    <button className="btn btn-outline-primary btn-sm" type="button" onClick={checkHotspotLoginSync} disabled={hotspotLoginChecking || hotspotLoginSyncing || !mikrotikStations.length}>
-                      <IconSearch size={15} className="me-1" />{hotspotLoginChecking ? 'Checking...' : 'Check Sync'}
-                    </button>
-                    <button className="btn btn-primary btn-sm" type="button" onClick={() => syncHotspotLoginHtml()} disabled={hotspotLoginSyncing || !mikrotikStations.length}>
-                      <IconRefresh size={15} className="me-1" />{hotspotLoginSyncing ? 'Syncing...' : 'Sync login.html to MikroTik'}
-                    </button>
-                  </div>
-                </div>
-                <div className="row g-2 mb-3">
-                  {[
-                    { label: 'Stations', value: hotspotLoginSync.summary?.total ?? mikrotikStations.length, tone: 'bg-blue-lt text-blue' },
-                    { label: 'Synced', value: hotspotLoginSync.summary?.synced ?? 0, tone: 'bg-green-lt text-green' },
-                    { label: 'Needs Sync', value: hotspotLoginSync.summary?.needs_sync ?? 0, tone: 'bg-yellow-lt text-yellow' },
-                    { label: 'Errors', value: hotspotLoginSync.summary?.failed ?? 0, tone: 'bg-red-lt text-red' }
-                  ].map((item) => (
-                    <div className="col-6 col-md-3" key={`portal-sync-kpi-${item.label}`}>
-                      <div className="border rounded p-3 h-100">
-                        <div className="text-muted small">{item.label}</div>
-                        <span className={`badge fs-6 ${item.tone}`}>{item.value}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                {!!(hotspotLoginSync.stations || []).length ? (
-                  <div className="table-responsive">
-                    <table className="table table-sm table-vcenter mb-0">
-                      <thead>
-                        <tr>
-                          <th>Station</th>
-                          <th>Root Gateway</th>
-                          <th>File</th>
-                          <th>Status</th>
-                          <th className="text-end">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(hotspotLoginSync.stations || []).map((row) => (
-                          <tr key={`portal-sync-${row.station_id}`}>
-                            <td>
-                              <div className="fw-semibold">{row.station_name}</div>
-                              <div className="text-muted small">{row.latest_sync?.created_at ? `Last sync: ${fmt(row.latest_sync.created_at)}` : 'Not synced yet'}</div>
-                            </td>
-                            <td>{row.router_name || '-'}</td>
-                            <td><code>{row.file_path || 'hotspot/login.html'}</code></td>
-                            <td>
-                              <span className={`badge ${hotspotLoginStatusClass(row.status)}`}>{row.status || 'UNKNOWN'}</span>
-                              {row.message && <div className="text-muted small text-truncate mt-1" title={row.message}>{row.message}</div>}
-                            </td>
-                            <td className="text-end">
-                              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => syncHotspotLoginHtml(row.station_id)} disabled={hotspotLoginSyncing}>
-                                <IconRefresh size={15} className="me-1" />Sync
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : (
-                  <div className="empty py-4">
-                    <div className="empty-icon"><IconCloudUpload size={32} /></div>
-                    <p className="empty-title">No station portal sync targets yet</p>
-                    <p className="empty-subtitle text-muted">Create a station first. The root gateway will appear here for login.html sync.</p>
-                  </div>
-                )}
-              </>}
               {mikrotikTab === 'AP Management' && <>
                 <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                   <div>
                     <h3 className="card-title mb-1">AP Management</h3>
-                    <div className="text-muted small">Plan and push the centralized AP/Omada management VLAN path separately from customer HotSpot station VLANs.</div>
+                    <div className="text-muted small">Plan and push the centralized AP/Omada management VLAN path separately from customer station VLANs.</div>
                   </div>
                   <div className="btn-list justify-content-end flex-nowrap">
                     <button className="btn btn-primary btn-sm" type="button" onClick={openApManagementModal} disabled={!preflightEngaged} title={preflightEngaged ? 'Create or edit the AP management router chain.' : 'Run at least one read-only preflight scan before adding AP management.'}>
@@ -6903,10 +8818,20 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <button className="btn btn-outline-primary btn-sm" type="button" onClick={openApManagementImplementation} disabled={!apManagementConfig?.id}>
                       <IconCloudUpload size={15} className="me-1" />Push AP Management Config
                     </button>
+                    <button className="btn btn-outline-danger btn-sm" type="button" onClick={openApManagementRemove} disabled={!apManagementConfig?.id}>
+                      <IconTrash size={15} className="me-1" />Remove Config
+                    </button>
                   </div>
                 </div>
                 {apManagementConfig?.id ? (
                   <div className="station-card-list">
+                    <div className="alert alert-info mb-3">
+                      <div className="fw-semibold mb-1">AP management subnet lives only on the root gateway</div>
+                      <div className="small">
+                        If you change only the subnet, the root CCR removes and recreates the IP address, pool, DHCP server, and DHCP network.
+                        CRS/trunk routers do not store that subnet; they carry only the AP management VLAN tag. If the VLAN ID remains {apManagementConfig.vlan_id}, CRS should still show VLAN {apManagementConfig.vlan_id} after Push Config succeeds.
+                      </div>
+                    </div>
                     <div className="station-plan-card">
                       {(() => {
                         const progress = apManagementProgressSummary(apManagementConfig);
@@ -6922,7 +8847,12 @@ function CaptivePortalPage({ mode = 'full' }) {
                           <span className="station-chain-node root"><IconRouter size={18} /></span>
                           <div>
                             <div className="fw-semibold">{apManagementConfig.config_name || 'Central AP Management'}</div>
-                            <div className="text-muted small">Hover the router links to view AP management VLAN, gateway, and DHCP pool details.</div>
+                            <div className="text-muted small">Root gateway owns the AP management subnet/DHCP. Downstream CRS/trunk routers only carry the AP management VLAN tag.</div>
+                            {(apManagementConfig.has_pending_cleanup || apManagementConfig.plan?.has_pending_cleanup) && (
+                              <div className="text-orange small mt-1">
+                                <IconAlertTriangle size={14} className="me-1" />Edited plan: Push Config removes old managed AP management objects before applying the updated config.
+                              </div>
+                            )}
                           </div>
                         </div>
                         <div className="btn-list justify-content-end flex-nowrap">
@@ -6930,14 +8860,21 @@ function CaptivePortalPage({ mode = 'full' }) {
                             const progress = apManagementProgressSummary(apManagementConfig);
                             return <span className={`badge align-self-center ${progress.pushed >= progress.total && progress.total ? 'bg-green-lt text-green' : progress.pushed ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>{progress.pushed}/{progress.total} pushed</span>;
                           })()}
-                          <span className={`badge align-self-center ${apManagementConfig.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{apManagementConfig.status || 'READY'}</span>
-                          <span className="badge bg-blue-lt text-blue align-self-center">VLAN {apManagementConfig.vlan_id}</span>
-                          <span className="badge bg-purple-lt text-purple align-self-center">{apManagementConfig.network_cidr}</span>
+	                          <span className={`badge align-self-center ${apManagementConfig.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{apManagementConfig.status || 'READY'}</span>
+	                          <span className="badge bg-blue-lt text-blue align-self-center">VLAN {apManagementConfig.vlan_id}</span>
+	                          <span className="badge bg-purple-lt text-purple align-self-center">{apManagementConfig.network_cidr}</span>
+                            {(apManagementConfig.has_pending_cleanup || apManagementConfig.plan?.has_pending_cleanup) && (
+                              <span className="badge bg-orange-lt text-orange align-self-center">Cleanup pending</span>
+                            )}
+	                          {apManagementConfig.plan?.omada_controller_discovery_ip && <span className="badge bg-green-lt text-green align-self-center">Omada {apManagementConfig.plan.omada_controller_discovery_ip}</span>}
                           <button className="btn btn-sm btn-outline-secondary" type="button" onClick={openApManagementModal} title="Edit AP management plan">
                             <IconEdit size={16} className="me-1" />Edit
                           </button>
                           <button className="btn btn-sm btn-primary" type="button" onClick={openApManagementImplementation} title="Open AP management config push workflow">
                             <IconPlayerPlay size={16} className="me-1" />Push Config
+                          </button>
+                          <button className="btn btn-sm btn-outline-danger" type="button" onClick={openApManagementRemove} title="Remove AP management-created RouterOS config">
+                            <IconTrash size={16} className="me-1" />Remove Config
                           </button>
                         </div>
                       </div>
@@ -6946,18 +8883,95 @@ function CaptivePortalPage({ mode = 'full' }) {
                       </div>
                     </div>
                   </div>
+	                ) : (
+	                  <div className="empty py-4">
+	                    <div className="empty-icon"><IconRouter size={32} /></div>
+	                    <p className="empty-title">No AP management plan yet</p>
+	                    <p className="empty-subtitle text-muted">Create the centralized AP management VLAN path after preflight data is available.</p>
+	                    <button className="btn btn-primary" type="button" onClick={openApManagementModal} disabled={!preflightEngaged}>
+	                      <IconSettings size={18} className="me-2" />Add AP Management
+	                    </button>
+	                  </div>
+	                )}
+	              </>}
+              {mikrotikTab === 'Office AP Path' && <>
+                <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                  <div>
+                    <h3 className="card-title mb-1">Office AP Path</h3>
+                    <div className="text-muted small">Carry the existing office subnet from CCR to CRS/OLT/ONU/AP so a reset AP can get an office DHCP address and reach Omada before customer SSID VLANs are applied.</div>
+                  </div>
+                  <div className="btn-list justify-content-end flex-nowrap">
+                    <button className="btn btn-primary btn-sm" type="button" onClick={openOfficeApPathModal} disabled={!preflightEngaged} title={preflightEngaged ? 'Create or edit the office AP path.' : 'Run at least one read-only preflight scan before adding the office AP path.'}>
+                      <IconSettings size={15} className="me-1" />{officeApPathConfig?.id ? 'Edit Office AP Path' : 'Add Office AP Path'}
+                    </button>
+                    <button className="btn btn-outline-primary btn-sm" type="button" onClick={openOfficeApPathImplementation} disabled={!officeApPathConfig?.id}>
+                      <IconCloudUpload size={15} className="me-1" />Push Config
+                    </button>
+                    <button className="btn btn-outline-danger btn-sm" type="button" onClick={openOfficeApPathRemove} disabled={!officeApPathConfig?.id}>
+                      <IconTrash size={15} className="me-1" />Remove Config
+                    </button>
+                  </div>
+                </div>
+                <div className="alert alert-warning">
+                  <div className="fw-semibold mb-1">This extends the office LAN at Layer 2</div>
+                  <div className="small">Root MikroTik bridges a tagged transport VLAN into the existing office bridge. CRS/trunk routers carry that VLAN tagged. The ONU/AP-facing port must make that VLAN native/untagged outside RouterOS. Use this on one AP path first to avoid leaking the office subnet.</div>
+                </div>
+                {officeApPathConfig?.id ? (
+                  <div className="station-card-list">
+                    <div className="station-plan-card">
+                      {(() => {
+                        const progress = officeApPathProgressSummary(officeApPathConfig);
+                        const pct = progress.total ? Math.round((progress.pushed / progress.total) * 100) : 0;
+                        return <div className="station-plan-progress"><div className="station-plan-progress-bar" style={{ width: `${pct}%` }} /></div>;
+                      })()}
+                      <div className="station-plan-card-header">
+                        <div className="station-plan-card-title">
+                          <span className="station-chain-node root"><IconRouter size={18} /></span>
+                          <div>
+                            <div className="fw-semibold">{officeApPathConfig.config_name || 'Office AP Path'}</div>
+                            <div className="text-muted small">Office bridge {officeApPathConfig.office_bridge_name} is carried over transport VLAN {officeApPathConfig.transport_vlan_id} toward the AP path.</div>
+                            {(officeApPathConfig.has_pending_cleanup || officeApPathConfig.plan?.has_pending_cleanup) && (
+                              <div className="text-orange small mt-1"><IconAlertTriangle size={14} className="me-1" />Edited plan: Push Config removes old managed office AP path objects before applying the updated config.</div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="btn-list justify-content-end flex-nowrap">
+                          {(() => {
+                            const progress = officeApPathProgressSummary(officeApPathConfig);
+                            return <span className={`badge align-self-center ${progress.pushed >= progress.total && progress.total ? 'bg-green-lt text-green' : progress.pushed ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>{progress.pushed}/{progress.total} pushed</span>;
+                          })()}
+                          <span className={`badge align-self-center ${officeApPathConfig.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{officeApPathConfig.status || 'READY'}</span>
+                          <span className="badge bg-blue-lt text-blue align-self-center">VLAN {officeApPathConfig.transport_vlan_id}</span>
+                          <span className="badge bg-purple-lt text-purple align-self-center">Office: {officeApPathConfig.office_bridge_name}</span>
+                          {(officeApPathConfig.has_pending_cleanup || officeApPathConfig.plan?.has_pending_cleanup) && <span className="badge bg-orange-lt text-orange align-self-center">Cleanup pending</span>}
+                          <button className="btn btn-sm btn-outline-secondary" type="button" onClick={openOfficeApPathModal} title="Edit office AP path plan">
+                            <IconEdit size={16} className="me-1" />Edit
+                          </button>
+                          <button className="btn btn-sm btn-primary" type="button" onClick={openOfficeApPathImplementation} title="Open office AP path config push workflow">
+                            <IconPlayerPlay size={16} className="me-1" />Push Config
+                          </button>
+                          <button className="btn btn-sm btn-outline-danger" type="button" onClick={openOfficeApPathRemove} title="Remove office AP path-created RouterOS config">
+                            <IconTrash size={16} className="me-1" />Remove Config
+                          </button>
+                        </div>
+                      </div>
+                      <div className="station-plan-card-body">
+                        {renderOfficeApPathChainPath(officeApPathConfig)}
+                      </div>
+                    </div>
+                  </div>
                 ) : (
                   <div className="empty py-4">
                     <div className="empty-icon"><IconRouter size={32} /></div>
-                    <p className="empty-title">No AP management plan yet</p>
-                    <p className="empty-subtitle text-muted">Create the centralized AP management VLAN path after preflight data is available.</p>
-                    <button className="btn btn-primary" type="button" onClick={openApManagementModal} disabled={!preflightEngaged}>
-                      <IconSettings size={18} className="me-2" />Add AP Management
+                    <p className="empty-title">No office AP path plan yet</p>
+                    <p className="empty-subtitle text-muted">Create this when you want reset/default APs to receive the office DHCP subnet across the CCR to CRS/OLT/ONU/AP path.</p>
+                    <button className="btn btn-primary" type="button" onClick={openOfficeApPathModal} disabled={!preflightEngaged}>
+                      <IconSettings size={18} className="me-2" />Add Office AP Path
                     </button>
                   </div>
                 )}
               </>}
-                {false && mikrotikStepReview && (
+	                {false && mikrotikStepReview && (
                   <Modal title={`Review Step ${mikrotikStepReview.item.step_number || mikrotikStepReview.index + 1}: ${mikrotikStepReview.item.step}`} onClose={() => mikrotikApplyingStep ? null : setMikrotikStepReview(null)}>
                     <div className="alert alert-danger">
                       <div className="fw-semibold mb-1">Review before applying</div>
@@ -6994,7 +9008,18 @@ function CaptivePortalPage({ mode = 'full' }) {
                         <div className="fw-semibold mb-1">Central AP management plan only</div>
                         <div>This saves the AP management VLAN/subnet and router path. It does not configure MikroTik until you use Push AP Management Config.</div>
                       </div>
-                      {apManagementError && <div className="alert alert-danger">{apManagementError}</div>}
+                      {apManagementSaveSuccess && (
+                        <div className="alert alert-success" ref={apManagementSuccessRef} tabIndex={-1}>
+                          <div className="fw-semibold mb-1">AP Management plan saved</div>
+                          <div>{apManagementSaveSuccess}</div>
+                        </div>
+                      )}
+                      {apManagementError && (
+                        <div className="alert alert-danger" ref={apManagementErrorRef} tabIndex={-1}>
+                          <div className="fw-semibold mb-1">AP Management plan was not saved</div>
+                          <div>{apManagementError}</div>
+                        </div>
+                      )}
                       <div className="row g-3">
                         <div className="col-md-4">
                           <StationLabel hint="Friendly name for this central AP management setup.">Config Name</StationLabel>
@@ -7104,11 +9129,15 @@ function CaptivePortalPage({ mode = 'full' }) {
                               const routerOptionsLoading = Boolean(row?.router_id && mikrotikOptionsLoading[row.router_id]);
                               const routerInterfaces = routerOptions.interfaces || [];
                               const safeInterfaces = routerInterfaces.filter((iface) => !isPppoeInterface(iface));
+                              const bridgeInterfaceChoices = bridgeInterfaceChoicesFromOptions(routerOptions);
                               const selectedTaggedPorts = String(row?.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
                               const selectedTaggedPortSet = new Set(selectedTaggedPorts);
                               const portSearchKey = row?.router_id || `ap-management-index-${activeIndex}`;
                               const portSearchText = apManagementPortSearch[portSearchKey] || '';
-                              const visibleTaggedInterfaces = safeInterfaces.filter((iface) => {
+                              const bridgeMemberInterfaces = row?.bridge_name
+                                ? safeInterfaces.filter((iface) => iface.name !== row.bridge_name && iface.bridge === row.bridge_name)
+                                : [];
+                              const visibleTaggedInterfaces = bridgeMemberInterfaces.filter((iface) => {
                                 const haystack = [iface.name, iface.type, iface.bridge, iface.comment].map((value) => String(value || '').toLowerCase()).join(' ');
                                 return !portSearchText.trim() || haystack.includes(portSearchText.trim().toLowerCase());
                               });
@@ -7156,8 +9185,8 @@ function CaptivePortalPage({ mode = 'full' }) {
                                       <div className="station-subpanel">
                                         <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                                           <div>
-                                            <div className="station-subpanel-title mb-1">{activeIndex === 0 ? 'Step 2: Select Root Bridge and Tagged Ports' : 'Step 2: Select Bridge and Tagged Ports'}</div>
-                                            <div className="text-muted small">Select the bridge/interface and all ports that should carry AP management VLAN {apManagementForm.vlan_id || 'x'}.</div>
+                                            <div className="station-subpanel-title mb-1">{activeIndex === 0 ? 'Step 2: Select Root Bridge and AP Management Ports' : 'Step 2: Select Bridge and AP Management Ports'}</div>
+                                            <div className="text-muted small">Tagged ports carry AP management VLAN {apManagementForm.vlan_id || 'x'} through the router chain toward OLTs and APs. Factory-reset APs should have their management VLAN configured manually before deployment for now.</div>
                                           </div>
                                           <button className="btn btn-outline-primary btn-sm" type="button" onClick={() => row.router_id && loadMikrotikRouterOptions(row.router_id)} disabled={!row.router_id || routerOptionsLoading}>
                                             {routerOptionsLoading ? <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true" /> : <IconRefresh size={15} className="me-1" />}
@@ -7169,7 +9198,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                             <StationLabel hint="Bridge/interface where AP management VLAN traffic is carried. PPPoE interfaces are hidden.">{activeIndex === 0 ? 'Root Bridge / Interface' : 'Bridge / Interface'}</StationLabel>
                                             <select className="form-select" value={row.bridge_name} onChange={(e) => updateApManagementRouter(activeIndex, { bridge_name: e.target.value })} disabled={!row.router_id || routerOptionsLoading} required>
                                               <option value="">{row.router_id ? (routerOptionsLoading ? 'Detecting bridge/interface list...' : 'Choose detected bridge/interface') : 'Choose router first'}</option>
-                                              {safeInterfaces.map((iface) => <option value={iface.name} key={`ap-management-bridge-${activeIndex}-${iface.name}`}>{interfaceOptionLabel(iface)}</option>)}
+                                              {bridgeInterfaceChoices.map((iface) => <option value={iface.name} key={`ap-management-bridge-${activeIndex}-${iface.name}`}>{interfaceOptionLabel(iface)}</option>)}
                                             </select>
                                             {!!(routerOptions.warnings || []).length && <div className="text-warning small mt-1">Some optional RouterOS option lists were unavailable, but interfaces loaded.</div>}
                                             {!routerOptionsLoading && row.router_id && routerOptions.status === 'SUCCESS' && (
@@ -7228,7 +9257,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                                 )}
                                               </div>
                                             </div>
-                                            <div className="text-muted small">Check every detected RouterOS interface that should carry VLAN {apManagementForm.vlan_id || 'x'} on this router. PPPoE interfaces are hidden.</div>
+                                            <div className="text-muted small">Check detected ports inside {row.bridge_name || 'the selected bridge'} that should carry VLAN {apManagementForm.vlan_id || 'x'} on this router. PPPoE ports and ports from other bridges are hidden.</div>
                                             {!!selectedTaggedPorts.length && (
                                               <div className="d-flex flex-wrap gap-1 mt-2">
                                                 {selectedTaggedPorts.map((port) => (
@@ -7269,19 +9298,25 @@ function CaptivePortalPage({ mode = 'full' }) {
                   </Modal>
                 )}
                 {apManagementImplementation && (
-                  <Modal title={`Push AP Management Config: ${apManagementImplementation.config_name}`} size="xl" onClose={() => { if (!apManagementImplementing) { apManagementPushCompleted ? closeApManagementPushSuccess() : setApManagementImplementation(null); } }}>
-                    <div className="alert alert-danger">
-                      <div className="fw-semibold mb-1">RouterOS write action</div>
-                      <div>Review every AP management command below before starting. When you click Start Push, the system sends these commands to the listed MikroTik routers one at a time and stops on the first error.</div>
-                    </div>
+		                  <Modal title={`Push AP Management Config: ${apManagementImplementation.config_name}`} size="xl" onClose={() => { if (!apManagementImplementing) { setApManagementGuidePanel(null); apManagementPushCompleted ? closeApManagementPushSuccess() : setApManagementImplementation(null); } }}>
+	                    <div className="alert alert-danger">
+	                      <div className="fw-semibold mb-1">RouterOS write action</div>
+	                      <div>The system checks MikroTik first, hides cleanup steps that are already removed, then pushes only the remaining needed steps one at a time.</div>
+	                    </div>
+	                    {apManagementImplementationSteps.some((step) => step.phase === 'CLEANUP_OLD') && (
+	                      <div className="alert alert-warning">
+	                        <div className="fw-semibold mb-1">Changed configuration cleanup</div>
+	                        <div>{apManagementImplementation.plan?.pending_cleanup_reason || apManagementImplementation.pending_cleanup_reason || 'Only old AP management objects still detected on MikroTik are shown below and removed before the new config is pushed.'}</div>
+	                      </div>
+	                    )}
                     <div className="row g-3 mb-3">
                       <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">AP Management VLAN</div><div className="h3 mb-0">VLAN {apManagementImplementation.vlan_id}</div></div></div>
                       <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Management Network</div><div className="h4 mb-0">{apManagementImplementation.network_cidr}</div></div></div>
                       <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Gateway</div><div className="h4 mb-0">{apManagementImplementation.gateway_ip}</div></div></div>
-                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Routers</div><div className="h3 mb-0">{(apManagementImplementation.routers || []).length}</div></div></div>
+	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Omada Discovery</div><div className="h4 mb-0">{apManagementImplementation.plan?.omada_controller_discovery_ip || 'Not set'}</div></div></div>
                     </div>
                     {(() => {
-                      const totalSteps = apManagementImplementationSteps.length || apManagementStepList(apManagementImplementation).length;
+	                      const totalSteps = apManagementImplementationSteps.length;
                       const completedSteps = apManagementImplementationSteps.filter((item) => ['SUCCESS', 'SKIPPED', 'FAILED'].includes(item.status)).length;
                       const successSteps = apManagementImplementationSteps.filter((item) => ['SUCCESS', 'SKIPPED'].includes(item.status)).length;
                       const failedSteps = apManagementImplementationSteps.filter((item) => item.status === 'FAILED').length;
@@ -7324,12 +9359,153 @@ function CaptivePortalPage({ mode = 'full' }) {
                           {renderApManagementChainPath(apManagementImplementation)}
                         </div>
                         <div className="station-implementation-list">
-                          {(apManagementImplementationSteps.length ? apManagementImplementationSteps : apManagementStepList(apManagementImplementation)).map((step, index) => (
-                            <div
+	                          {apManagementImplementationSteps.map((step, index) => (
+	                            <div
                               className={`station-implementation-step ${step.status?.toLowerCase() || 'pending'} ${step.detected ? 'detected' : ''}`}
                               key={`${step.id}-${index}`}
                               ref={(node) => { if (node) apManagementStepRefs.current[step.id] = node; }}
                             >
+                              <div className="station-implementation-step-header">
+	                                <span className="station-implementation-status-icon">{stationImplementationStatusIcon(step.status)}</span>
+	                                <div className="min-w-0">
+	                                  <div className="fw-semibold d-flex align-items-center gap-2 flex-wrap">
+		                                    <span>{index + 1}. {step.label}</span>
+		                                    {step.phase === 'CLEANUP_OLD' && <span className="badge bg-orange-lt text-orange">Remove old config first</span>}
+			                                    {step.phase === 'APPLY_NEW' && apManagementImplementationSteps.some((item) => item.phase === 'CLEANUP_OLD') && <span className="badge bg-blue-lt text-blue">Apply updated config</span>}
+		                                    {apManagementStepGuide(step) && (
+	                                      <button
+	                                        className="btn btn-icon btn-sm btn-outline-info ap-management-guide-button"
+	                                        type="button"
+	                                        title="Open guide"
+	                                        aria-label={`Open guide for ${step.label}`}
+	                                        onClick={() => setApManagementGuidePanel(apManagementStepGuide(step))}
+	                                      >
+	                                        <IconInfoCircle size={15} />
+	                                      </button>
+	                                    )}
+	                                  </div>
+	                                  <div className="text-muted small">{step.router_name || 'Router'}{step.host ? ` · ${step.host}` : ''} · {step.router_role || 'Router'}</div>
+	                                </div>
+                                <span className={`badge ms-auto ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'bg-green-lt text-green' : step.status === 'FAILED' ? 'bg-red-lt text-red' : step.status === 'RUNNING' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
+                                  {step.detected ? 'Already pushed' : step.status === 'SKIPPED' ? 'Already exists' : step.status}
+                                </span>
+                              </div>
+                              <pre className="station-implementation-command mb-0"><code>{step.preview || 'No command preview available.'}</code></pre>
+	                              {step.message && <div className={`small mt-2 ${step.status === 'FAILED' ? 'text-danger' : 'text-muted'}`}>{step.message}</div>}
+	                            </div>
+	                          ))}
+	                          {!apManagementImplementationSteps.length && (
+	                            <div className="empty py-4">
+	                              <div className="empty-icon">{apManagementCheckingManaged ? <IconRefresh size={32} /> : <IconClock size={32} />}</div>
+	                              <p className="empty-title">{apManagementCheckingManaged ? 'Checking MikroTik routers' : 'No push steps loaded'}</p>
+	                              <p className="empty-subtitle text-muted">
+	                                {apManagementCheckingManaged
+	                                  ? 'The system is checking actual RouterOS state before displaying cleanup or push steps.'
+	                                  : apManagementImplementationMessage || 'Run the check again by reopening Push Config.'}
+	                              </p>
+	                            </div>
+	                          )}
+	                        </div>
+		                        <div className="modal-footer px-0 pb-0">
+		                          <button type="button" className="btn" onClick={() => { setApManagementGuidePanel(null); setApManagementImplementation(null); }} disabled={apManagementImplementing}>Close</button>
+		                          <button type="button" className="btn btn-danger" onClick={runApManagementImplementation} disabled={apManagementImplementing || apManagementCheckingManaged || !apManagementImplementationSteps.length}>
+		                            <IconPlayerPlay size={18} className="me-2" />{apManagementImplementing ? 'Pushing...' : apManagementCheckingManaged ? 'Checking...' : 'Start Push'}
+		                          </button>
+	                        </div>
+	                      </>
+	                    )}
+	                    {apManagementGuidePanel && (
+	                      <>
+	                        <button className="ap-management-guide-backdrop" type="button" aria-label="Close guide" onClick={() => setApManagementGuidePanel(null)} />
+	                        <aside className="ap-management-guide-panel" aria-label="AP management guide">
+	                          <div className="ap-management-guide-header">
+	                            <div>
+	                              <div className="h3 mb-1">{apManagementGuidePanel.title}</div>
+	                              <div className="text-muted small">{apManagementGuidePanel.subtitle}</div>
+	                            </div>
+	                            <button className="btn btn-icon btn-sm" type="button" onClick={() => setApManagementGuidePanel(null)} aria-label="Close guide">
+	                              <IconX size={18} />
+	                            </button>
+	                          </div>
+	                          <div className="d-flex flex-wrap gap-2 mb-3">
+	                            {(apManagementGuidePanel.badges || []).map((badge) => <span className="badge bg-blue-lt text-blue" key={`ap-guide-badge-${badge}`}>{badge}</span>)}
+	                          </div>
+	                          <div className="ap-management-guide-body">
+	                            {(apManagementGuidePanel.body || []).map((item, guideIndex) => (
+	                              <p key={`ap-management-guide-text-${guideIndex}`}>{item}</p>
+	                            ))}
+	                          </div>
+	                          <div className="mb-3">
+	                            <div className="fw-semibold mb-2">RouterOS meaning</div>
+	                            <pre className="station-implementation-command mb-0"><code>{apManagementGuidePanel.command}</code></pre>
+	                          </div>
+	                          {apManagementGuidePanel.important && (
+	                            <div className="alert alert-warning mb-0">
+	                              <div className="fw-semibold mb-1">Important</div>
+	                              <div>{apManagementGuidePanel.important}</div>
+	                            </div>
+	                          )}
+	                        </aside>
+	                      </>
+	                    )}
+	                  </Modal>
+	                )}
+                {apManagementRemove && (
+                  <Modal title={`Remove AP Management Config: ${apManagementRemove.config_name}`} size="xl" onClose={() => { if (!apManagementRemoving) { apManagementRemoveCompleted ? closeApManagementRemoveSuccess() : setApManagementRemove(null); } }}>
+                    <div className="alert alert-danger">
+                      <div className="fw-semibold mb-1">Remove AP management-created RouterOS config</div>
+                      <div>This removes only AP management objects matching the saved plan by exact generated names/comments. Review every remove step before starting.</div>
+                    </div>
+                    <div className="row g-3 mb-3">
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">AP Management VLAN</div><div className="h3 mb-0">VLAN {apManagementRemove.vlan_id}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Management Network</div><div className="h4 mb-0">{apManagementRemove.network_cidr}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Gateway</div><div className="h4 mb-0">{apManagementRemove.gateway_ip}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Routers</div><div className="h3 mb-0">{(apManagementRemove.routers || []).length}</div></div></div>
+                    </div>
+                    {(() => {
+                      const totalSteps = apManagementRemoveSteps.length;
+                      const completedSteps = apManagementRemoveSteps.filter((item) => ['SUCCESS', 'SKIPPED', 'FAILED'].includes(item.status)).length;
+                      const successSteps = apManagementRemoveSteps.filter((item) => ['SUCCESS', 'SKIPPED'].includes(item.status)).length;
+                      const failedSteps = apManagementRemoveSteps.filter((item) => item.status === 'FAILED').length;
+                      const progressPct = totalSteps ? Math.round((completedSteps / totalSteps) * 100) : 0;
+                      return (
+                        <div className="border rounded p-3 mb-3">
+                          <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
+                            <div>
+                              <div className="fw-semibold">Remove progress</div>
+                              <div className="text-muted small">{successSteps}/{totalSteps} removed or already absent{failedSteps ? ` · ${failedSteps} failed` : ''}</div>
+                            </div>
+                            <span className={`badge ${failedSteps ? 'bg-red-lt text-red' : completedSteps === totalSteps && totalSteps ? 'bg-green-lt text-green' : apManagementRemoving ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
+                              {apManagementRemoving ? 'Running' : failedSteps ? 'Stopped' : completedSteps === totalSteps && totalSteps ? 'Complete' : 'Ready'}
+                            </span>
+                          </div>
+                          <div className="progress"><div className={`progress-bar ${failedSteps ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${progressPct}%` }} /></div>
+                          {apManagementRemoveMessage && <div className="text-muted small mt-2">{apManagementRemoveMessage}</div>}
+                        </div>
+                      );
+                    })()}
+                    {apManagementRemoveCompleted ? (
+                      <div className="station-push-success">
+                        <div className="station-push-success-icon">
+                          <IconCircleCheck size={56} />
+                        </div>
+                        <div>
+                          <div className="h2 mb-2">AP management config removed</div>
+                          <div className="text-muted">All planned AP management remove steps completed or were already absent on MikroTik.</div>
+                        </div>
+                        <button type="button" className="btn btn-success btn-lg" onClick={closeApManagementRemoveSuccess}>
+                          Close ({apManagementRemoveCloseCountdown}s)
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="mb-3">
+                          <div className="fw-semibold mb-2">Router path</div>
+                          {renderApManagementChainPath(apManagementRemove)}
+                        </div>
+                        <div className="station-implementation-list">
+                          {apManagementRemoveSteps.map((step, index) => (
+                            <div className={`station-implementation-step ${step.status?.toLowerCase() || 'pending'}`} key={`${step.id}-${index}`} ref={(node) => { if (node) apManagementStepRefs.current[step.id] = node; }}>
                               <div className="station-implementation-step-header">
                                 <span className="station-implementation-status-icon">{stationImplementationStatusIcon(step.status)}</span>
                                 <div className="min-w-0">
@@ -7337,18 +9513,380 @@ function CaptivePortalPage({ mode = 'full' }) {
                                   <div className="text-muted small">{step.router_name || 'Router'}{step.host ? ` · ${step.host}` : ''} · {step.router_role || 'Router'}</div>
                                 </div>
                                 <span className={`badge ms-auto ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'bg-green-lt text-green' : step.status === 'FAILED' ? 'bg-red-lt text-red' : step.status === 'RUNNING' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
-                                  {step.detected ? 'Already pushed' : step.status === 'SKIPPED' ? 'Already exists' : step.status}
+                                  {step.status === 'SKIPPED' ? 'Not found' : step.status}
                                 </span>
                               </div>
                               <pre className="station-implementation-command mb-0"><code>{step.preview || 'No command preview available.'}</code></pre>
                               {step.message && <div className={`small mt-2 ${step.status === 'FAILED' ? 'text-danger' : 'text-muted'}`}>{step.message}</div>}
                             </div>
                           ))}
+                          {!apManagementRemoveSteps.length && (
+                            <div className="empty py-4">
+                              <div className="empty-icon">{apManagementCheckingManaged ? <IconRefresh size={32} /> : <IconCircleCheck size={32} />}</div>
+                              <p className="empty-title">{apManagementCheckingManaged ? 'Checking MikroTik routers' : 'No remove steps detected'}</p>
+                              <p className="empty-subtitle text-muted">
+                                {apManagementCheckingManaged
+                                  ? 'The system is checking the actual RouterOS state before showing any remove steps.'
+                                  : 'No AP management-created RouterOS objects were found for this saved plan.'}
+                              </p>
+                            </div>
+                          )}
                         </div>
                         <div className="modal-footer px-0 pb-0">
-                          <button type="button" className="btn" onClick={() => setApManagementImplementation(null)} disabled={apManagementImplementing}>Close</button>
-                          <button type="button" className="btn btn-danger" onClick={runApManagementImplementation} disabled={apManagementImplementing || !(apManagementImplementationSteps.length || apManagementStepList(apManagementImplementation).length)}>
-                            <IconPlayerPlay size={18} className="me-2" />{apManagementImplementing ? 'Pushing...' : 'Start Push'}
+                          <button type="button" className="btn" onClick={() => setApManagementRemove(null)} disabled={apManagementRemoving}>Close</button>
+                          <button type="button" className="btn btn-danger" onClick={runApManagementRemove} disabled={apManagementRemoving || apManagementCheckingManaged || !apManagementManagedStatus?.has_removable_config || !apManagementRemoveSteps.length} title={!apManagementManagedStatus ? 'Checking AP management-created config first.' : !apManagementManagedStatus?.has_removable_config ? 'No AP management-created config detected.' : 'Remove detected AP management-created config'}>
+                            <IconTrash size={18} className="me-2" />{apManagementRemoving ? 'Removing...' : apManagementCheckingManaged && !apManagementManagedStatus ? 'Checking...' : 'Start Remove Config'}
+                          </button>
+                        </div>
+                      </>
+                    )}
+	                  </Modal>
+	                )}
+                {officeApPathModalOpen && (
+                  <Modal title="Office AP Path Setup" size="xl" onClose={() => officeApPathSaving ? null : setOfficeApPathModalOpen(false)}>
+                    <form onSubmit={saveOfficeApPath}>
+                      <div className="alert alert-info">
+                        <div className="fw-semibold mb-1">Office AP path plan only</div>
+                        <div>This saves how the existing office subnet is transported toward APs. It does not configure MikroTik until you use Push Config and review the exact RouterOS steps.</div>
+                      </div>
+                      {officeApPathSaveSuccess && <div className="alert alert-success"><div className="fw-semibold mb-1">Office AP path plan saved</div><div>{officeApPathSaveSuccess}</div></div>}
+                      {officeApPathError && <div className="alert alert-danger"><div className="fw-semibold mb-1">Office AP path plan was not saved</div><div>{officeApPathError}</div></div>}
+                      <div className="row g-3">
+                        <div className="col-md-4">
+                          <StationLabel hint="Friendly name for this office subnet transport path.">Config Name</StationLabel>
+                          <input className="form-control" value={officeApPathForm.config_name} onChange={(e) => updateOfficeApPathField('config_name', e.target.value)} required />
+                        </div>
+                        <div className="col-md-3">
+                          <StationLabel hint="Existing office LAN bridge on the root MikroTik. Example: MANAGEMENT LAN.">Office LAN Bridge</StationLabel>
+                          {(() => {
+                            const root = officeApPathForm.routers[0];
+                            const routerOptions = root?.router_id ? (mikrotikOptions[root.router_id] || {}) : {};
+                            const rootOptionsLoading = Boolean(root?.router_id && mikrotikOptionsLoading[root.router_id]);
+                            const choices = bridgeInterfaceChoicesFromOptions(routerOptions);
+                            return (
+                              <select className="form-select" value={officeApPathForm.office_bridge_name} onChange={(e) => updateOfficeApPathField('office_bridge_name', e.target.value)} disabled={!root?.router_id || rootOptionsLoading} required>
+                                <option value="">{root?.router_id ? (rootOptionsLoading ? 'Detecting office bridge...' : 'Choose detected office bridge') : 'Choose root router first'}</option>
+                                {officeApPathForm.office_bridge_name && !choices.some((item) => item.name === officeApPathForm.office_bridge_name) && <option value={officeApPathForm.office_bridge_name}>{officeApPathForm.office_bridge_name} (current/default)</option>}
+                                {choices.map((iface) => <option value={iface.name} key={`office-ap-path-office-bridge-${iface.name}`}>{interfaceOptionLabel(iface)}</option>)}
+                              </select>
+                            );
+                          })()}
+                        </div>
+                        <div className="col-md-2">
+                          <StationLabel hint="Tagged VLAN used only to transport the office subnet over the CCR/CRS/OLT path.">Transport VLAN</StationLabel>
+                          <input className="form-control" type="number" min="1" max="4094" value={officeApPathForm.transport_vlan_id} onChange={(e) => updateOfficeApPathVlan(e.target.value)} required />
+                        </div>
+                        <div className="col-md-3">
+                          <StationLabel hint="RouterOS VLAN interface created on the root transport bridge and then bridged into the office LAN bridge.">VLAN Interface Name</StationLabel>
+                          <input className="form-control" value={officeApPathForm.transport_vlan_interface_name} onChange={(e) => updateOfficeApPathField('transport_vlan_interface_name', e.target.value)} required />
+                        </div>
+                      </div>
+                      <div className="border rounded p-3 mt-3">
+                        <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                          <div>
+                            <div className="fw-semibold">Router Chain</div>
+                            <div className="text-muted small">Add the root CCR first, then CRS/switch/transport routers in the order the office AP path travels toward OLTs and ONU/APs.</div>
+                          </div>
+                          <button className="btn btn-outline-primary btn-sm" type="button" onClick={addOfficeApPathRouter}>
+                            <IconRouter size={16} className="me-1" />Add Router to Chain
+                          </button>
+                        </div>
+                        {officeApPathForm.routers.length ? (
+                          <div className="station-chain-builder">
+                            <div className="station-chain-tabs">
+                              {officeApPathForm.routers.map((row, index) => (
+                                <button
+                                  className={`station-chain-tab ${officeApPathActiveRouterIndex === index ? 'active' : ''}`}
+                                  type="button"
+                                  draggable
+                                  onClick={() => {
+                                    setOfficeApPathActiveRouterIndex(index);
+                                    if (row.router_id && !mikrotikOptions[row.router_id]) loadMikrotikRouterOptions(row.router_id);
+                                  }}
+                                  onDragStart={() => setOfficeApPathDragIndex(index)}
+                                  onDragOver={(e) => e.preventDefault()}
+                                  onDrop={() => {
+                                    if (officeApPathDragIndex !== null) moveOfficeApPathRouter(officeApPathDragIndex, index);
+                                    setOfficeApPathDragIndex(null);
+                                  }}
+                                  key={`office-ap-path-router-tab-${index}`}
+                                >
+                                  <span className={`station-chain-node ${index === 0 ? 'root' : ''}`}><IconRouter size={18} /></span>
+                                  <span className="station-chain-tab-text">
+                                    <span className="fw-semibold">{officeApPathRouterDisplay(row, index)}</span>
+                                    <span className="text-muted small">{index === 0 ? 'Root CCR' : `Hop ${index + 1}`}</span>
+                                  </span>
+                                  <span className="station-chain-drag-indicator" title="Drag to reorder">::</span>
+                                </button>
+                              ))}
+                            </div>
+                            {(() => {
+                              const activeIndex = Math.min(officeApPathActiveRouterIndex, officeApPathForm.routers.length - 1);
+                              const row = officeApPathForm.routers[activeIndex];
+                              const routerOptions = row?.router_id ? (mikrotikOptions[row.router_id] || {}) : {};
+                              const routerOptionsLoading = Boolean(row?.router_id && mikrotikOptionsLoading[row.router_id]);
+                              const routerInterfaces = routerOptions.interfaces || [];
+                              const safeInterfaces = routerInterfaces.filter((iface) => !isPppoeInterface(iface));
+                              const bridgeInterfaceChoices = bridgeInterfaceChoicesFromOptions(routerOptions);
+                              const selectedTaggedPorts = String(row?.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+                              const selectedTaggedPortSet = new Set(selectedTaggedPorts);
+                              const portSearchKey = row?.router_id || `office-ap-path-index-${activeIndex}`;
+                              const portSearchText = officeApPathPortSearch[portSearchKey] || '';
+                              const bridgeMemberInterfaces = row?.bridge_name ? safeInterfaces.filter((iface) => iface.name !== row.bridge_name && iface.bridge === row.bridge_name) : [];
+                              const visibleTaggedInterfaces = bridgeMemberInterfaces.filter((iface) => {
+                                const haystack = [iface.name, iface.type, iface.bridge, iface.comment].map((value) => String(value || '').toLowerCase()).join(' ');
+                                return !portSearchText.trim() || haystack.includes(portSearchText.trim().toLowerCase());
+                              });
+                              return (
+                                <div className="station-router-panel">
+                                  <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                                    <div>
+                                      <div className="fw-semibold">{activeIndex === 0 ? 'Root CCR Office Bridge Setup' : `Office AP Path Trunk Setup - Hop ${activeIndex + 1}`}</div>
+                                      <div className="text-muted small">
+                                        {activeIndex === 0
+                                          ? 'This router creates the transport VLAN interface on the CRS-facing bridge, then bridges it into the office LAN bridge.'
+                                          : 'This router carries the same office transport VLAN through selected tagged ports toward OLTs/ONU/APs.'}
+                                      </div>
+                                    </div>
+                                    <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => removeOfficeApPathRouter(activeIndex)}>
+                                      <IconTrash size={15} className="me-1" />Remove Router
+                                    </button>
+                                  </div>
+                                  <div className="row g-3">
+                                    <div className="col-12">
+                                      <div className="station-subpanel">
+                                        <div className="station-subpanel-title">Step 1: Select Router</div>
+                                        <div className="row g-3">
+                                          <div className="col-md-6">
+                                            <StationLabel hint="Select one of the MikroTik routers already saved in the system.">MikroTik Router</StationLabel>
+                                            <select
+                                              className="form-select"
+                                              value={row.router_id}
+                                              onChange={(e) => {
+                                                updateOfficeApPathRouter(activeIndex, { router_id: e.target.value, bridge_name: '', tagged_ports: '' });
+                                                if (e.target.value) loadMikrotikRouterOptions(e.target.value);
+                                              }}
+                                              required
+                                            >
+                                              <option value="">Choose router</option>
+                                              {mikrotiks.map((router) => <option value={router.id} key={`office-ap-path-router-${router.id}`}>{router.router_name} ({router.host})</option>)}
+                                            </select>
+                                            {routerOptions.error && <div className="text-danger small mt-1">{routerOptions.error}</div>}
+                                            {routerOptionsLoading && <div className="text-muted small mt-1">Fetching ports from RouterOS...</div>}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="col-12">
+                                      <div className="station-subpanel">
+                                        <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                                          <div>
+                                            <div className="station-subpanel-title mb-1">{activeIndex === 0 ? 'Step 2: Select Transport Bridge and Tagged Ports' : 'Step 2: Select Bridge and Tagged Ports'}</div>
+                                            <div className="text-muted small">Tagged ports carry office transport VLAN {officeApPathForm.transport_vlan_id || 'x'} through the router chain. On the ONU/AP-facing side, make this VLAN native/untagged outside RouterOS.</div>
+                                          </div>
+                                          <button className="btn btn-outline-primary btn-sm" type="button" onClick={() => row.router_id && loadMikrotikRouterOptions(row.router_id)} disabled={!row.router_id || routerOptionsLoading}>
+                                            {routerOptionsLoading ? <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true" /> : <IconRefresh size={15} className="me-1" />}
+                                            {routerOptionsLoading ? 'Detecting...' : 'Detect Ports'}
+                                          </button>
+                                        </div>
+                                        <div className="row g-3">
+                                          <div className="col-md-6">
+                                            <StationLabel hint={activeIndex === 0 ? 'Transport bridge where the CRS/OLT path is connected. Example: SwAC on CCR2116.' : 'Bridge on this downstream router that carries the tagged office AP transport VLAN.'}>{activeIndex === 0 ? 'Transport Bridge / Interface' : 'Bridge / Interface'}</StationLabel>
+                                            <select className="form-select" value={row.bridge_name} onChange={(e) => updateOfficeApPathRouter(activeIndex, { bridge_name: e.target.value })} disabled={!row.router_id || routerOptionsLoading} required>
+                                              <option value="">{row.router_id ? (routerOptionsLoading ? 'Detecting bridge/interface list...' : 'Choose detected bridge/interface') : 'Choose router first'}</option>
+                                              {bridgeInterfaceChoices.map((iface) => <option value={iface.name} key={`office-ap-path-bridge-${activeIndex}-${iface.name}`}>{interfaceOptionLabel(iface)}</option>)}
+                                            </select>
+                                            {!!(routerOptions.warnings || []).length && <div className="text-warning small mt-1">Some optional RouterOS option lists were unavailable, but interfaces loaded.</div>}
+                                            {!routerOptionsLoading && row.router_id && routerOptions.status === 'SUCCESS' && <div className="text-success small mt-1">Detected {safeInterfaces.length} usable non-PPPoE interface{safeInterfaces.length === 1 ? '' : 's'}.</div>}
+                                          </div>
+                                          <div className="col-12">
+                                            <StationLabel hint="Check every detected RouterOS interface that should carry the office transport VLAN on this router.">Tagged Ports</StationLabel>
+                                            <div className="station-port-picker">
+                                              <div className="input-group station-port-search-group">
+                                                <input className="form-control station-port-search" value={portSearchText} onChange={(e) => setOfficeApPathPortSearch((current) => ({ ...current, [portSearchKey]: e.target.value }))} placeholder="Search port, bridge, type, or comment" disabled={!row.router_id || routerOptionsLoading} />
+                                                <button className="btn btn-outline-secondary station-port-search-clear" type="button" onClick={() => setOfficeApPathPortSearch((current) => ({ ...current, [portSearchKey]: '' }))} disabled={!row.router_id || !portSearchText} title="Clear tagged port search" aria-label="Clear tagged port search"><IconX size={15} /></button>
+                                              </div>
+                                              <div className="station-port-checkbox-list">
+                                                {visibleTaggedInterfaces.map((iface) => (
+                                                  <label className={`station-port-checkbox-item ${selectedTaggedPortSet.has(iface.name) ? 'selected' : ''}`} key={`office-ap-path-port-${activeIndex}-${iface.name}`}>
+                                                    <input className="form-check-input" type="checkbox" checked={selectedTaggedPortSet.has(iface.name)} onChange={(e) => toggleOfficeApPathTaggedPort(activeIndex, iface.name, e.target.checked)} disabled={!row.router_id || routerOptionsLoading} />
+                                                    <span className="station-port-checkbox-text">
+                                                      <strong>{iface.name}</strong>
+                                                      <small>{[iface.type, iface.bridge ? `in ${iface.bridge}` : '', iface.disabled ? 'disabled' : '', iface.running ? 'running' : ''].filter(Boolean).join(' · ') || 'interface'}</small>
+                                                    </span>
+                                                  </label>
+                                                ))}
+                                                {!visibleTaggedInterfaces.length && <div className="text-muted small p-3">{routerOptionsLoading ? 'Fetching ports from RouterOS...' : row.router_id ? 'No matching non-PPPoE ports found.' : 'Choose a router first.'}</div>}
+                                              </div>
+                                            </div>
+                                            <div className="text-muted small">Check detected ports inside {row.bridge_name || 'the selected bridge'} that should carry office transport VLAN {officeApPathForm.transport_vlan_id || 'x'} on this router.</div>
+                                            {!!selectedTaggedPorts.length && (
+                                              <div className="d-flex flex-wrap gap-1 mt-2">
+                                                {selectedTaggedPorts.map((port) => (
+                                                  <span className="badge bg-blue-lt text-blue station-selected-port-badge" key={`office-ap-path-selected-port-${activeIndex}-${port}`}>
+                                                    <span>{port}</span>
+                                                    <button className="station-selected-port-remove" type="button" onClick={() => toggleOfficeApPathTaggedPort(activeIndex, port, false)} title={`Remove ${port}`} aria-label={`Remove ${port}`}><IconX size={12} /></button>
+                                                  </span>
+                                                ))}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        ) : (
+                          <div className="empty py-4">
+                            <div className="empty-icon"><IconRouter size={32} /></div>
+                            <p className="empty-title">Add the root CCR first</p>
+                            <p className="empty-subtitle text-muted">Start with the root gateway that owns the office subnet, then add CRS/transport routers toward OLTs/APs.</p>
+                            <button className="btn btn-primary" type="button" onClick={addOfficeApPathRouter}><IconRouter size={18} className="me-2" />Add Router</button>
+                          </div>
+                        )}
+                      </div>
+                      <div className="modal-footer px-0 pb-0">
+                        <button type="button" className="btn" onClick={() => setOfficeApPathModalOpen(false)} disabled={officeApPathSaving}>Close</button>
+                        <button type="submit" className="btn btn-primary" disabled={officeApPathSaving}>
+                          <IconDeviceFloppy size={18} className="me-2" />{officeApPathSaving ? 'Saving...' : 'Save Office AP Path Plan'}
+                        </button>
+                      </div>
+                    </form>
+                  </Modal>
+                )}
+                {officeApPathImplementation && (
+                  <Modal title={`Push Office AP Path Config: ${officeApPathImplementation.config_name}`} size="xl" onClose={() => { if (!officeApPathImplementing) { officeApPathPushCompleted ? closeOfficeApPathPushSuccess() : setOfficeApPathImplementation(null); } }}>
+                    <div className="alert alert-danger">
+                      <div className="fw-semibold mb-1">Review before pushing</div>
+                      <div>The system checks MikroTik first, hides cleanup steps that are already removed, then pushes only the remaining needed office AP path steps one at a time.</div>
+                    </div>
+                    <div className="row g-3 mb-3">
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Office Bridge</div><div className="h4 mb-0">{officeApPathImplementation.office_bridge_name}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Transport VLAN</div><div className="h3 mb-0">VLAN {officeApPathImplementation.transport_vlan_id}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">VLAN Interface</div><div className="h4 mb-0">{officeApPathImplementation.transport_vlan_interface_name}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Routers</div><div className="h3 mb-0">{(officeApPathImplementation.routers || []).length}</div></div></div>
+                    </div>
+                    {(() => {
+                      const totalSteps = officeApPathImplementationSteps.length;
+                      const completedSteps = officeApPathImplementationSteps.filter((item) => ['SUCCESS', 'SKIPPED', 'FAILED'].includes(item.status)).length;
+                      const successSteps = officeApPathImplementationSteps.filter((item) => ['SUCCESS', 'SKIPPED'].includes(item.status)).length;
+                      const failedSteps = officeApPathImplementationSteps.filter((item) => item.status === 'FAILED').length;
+                      const progressPct = totalSteps ? Math.round((completedSteps / totalSteps) * 100) : 0;
+                      return (
+                        <div className="border rounded p-3 mb-3">
+                          <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
+                            <div><div className="fw-semibold">Push progress</div><div className="text-muted small">{successSteps}/{totalSteps} pushed or already detected{failedSteps ? ` · ${failedSteps} failed` : ''}</div></div>
+                            <span className={`badge ${failedSteps ? 'bg-red-lt text-red' : completedSteps === totalSteps && totalSteps ? 'bg-green-lt text-green' : officeApPathImplementing ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>{officeApPathImplementing ? 'Running' : failedSteps ? 'Stopped' : completedSteps === totalSteps && totalSteps ? 'Complete' : 'Ready'}</span>
+                          </div>
+                          <div className="progress"><div className={`progress-bar ${failedSteps ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${progressPct}%` }} /></div>
+                          {officeApPathImplementationMessage && <div className="text-muted small mt-2">{officeApPathImplementationMessage}</div>}
+                        </div>
+                      );
+                    })()}
+                    {officeApPathPushCompleted ? (
+                      <div className="station-push-success">
+                        <div className="station-push-success-icon"><IconCircleCheck size={56} /></div>
+                        <div><div className="h2 mb-2">Office AP path pushed successfully</div><div className="text-muted">All planned office AP path steps completed or were already detected on MikroTik.</div></div>
+                        <button type="button" className="btn btn-success btn-lg" onClick={closeOfficeApPathPushSuccess}>Close ({officeApPathPushCloseCountdown}s)</button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="mb-3"><div className="fw-semibold mb-2">Router path</div>{renderOfficeApPathChainPath(officeApPathImplementation)}</div>
+                        <div className="station-implementation-list">
+                          {officeApPathImplementationSteps.map((step, index) => (
+                            <div className={`station-implementation-step ${step.status?.toLowerCase() || 'pending'} ${step.detected ? 'detected' : ''}`} key={`${step.id}-${index}`} ref={(node) => { if (node) officeApPathStepRefs.current[step.id] = node; }}>
+                              <div className="station-implementation-step-header">
+                                <span className="station-implementation-status-icon">{stationImplementationStatusIcon(step.status)}</span>
+                                <div className="min-w-0">
+                                  <div className="fw-semibold d-flex align-items-center gap-2 flex-wrap"><span>{index + 1}. {step.label}</span>{step.phase === 'CLEANUP_OLD' && <span className="badge bg-orange-lt text-orange">Remove old config first</span>}{step.phase === 'APPLY_NEW' && officeApPathImplementationSteps.some((item) => item.phase === 'CLEANUP_OLD') && <span className="badge bg-blue-lt text-blue">Apply updated config</span>}</div>
+                                  <div className="text-muted small">{step.router_name || 'Router'}{step.host ? ` · ${step.host}` : ''} · {step.router_role || 'Router'}</div>
+                                </div>
+                                <span className={`badge ms-auto ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'bg-green-lt text-green' : step.status === 'FAILED' ? 'bg-red-lt text-red' : step.status === 'RUNNING' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>{step.detected ? 'Already pushed' : step.status === 'SKIPPED' ? 'Already exists' : step.status}</span>
+                              </div>
+                              <pre className="station-implementation-command mb-0"><code>{step.preview || 'No command preview available.'}</code></pre>
+                              {step.message && <div className={`small mt-2 ${step.status === 'FAILED' ? 'text-danger' : 'text-muted'}`}>{step.message}</div>}
+                            </div>
+                          ))}
+                          {!officeApPathImplementationSteps.length && (
+                            <div className="empty py-4">
+                              <div className="empty-icon">{officeApPathCheckingManaged ? <IconRefresh size={32} /> : <IconClock size={32} />}</div>
+                              <p className="empty-title">{officeApPathCheckingManaged ? 'Checking MikroTik routers' : 'No push steps loaded'}</p>
+                              <p className="empty-subtitle text-muted">{officeApPathCheckingManaged ? 'The system is checking actual RouterOS state before displaying cleanup or push steps.' : officeApPathImplementationMessage || 'Run the check again by reopening Push Config.'}</p>
+                            </div>
+                          )}
+                        </div>
+                        <div className="modal-footer px-0 pb-0">
+                          <button type="button" className="btn" onClick={() => setOfficeApPathImplementation(null)} disabled={officeApPathImplementing}>Close</button>
+                          <button type="button" className="btn btn-danger" onClick={runOfficeApPathImplementation} disabled={officeApPathImplementing || officeApPathCheckingManaged || !officeApPathImplementationSteps.length}>
+                            <IconPlayerPlay size={18} className="me-2" />{officeApPathImplementing ? 'Pushing...' : officeApPathCheckingManaged ? 'Checking...' : 'Start Push'}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </Modal>
+                )}
+                {officeApPathRemove && (
+                  <Modal title={`Remove Office AP Path Config: ${officeApPathRemove.config_name}`} size="xl" onClose={() => { if (!officeApPathRemoving) { officeApPathRemoveCompleted ? closeOfficeApPathRemoveSuccess() : setOfficeApPathRemove(null); } }}>
+                    <div className="alert alert-danger"><div className="fw-semibold mb-1">Remove office AP path-created RouterOS config</div><div>This removes only objects matching the saved office AP path by exact generated names/comments. Review every remove step before starting.</div></div>
+                    <div className="row g-3 mb-3">
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Office Bridge</div><div className="h4 mb-0">{officeApPathRemove.office_bridge_name}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Transport VLAN</div><div className="h3 mb-0">VLAN {officeApPathRemove.transport_vlan_id}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">VLAN Interface</div><div className="h4 mb-0">{officeApPathRemove.transport_vlan_interface_name}</div></div></div>
+                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Routers</div><div className="h3 mb-0">{(officeApPathRemove.routers || []).length}</div></div></div>
+                    </div>
+                    {(() => {
+                      const totalSteps = officeApPathRemoveSteps.length;
+                      const completedSteps = officeApPathRemoveSteps.filter((item) => ['SUCCESS', 'SKIPPED', 'FAILED'].includes(item.status)).length;
+                      const successSteps = officeApPathRemoveSteps.filter((item) => ['SUCCESS', 'SKIPPED'].includes(item.status)).length;
+                      const failedSteps = officeApPathRemoveSteps.filter((item) => item.status === 'FAILED').length;
+                      const progressPct = totalSteps ? Math.round((completedSteps / totalSteps) * 100) : 0;
+                      return (
+                        <div className="border rounded p-3 mb-3">
+                          <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
+                            <div><div className="fw-semibold">Remove progress</div><div className="text-muted small">{successSteps}/{totalSteps} removed or already absent{failedSteps ? ` · ${failedSteps} failed` : ''}</div></div>
+                            <span className={`badge ${failedSteps ? 'bg-red-lt text-red' : completedSteps === totalSteps && totalSteps ? 'bg-green-lt text-green' : officeApPathRemoving ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>{officeApPathRemoving ? 'Running' : failedSteps ? 'Stopped' : completedSteps === totalSteps && totalSteps ? 'Complete' : 'Ready'}</span>
+                          </div>
+                          <div className="progress"><div className={`progress-bar ${failedSteps ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${progressPct}%` }} /></div>
+                          {officeApPathRemoveMessage && <div className="text-muted small mt-2">{officeApPathRemoveMessage}</div>}
+                        </div>
+                      );
+                    })()}
+                    {officeApPathRemoveCompleted ? (
+                      <div className="station-push-success">
+                        <div className="station-push-success-icon"><IconCircleCheck size={56} /></div>
+                        <div><div className="h2 mb-2">Office AP path config removed</div><div className="text-muted">All planned office AP path remove steps completed or were already absent on MikroTik.</div></div>
+                        <button type="button" className="btn btn-success btn-lg" onClick={closeOfficeApPathRemoveSuccess}>Close ({officeApPathRemoveCloseCountdown}s)</button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="mb-3"><div className="fw-semibold mb-2">Router path</div>{renderOfficeApPathChainPath(officeApPathRemove)}</div>
+                        <div className="station-implementation-list">
+                          {officeApPathRemoveSteps.map((step, index) => (
+                            <div className={`station-implementation-step ${step.status?.toLowerCase() || 'pending'}`} key={`${step.id}-${index}`} ref={(node) => { if (node) officeApPathStepRefs.current[step.id] = node; }}>
+                              <div className="station-implementation-step-header">
+                                <span className="station-implementation-status-icon">{stationImplementationStatusIcon(step.status)}</span>
+                                <div className="min-w-0"><div className="fw-semibold">{index + 1}. {step.label}</div><div className="text-muted small">{step.router_name || 'Router'}{step.host ? ` · ${step.host}` : ''} · {step.router_role || 'Router'}</div></div>
+                                <span className={`badge ms-auto ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'bg-green-lt text-green' : step.status === 'FAILED' ? 'bg-red-lt text-red' : step.status === 'RUNNING' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>{step.status === 'SKIPPED' ? 'Not found' : step.status}</span>
+                              </div>
+                              <pre className="station-implementation-command mb-0"><code>{step.preview || 'No command preview available.'}</code></pre>
+                              {step.message && <div className={`small mt-2 ${step.status === 'FAILED' ? 'text-danger' : 'text-muted'}`}>{step.message}</div>}
+                            </div>
+                          ))}
+                          {!officeApPathRemoveSteps.length && (
+                            <div className="empty py-4">
+                              <div className="empty-icon">{officeApPathCheckingManaged ? <IconRefresh size={32} /> : <IconCircleCheck size={32} />}</div>
+                              <p className="empty-title">{officeApPathCheckingManaged ? 'Checking MikroTik routers' : 'No remove steps detected'}</p>
+                              <p className="empty-subtitle text-muted">{officeApPathCheckingManaged ? 'The system is checking the actual RouterOS state before showing any remove steps.' : 'No office AP path-created RouterOS objects were found for this saved plan.'}</p>
+                            </div>
+                          )}
+                        </div>
+                        <div className="modal-footer px-0 pb-0">
+                          <button type="button" className="btn" onClick={() => setOfficeApPathRemove(null)} disabled={officeApPathRemoving}>Close</button>
+                          <button type="button" className="btn btn-danger" onClick={runOfficeApPathRemove} disabled={officeApPathRemoving || officeApPathCheckingManaged || !officeApPathManagedStatus?.has_removable_config || !officeApPathRemoveSteps.length} title={!officeApPathManagedStatus ? 'Checking office AP path-created config first.' : !officeApPathManagedStatus?.has_removable_config ? 'No office AP path-created config detected.' : 'Remove detected office AP path-created config'}>
+                            <IconTrash size={18} className="me-2" />{officeApPathRemoving ? 'Removing...' : officeApPathCheckingManaged && !officeApPathManagedStatus ? 'Checking...' : 'Start Remove Config'}
                           </button>
                         </div>
                       </>
@@ -7360,7 +9898,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <form onSubmit={saveStation}>
 	                      <div className="alert alert-info">
 	                        <div className="fw-semibold mb-1">Station plan only</div>
-	                        <div>This does not configure MikroTik yet. It saves the root-to-downstream router chain and generates the same pattern as your tested VLAN 77 setup for customer HotSpot traffic. Central AP management is handled from the AP Management tab.</div>
+	                        <div>This does not configure MikroTik yet. It saves the root-to-downstream router chain and generates the same pattern as your tested VLAN 77 setup for customer VLAN traffic. Central AP management is handled from the AP Management tab.</div>
 	                      </div>
 	                      {stationError && <div className="alert alert-danger">{stationError}</div>}
 	                      <div className="station-process-steps mb-3">
@@ -7386,9 +9924,42 @@ function CaptivePortalPage({ mode = 'full' }) {
                         <div className="col-md-4">
                           <StationLabel hint={stationFieldHints.stationDescription}>Description</StationLabel>
                           <input className="form-control" value={stationForm.description} onChange={(e) => updateStationField('description', e.target.value)} placeholder="Root router to CRS/OLT/AP captive portal VLAN path" />
-                        </div>
-                      </div>
-                      <div className="border rounded p-3">
+	                        </div>
+	                      </div>
+	                      <div className="border rounded p-3 mb-3">
+	                        {(() => {
+	                          const boundSite = selectedStationSite(stationForm);
+	                          const stationSiteKey = boundSite ? siteOptionKey(boundSite) : selectedStationSiteKey();
+	                          const vlanStatus = omadaSiteVlanStatus(boundSite, stationForm.vlan_id);
+	                          return (
+	                            <div className="row g-3 align-items-end">
+	                              <div className="col-lg-6">
+	                                <StationLabel hint="Choose the Omada site that owns the APs for this station. Omada will handle captive portal redirect and client authorization for this station's SSID.">Station Omada Site</StationLabel>
+	                                <select className="form-select" value={stationSiteKey} onChange={(e) => updateStationOmadaSite(e.target.value)}>
+	                                  <option value="|||">Select Omada site for this station</option>
+	                                  {siteDeployments.map((site) => (
+	                                    <option value={siteOptionKey(site)} key={`station-site-option-${siteOptionKey(site)}`}>
+	                                      {site.site_name}{site.omada_site_id ? ` (${site.omada_site_id})` : ''}{site.vlan_tag ? ` · VLAN ${site.vlan_tag}` : ''}
+	                                    </option>
+	                                  ))}
+	                                </select>
+	                              </div>
+	                              <div className="col-lg-3">
+	                                <div className="text-muted small">Selected site VLAN</div>
+	                                <div><span className={`badge ${vlanStatus.className}`}>{vlanStatus.label}</span></div>
+	                              </div>
+	                              <div className="col-lg-3">
+	                                <div className="text-muted small">Connected APs</div>
+	                                <div className="h4 mb-0">{boundSite ? `${boundSite.ap_connected_count || 0}/${boundSite.ap_total_count || 0}` : '-'}</div>
+	                              </div>
+	                              <div className="col-12 text-muted small">
+	                                Bind the station to the Omada site before field testing. The site VLAN should match this station's customer VLAN.
+	                              </div>
+	                            </div>
+	                          );
+	                        })()}
+	                      </div>
+	                      <div className="border rounded p-3">
                         <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                           <div>
                             <div className="fw-semibold d-flex align-items-center gap-1">Router Chain <FieldHint text={stationFieldHints.routerChain} /></div>
@@ -7434,7 +10005,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                               const routerOptions = row?.router_id ? (mikrotikOptions[row.router_id] || {}) : {};
                               const routerInterfaces = routerOptions.interfaces || [];
                               const safeStationInterfaces = routerInterfaces.filter((iface) => !isPppoeInterface(iface));
-                              const bridgeInterfaceChoices = safeStationInterfaces;
+                              const bridgeInterfaceChoices = bridgeInterfaceChoicesFromOptions(routerOptions);
                               const routerInterfaceLists = routerOptions.interface_lists || [];
                               const selectedTaggedPorts = String(row?.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
                               const selectedTaggedPortSet = new Set(selectedTaggedPorts);
@@ -7571,9 +10142,9 @@ function CaptivePortalPage({ mode = 'full' }) {
                                     {activeIndex === 0 && (
                                       <div className="col-12">
                                         <div className="station-subpanel">
-                                          <div className="station-subpanel-title">Step 3B: Root Gateway VLAN Networks</div>
+	                                          <div className="station-subpanel-title">Step 3C: Root Gateway Network Values</div>
                                           <div className="station-field-group">
-                                            <div className="station-field-group-header">Customer HotSpot VLAN identity</div>
+	                                            <div className="station-field-group-header">Customer VLAN / Omada SSID VLAN</div>
                                             <div className="row g-3">
                                               <div className="col-md-3">
                                                 <StationLabel hint={stationFieldHints.vlanId}>Customer VLAN</StationLabel>
@@ -7581,7 +10152,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                               </div>
                                               <div className="col-md-5">
                                                 <StationLabel hint={stationFieldHints.vlanInterfaceName}>VLAN Interface Name</StationLabel>
-                                                <input className="form-control" value={stationForm.vlan_interface_name} onChange={(e) => updateStationField('vlan_interface_name', e.target.value)} placeholder="VLAN77-3J-HOTSPOT" />
+                                                <input className="form-control" value={stationForm.vlan_interface_name} onChange={(e) => updateStationField('vlan_interface_name', e.target.value)} placeholder="VLAN77-3J-CLIENTS" />
                                               </div>
                                             </div>
                                           </div>
@@ -7598,7 +10169,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                               </div>
                                               <div className="col-md-4">
                                                 <StationLabel hint={stationFieldHints.poolName}>Pool Name</StationLabel>
-                                                <input className="form-control" value={stationForm.pool_name} onChange={(e) => updateStationField('pool_name', e.target.value)} placeholder="POOL-3J-HOTSPOT-V77" />
+                                                <input className="form-control" value={stationForm.pool_name} onChange={(e) => updateStationField('pool_name', e.target.value)} placeholder="POOL-3J-CLIENTS-V77" />
                                               </div>
                                               <div className="col-md-6">
                                                 <StationLabel hint={stationFieldHints.poolStart}>Pool Start</StationLabel>
@@ -7626,7 +10197,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                                 <>
                                                   <div className="col-md-4">
                                                     <StationLabel hint={stationFieldHints.dhcpServerName}>DHCP Server Name</StationLabel>
-                                                    <input className="form-control" value={stationForm.dhcp_server_name} onChange={(e) => updateStationField('dhcp_server_name', e.target.value)} placeholder="DHCP-3J-HOTSPOT-V77" required />
+                                                    <input className="form-control" value={stationForm.dhcp_server_name} onChange={(e) => updateStationField('dhcp_server_name', e.target.value)} placeholder="DHCP-3J-CLIENTS-V77" required />
                                                   </div>
                                                   <div className="col-md-4">
                                                     <StationLabel hint={stationFieldHints.dhcpLeaseTime}>DHCP Lease Time</StationLabel>
@@ -7640,7 +10211,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                             </div>
                                           </div>
                                           <div className="station-field-group">
-                                            <div className="station-field-group-header">Captive DNS and firewall-list context</div>
+	                                            <div className="station-field-group-header">Gateway DNS and firewall-list context</div>
                                             <div className="row g-3">
                                               <div className="col-md-4">
                                                 <StationLabel hint={stationFieldHints.localInterfaceList}>Local Interface List</StationLabel>
@@ -7654,80 +10225,13 @@ function CaptivePortalPage({ mode = 'full' }) {
                                               <div className="col-md-8">
                                                 <StationLabel hint={stationFieldHints.dnsServers}>Router Upstream DNS</StationLabel>
                                                 <input className="form-control" value={stationForm.dns_servers} onChange={(e) => updateStationField('dns_servers', e.target.value)} placeholder="8.8.8.8,1.1.1.1" />
-                                                <div className="text-muted small">Phones on this HotSpot receive only {stationForm.gateway_ip || 'the gateway IP'} as DNS. MikroTik forwards DNS to these upstream servers.</div>
-                                              </div>
-                                            </div>
-                                          </div>
-                                          <div className="station-field-group mb-0">
-                                            <div className="station-field-group-header">Root HotSpot and portal enforcement</div>
-                                            <div className="row g-3">
-                                              <div className="col-md-4">
-                                                <label className="form-check form-switch">
-                                                  <input
-                                                    className="form-check-input"
-                                                    type="checkbox"
-                                                    checked={stationForm.create_hotspot_profile}
-                                                    onChange={(e) => updateStationField('create_hotspot_profile', e.target.checked)}
-                                                  />
-                                                  <span className="form-check-label d-inline-flex align-items-center gap-1">
-                                                    Create HotSpot profile
-                                                    <FieldHint text={stationFieldHints.createHotspotProfile} />
-                                                  </span>
-                                                </label>
-                                              </div>
-                                              <div className="col-md-4">
-                                                <label className="form-check form-switch">
-                                                  <input
-                                                    className="form-check-input"
-                                                    type="checkbox"
-                                                    checked={stationForm.create_hotspot_server}
-                                                    onChange={(e) => updateStationField('create_hotspot_server', e.target.checked)}
-                                                  />
-                                                  <span className="form-check-label d-inline-flex align-items-center gap-1">
-                                                    Create HotSpot server
-                                                    <FieldHint text={stationFieldHints.createHotspotServer} />
-                                                  </span>
-                                                </label>
-                                              </div>
-                                              <div className="col-md-4">
-                                                <label className="form-check form-switch">
-                                                  <input
-                                                    className="form-check-input"
-                                                    type="checkbox"
-                                                    checked={stationForm.create_walled_garden}
-                                                    onChange={(e) => updateStationField('create_walled_garden', e.target.checked)}
-                                                  />
-                                                  <span className="form-check-label d-inline-flex align-items-center gap-1">
-                                                    Allow portal before login
-                                                    <FieldHint text={stationFieldHints.createWalledGarden} />
-                                                  </span>
-                                                </label>
-                                              </div>
-                                              <div className="col-md-4">
-                                                <StationLabel hint={stationFieldHints.hotspotProfileName}>HotSpot Profile Name</StationLabel>
-                                                <input className="form-control" value={stationForm.hotspot_profile_name} onChange={(e) => updateStationField('hotspot_profile_name', e.target.value)} placeholder="PROFILE-3J-HOTSPOT-V77" disabled={!stationForm.create_hotspot_profile && !stationForm.create_hotspot_server} required={stationForm.create_hotspot_profile || stationForm.create_hotspot_server} />
-                                              </div>
-                                              <div className="col-md-4">
-                                                <StationLabel hint={stationFieldHints.hotspotDnsName}>HotSpot DNS Name</StationLabel>
-                                                <input className="form-control" value={stationForm.hotspot_dns_name} onChange={(e) => updateStationField('hotspot_dns_name', e.target.value)} placeholder="wifi.3j.3jportal.test" disabled={!stationForm.create_hotspot_profile} />
-                                              </div>
-                                              <div className="col-md-4">
-                                                <StationLabel hint={stationFieldHints.hotspotHtmlDirectory}>HotSpot HTML Directory</StationLabel>
-                                                <input className="form-control" value={stationForm.hotspot_html_directory} onChange={(e) => updateStationField('hotspot_html_directory', e.target.value)} placeholder="hotspot" disabled={!stationForm.create_hotspot_profile} />
-                                              </div>
-                                              <div className="col-md-4">
-                                                <StationLabel hint={stationFieldHints.hotspotServerName}>HotSpot Server Name</StationLabel>
-                                                <input className="form-control" value={stationForm.hotspot_server_name} onChange={(e) => updateStationField('hotspot_server_name', e.target.value)} placeholder="HS-3J-HOTSPOT-V77" disabled={!stationForm.create_hotspot_server} required={stationForm.create_hotspot_server} />
-                                              </div>
-                                              <div className="col-md-8">
-                                                <StationLabel hint={stationFieldHints.portalUrl}>Portal URL</StationLabel>
-                                                <input className="form-control" value={stationForm.portal_url} onChange={(e) => updateStationField('portal_url', e.target.value)} placeholder="http://192.168.50.70:8080/portal" required />
-                                              </div>
-                                              <div className="col-12">
-                                                <div className="text-muted small">HotSpot profile/server and walled garden rules are created only on the first/root gateway. This prepares MikroTik enforcement; voucher validation still stays in 3JCentralPisowifi.</div>
-                                              </div>
-                                            </div>
-                                          </div>
+	                                                <div className="text-muted small">Clients on this VLAN receive these DNS servers from DHCP. Omada handles captive portal redirect/enforcement for the SSID.</div>
+	                                              </div>
+	                                            </div>
+	                                          </div>
+	                                          <div className="alert alert-info mb-0">
+		                                            MikroTik Station setup creates only the customer VLAN gateway, DHCP, NAT, trunk path, and one-device voucher fairness guard. Omada Controller provides the captive portal redirect and enforcement for the SSID.
+	                                          </div>
                                         </div>
                                       </div>
                                     )}
@@ -7759,34 +10263,33 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                  </Modal>
 	                )}
 	                {stationReview && (
-	                  <Modal title={`Review Station Plan: ${stationReview.station_name}`} size="xl" onClose={() => setStationReview(null)}>
-	                    <div className="alert alert-warning">
-	                      <div className="fw-semibold mb-1">Preview only</div>
-	                      <div>This is the generated RouterOS plan for review. The managed HotSpot <code>login.html</code> is uploaded during implementation or from the sync action; no manual file upload is needed.</div>
-	                    </div>
+		                  <Modal title={`Review Station Plan: ${stationReview.station_name}`} size="xl" onClose={() => setStationReview(null)}>
+		                    <div className="alert alert-warning">
+		                      <div className="fw-semibold mb-1">Preview only</div>
+		                      <div>This is the generated RouterOS transport plan for review. It creates the VLAN gateway, DHCP/NAT path, downstream trunks, and a one-device voucher fairness guard. Omada handles captive portal redirect and enforcement.</div>
+		                    </div>
+		                    <div className="alert alert-info">
+		                      <div className="fw-semibold mb-1">Voucher sharing protection</div>
+		                      <div>Push Config includes managed MikroTik TTL guard rules on the root gateway. These rules are designed to stop normal phone-hotspot sharing so one redeemed voucher stays tied to the directly connected device.</div>
+		                    </div>
 	                    <div className="row g-3 mb-3">
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">VLAN</div><div className="h3 mb-0">{stationReview.vlan_id}</div></div></div>
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Client Network</div><div className="h3 mb-0">{stationReview.client_network_cidr}</div></div></div>
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Gateway</div><div className="h3 mb-0">{stationReview.gateway_ip}</div></div></div>
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Status</div><div className="h3 mb-0">{stationReview.status}</div></div></div>
 	                    </div>
-	                    <div className="row g-3 mb-3">
-	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Station Code</div><div className="fw-semibold">{stationReview.station_code || '-'}</div></div></div>
-	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">HotSpot DNS</div><div className="fw-semibold">{stationReview.hotspot_dns_name || '-'}</div></div></div>
-	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">HotSpot Server</div><div className="fw-semibold">{stationReview.hotspot_server_name || '-'}</div></div></div>
-	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Portal URL</div><div className="fw-semibold text-truncate" title={stationReview.portal_url || ''}>{stationReview.portal_url || '-'}</div></div></div>
+		                    <div className="row g-3 mb-3">
+		                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Station Code</div><div className="fw-semibold">{stationReview.station_code || '-'}</div></div></div>
+		                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Enforcement</div><div className="fw-semibold">Omada Captive Portal</div></div></div>
+		                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Station Role</div><div className="fw-semibold">Gateway / Transport</div></div></div>
+		                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Portal URL</div><div className="fw-semibold text-truncate" title={stationReview.portal_url || ''}>{stationReview.portal_url || '-'}</div></div></div>
 	                    </div>
 	                    <div className="row g-3 mb-3">
 	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">Root DHCP Server</div><div className="fw-semibold">{stationReview.create_dhcp_server ? (stationReview.dhcp_server_name || '-') : 'Disabled'}</div></div></div>
 	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">DHCP Lease Time</div><div className="fw-semibold">{stationReview.create_dhcp_server ? (stationReview.dhcp_lease_time || '1h') : '-'}</div></div></div>
 	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">DHCP Ownership</div><div className="fw-semibold">Root gateway only</div></div></div>
 	                    </div>
-	                    <div className="row g-3 mb-3">
-	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">HotSpot Profile</div><div className="fw-semibold">{stationReview.create_hotspot_profile ? (stationReview.hotspot_profile_name || '-') : 'Disabled'}</div></div></div>
-	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">HotSpot Server</div><div className="fw-semibold">{stationReview.create_hotspot_server ? (stationReview.hotspot_server_name || '-') : 'Disabled'}</div></div></div>
-	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">Pre-login Portal/DNS</div><div className="fw-semibold">{stationReview.create_walled_garden ? 'Enabled' : 'Disabled'}</div></div></div>
-	                    </div>
-	                    <div className="text-muted small mb-3">{stationReview.plan?.summary || 'Root router creates the customer VLAN gateway/DHCP network. Downstream routers carry the same VLAN as a tagged trunk toward OLT/AP paths.'}</div>
+		                    <div className="text-muted small mb-3">{stationReview.plan?.summary || 'Root router creates the customer VLAN gateway/DHCP network. Downstream routers carry the same VLAN as a tagged trunk toward OLT/AP paths.'}</div>
 	                    {(stationReview.plan?.router_plans || []).map((routerPlan) => (
 	                      <details className="border rounded mb-2" key={`station-review-plan-${routerPlan.router_id}`} open>
 	                        <summary className="p-2 fw-semibold">{routerPlan.router_name} · {routerPlan.role}</summary>
@@ -7801,20 +10304,234 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                        </div>
 	                      </details>
 	                    ))}
-	                    <div className="modal-footer px-0 pb-0">
-	                      <button type="button" className="btn btn-outline-primary" onClick={() => syncHotspotLoginHtml(stationReview.id)} disabled={hotspotLoginSyncing}>
-	                        <IconRefresh size={18} className="me-2" />{hotspotLoginSyncing ? 'Syncing...' : 'Sync HotSpot login.html'}
-	                      </button>
-	                      <button type="button" className="btn btn-primary" onClick={() => setStationReview(null)}>Close Review</button>
-	                    </div>
-	                  </Modal>
-	                )}
-                  {stationImplementation && (
-                    <Modal title={`Push Config: ${stationImplementation.station_name}`} size="xl" onClose={() => { if (!stationImplementing) { stationPushCompleted ? closeStationPushSuccess() : setStationImplementation(null); } }}>
-                      <div className="alert alert-danger">
-                        <div className="fw-semibold mb-1">RouterOS write action</div>
-                        <div>Review every command below before starting. When you click Start Push, the system sends these commands to the listed MikroTik routers one at a time, uploads the managed HotSpot login.html, and stops on the first error.</div>
-                      </div>
+		                    <div className="modal-footer px-0 pb-0">
+		                      <button type="button" className="btn btn-primary" onClick={() => setStationReview(null)}>Close Review</button>
+		                    </div>
+		                  </Modal>
+		                )}
+                    {stationOmadaPlan && (
+                      <Modal title={`Omada Captive Portal Setup: ${stationOmadaPlan.station?.station_name || stationOmadaPlan.plan?.station?.station_name || 'Station'}`} size="xl" onClose={() => stationOmadaActionLoading ? null : setStationOmadaPlan(null)}>
+                        {stationOmadaPlanLoading && <div className="alert alert-info">Loading station Omada captive portal readiness...</div>}
+                        {stationOmadaPlan.error && <div className="alert alert-danger">{stationOmadaPlan.error}</div>}
+                        {stationOmadaPlan.plan && (
+                          <>
+	                            <div className="alert alert-info">
+	                              <div className="fw-semibold mb-1">Station Omada captive portal plan</div>
+	                              <div>Omada handles captive portal redirect and device authorization. MikroTik remains the station VLAN/DHCP/NAT transport path; this screen does not push RouterOS configuration.</div>
+	                            </div>
+	                            <div className="border rounded p-3 mb-3">
+	                              {(() => {
+	                                const rawBindingKey = `${stationOmadaBindingForm.omada_site_id || ''}|||${stationOmadaBindingForm.omada_site_name || ''}`;
+	                                const bindingSite = siteDeployments.find((site) => siteOptionKey(site) === rawBindingKey) || selectedStationSite(stationOmadaBindingForm);
+	                                const bindingKey = bindingSite ? siteOptionKey(bindingSite) : rawBindingKey;
+	                                const vlanStatus = omadaSiteVlanStatus(bindingSite, stationOmadaPlan.plan.station?.vlan_id);
+	                                return (
+	                                  <div className="row g-3 align-items-end">
+	                                    <div className="col-lg-5">
+	                                      <label className="form-label">Bind Station to Omada Site</label>
+	                                      <select
+	                                        className="form-select"
+	                                        value={bindingKey}
+		                                        onChange={(e) => {
+		                                          const site = findSiteOptionByKey(e.target.value);
+		                                          setStationOmadaBindingResult(null);
+		                                          setStationOmadaBindingForm({
+		                                            omada_site_id: site?.omada_site_id || '',
+		                                            omada_site_name: site?.site_name || ''
+		                                          });
+		                                        }}
+	                                      >
+	                                        <option value="|||">Select Omada site</option>
+	                                        {siteDeployments.map((site) => (
+	                                          <option value={siteOptionKey(site)} key={`omada-binding-site-${siteOptionKey(site)}`}>
+	                                            {site.site_name}{site.omada_site_id ? ` (${site.omada_site_id})` : ''}{site.vlan_tag ? ` · VLAN ${site.vlan_tag}` : ''}
+	                                          </option>
+	                                        ))}
+	                                      </select>
+	                                    </div>
+	                                    <div className="col-lg-3">
+	                                      <div className="text-muted small">VLAN check</div>
+	                                      <span className={`badge ${vlanStatus.className}`}>{vlanStatus.label}</span>
+	                                    </div>
+	                                    <div className="col-lg-2">
+	                                      <div className="text-muted small">APs in site</div>
+	                                      <div className="fw-semibold">{bindingSite ? `${bindingSite.ap_connected_count || 0}/${bindingSite.ap_total_count || 0}` : '-'}</div>
+	                                    </div>
+	                                    <div className="col-lg-2">
+	                                      <button type="button" className="btn btn-primary w-100" onClick={saveStationOmadaBinding} disabled={stationOmadaBindingSaving}>
+	                                        {stationOmadaBindingSaving ? 'Saving...' : 'Save Binding'}
+	                                      </button>
+	                                    </div>
+		                                    <div className="col-12 text-muted small">
+		                                      Each station should be bound to the Omada site that owns its APs. Omada automation actions below will target this station site.
+		                                    </div>
+		                                    {stationOmadaBindingResult && (
+		                                      <div className="col-12">
+		                                        <div className={`alert mb-0 ${stationOmadaBindingResult.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'}`}>
+		                                          <div className="fw-semibold">{stationOmadaBindingResult.status === 'SUCCESS' ? 'Binding saved' : 'Binding was not saved'}</div>
+		                                          <div>{stationOmadaBindingResult.message}</div>
+		                                        </div>
+		                                      </div>
+		                                    )}
+		                                  </div>
+		                                );
+	                              })()}
+	                            </div>
+	                            <div className="row g-3 mb-3">
+                              <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Readiness</div><div className="h3 mb-0"><span className={`badge ${omadaReadinessClass(stationOmadaPlan.plan.status)}`}>{stationOmadaPlan.plan.status}</span></div></div></div>
+                              <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Station VLAN</div><div className="h3 mb-0">VLAN {stationOmadaPlan.plan.station?.vlan_id}</div></div></div>
+                              <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">SSID</div><div className="fw-semibold text-truncate" title={stationOmadaPlan.plan.ssid?.display_ssid}>{stationOmadaPlan.plan.ssid?.display_ssid || '-'}</div><div className="text-muted small">{stationOmadaPlan.plan.ssid?.security_mode || 'OPEN'}</div></div></div>
+                              <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Omada Site</div><div className="fw-semibold text-truncate" title={stationOmadaPlan.plan.omada?.selected_site_name || stationOmadaPlan.plan.omada?.selected_site_id}>{stationOmadaPlan.plan.omada?.selected_site_name || stationOmadaPlan.plan.omada?.selected_site_id || '-'}</div><div className="text-muted small">{stationOmadaPlan.plan.omada?.ap_connected_count || 0}/{stationOmadaPlan.plan.omada?.ap_total_count || 0} APs connected · {stationOmadaPlan.plan.omada?.ap_count_source === 'OMADA_API' ? 'live Omada' : 'local records'}</div></div></div>
+                            </div>
+                            <div className="row g-3 mb-3">
+                              <div className="col-lg-7">
+                                <div className="border rounded p-3 h-100">
+                                  <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+                                    <div>
+                                      <div className="fw-semibold">Readiness checklist</div>
+                                      <div className="text-muted small">Fix blocked or missing items before testing the phone redirect on one AP.</div>
+                                    </div>
+                                    <button className="btn btn-sm btn-outline-secondary" type="button" onClick={refreshStationOmadaPortalPlan} disabled={stationOmadaPlanLoading}>
+                                      <IconRefresh size={15} className="me-1" />Refresh
+                                    </button>
+                                  </div>
+                                  <div className="list-group list-group-flush">
+                                    {(stationOmadaPlan.plan.checks || []).map((check) => (
+                                      <div className="list-group-item px-0" key={check.key}>
+                                        <div className="d-flex align-items-start justify-content-between gap-3">
+                                          <div>
+                                            <div className="fw-semibold">{check.label}</div>
+                                            <div className="text-muted small">{check.detail}</div>
+                                            {check.action && <div className="small text-blue mt-1">{check.action}</div>}
+                                          </div>
+                                          <span className={`badge ${omadaReadinessClass(check.status)}`}>{check.status}</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="col-lg-5">
+                                <div className="border rounded p-3 h-100">
+                                  <div className="fw-semibold mb-2">Portal and VLAN values</div>
+                                  <div className="table-responsive">
+                                    <table className="table table-sm mb-0">
+                                      <tbody>
+                                        <tr><td className="text-muted">Portal URL</td><td className="text-break">{stationOmadaPlan.plan.portal?.url}</td></tr>
+                                        <tr><td className="text-muted">Client network</td><td>{stationOmadaPlan.plan.station?.client_network_cidr}</td></tr>
+                                        <tr><td className="text-muted">Gateway</td><td>{stationOmadaPlan.plan.station?.gateway_ip}</td></tr>
+                                        <tr><td className="text-muted">SSID VLAN</td><td>{stationOmadaPlan.plan.ssid?.selected_site_vlan_id || 'Not saved'}{stationOmadaPlan.plan.ssid?.vlan_match ? <span className="badge bg-green-lt text-green ms-2">Matches</span> : null}</td></tr>
+                                        <tr><td className="text-muted">Omada API</td><td>{stationOmadaPlan.plan.omada?.api_configured ? <span className="badge bg-green-lt text-green">Configured</span> : <span className="badge bg-red-lt text-red">Needs credentials</span>}</td></tr>
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+	                            <div className="border rounded p-3 mb-3">
+	                              <div className="fw-semibold mb-2">Omada automation actions</div>
+	                              <div className="text-muted small mb-3">These actions call the existing Omada Controller integration. If Omada rejects an API path, use the manual setup checklist below.</div>
+	                              <div className="btn-list">
+	                                {(stationOmadaPlan.plan.automation_actions || []).map((action) => {
+	                                  const disabled = Boolean(stationOmadaActionLoading) || action.enabled === false;
+	                                  return (
+	                                    <button key={action.key} type="button" className="btn btn-outline-primary" title={action.disabled_reason || action.label} disabled={disabled} onClick={() => runStationOmadaAction(action.key)}>
+	                                      {stationOmadaActionLoading === action.key ? <IconRefresh size={16} className="me-2" /> : <IconWifi size={16} className="me-2" />}
+	                                      {stationOmadaActionLoading === action.key ? 'Running...' : action.label}
+	                                    </button>
+	                                  );
+	                                })}
+	                              </div>
+	                              {(stationOmadaPlan.plan.automation_actions || []).some((action) => action.enabled === false) && (
+	                                <div className="mt-3">
+	                                  {(stationOmadaPlan.plan.automation_actions || []).filter((action) => action.enabled === false).map((action) => (
+	                                    <div className="small text-muted" key={`omada-action-disabled-${action.key}`}>
+	                                      <span className="badge bg-yellow-lt text-yellow me-2">{action.label}</span>{action.disabled_reason}
+	                                    </div>
+	                                  ))}
+	                                </div>
+	                              )}
+	                              {stationOmadaActionResult && (
+	                                <div className={`alert mt-3 mb-0 ${stationOmadaActionResult.status === 'SUCCESS' ? 'alert-success' : stationOmadaActionResult.status === 'WARNING' ? 'alert-warning' : 'alert-danger'}`}>
+	                                  <div className="fw-semibold">{stationOmadaActionResult.status || 'RESULT'}</div>
+	                                  <div>{stationOmadaActionResult.message || stationOmadaActionResult.error || 'Action completed.'}</div>
+	                                </div>
+	                              )}
+	                            </div>
+	                            <div className="border rounded p-3 mb-3">
+	                              <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+	                                <div>
+	                                  <div className="fw-semibold">Recent Omada action history</div>
+	                                  <div className="text-muted small">Station-scoped automation logs for API tests, SSID creation, portal setup, and verification.</div>
+	                                </div>
+	                                {stationOmadaPlan.plan.last_action && <span className={`badge ${stationOmadaPlan.plan.last_action.status === 'SUCCESS' ? 'bg-green-lt text-green' : stationOmadaPlan.plan.last_action.status === 'WARNING' ? 'bg-yellow-lt text-yellow' : 'bg-red-lt text-red'}`}>Last: {stationOmadaPlan.plan.last_action.status}</span>}
+	                              </div>
+	                              {(stationOmadaPlan.plan.recent_actions || []).length ? (
+	                                <div className="table-responsive">
+	                                  <table className="table table-sm mb-0">
+	                                    <thead>
+	                                      <tr>
+	                                        <th>Time</th>
+	                                        <th>Action</th>
+	                                        <th>Status</th>
+	                                        <th>SSID</th>
+	                                        <th>Message</th>
+	                                      </tr>
+	                                    </thead>
+	                                    <tbody>
+	                                      {(stationOmadaPlan.plan.recent_actions || []).map((item) => (
+	                                        <tr key={item.id}>
+	                                          <td className="text-nowrap">{fmt(item.created_at)}</td>
+	                                          <td>{item.action}</td>
+	                                          <td><span className={`badge ${item.status === 'SUCCESS' ? 'bg-green-lt text-green' : item.status === 'WARNING' ? 'bg-yellow-lt text-yellow' : 'bg-red-lt text-red'}`}>{item.status}</span></td>
+	                                          <td>{item.ssid_name || '-'}</td>
+	                                          <td className="text-muted">{item.message || '-'}</td>
+	                                        </tr>
+	                                      ))}
+	                                    </tbody>
+	                                  </table>
+	                                </div>
+	                              ) : (
+	                                <div className="text-muted small">No station Omada actions have been run yet.</div>
+	                              )}
+	                            </div>
+	                            <div className="row g-3">
+                              <div className="col-lg-7">
+                                <div className="border rounded p-3 h-100">
+                                  <div className="fw-semibold mb-2">Manual Omada setup checklist</div>
+                                  <ol className="mb-0">
+                                    {(stationOmadaPlan.plan.manual_steps || []).map((step, index) => <li key={`manual-step-${index}`} className="mb-2">{step}</li>)}
+                                  </ol>
+                                </div>
+                              </div>
+                              <div className="col-lg-5">
+                                <div className="border rounded p-3 h-100">
+                                  <div className="fw-semibold mb-2">Known limitations</div>
+                                  <ul className="mb-0">
+                                    {(stationOmadaPlan.plan.known_limitations || []).map((item, index) => <li key={`omada-limit-${index}`} className="mb-2">{item}</li>)}
+                                  </ul>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                        <div className="modal-footer px-0 pb-0">
+                          <button type="button" className="btn" onClick={() => setStationOmadaPlan(null)} disabled={Boolean(stationOmadaActionLoading)}>Close</button>
+                        </div>
+                      </Modal>
+                    )}
+		                  {stationImplementation && (
+			                    <Modal title={`Push Config: ${stationImplementation.station_name}`} size="xl" onClose={() => { if (!stationImplementing) { stationPushCompleted ? closeStationPushSuccess() : setStationImplementation(null); } }}>
+			                      <div className="alert alert-danger">
+			                        <div className="fw-semibold mb-1">RouterOS write action</div>
+			                        <div>The system checks MikroTik first, hides cleanup steps that are already removed, then pushes only the remaining needed station VLAN transport and one-device voucher fairness steps one at a time. No MikroTik HotSpot server or login.html is created.</div>
+		                      </div>
+		                      {stationImplementationSteps.some((step) => step.phase === 'CLEANUP_OLD') && (
+		                        <div className="alert alert-warning">
+		                          <div className="fw-semibold mb-1">Changed configuration cleanup</div>
+		                          <div>{stationImplementation.plan?.pending_cleanup_reason || stationImplementation.pending_cleanup_reason || 'Only old station objects still detected on MikroTik are shown below and removed before the updated config is pushed.'}</div>
+		                        </div>
+		                      )}
                       <div className="row g-3 mb-3">
                         <div className="col-md-3">
                           <div className="border rounded p-3 h-100">
@@ -7842,7 +10559,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                         </div>
                       </div>
                       {(() => {
-                        const totalSteps = stationImplementationSteps.length || stationImplementationStepList(stationImplementation).length;
+	                        const totalSteps = stationImplementationSteps.length;
                         const completedSteps = stationImplementationSteps.filter((item) => ['SUCCESS', 'SKIPPED', 'FAILED'].includes(item.status)).length;
                         const successSteps = stationImplementationSteps.filter((item) => ['SUCCESS', 'SKIPPED'].includes(item.status)).length;
                         const failedSteps = stationImplementationSteps.filter((item) => item.status === 'FAILED').length;
@@ -7871,10 +10588,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                             <IconCircleCheck size={56} />
                           </div>
                           <div>
-                            <div className="h2 mb-2">Configuration pushed successfully</div>
-                            <div className="text-muted">
-                              All planned station configuration steps completed or were already detected on MikroTik. The managed HotSpot login.html sync step is also complete.
-                            </div>
+	                            <div className="h2 mb-2">Configuration pushed successfully</div>
+	                            <div className="text-muted">
+	                              All planned station transport steps completed or were already detected on MikroTik. Omada captive portal configuration is handled separately.
+	                            </div>
                           </div>
                           <button type="button" className="btn btn-success btn-lg" onClick={closeStationPushSuccess}>
                             Close ({stationPushCloseCountdown}s)
@@ -7887,23 +10604,38 @@ function CaptivePortalPage({ mode = 'full' }) {
                         {renderStationChainPath(stationImplementation)}
                       </div>
                       <div className="station-implementation-list">
-                        {(stationImplementationSteps.length ? stationImplementationSteps : stationImplementationStepList(stationImplementation)).map((step, stepIndex) => (
+	                        {stationImplementationSteps.map((step, stepIndex) => (
                           <div className={`station-implementation-step ${step.status?.toLowerCase() || 'pending'} ${step.detected ? 'detected' : ''}`} key={`${step.id}-${stepIndex}`} ref={(node) => { if (node) stationStepRefs.current[step.id] = node; }}>
                             <div className="station-implementation-step-header">
                               <span className="station-implementation-status-icon">{stationImplementationStatusIcon(step.status)}</span>
-                              <div className="min-w-0">
-                                <div className="fw-semibold">{stepIndex + 1}. {step.label}</div>
-                                <div className="text-muted small">{step.router_name || 'Router'}{step.host ? ` · ${step.host}` : ''} · {step.router_role}</div>
-                              </div>
+	                              <div className="min-w-0">
+	                                <div className="fw-semibold d-flex align-items-center gap-2 flex-wrap">
+	                                  <span>{stepIndex + 1}. {step.label}</span>
+	                                  {step.phase === 'CLEANUP_OLD' && <span className="badge bg-orange-lt text-orange">Remove old config first</span>}
+		                                  {step.phase === 'APPLY_NEW' && stationImplementationSteps.some((item) => item.phase === 'CLEANUP_OLD') && <span className="badge bg-blue-lt text-blue">Apply updated config</span>}
+	                                </div>
+	                                <div className="text-muted small">{step.router_name || 'Router'}{step.host ? ` · ${step.host}` : ''} · {step.router_role}</div>
+	                              </div>
                               <span className={`badge ms-auto ${step.status === 'SUCCESS' || step.status === 'SKIPPED' ? 'bg-green-lt text-green' : step.status === 'FAILED' ? 'bg-red-lt text-red' : step.status === 'RUNNING' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
                                 {step.detected ? 'Already pushed' : step.status === 'SKIPPED' ? 'Already exists' : step.status}
                               </span>
                             </div>
                             <pre className="station-implementation-command mb-0"><code>{step.preview}</code></pre>
-                            {step.message && <div className={`small mt-2 ${step.status === 'FAILED' ? 'text-danger' : 'text-muted'}`}>{step.message}</div>}
-                          </div>
-                        ))}
-                      </div>
+	                            {step.message && <div className={`small mt-2 ${step.status === 'FAILED' ? 'text-danger' : 'text-muted'}`}>{step.message}</div>}
+	                          </div>
+	                        ))}
+	                        {!stationImplementationSteps.length && (
+	                          <div className="empty py-4">
+	                            <div className="empty-icon">{stationCheckingManaged ? <IconRefresh size={32} /> : <IconClock size={32} />}</div>
+	                            <p className="empty-title">{stationCheckingManaged ? 'Checking MikroTik routers' : 'No push steps loaded'}</p>
+	                            <p className="empty-subtitle text-muted">
+	                              {stationCheckingManaged
+	                                ? 'The system is checking actual RouterOS state before displaying cleanup or push steps.'
+	                                : stationImplementationMessage || 'Run the check again by reopening Push Config.'}
+	                            </p>
+	                          </div>
+	                        )}
+	                      </div>
                       <div className="modal-footer px-0 pb-0">
                         <button type="button" className="btn" onClick={() => setStationImplementation(null)} disabled={stationImplementing}>Close</button>
                         <button
@@ -7917,9 +10649,9 @@ function CaptivePortalPage({ mode = 'full' }) {
                         >
                           <IconEye size={18} className="me-2" />Review Plan First
                         </button>
-                        <button type="button" className="btn btn-danger" disabled={stationImplementing || !stationManagedStatus || stationCheckingManaged || !(stationImplementationSteps.length || stationImplementationStepList(stationImplementation).length)} onClick={runStationImplementation} title={!stationManagedStatus ? 'Checking existing config first.' : 'Start station config push'}>
-                          <IconPlayerPlay size={18} className="me-2" />{stationImplementing ? 'Pushing...' : stationCheckingManaged && !stationManagedStatus ? 'Checking...' : 'Start Push'}
-                        </button>
+	                        <button type="button" className="btn btn-danger" disabled={stationImplementing || !stationManagedStatus || stationCheckingManaged || !stationImplementationSteps.length} onClick={runStationImplementation} title={!stationManagedStatus ? 'Checking existing config first.' : 'Start station config push'}>
+	                          <IconPlayerPlay size={18} className="me-2" />{stationImplementing ? 'Pushing...' : stationCheckingManaged ? 'Checking...' : 'Start Push'}
+	                        </button>
                       </div>
                       <div className="border-top pt-3 mt-3">
                         <div className="fw-semibold mb-2">Recent station history</div>
@@ -8150,7 +10882,7 @@ function CaptivePortalPage({ mode = 'full' }) {
               {mikrotikTab === 'Scan Result' && <>
                 <div className="alert alert-info">
                   <div className="fw-semibold mb-1">Preflight scan is read-only</div>
-                  <div>It checks the MikroTik router before setup and does not change VLANs, DHCP, HotSpot, firewall, routing, WireGuard, or any other RouterOS configuration.</div>
+                  <div>It checks the MikroTik router before setup and does not change VLANs, DHCP, firewall, routing, WireGuard, or any other RouterOS configuration.</div>
                 </div>
                 {false && <ul className="nav nav-tabs flex-nowrap overflow-auto mb-3" role="tablist">
                   <li className="nav-item" role="presentation">
@@ -8218,7 +10950,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <KpiCard icon={IconSearch} label="Scanned" value={preflightSummary?.cards?.scanned || 0} tone="green" />
                     <KpiCard icon={IconRefresh} label="Reachable" value={preflightSummary?.cards?.reachable || 0} tone="purple" />
                     <KpiCard icon={IconAlertTriangle} label="Failed / Unreachable" value={preflightSummary?.cards?.failed_unreachable || 0} tone="red" />
-                    <KpiCard icon={IconWifi} label="Potential HotSpot Candidates" value={preflightSummary?.cards?.hotspot_gateway_candidates || 0} tone="green" />
+                    <KpiCard icon={IconWifi} label="Station Gateway Candidates" value={preflightSummary?.cards?.hotspot_gateway_candidates || 0} tone="green" />
                     <KpiCard icon={IconShieldLock} label="Requires Confirmation" value={preflightSummary?.cards?.requires_confirmation || 0} tone="yellow" />
                     <KpiCard icon={IconLock} label="Read-only/Core" value={preflightSummary?.cards?.read_only_core || 0} tone="secondary" />
                     <KpiCard icon={IconListDetails} label="VLAN Trunk Helpers" value={preflightSummary?.cards?.vlan_trunk_helpers || 0} tone="blue" />
@@ -8231,7 +10963,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                         ['ALL', 'All'],
                         ['FAILED', 'Failed scans'],
                         ['BLOCKED', 'Blocked'],
-                        ['CANDIDATES', 'Potential HotSpot candidates'],
+                        ['CANDIDATES', 'Station gateway candidates'],
                         ['READ_ONLY', 'Read-only/core'],
                         ['TRUNK', 'VLAN trunk helpers'],
                         ['CONFIRMATION', 'Requires confirmation']
@@ -8280,9 +11012,6 @@ function CaptivePortalPage({ mode = 'full' }) {
                                   </button>
                                   <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => runPreflightScan(row.router_id)} title="Run Scan">
                                     <IconSearch size={16} />
-                                  </button>
-                                  <button className="btn btn-sm btn-outline-warning" type="button" onClick={() => openPreflightRouter(row.router_id)} title="Set Deployment Mode">
-                                    <IconShieldLock size={16} />
                                   </button>
                                 </div>
                               </td>
@@ -8361,7 +11090,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                             <span className="badge bg-blue-lt text-blue">Role guess: {preflightScan.router_role_guess || 'UNKNOWN'}</span>
                             <span className={`badge ${preflightScan.scan_status === 'SUCCESS' ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>{preflightScan.scan_status}</span>
                           </div>
-                          <div className="text-muted small">Last scan timestamp: {fmt(preflightScan.created_at)}. Use this read-only data to check existing VLANs, subnets, pools, DHCP, HotSpot, and sensitive routing services before creating a station plan.</div>
+                          <div className="text-muted small">Last scan timestamp: {fmt(preflightScan.created_at)}. Use this read-only data to check existing VLANs, subnets, pools, DHCP, legacy HotSpot objects, and sensitive routing services before creating a station plan.</div>
                         </div>
                       </div>
                       {preflightScan.last_error && <div className="alert alert-danger mt-3 mb-0">{preflightScan.last_error}</div>}
@@ -8377,12 +11106,12 @@ function CaptivePortalPage({ mode = 'full' }) {
                       )}
                       {preflightScan.router_role_guess === 'CORE_ROUTER_READ_ONLY' && (
                         <div className="alert alert-danger">
-                          This router appears to be core/routing infrastructure. HotSpot setup is blocked by default.
+                          This router appears to be core/routing infrastructure. Station gateway setup is blocked by default.
                         </div>
                       )}
                       {preflightScan.router_role_guess === 'SWITCH_TRUNK_HELPER' && (
                         <div className="alert alert-info">
-                          This device appears to be a VLAN trunk/switch device. It should not host HotSpot, but it may later help carry a customer VLAN.
+                          This device appears to be a VLAN trunk/switch device. It should not host station DHCP/NAT, but it may help carry a customer VLAN.
                         </div>
                       )}
                       <div className="row g-3">
@@ -8402,7 +11131,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                   <div className="row row-cards mb-3">
                     <div className="col-md-3"><div className="card"><div className="card-body"><div className="text-muted small">VLANs</div><div className="h2 mb-0">{preflightVlanRows.length}</div></div></div></div>
                     <div className="col-md-3"><div className="card"><div className="card-body"><div className="text-muted small">Subnets</div><div className="h2 mb-0">{preflightSubnetRows.length}</div></div></div></div>
-                    <div className="col-md-3"><div className="card"><div className="card-body"><div className="text-muted small">DHCP / HotSpot</div><div className="h2 mb-0">{preflightCounts.dhcp_servers || 0} / {preflightCounts.hotspots || 0}</div></div></div></div>
+                    <div className="col-md-3"><div className="card"><div className="card-body"><div className="text-muted small">DHCP / Legacy HotSpot</div><div className="h2 mb-0">{preflightCounts.dhcp_servers || 0} / {preflightCounts.hotspots || 0}</div></div></div></div>
                     <div className="col-md-3"><div className="card"><div className="card-body"><div className="text-muted small">PPPoE / OSPF / WG</div><div className="h2 mb-0">{preflightCounts.pppoe_servers || 0} / {preflightCounts.ospf_entries || 0} / {preflightCounts.wireguard || 0}</div></div></div></div>
                   </div>
                   <div className="row row-cards">
@@ -8430,7 +11159,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <div className="col-lg-6"><Card title="Existing Subnets"><Table rows={preflightSubnetRows} columns={['address', 'network', 'interface', 'disabled', 'comment']} /></Card></div>
                     <div className="col-lg-6"><Card title="Existing IP Pools"><Table rows={preflightPoolRows} columns={['name', 'ranges', 'comment']} /></Card></div>
                     <div className="col-lg-6"><Card title="Existing DHCP Servers"><Table rows={preflightDhcpRows} columns={['name', 'interface', 'address_pool', 'disabled', 'lease_time']} /></Card></div>
-                    <div className="col-lg-6"><Card title="Existing HotSpot Servers"><Table rows={preflightHotspotRows} columns={['name', 'interface', 'profile', 'address_pool', 'disabled']} /></Card></div>
+                    <div className="col-lg-6"><Card title="Existing Legacy HotSpot Servers"><Table rows={preflightHotspotRows} columns={['name', 'interface', 'profile', 'address_pool', 'disabled']} /></Card></div>
                     <div className="col-lg-6">
                       <Card title="Sensitive Config Indicators">
                         <div className="d-flex flex-column gap-2">
@@ -9385,7 +12114,7 @@ function CaptivePortalPage({ mode = 'full' }) {
               {mikrotikTab === 'Add Router' && <form onSubmit={saveMikrotikRows}>
                 <div className="alert alert-warning">
                   <div className="fw-semibold mb-1">MikroTik account requirement</div>
-                  <div>A dedicated <strong>full/write RouterOS API account is required</strong>. The system will need write access to configure HotSpot, walled garden, client authorization, and portal enforcement. Do not use your main MikroTik admin account; create a dedicated automation account with only the required RouterOS policies.</div>
+                  <div>A dedicated <strong>full/write RouterOS API account is required</strong>. The system will need write access to configure station VLAN, DHCP, NAT, and trunk helper objects. Do not use your main MikroTik admin account; create a dedicated automation account with only the required RouterOS policies.</div>
                 </div>
                 <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                   <div>
@@ -9447,9 +12176,91 @@ function CaptivePortalPage({ mode = 'full' }) {
               </form>}
             </div>
           </div>
-        </div>
-      </>}
-      {activeTab === 'Portal Settings' && <>
+	        </div>
+	      </>}
+	      {activeTab === 'Portal Notifs' && <div className="col-12">
+	        <Card title={<CardHeaderContent><div className="d-flex align-items-center gap-2"><IconBell size={20} /><h3 className="card-title mb-0">Portal Notifs</h3></div></CardHeaderContent>}>
+	          {portalSettings ? <form onSubmit={savePortalSettings}>
+	            <div className="alert alert-info">
+	              Mobile notification-bar support depends on the phone browser and captive portal WebView. The portal will try to show a browser notification where supported, and will always show the same message inside the portal as fallback. The OS-level "Sign in to WiFi network" notification text cannot be customized by this system.
+	            </div>
+	            <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap border rounded p-3 mb-3">
+	              <div>
+	                <div className="fw-semibold">Enable portal notifications</div>
+	                <div className="text-muted small">When enabled, voucher success, remaining-time, expired, and restored-session notices can be shown to customers.</div>
+	              </div>
+	              <label className="form-check form-switch mb-0">
+	                <input className="form-check-input" type="checkbox" checked={portalSettings.portal_notifications_enabled === true} onChange={(e) => setPortalSettings({ ...portalSettings, portal_notifications_enabled: e.target.checked })} />
+	              </label>
+	            </div>
+	            <div className="mb-3">
+	              <div className="text-muted small mb-2">Template tags: <code>{'<TIME>'}</code> <code>{'<REMAINING>'}</code> <code>{'<VOUCHER>'}</code> <code>{'<SSID>'}</code> <code>{'<EXPIRES_AT>'}</code> <code>{'<BRAND>'}</code> <code>{'<STATUS>'}</code></div>
+	            </div>
+	            <div className="row g-3">
+	              <div className="col-12">
+	                <div className="border rounded p-3">
+	                  <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
+	                    <label className="form-label mb-0">Voucher success message</label>
+	                    <label className="form-check form-switch mb-0">
+	                      <input className="form-check-input" type="checkbox" checked={portalSettings.portal_success_notification_enabled !== false} onChange={(e) => setPortalSettings({ ...portalSettings, portal_success_notification_enabled: e.target.checked })} />
+	                    </label>
+	                  </div>
+	                  <textarea className="form-control" rows={3} value={portalSettings.portal_success_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_success_notification_message: e.target.value })} placeholder="Voucher accepted. Remaining time: <TIME>." />
+	                  <div className="form-hint">Shown after a voucher is accepted and Omada authorizes the client.</div>
+	                </div>
+	              </div>
+	              <div className="col-12">
+	                <div className="border rounded p-3">
+	                  <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
+	                    <label className="form-label mb-0">Remaining time reminder</label>
+	                    <label className="form-check form-switch mb-0">
+	                      <input className="form-check-input" type="checkbox" checked={portalSettings.portal_remaining_notification_enabled !== false} onChange={(e) => setPortalSettings({ ...portalSettings, portal_remaining_notification_enabled: e.target.checked })} />
+	                    </label>
+	                  </div>
+	                  <div className="row g-3">
+	                    <div className="col-md-4">
+	                      <label className="form-label">Send when remaining seconds is at or below</label>
+	                      <input className="form-control" type="number" min="0" value={portalSettings.portal_remaining_notification_trigger_seconds ?? 300} onChange={(e) => setPortalSettings({ ...portalSettings, portal_remaining_notification_trigger_seconds: Number(e.target.value) })} />
+	                    </div>
+	                    <div className="col-md-8">
+	                      <label className="form-label">Message</label>
+	                      <textarea className="form-control" rows={3} value={portalSettings.portal_remaining_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_remaining_notification_message: e.target.value })} placeholder="Reminder: only <TIME> remaining on your WiFi voucher." />
+	                    </div>
+	                  </div>
+	                  <div className="form-hint">Use this for warnings like 5 minutes remaining. Set trigger to 0 to disable timing even if the switch is on.</div>
+	                </div>
+	              </div>
+	              <div className="col-md-6">
+	                <div className="border rounded p-3 h-100">
+	                  <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
+	                    <label className="form-label mb-0">Time fully consumed message</label>
+	                    <label className="form-check form-switch mb-0">
+	                      <input className="form-check-input" type="checkbox" checked={portalSettings.portal_expired_notification_enabled !== false} onChange={(e) => setPortalSettings({ ...portalSettings, portal_expired_notification_enabled: e.target.checked })} />
+	                    </label>
+	                  </div>
+	                  <textarea className="form-control" rows={4} value={portalSettings.portal_expired_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_expired_notification_message: e.target.value })} placeholder="Your WiFi voucher time is fully consumed. Enter a new voucher to continue." />
+	                </div>
+	              </div>
+	              <div className="col-md-6">
+	                <div className="border rounded p-3 h-100">
+	                  <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
+	                    <label className="form-label mb-0">Session restored message</label>
+	                    <label className="form-check form-switch mb-0">
+	                      <input className="form-check-input" type="checkbox" checked={portalSettings.portal_reconnect_notification_enabled !== false} onChange={(e) => setPortalSettings({ ...portalSettings, portal_reconnect_notification_enabled: e.target.checked })} />
+	                    </label>
+	                  </div>
+	                  <textarea className="form-control" rows={4} value={portalSettings.portal_reconnect_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_reconnect_notification_message: e.target.value })} placeholder="Your WiFi session was restored. Remaining time: <TIME>." />
+	                  <div className="form-hint">Shown when a random/private MAC or 2G/5G band change is re-authorized with remaining time.</div>
+	                </div>
+	              </div>
+	              <div className="col-12 d-flex justify-content-end">
+	                <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Portal Notifs</button>
+	              </div>
+	            </div>
+	          </form> : <div className="empty">Loading portal notifications...</div>}
+	        </Card>
+	      </div>}
+	      {activeTab === 'Portal Settings' && <>
         <div className="col-12">
           <Card title="Portal Settings">
             {portalSettings ? <form onSubmit={savePortalSettings}>
@@ -10211,15 +13022,15 @@ function MikroTikScanResultPage() {
     { key: 'subnets', label: 'Subnets', detail: 'Existing IP addresses', icon: IconDatabase, tone: 'cyan', count: subnetRows.length },
     { key: 'pools', label: 'Pools', detail: 'Existing IP pools', icon: IconArchive, tone: 'orange', count: poolRows.length },
     { key: 'dhcp', label: 'DHCP', detail: 'Servers and pools', icon: IconServer, tone: 'green', count: dhcpRows.length },
-    { key: 'hotspot', label: 'HotSpot', detail: 'Existing HotSpot config', icon: IconWifi, tone: 'yellow', count: hotspotRows.length },
+    { key: 'hotspot', label: 'Legacy HotSpot', detail: 'Existing legacy HotSpot config', icon: IconWifi, tone: 'yellow', count: hotspotRows.length },
     { key: 'sensitive', label: 'Sensitive', detail: 'PPPoE, OSPF, WG, routes', icon: IconLock, tone: 'red', count: (counts.pppoe_servers || 0) + (counts.ospf_entries || 0) + (counts.wireguard || 0) }
   ];
 
   const roleOverview = (
     <Card title="Role Explanation">
       {scan?.router_role_guess === 'PPPoE_ACCESS_CONCENTRATOR' && <div className="alert alert-warning">This router has PPPoE services. Captive portal setup should only use a new dedicated VLAN/subnet and must not touch PPPoE objects.</div>}
-      {scan?.router_role_guess === 'CORE_ROUTER_READ_ONLY' && <div className="alert alert-danger">This router appears to be core/routing infrastructure. Do not use it for HotSpot setup without expert review.</div>}
-      {scan?.router_role_guess === 'SWITCH_TRUNK_HELPER' && <div className="alert alert-info">This device appears to be a VLAN trunk/switch device. It can carry VLANs but should not host HotSpot/DHCP/NAT.</div>}
+      {scan?.router_role_guess === 'CORE_ROUTER_READ_ONLY' && <div className="alert alert-danger">This router appears to be core/routing infrastructure. Do not use it as the station gateway without expert review.</div>}
+      {scan?.router_role_guess === 'SWITCH_TRUNK_HELPER' && <div className="alert alert-info">This device appears to be a VLAN trunk/switch device. It can carry VLANs but should not host station DHCP/NAT.</div>}
       <div className="fw-semibold mb-2">Why this role was guessed</div>
       <ul className="mb-3">{(scan?.role_reasoning || ['No role reasoning saved for this scan yet.']).map((item, index) => <li key={`scan-role-${index}`}>{item}</li>)}</ul>
       <span className={`badge ${pilotClass(scan?.pilot_suitability)}`}>Pilot suitability: {pilotLabel(scan?.pilot_suitability)}</span>
@@ -10301,7 +13112,7 @@ function MikroTikScanResultPage() {
     subnets: <Card title="Existing Subnets"><Table rows={subnetRows} columns={['address', 'network', 'interface', 'disabled', 'comment']} /></Card>,
     pools: <Card title="Existing IP Pools"><Table rows={poolRows} columns={['name', 'ranges', 'comment']} /></Card>,
     dhcp: <Card title="Existing DHCP Servers"><Table rows={dhcpRows} columns={['name', 'interface', 'address_pool', 'disabled', 'lease_time']} /></Card>,
-    hotspot: <Card title="Existing HotSpot Servers"><Table rows={hotspotRows} columns={['name', 'interface', 'profile', 'address_pool', 'disabled']} /></Card>,
+    hotspot: <Card title="Existing Legacy HotSpot Servers"><Table rows={hotspotRows} columns={['name', 'interface', 'profile', 'address_pool', 'disabled']} /></Card>,
     sensitive: (
       <Card title="Sensitive Config Indicators">
         <div className="d-flex flex-column gap-2">
@@ -10375,12 +13186,12 @@ function NetworkPage({ refresh }) {
     <div className="row row-cards">
       <div className="col-12">
         <div className="alert alert-info">
-          Network tools are for trusted infrastructure devices and advanced validation. MikroTik handles gateway/enforcement planning, while customer-facing access stays Captive Portal + Voucher.
+          Network tools are for trusted infrastructure devices. MikroTik now handles station VLAN, DHCP, NAT, AP-management transport, and preflight validation. Omada handles the customer captive portal.
         </div>
       </div>
       <div className="col-12">
         <ul className="nav nav-tabs">
-          {['MikroTik', 'NAS / Router / AP Clients', 'Advanced RADIUS Lab'].map((item) => (
+          {['MikroTik'].map((item) => (
             <li className="nav-item" key={item}>
               <button className={`nav-link ${tab === item ? 'active' : ''}`} type="button" onClick={() => setTab(item)}>{item}</button>
             </li>
@@ -10389,8 +13200,6 @@ function NetworkPage({ refresh }) {
       </div>
       <div className="col-12">
         {tab === 'MikroTik' && <CaptivePortalPage mode="mikrotik-only" />}
-        {tab === 'NAS / Router / AP Clients' && <NasClients refresh={refresh} />}
-        {tab === 'Advanced RADIUS Lab' && <RadiusTestGuide refresh={refresh} />}
       </div>
     </div>
   );
@@ -10518,7 +13327,7 @@ function SystemSettingsPage({ refresh }) {
   const [settings, setSettings] = useState(null);
   const [admins, setAdmins] = useState([]);
   const [newAdmin, setNewAdmin] = useState({ username: '', password: '', full_name: '', email: '', role: 'admin' });
-  const [danger, setDanger] = useState({ action: 'clear_auth_logs', confirmation: '', current_password: '' });
+  const [danger, setDanger] = useState({ action: 'clear_sessions', confirmation: '', current_password: '' });
   const [companyLogo, setCompanyLogo] = useState(null);
   const [browserLogo, setBrowserLogo] = useState(null);
   const [message, setMessage] = useState('');
@@ -10576,7 +13385,7 @@ function SystemSettingsPage({ refresh }) {
   async function runDanger(e) {
     e.preventDefault();
     await request('/system/danger', { method: 'POST', body: JSON.stringify(danger) });
-    setDanger({ action: 'clear_auth_logs', confirmation: '', current_password: '' });
+    setDanger({ action: 'clear_sessions', confirmation: '', current_password: '' });
     setMessage('Danger action completed.');
   }
 
@@ -10690,8 +13499,8 @@ function SystemSettingsPage({ refresh }) {
         <Card title="Danger">
           <form onSubmit={runDanger}>
             <div className="row g-3 align-items-end">
-              <div className="col-md-4"><label className="form-label">Action</label><select className="form-select" value={danger.action} onChange={(e) => setDanger({ ...danger, action: e.target.value })}><option value="clear_auth_logs">Clear authentication logs</option><option value="clear_sessions">Clear session records</option></select></div>
-              <div className="col-md-3"><label className="form-label">Confirmation</label><input className="form-control" placeholder={danger.action === 'clear_sessions' ? 'CLEAR SESSIONS' : 'CLEAR AUTH LOGS'} value={danger.confirmation} onChange={(e) => setDanger({ ...danger, confirmation: e.target.value })} /></div>
+              <div className="col-md-4"><label className="form-label">Action</label><select className="form-select" value={danger.action} onChange={(e) => setDanger({ ...danger, action: e.target.value })}><option value="clear_sessions">Clear legacy session records</option></select></div>
+              <div className="col-md-3"><label className="form-label">Confirmation</label><input className="form-control" placeholder="CLEAR SESSIONS" value={danger.confirmation} onChange={(e) => setDanger({ ...danger, confirmation: e.target.value })} /></div>
               <div className="col-md-3"><label className="form-label">Current Password</label><input className="form-control" type="password" value={danger.current_password} onChange={(e) => setDanger({ ...danger, current_password: e.target.value })} /></div>
               <div className="col-md-2"><button className="btn btn-danger w-100"><IconAlertTriangle size={18} className="me-2" />Run</button></div>
             </div>
@@ -11100,6 +13909,8 @@ function OmadaControllerPage({ refresh }) {
   const [sites, setSites] = useState([]);
   const [automationLogs, setAutomationLogs] = useState([]);
   const [automationResult, setAutomationResult] = useState(null);
+  const [uninstallOpen, setUninstallOpen] = useState(false);
+  const [uninstallConfirmation, setUninstallConfirmation] = useState('');
   const [environment, setEnvironment] = useState('STAGING');
   const [profileForm, setProfileForm] = useState({ environment: 'STAGING', profile_name: '3JCentralPisowifi Staging RADIUS', radius_server_ip: '192.168.50.70', auth_port: 11812, accounting_port: 11813, shared_secret: generateSharedSecret(), accounting_enabled: true, interim_update_seconds: 300 });
   const [ssidForm, setSsidForm] = useState({ environment: 'STAGING', ssid_name: '3J-Test-WiFi' });
@@ -11135,6 +13946,8 @@ function OmadaControllerPage({ refresh }) {
     'Confirm second device with same account is rejected.'
   ];
   const installed = Boolean(settings && ['INSTALLED', 'RUNNING', 'STOPPED', 'ERROR'].includes(settings.install_status));
+  const installOnly = Boolean(settings && settings.install_status === 'NOT_INSTALLED');
+  const omadaTabs = installOnly ? ['Install'] : ['Status', 'Settings', 'Logs'];
   const webReachable = Boolean(webResult && (webResult.http?.status === 'Reachable' || webResult.https?.status === 'Reachable'));
   const canOpenOmada = installed && settings?.install_status !== 'NOT_INSTALLED' && webReachable;
 
@@ -11143,9 +13956,13 @@ function OmadaControllerPage({ refresh }) {
     setLogs(await request('/omada/logs'));
     setApiSettings(await request('/omada/api-settings'));
     setAutomationLogs(await request('/omada/automation-logs'));
-    setFallback(await request(`/omada/manual-fallback-settings?environment=${environment}&shared_secret=${encodeURIComponent(profileForm.shared_secret)}`));
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!settings) return;
+    const allowedTabs = settings.install_status === 'NOT_INSTALLED' ? ['Install'] : ['Status', 'Settings', 'Logs'];
+    if (!allowedTabs.includes(tab)) setTab(allowedTabs[0]);
+  }, [settings?.install_status, tab]);
   useEffect(() => {
     const staging = environment === 'STAGING';
     const nextSecret = profileForm.shared_secret || generateSharedSecret();
@@ -11164,7 +13981,6 @@ function OmadaControllerPage({ refresh }) {
       shortname: `omada-${staging ? 'staging' : 'production'}`,
       secret: nextSecret
     });
-    request(`/omada/manual-fallback-settings?environment=${environment}&shared_secret=${encodeURIComponent(nextSecret)}`).then(setFallback).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [environment]);
   useEffect(() => {
@@ -11173,13 +13989,18 @@ function OmadaControllerPage({ refresh }) {
       try {
         const nextLogs = await request('/omada/logs');
         setLogs(nextLogs);
-        const current = nextLogs.find((row) => row.id === installLog.id) || nextLogs.find((row) => row.action === 'INSTALL');
+        const current = nextLogs.find((row) => row.id === installLog.id) || nextLogs.find((row) => row.action === installLog.action && row.status === 'RUNNING');
         if (current) {
           setInstallLog(current);
           if (current.status !== 'RUNNING') {
             setBusy('');
             const saved = await request('/omada/settings');
             setSettings(saved);
+            if (current.action === 'UNINSTALL' && current.status === 'SUCCESS') {
+              setTab('Install');
+              setMessage('Omada Controller uninstalled. The page is now showing installation setup only.');
+              setWebResult(null);
+            }
           }
         }
       } catch (_err) {
@@ -11212,7 +14033,7 @@ function OmadaControllerPage({ refresh }) {
     };
   }, [settings?.install_status, settings?.host, settings?.http_port, settings?.https_port, webReachable]);
   useEffect(() => {
-    if (webReachable && installLog) {
+    if (webReachable && installLog?.action === 'INSTALL') {
       setInstallLog(null);
       setBusy('');
     }
@@ -11276,6 +14097,24 @@ function OmadaControllerPage({ refresh }) {
       await load().catch(() => {});
     } finally {
       if (name !== 'install') setBusy('');
+    }
+  }
+
+  async function uninstallOmada() {
+    setBusy('uninstall');
+    setError('');
+    setMessage('');
+    try {
+      const data = await request('/omada/uninstall', { method: 'POST', body: JSON.stringify({ confirmation: uninstallConfirmation }) });
+      if (data.settings) setSettings(data.settings);
+      setInstallLog({ id: data.log_id, action: 'UNINSTALL', status: 'RUNNING', progress_percent: 2, current_step: 'Queued' });
+      setUninstallOpen(false);
+      setUninstallConfirmation('');
+      setMessage('Omada uninstall started.');
+      await load();
+    } catch (err) {
+      setError(err.message);
+      setBusy('');
     }
   }
 
@@ -11439,24 +14278,25 @@ function OmadaControllerPage({ refresh }) {
     setSettings(saved);
   }
 
-  const visibleInstallLog = webReachable ? null : (installLog || logs.find((row) => row.action === 'INSTALL' && row.status === 'RUNNING'));
+  const visibleInstallLog = installLog || logs.find((row) => ['INSTALL', 'UNINSTALL'].includes(row.action) && row.status === 'RUNNING') || (!webReachable ? logs.find((row) => row.action === 'INSTALL' && row.status === 'RUNNING') : null);
   const installProgress = Math.min(100, Math.max(0, Number(visibleInstallLog?.progress_percent || 0)));
+  const omadaProgressAction = visibleInstallLog?.action === 'UNINSTALL' ? 'Uninstall' : 'Install';
   const latestLog = logs[0];
   const radiusSecret = nasResult?.secret || nasForm.secret;
 
   return (
     <div className="row row-cards">
-      {message && <div className="col-12"><div className="alert alert-info">{message}</div></div>}
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
       {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
       <div className="col-12">
         <div className="alert alert-info">
-          Omada Controller is used to manage TP-Link Omada access points, open SSIDs, and WiFi settings. Captive Portal + Voucher is now the main customer access direction. WPA2-Enterprise/RADIUS automation remains available under Advanced for lab validation.
+          Omada Controller is used to manage TP-Link Omada access points, open SSIDs, captive portal redirect, and WiFi settings. Customer access is handled by Captive Portal + Voucher.
         </div>
       </div>
 
       <div className="col-12">
         <ul className="nav nav-tabs">
-          {['Status', 'Settings', 'Portal Setup', 'AP / SSID Setup', 'Advanced', 'Logs'].map((item) => (
+          {omadaTabs.map((item) => (
             <li className="nav-item" key={item}>
               <button className={`nav-link ${tab === item ? 'active' : ''}`} type="button" onClick={() => setTab(item)}>
                 {item}
@@ -11466,7 +14306,30 @@ function OmadaControllerPage({ refresh }) {
         </ul>
       </div>
 
-      {tab === 'Status' && <div className="col-12">
+      {tab === 'Install' && <div className="col-12">
+        <Card title="Install Omada Controller" subtitle="Fresh installation on the configured Omada server. Existing controller data is not present when this status is shown.">
+          <div className="row g-3 align-items-center">
+            <div className="col-md-3"><div className="text-muted">Omada Server</div><div className="h3">{settings.host}</div></div>
+            <div className="col-md-3"><div className="text-muted">SSH Target</div><div className="h3">{settings.ssh_host || 'Not set'}</div></div>
+            <div className="col-md-3"><div className="text-muted">Docker Image</div><div className="h3 text-truncate" title={settings.docker_image}>{settings.docker_image || 'Not set'}</div></div>
+            <div className="col-md-3"><div className="text-muted">Status</div><div className="h3"><StatusBadge value={settings.install_status} /></div></div>
+            <div className="col-12">
+              <div className="alert alert-warning mb-0">
+                Install uses SSH to create `/opt/omada-controller`, write the Docker Compose file, pull the configured image, and start Omada. Complete first-time setup in Omada after installation.
+              </div>
+            </div>
+            <div className="col-12 d-flex gap-2 flex-wrap">
+              <button className="btn btn-primary" disabled={!!busy || !settings.ssh_username} onClick={() => action('install', `Omada Controller will be installed on ${settings.ssh_host || settings.host}. Continue?`)}>
+                <IconCloudUpload size={18} className="me-2" />Install Omada
+              </button>
+              <button className="btn" type="button" disabled={!!busy} onClick={testSsh}>Test SSH Connection</button>
+              <button className="btn" type="button" disabled={!!busy} onClick={testWeb}>Test Web UI Reachability</button>
+            </div>
+          </div>
+        </Card>
+      </div>}
+
+      {!installOnly && tab === 'Status' && <div className="col-12">
         <Card title="Controller Overview">
           <div className="row g-3">
             <div className="col-md-3"><div className="text-muted">Controller Server</div><div className="h3">{settings.host}</div></div>
@@ -11481,21 +14344,21 @@ function OmadaControllerPage({ refresh }) {
                 )}
               </div>
             </div>
-            <div className="col-md-3"><div className="text-muted">RADIUS Server</div><div className="h3">192.168.50.70</div></div>
+            <div className="col-md-3"><div className="text-muted">Portal Server</div><div className="h3">192.168.50.70</div></div>
             <div className="col-md-3"><div className="text-muted">Last Check</div><div className="h3">{settings.last_status_check_at || 'Not checked'}</div></div>
           </div>
           {webResult && <div className="mt-3 d-flex gap-2 flex-wrap"><StatusBadge value={webResult.http.status} /><span>HTTP {webResult.http.port}</span><StatusBadge value={webResult.https.status} /><span>HTTPS {webResult.https.port}</span></div>}
           {visibleInstallLog && (
             <div className="mt-3 border rounded p-3">
               <div className="d-flex justify-content-between align-items-center mb-2">
-                <div className="fw-semibold">{visibleInstallLog.current_step || 'Installing Omada'}</div>
+                <div className="fw-semibold">{visibleInstallLog.current_step || `${omadaProgressAction}ing Omada`}</div>
                 <span className="badge bg-blue-lt text-blue">{installProgress}%</span>
               </div>
               <div className="progress">
                 <div className={`progress-bar ${visibleInstallLog.status === 'FAILED' ? 'bg-danger' : 'bg-primary'}`} style={{ width: `${installProgress}%` }} />
               </div>
               <div className="text-muted small mt-2">
-                {visibleInstallLog.status === 'RUNNING' ? 'Installation is running. Logs refresh automatically.' : `Install ${String(visibleInstallLog.status || '').toLowerCase()}.`}
+                {visibleInstallLog.status === 'RUNNING' ? `${omadaProgressAction} is running. Logs refresh automatically.` : `${omadaProgressAction} ${String(visibleInstallLog.status || '').toLowerCase()}.`}
               </div>
             </div>
           )}
@@ -11503,7 +14366,7 @@ function OmadaControllerPage({ refresh }) {
         </Card>
       </div>}
 
-      {tab === 'Settings' && <div className="col-12">
+      {(tab === 'Settings' || tab === 'Install') && <div className="col-12">
         <Card title="Connection Settings">
           <form onSubmit={save}>
             <div className="row g-3">
@@ -11527,7 +14390,7 @@ function OmadaControllerPage({ refresh }) {
         </Card>
       </div>}
 
-      {tab === 'Settings' && <div className="col-12">
+      {(tab === 'Settings' || tab === 'Install') && <div className="col-12">
         <Card title="SSH Installation Settings">
           <form onSubmit={save}>
             <div className="row g-3">
@@ -11594,7 +14457,7 @@ function OmadaControllerPage({ refresh }) {
             <div className="col-md-6">
               <div className="border rounded p-3 h-100">
                 <h4>Parked Lab Feature</h4>
-                <p className="text-muted mb-0">WPA2-Enterprise profile and test SSID automation are still available in Advanced. They are no longer the primary customer login path.</p>
+                <p className="text-muted mb-0">Legacy WPA2-Enterprise/RADIUS lab tooling has been removed from the active workflow. Use open SSIDs with Omada captive portal enforcement.</p>
               </div>
             </div>
           </div>
@@ -11604,7 +14467,7 @@ function OmadaControllerPage({ refresh }) {
       {tab === 'Status' && <div className="col-12">
         <Card title="Detection & Status">
           <div className="row g-3">
-            {['8088/tcp HTTP UI', '8043/tcp HTTPS UI', '8843/tcp future portal', '29810/udp discovery', '29811/tcp adoption', '29812/tcp adoption', '29813/tcp upgrade', '29814/tcp management'].map((item) => <div className="col-md-3" key={item}><span className="badge bg-blue-lt text-blue">{item}</span></div>)}
+            {['8088/tcp HTTP UI', '8043/tcp HTTPS UI', '8843/tcp future portal', '29810/udp discovery', '29811/tcp adoption', '29812/tcp adoption', '29813/tcp upgrade', '29814/tcp management', '29815/tcp management', '29816/tcp management', '29817/tcp management'].map((item) => <div className="col-md-3" key={item}><span className="badge bg-blue-lt text-blue">{item}</span></div>)}
           </div>
         </Card>
       </div>}
@@ -11622,6 +14485,7 @@ function OmadaControllerPage({ refresh }) {
             <button className="btn" disabled={!!busy || !installed} onClick={() => action('restart', 'Restart Omada Controller on 192.168.50.71?')}><IconRefresh size={18} className="me-2" />Restart Omada</button>
             <button className="btn" disabled={!!busy || !installed} onClick={() => action('backup')}><IconArchive size={18} className="me-2" />Backup Omada</button>
             <button className="btn btn-primary" disabled={!!busy || !installed} onClick={() => action('apply-host-network', 'This will recreate Omada Controller on 192.168.50.71 using Docker host network mode. Continue?')}><IconSettings size={18} className="me-2" />Apply Host Network Fix</button>
+            <button className="btn btn-outline-danger" disabled={!!busy || !installed} onClick={() => setUninstallOpen(true)}><IconTrash size={18} className="me-2" />Uninstall Omada</button>
             {canOpenOmada ? <a className="btn" href={`https://${settings.host}:${settings.https_port}`} target="_blank" rel="noreferrer"><IconExternalLink size={18} className="me-2" />Open Omada UI</a> : <button className="btn" type="button" disabled><IconExternalLink size={18} className="me-2" />Open Omada UI</button>}
           </div>
           {busy && <div className="text-muted mt-3">Running {busy}...</div>}
@@ -11650,11 +14514,11 @@ function OmadaControllerPage({ refresh }) {
               <div className="col-md-3"><label className="form-label">Controller Host</label><input className="form-control" value={apiSettings?.controller_host || '192.168.50.71'} onChange={(e) => setApiSettings({ ...apiSettings, controller_host: e.target.value, api_base_url: `https://${e.target.value}:${apiSettings?.https_port || 8043}` })} /></div>
               <div className="col-md-2"><label className="form-label">HTTPS Port</label><input className="form-control" type="number" value={apiSettings?.https_port || 8043} onChange={(e) => setApiSettings({ ...apiSettings, https_port: Number(e.target.value), api_base_url: `https://${apiSettings?.controller_host || '192.168.50.71'}:${e.target.value}` })} /></div>
               <div className="col-md-4"><label className="form-label">API Base URL</label><input className="form-control" value={apiSettings?.api_base_url || 'https://192.168.50.71:8043'} onChange={(e) => setApiSettings({ ...apiSettings, api_base_url: e.target.value })} /></div>
-              <div className="col-md-3"><label className="form-label">Controller ID / Omada ID</label><input className="form-control" placeholder="Auto-detect if possible" value={apiSettings?.controller_id || ''} onChange={(e) => setApiSettings({ ...apiSettings, controller_id: e.target.value })} /></div>
               <div className="col-md-3"><label className="form-label">Username</label><input className="form-control" value={apiSettings?.username || ''} onChange={(e) => setApiSettings({ ...apiSettings, username: e.target.value })} /></div>
               <div className="col-md-3"><label className="form-label">Password</label><input className="form-control" type="password" placeholder={apiSettings?.has_password ? 'Saved, enter to replace' : ''} onChange={(e) => setApiSettings({ ...apiSettings, password: e.target.value })} /></div>
               <div className="col-md-3"><label className="form-label">Remember Credentials</label><label className="form-check"><input className="form-check-input" type="checkbox" checked={apiSettings?.remember_credentials !== false} onChange={(e) => setApiSettings({ ...apiSettings, remember_credentials: e.target.checked })} /><span className="form-check-label">Encrypt and save password</span></label></div>
               <div className="col-md-3"><label className="form-label">Verify TLS Certificate</label><label className="form-check"><input className="form-check-input" type="checkbox" checked={!!apiSettings?.verify_tls} onChange={(e) => setApiSettings({ ...apiSettings, verify_tls: e.target.checked })} /><span className="form-check-label">Require trusted certificate</span></label></div>
+              <div className="col-12"><div className="alert alert-info mb-0">Omada Controller ID is auto-detected on each API session. It is not saved because Omada changes it after reinstall or restore.</div></div>
               {!apiSettings?.verify_tls && <div className="col-12"><div className="alert alert-warning mb-0">TLS verification is disabled for lab testing with the Omada self-signed certificate.</div></div>}
               <div className="col-12"><div className="alert alert-info mb-0">Omada credentials are used only to configure AP and SSID settings. Customer accounts and balances are still managed by 3JCentralPisowifi.</div></div>
               <div className="col-12 d-flex gap-2 flex-wrap">
@@ -11810,6 +14674,24 @@ function OmadaControllerPage({ refresh }) {
           {automationLogs.length > 0 ? <Table rows={automationLogs.slice(0, 10)} columns={['action', 'status', 'error_message', 'created_at']} /> : <div className="empty">No Omada automation logs yet.</div>}
         </Card>
       </div>}
+
+      {uninstallOpen && (
+        <Modal title="Uninstall Omada Controller" onClose={() => !busy && setUninstallOpen(false)}>
+          <div className="alert alert-danger">
+            This removes the Omada Docker Compose project, containers, and Docker volumes from {settings.ssh_host || settings.host}. This is intended for a fresh Omada install and will remove Omada controller data stored in those volumes.
+          </div>
+          <div className="mb-3">
+            <label className="form-label">Type <code>uninstall</code> to continue</label>
+            <input className="form-control" value={uninstallConfirmation} onChange={(event) => setUninstallConfirmation(event.target.value)} autoFocus />
+          </div>
+          <div className="modal-footer px-0 pb-0">
+            <button className="btn" type="button" disabled={!!busy} onClick={() => setUninstallOpen(false)}>Cancel</button>
+            <button className="btn btn-danger" type="button" disabled={!!busy || uninstallConfirmation.trim().toLowerCase() !== 'uninstall'} onClick={uninstallOmada}>
+              <IconTrash size={18} className="me-2" />Uninstall Omada
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -11831,7 +14713,6 @@ const nav = [
   { page: 'Location Management', icon: IconMapPin, tone: 'green' },
   { page: 'Vouchers', icon: IconKey, tone: 'yellow' },
   { page: 'Wallet / Manual Top-Up', icon: IconCash, tone: 'green' },
-  { page: 'Sessions', icon: IconHistory, tone: 'orange' },
   { page: 'Captive Portal', icon: IconWifi, tone: 'blue' },
   { page: 'Network', icon: IconRouter, tone: 'purple' },
   { page: 'Omada Controller', icon: IconServer, tone: 'cyan' },
@@ -11842,7 +14723,6 @@ const nav = [
 const profilePages = {
   'View Profile': { icon: IconId, tone: 'blue' },
   'Change Password': { icon: IconKey, tone: 'blue' },
-  'Advanced RADIUS Lab': { icon: IconWifi, tone: 'teal' },
   'MikroTik Scan Result': { icon: IconSearch, tone: 'blue' }
 };
 
@@ -11946,10 +14826,11 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed }) {
   );
 }
 
-function Header({ page, dashboard, resources, onToggleSidebar, sidebarCollapsed }) {
+function Header({ page, dashboard, resources, omadaPortalStatus, onToggleSidebar, sidebarCollapsed, onOpenCaptivePortal }) {
   const meta = pageMeta(page);
   const PageIcon = meta.icon;
   const ramAllocated = resources?.ram_used_incl_cache_pct;
+  const omadaPortalRatio = omadaPortalStatus?.portal_ap_ratio || `${omadaPortalStatus?.portal_ap_connected_count ?? 0}/${omadaPortalStatus?.portal_ap_count ?? 0}`;
   return (
     <header className="navbar navbar-expand-md navbar-light d-print-none sticky-top">
       <div className="container-xl">
@@ -11959,6 +14840,15 @@ function Header({ page, dashboard, resources, onToggleSidebar, sidebarCollapsed 
             <div className="h3 m-0">{page}</div>
           </button>
           <div className="sys-metrics d-none d-lg-flex ms-auto gap-4">
+            <button
+              className={`btn btn-sm ${omadaPortalBadgeClass(omadaPortalStatus?.status)} border-0 d-inline-flex align-items-center gap-1`}
+              type="button"
+              onClick={onOpenCaptivePortal}
+              title={omadaPortalStatus?.message || 'Open Captive Portal status'}
+            >
+              <IconWifi size={16} /> Omada Portal {omadaPortalStatusLabel(omadaPortalStatus?.status)}
+              <span className="badge bg-white text-dark ms-1">{omadaPortalRatio}</span>
+            </button>
             <div className="sys-metric text-muted"><IconCpu size={18} /><span>CPU {resources?.cpu_pct ?? 0}%</span></div>
             <div className="sys-metric text-muted"><IconServer size={18} /><span>RAM {resources?.ram_pressure_pct ?? 0}%{ramAllocated !== undefined ? ` · Alloc ${ramAllocated}%` : ''}</span></div>
             <div className="sys-metric text-muted"><IconDatabase size={18} /><span>DISK {resources?.disk_pct ?? 0}%</span></div>
@@ -11977,14 +14867,22 @@ function App() {
   const [dashboard, setDashboard] = useState(null);
   const [me, setMe] = useState(null);
   const [resources, setResources] = useState(null);
+  const [omadaPortalStatus, setOmadaPortalStatus] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [branding, setBranding] = useState({ display_name: '3JCentralPisowifi', portal_subtitle: 'Source of Truth + Manual RADIUS Test MVP', accent_color: '#206bc4', company_logo_url: null, browser_logo_url: null });
+  const [branding, setBranding] = useState({ display_name: '3JCentralPisowifi', portal_subtitle: 'Captive Portal + Voucher Access', accent_color: '#206bc4', company_logo_url: null, browser_logo_url: null });
 
   async function refresh() {
     if (localStorage.getItem('centralwifi_token')) {
-      setDashboard(await request('/dashboard'));
-      setMe(await request('/me'));
-      setBranding(await publicRequest('/public/branding'));
+      const [dashboardData, meData, brandingData, omadaStatusData] = await Promise.all([
+        request('/dashboard'),
+        request('/me'),
+        publicRequest('/public/branding'),
+        request('/captive-portal/omada/status').catch(() => null)
+      ]);
+      setDashboard(dashboardData);
+      setMe(meData);
+      setBranding(brandingData);
+      setOmadaPortalStatus(omadaStatusData);
     }
   }
 
@@ -12039,6 +14937,24 @@ function App() {
       window.clearInterval(timer);
     };
   }, [authed]);
+  useEffect(() => {
+    if (!authed) return undefined;
+    let mounted = true;
+    const loadOmadaPortalStatus = async () => {
+      try {
+        const data = await request('/captive-portal/omada/status');
+        if (mounted) setOmadaPortalStatus(data);
+      } catch (_err) {
+        if (mounted) setOmadaPortalStatus({ status: 'DOWN', message: 'Could not load Omada portal status.' });
+      }
+    };
+    loadOmadaPortalStatus();
+    const timer = window.setInterval(loadOmadaPortalStatus, 30000);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+    };
+  }, [authed]);
   if (isPortalRoute) return <PortalApp />;
   if (!authed) return <Login onLogin={() => setAuthed(true)} branding={branding} />;
 
@@ -12051,7 +14967,7 @@ function App() {
     <div className={`page ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
       <Sidebar page={page} setPage={navigatePage} me={me} logout={logout} branding={branding} collapsed={sidebarCollapsed} />
       <div className="page-wrapper">
-        <Header page={page} dashboard={dashboard} resources={resources} onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)} sidebarCollapsed={sidebarCollapsed} />
+        <Header page={page} dashboard={dashboard} resources={resources} omadaPortalStatus={omadaPortalStatus} onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)} sidebarCollapsed={sidebarCollapsed} onOpenCaptivePortal={() => navigatePage('Captive Portal')} />
         {page === 'Long Lat' ? (
           <LongLatPage />
         ) : page === 'AP & Client Map' ? (
@@ -12066,12 +14982,10 @@ function App() {
             {page === 'Location Management' && <LocationManagementPage />}
             {page === 'Vouchers' && <VouchersPage />}
             {page === 'Wallet / Manual Top-Up' && <WalletPage refresh={refresh} />}
-            {page === 'Sessions' && <SessionsPage refresh={refresh} />}
             {page === 'Captive Portal' && <CaptivePortalPage />}
             {page === 'Portal Editor' && <CaptivePortalEditorPage />}
             {page === 'Network' && <NetworkPage refresh={refresh} />}
             {page === 'MikroTik Scan Result' && <MikroTikScanResultPage />}
-            {page === 'Advanced RADIUS Lab' && <RadiusTestGuide refresh={refresh} />}
             {page === 'System Settings' && <SystemSettingsPage refresh={refresh} />}
             {page === 'Omada Controller' && <OmadaControllerPage refresh={refresh} />}
             {page === 'Logs' && <SimplePage title="Logs" endpoint="/audit-logs" columns={['action', 'target_type', 'target_id', 'details', 'created_at']} />}

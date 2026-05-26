@@ -1,73 +1,48 @@
 # Captive Portal Integration
 
-Phase 2C connected the public voucher portal to Omada captive portal testing. The current production direction is MikroTik gateway enforcement with Omada kept for AP/SSID management.
+The active customer access flow is Omada Captive Portal + Voucher. MikroTik is retained for station transport only.
 
-## Flow
+## Active Flow
 
-1. Customer connects to the open SSID configured in `APs Deployment -> Sites -> Configurations -> SSID and Security`.
-2. Omada redirects the browser to `http://192.168.50.70:8080/portal`.
-3. The portal captures Omada client parameters.
+1. Customer connects to the open SSID configured in `APs Deployment -> Sites -> Configurations`.
+2. Omada captive portal redirects the customer to `/portal`.
+3. `/portal` captures Omada client parameters.
 4. Customer enters a voucher.
-5. 3JCentralPisowifi validates the voucher.
-6. If the request came from Omada, the system attempts Omada client authorization.
-7. When authorization succeeds, the voucher is redeemed and wallet/access is credited.
+5. 3JCentralPisowifi validates the voucher from PostgreSQL.
+6. If the session came from Omada, 3JCentralPisowifi attempts Omada client authorization.
+7. After successful authorization, the voucher is consumed and wallet/access state is credited.
 
-## Omada Role
+## Component Roles
 
-Omada manages APs, SSIDs, captive portal redirect, and client authorization. It does not manage customer accounts, vouchers, wallets, or access decisions.
+Omada:
+- AP adoption.
+- SSID/radio/VLAN settings.
+- Captive portal redirect/enforcement.
+- Client authorization after voucher success.
 
-## MikroTik Gateway Direction
+MikroTik:
+- Station VLAN transport.
+- DHCP/NAT/routing for customer and AP management networks.
+- Read-only preflight scanning to avoid VLAN/subnet/pool conflicts.
+- No active MikroTik HotSpot enforcement.
 
-MikroTik is the preferred captive portal enforcement layer for future substations.
-
-Recommended split:
-
-- Omada: AP adoption, SSIDs, radio settings, VLAN tagging, AP monitoring.
-- MikroTik: captive portal redirect, HotSpot enforcement, RADIUS accounting, queues/rate limits, routing, and future WireGuard tunnels.
-- 3JCentralPisowifi: vouchers, wallets, portal sessions, access decisions, and logs.
-
-MikroTik management now lives under `Admin -> Network -> MikroTik`, where operators can store multiple RouterOS API connection records, test API login/reachability, run read-only scans, and plan station router chains.
-
-Use a dedicated full/write RouterOS API account. MikroTik captive portal automation needs write access for HotSpot, walled garden, client authorization, and portal enforcement. Do not use the main MikroTik admin account.
-
-The MikroTik workspace is split into `Configuration` and `Add Router`. Add and test router API credentials in `Add Router`; then use `Configuration` to run/read scan status, view scan results per router, and create station plans. The main Configuration table no longer shows the old single-router `Start Setup`, `Check Config`, or `Remove Config` actions because station planning is now the active workflow. Future apply/remove phases must still show exact RouterOS commands before any RouterOS write is sent.
-
-Station planning is now the preferred way to model customer HotSpot deployments. A station is an ordered router path: the first router is the root gateway and the next routers carry the customer VLAN as trunk helpers toward CRS, OLTs, switches, and APs. The Add Station modal starts with an empty chain, then operators add routers one by one. Each router appears as a vertical tab with a router icon and drag indicator; selecting a router tab opens that router's bridge/tagged-port setup, and dragging tabs changes router order. The left chain includes an animated root-to-downstream pulse to show the intended VLAN flow.
-
-The MikroTik Configuration page now separates:
-
-- HTML and AP Management: central AP management VLAN/subnet and managed HotSpot `login.html` sync.
-- Station-based MikroTik planning: customer HotSpot VLANs, DHCP, HotSpot, captive DNS, voucher authorization, and NAT.
-
-Central AP management defaults to VLAN `111` with subnet `10.111.0.0/24`. The AP management plan is configured from `HTML and AP Management`, not Add Station. The first/root AP management router creates the VLAN interface, management gateway IP, DHCP pool/server, DHCP network options, and local interface-list membership. Downstream routers carry VLAN 111 as a tagged trunk and may create a VLAN monitoring interface for visibility. The AP management push uses the same safe step-by-step RouterOS flow as Station Push Config.
-
-For station setup, the operator should not need to understand RouterOS command syntax. The Add Station modal is organized as a checklist: name the station, build the router chain, fill detected router bridge/tagged-port fields, fill root gateway network values, and review the generated plan. The selected router panel is split into `Step 3A: Select Router`, `Step 3B: Select Root Bridge and Tagged Ports`, and, for the root gateway only, `Step 3C: Root Gateway Network Values`. `Step 4: Review Plan` appears after the operator clicks `Save & Review Station Plan`; saving shows generated RouterOS preview text only and still does not apply configuration. Operators explicitly choose each saved router in the path, while bridge/interface, tagged ports, and root local interface list are selected from read-only RouterOS-detected controls to reduce typing mistakes. Tagged ports use a searchable checkbox list so operators can select multiple trunk/OLT/AP-facing ports without holding Ctrl/Command. Station bridge/interface and tagged-port selectors hide PPPoE interfaces because the VLAN should be created/carried on bridges, trunks, or physical ports such as `SwAC`, not on dynamic/customer PPPoE sessions. Field-level info icons explain what each value means. The root gateway tab owns the customer VLAN, gateway subnet, DHCP pool, DNS servers, VLAN interface name, and local interface-list membership. Downstream router tabs only choose the detected bridge/interface and tagged ports needed to carry the customer VLAN. The system must not silently reuse existing RouterOS pools, subnets, profiles, speed-plan configuration, management interfaces, or WAN settings.
-
-The system must create only system-owned RouterOS objects from those entered values. It must not silently reuse existing RouterOS pools, subnets, profiles, speed-plan configuration, management interfaces, or WAN settings. New RouterOS records should use the System Display Name as the identifier where possible and must include managed comments so operators can immediately recognize configuration created by 3JCentralPisowifi.
-
-Captive Portal does not have its own editable SSID field. It reads the SSID from APs Deployment -> Sites -> Configurations -> SSID and Security so AP/SSID management has one source.
-
-The Captive Portal page no longer has a separate Omada Integration tab. Keep Omada-specific controller, AP, SSID, and lab automation under Omada Controller and APs Deployment. Captive Portal should stay focused on MikroTik gateway setup, portal settings/design, sessions, logs, and manual operator guidance.
-
-The `Sanity Check` tab replaces the old test-flow checklist. It combines automatic readiness checks, manual field-test confirmations, and `Coming soon` placeholders for features that are intentionally not complete yet, such as MikroTik client authorization, login page upload, payments, SMS, and coinslot/vendo integration.
+3JCentralPisowifi:
+- Voucher validation.
+- Wallet/source-of-truth access state.
+- Portal sessions/events.
+- Omada authorization logs.
+- Station planning and reviewed MikroTik transport push.
 
 ## Portal URLs
 
-Staging:
-
 ```text
-http://192.168.50.70:8080/portal
+Staging:    http://192.168.50.70:8080/portal
+Production: http://192.168.50.70/portal
 ```
 
-Production:
+## Omada Query Parameters
 
-```text
-http://192.168.50.70/portal
-```
-
-## Query Parameters
-
-The portal accepts Omada-style parameters such as:
+The portal accepts common Omada-style parameters:
 
 ```text
 clientMac
@@ -86,96 +61,100 @@ token
 authToken
 ```
 
-Raw query parameters are stored with the portal session for diagnostics.
+Raw query parameters are stored with `portal_sessions` for diagnostics.
 
-## Authorization Behavior
+## Voucher Behavior
 
-Manual portal testing does not require Omada authorization. Omada-sourced sessions validate the voucher first, then attempt authorization. If Omada authorization fails, the voucher is not consumed.
+Manual `/portal` testing can redeem a voucher into wallet/access state without gateway authorization.
 
-Unlimited vouchers without an expiry use the configured default authorization duration. The default fallback is 86400 seconds.
+Omada-sourced sessions validate the voucher first, then attempt Omada authorization. If Omada authorization fails, the voucher is not consumed.
+
+Unlimited vouchers without an expiry use the configured default authorization duration for Omada authorization.
+
+## Random MAC / Private WiFi Address
+
+3JCentralPisowifi handles normal phone private-MAC changes with a device-session token.
+
+- After voucher success, the portal stores a secure token in the browser.
+- The database stores only the token hash.
+- If the same token returns with a new client MAC and remaining time still exists, the backend silently authorizes the new MAC for the remaining time.
+- The voucher is not consumed again and no extra time is credited.
+- Rebinds are limited and logged for operator review.
+
+This avoids Google login and avoids unreliable fingerprinting. If the browser token is lost, the system cannot safely prove that the new MAC belongs to the same phone.
+
+## Portal Notifications
+
+Admin -> Captive Portal -> Portal Notifs controls optional customer messages for voucher success, remaining-time warning, time consumed, and restored sessions.
+
+Supported template tags are `<TIME>`, `<REMAINING>`, `<VOUCHER>`, `<SSID>`, `<EXPIRES_AT>`, `<BRAND>`, and `<STATUS>`.
+
+The portal attempts browser/Web Notifications when the mobile browser supports them. Captive portal mini-browsers and plain HTTP portals often block native notification prompts, so the same message is always shown inside the portal as a fallback. The OS-level WiFi sign-in notification text is controlled by Android/iOS and cannot be customized by 3JCentralPisowifi.
+
+## MikroTik Station Transport
+
+Network -> MikroTik is still active for station transport:
+
+- Add Router stores RouterOS API access.
+- Overview runs read-only preflight scans.
+- Configuration creates station router chains.
+- AP Management creates a central AP management VLAN/subnet plan.
+- Station Push Config applies only reviewed VLAN/DHCP/NAT/trunk transport steps.
+- Station Push Config also applies station-scoped one-device voucher fairness rules on the root gateway so normal phone hotspot sharing is blocked.
+
+Station Push Config does not create MikroTik HotSpot profile/server, walled-garden, forced DNS redirect, or managed `login.html`.
+
+## One-Device Voucher Fairness
+
+Omada authorizes the device that redeemed the voucher, but it cannot reliably see another phone hidden behind that device's personal hotspot/NAT. 3JCentralPisowifi therefore enforces voucher fairness on the MikroTik station root gateway.
+
+The managed station rules:
+
+- Clamp return traffic to the customer VLAN with `TTL=1`.
+- Drop common tethered source TTL values `63` and `127`.
+- Insert station-scoped established/related accept rules before active FastTrack rules when needed so TTL enforcement is not bypassed.
+- Are scoped to the station client subnet/VLAN interface.
+- Are removed by Station Remove Config using exact managed comments.
+
+This blocks normal hotspot sharing from phones. It is not a cryptographic guarantee against rooted/custom clients that deliberately manipulate TTL.
+
+Office AP Path is retired from the active UI. The current AP adoption process is to connect the AP directly to the office subnet, adopt it in Omada, then set the AP management VLAN after adoption before moving it to the station path.
 
 ## Manual Omada Setup
 
 1. Open `https://192.168.50.71:8043`.
-2. Create or edit the WLAN using the SSID configured in APs Deployment -> Sites -> Configurations.
-3. Set security to Open.
-4. Enable Captive Portal / Portal Authentication.
-5. Choose External Portal / External Web Portal.
-6. Set portal URL to `http://192.168.50.70:8080/portal` for staging.
-7. Add walled garden access for `192.168.50.70`, the portal URL, and DNS if required.
-8. Apply to one test AP only.
+2. Adopt the AP into the correct Omada site.
+3. Create or edit the open SSID from APs Deployment configuration.
+4. Enable Portal Authentication / External Portal.
+5. Set the external portal URL to `http://192.168.50.70:8080/portal`.
+6. Configure the SSID VLAN to the station customer VLAN.
+7. Add pre-auth access for `192.168.50.70` and DNS if needed.
+8. Apply to one AP first.
 9. Connect a phone and redeem one test voucher.
 
 ## Troubleshooting
 
-Omada API login failed:
-- Check Omada username/password.
-- Confirm Omada first-time setup is complete.
-- Disable TLS verification for lab self-signed certificates if needed.
-
-Client did not redirect:
-- Confirm captive portal is enabled on the open SSID.
-- Confirm the SSID is applied to the test AP.
-- Confirm walled garden allows the portal server.
+Client does not redirect:
+- Confirm Omada Portal Authentication is enabled on the open SSID.
+- Confirm the AP is connected in the selected Omada site.
+- Confirm the SSID is broadcasting and uses the station customer VLAN.
+- Confirm walled garden/pre-auth access allows the portal server.
 
 Voucher valid but authorization failed:
-- Check Admin -> Captive Portal -> Authorization Logs.
-- Confirm Omada sent client MAC/token parameters.
-- Use the manual Omada setup guide if API automation is unsupported by this controller version.
+- Check Captive Portal -> Authorization Logs.
+- Confirm Omada sends client context to `/portal`.
+- If Omada API authorization is unsupported, authorize/test manually from Omada and record the limitation.
 
 Client authorized but no internet:
-- Check gateway/DNS routing outside 3JCentralPisowifi.
-- Confirm Omada portal policy allows internet after authorization.
+- Confirm MikroTik station transport has DHCP/NAT/routing pushed.
+- Confirm the phone received an IP from the station customer subnet.
+- Confirm the SSID VLAN matches the station VLAN.
 
-## Not Implemented Yet
+## Retired From Active Workflow
 
-- Payments.
-- SMS.
-- Coinslot/vendo integration.
-- Full MikroTik client authorization and managed login page upload.
-- WireGuard tunnel automation.
-- Production rollout automation.
-
-## MikroTik Preflight Before Setup
-
-Admin -> Network -> MikroTik no longer has a standalone `Preflight Scanner` tab. Read-only scan controls are now surfaced in `Configuration`.
-
-Run `Prescan All Routers` or `Run Scan` from the Configuration router table before MikroTik captive portal setup. The scan is read-only and checks existing VLANs, subnets, pools, DHCP servers, HotSpot servers, PPPoE, OSPF, WireGuard, routing, firewall/NAT summaries, and unsupported RouterOS paths. Use `View Scan Result` in the router table to open the result in a new browser tab/page. The scan-result page uses vertical section tabs with large icon badges for the scan sections; Overview includes role explanation, findings by category, and scan history.
-
-The scanner gives:
-
-- router identity/model/version
-- advisory router role guess
-- risk level
-- conflict warnings
-- recommended next questions
-
-AI explanation has been removed from the active workflow. Future apply phases must still show exact command previews and require explicit operator approval.
-
-## MT-2 Safe MikroTik Readiness
-
-Network -> MikroTik -> Configuration now includes the latest scan summary, `Prescan All Routers`, per-router `Run Scan`, and per-router `View Scan Result`.
-
-The active UI no longer shows deployment-mode confirmation or policy-decision cards. Operators review scan results directly and use station planning fields to create the router chain. Add Station is disabled until read-only scan data exists.
-
-## Manual MikroTik Setup Refocus
-
-The AI Network Assistant, AI chat, AI smoke test, AI suggested answers, and AI draft plans have been removed from the active UI.
-
-The active workflow is now:
-
-1. Add MikroTik routers under Network -> MikroTik -> Add Router.
-2. Return to Network -> MikroTik -> Configuration.
-3. Run Prescan All Routers or scan the needed router from the table.
-4. Open View Scan Result for any router that needs review.
-5. Use Add Station to build the ordered router chain.
-6. Enter the required customer VLAN, parent interface, client subnet, gateway, DHCP pool, DNS, and local interface-list values in the station modal.
-7. Use scan data to avoid VLAN/subnet/pool conflicts before any future reviewed apply step.
-
-## MT-3.3 VLAN Path Planning
-
-PPPoE access concentrators are high-risk but valid HotSpot Gateway candidates when the captive portal network uses a new dedicated VLAN/subnet and existing PPPoE, OSPF, WireGuard, routing, and production bridge objects remain protected.
-
-Before MT-4 command preview, the pilot router must have a confirmed VLAN Path Planner record. The planner describes the gateway parent bridge/trunk, the first next-hop device after the gateway, CRS involvement, OLT behavior, and AP tagged/untagged VLAN mode. The open captive portal SSID uses the same customer VLAN ID from the planning questions, so there is no separate SSID VLAN field. The system does not guess `ether1` or another physical interface unless the scan and operator-confirmed topology prove the AP/customer VLAN path.
-
-Large pilot client subnets bigger than `/22` are allowed only with a warning. For first-router testing, use `/24` or `/22` unless the operator intentionally needs more client addresses.
+- RADIUS / FreeRADIUS customer login.
+- NAS/RADIUS client management.
+- WPA2-Enterprise test SSID automation.
+- AI/OpenAI assistant planning.
+- MikroTik HotSpot enforcement and managed `login.html`.
+- Payments, SMS, coinslot/vendo, WireGuard automation, and production rollout automation.

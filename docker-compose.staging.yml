@@ -3,7 +3,3 @@ services:
     ports:
       - "80:80/tcp"
       - "8080:80/tcp"
-  radius:
-    ports:
-      - "11812:1812/udp"
-      - "11813:1813/udp"

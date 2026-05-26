@@ -1,32 +1,32 @@
 # Omada Controller Setup
 
-Phase 1D prepares a real TP-Link Omada AP test while keeping 3JCentralPisowifi as the source of truth.
+Omada Controller remains active in 3JCentralPisowifi. It is used for TP-Link Omada AP adoption, site/AP inventory, SSID configuration, and captive portal redirect/enforcement.
 
-## Why Omada Is Separate
-
-The Omada Software Controller should run on its own server:
+## Servers
 
 ```text
-Omada server: 192.168.50.71
-3JCentralPisowifi server: 192.168.50.70
+Omada Controller:       192.168.50.71
+3JCentralPisowifi API:  192.168.50.70
+Portal URL staging:     http://192.168.50.70:8080/portal
+Portal URL production:  http://192.168.50.70/portal
 ```
-
-This keeps AP management isolated from the RADIUS, wallet, session, and accounting system.
 
 ## What Omada Does
 
-- Adopt Omada APs.
-- Configure SSIDs.
-- Configure WPA2-Enterprise / RADIUS profiles.
-- Monitor AP status.
+- Adopts and manages Omada APs.
+- Manages sites, APs, radios, SSIDs, and SSID VLAN tagging.
+- Hosts the open SSID captive portal policy.
+- Redirects unauthenticated clients to the 3JCentralPisowifi portal.
+- Authorizes clients after voucher validation when the Omada API path is supported.
 
 ## What Omada Does Not Do
 
-- It does not store WiFi customer accounts.
-- It does not manage balances, vouchers, SMS, payments, or access decisions.
-- It does not replace FreeRADIUS.
+- It does not store vouchers.
+- It does not store customer wallets.
+- It does not decide voucher validity.
+- It does not replace PostgreSQL as the source of truth.
 
-3JCentralPisowifi remains the source of truth. FreeRADIUS on `192.168.50.70` still handles authentication and accounting.
+3JCentralPisowifi remains the source of truth for vouchers, wallets, portal sessions, authorization logs, and access decisions.
 
 ## Install From Admin Portal
 
@@ -36,190 +36,68 @@ Open:
 http://192.168.50.70:8080/admin/settings/omada-controller
 ```
 
-Use the page to:
-- Save controller host `192.168.50.71`.
-- Test HTTP/HTTPS reachability.
-- Save SSH credentials.
-- Test SSH.
-- Install Omada Software Controller on the separate server.
-- View install logs.
-- Open the Omada UI.
+This old Omada install/manage automation must remain available. It supports:
 
-The backend only exposes controlled actions: detect, install, start, stop, restart, view logs, backup, and check ports. It does not allow arbitrary shell command execution.
+- Saving controller host/ports.
+- Testing HTTP/HTTPS reachability.
+- Saving SSH credentials.
+- Testing SSH.
+- Installing Omada Software Controller on the separate controller server.
+- Starting, stopping, restarting, backing up, and viewing install logs.
+
+The backend exposes only controlled Omada install/manage actions. It does not expose arbitrary shell command execution.
 
 ## Required Ports
 
 - `8088/tcp`: HTTP controller UI
 - `8043/tcp`: HTTPS controller UI
-- `8843/tcp`: HTTPS portal, parked for later
+- `8843/tcp`: HTTPS portal when used by Omada
 - `29810/udp`: discovery
 - `29811/tcp`: management/adoption
 - `29812/tcp`: adoption
 - `29813/tcp`: upgrade
 - `29814/tcp`: current management/adoption
+- `29815/tcp`: controller/device management on newer Omada versions
+- `29816/tcp`: controller/device management on newer Omada versions
+- `29817/tcp`: controller/device management on newer Omada versions, if the controller listens on it
 
-## RADIUS Settings
+When APs are on a routed AP management VLAN behind MikroTik, Network -> MikroTik -> AP Management Push Config adds managed forward allow rules from the AP management subnet to the controller for `29810/udp` and `29811-29817/tcp`. These rules must be before any generic forward drop that blocks AP management traffic from reaching `192.168.50.71`.
 
-Staging:
+Office AP Path is retired from the active Network UI. For now, adopt factory-reset APs by connecting them directly to the office subnet, then set the AP management VLAN after successful adoption before moving the AP to the field path.
 
-```text
-RADIUS Server: 192.168.50.70
-Authentication Port: 11812
-Accounting Port: 11813
-Accounting: Enabled
-Interim Update: 300 seconds
-```
+If Omada Controller is reinstalled, local Sites Deployments records may point to old Omada site IDs. Use APs Deployment -> Sites -> Sync Omada Sites to recreate missing local sites in Omada or relink by matching site name. The local Sites table remains the planning source of truth for addresses, map coordinates, and station bindings.
 
-Production:
+## Active Captive Portal Workflow
 
-```text
-RADIUS Server: 192.168.50.70
-Authentication Port: 1812
-Accounting Port: 1813
-Accounting: Enabled
-Interim Update: 300 seconds
-```
+1. Configure the open SSID in APs Deployment -> Sites -> Configurations.
+2. Bind the station to the correct Omada site from Network -> MikroTik -> Configuration.
+3. Ensure the SSID VLAN matches the station customer VLAN.
+4. Configure Omada Portal Authentication / External Portal.
+5. Set the external portal URL to `http://192.168.50.70:8080/portal` for staging.
+6. Allow pre-auth/walled-garden access to `192.168.50.70` and DNS as required by the controller.
+7. Test on one AP before wider rollout.
 
-Use the shared secret from the matching NAS / Router / AP Client record.
+## Retired Items
 
-## Adopt AP And Configure WPA2-Enterprise
-
-1. Open Omada Controller UI.
-2. Complete first-time setup.
-3. Adopt one Omada AP.
-4. Create SSID `3J-Test-WiFi`.
-5. Set security to WPA2-Enterprise.
-6. Add a RADIUS profile pointing to `192.168.50.70`.
-7. Use staging auth port `11812` and accounting port `11813`.
-8. Enable accounting if available.
-9. Set interim update to 300 seconds if available.
-
-## Correct NAS Source IP
-
-Create a NAS / Router / AP Client entry for the IP that FreeRADIUS sees as the RADIUS packet source. Depending on Omada/AP behavior, this may be:
-
-- Omada Controller IP: `192.168.50.71`
-- AP management IP
-
-If FreeRADIUS says unknown client or no reply appears in the UI, verify the source IP in FreeRADIUS logs and add that IP as the NAS client.
+RADIUS profile automation, WPA2-Enterprise test SSID automation, NAS/RADIUS client setup, and FreeRADIUS packet tests are removed from the active system. Historical database tables may remain, but the UI/API should not expose those workflows.
 
 ## Troubleshooting
 
-Access-Reject:
-- Check username and password.
-- Check user status and wallet balance.
-- Check active session conflict.
-- Confirm the NAS shared secret matches Omada.
+Omada API login failed:
+- Confirm controller host, port, username, and password.
+- For lab/self-signed certificates, disable TLS verification in Omada API settings.
 
-No Reply:
-- Confirm Omada points to `192.168.50.70`.
-- Confirm staging ports `11812/11813` or production ports `1812/1813`.
-- Check firewall and UDP reachability.
-- Check FreeRADIUS logs.
+AP not visible:
+- Confirm the AP management subnet can reach `192.168.50.71`.
+- Confirm DHCP option 138 or Omada inform/discovery is configured if the AP is outside the controller subnet.
+- Confirm firewall/raw rules do not block controller/AP traffic.
 
-Accounting not showing:
-- Enable accounting in Omada if available.
-- Confirm accounting port is set.
-- Confirm interim update is enabled.
-- Confirm the source IP has a NAS client record.
+Voucher valid but authorization failed:
+- Check Captive Portal -> Authorization Logs.
+- Confirm Omada is sending client context such as client MAC/token/site.
+- If API authorization is unsupported by this controller version, use the manual Omada portal setup flow.
 
-## Phase 1E Omada API Automation
-
-Open:
-
-```text
-http://192.168.50.70:8080/admin/settings/omada-controller
-```
-
-Use the API Automation tab to save:
-
-```text
-Controller Host: 192.168.50.71
-HTTPS Port: 8043
-API Base URL: https://192.168.50.71:8043
-Verify TLS Certificate: disabled for lab/self-signed certificates
-```
-
-Omada credentials are used only to configure AP and SSID settings. Customer accounts, balances, sessions, and access decisions remain in 3JCentralPisowifi and FreeRADIUS.
-
-Workflow:
-1. Save Omada API settings.
-2. Test API Login.
-3. Refresh Sites and select the active site.
-4. Build the staging RADIUS profile.
-5. Create Matching RADIUS Trust Entry in 3JCentralPisowifi.
-6. Attempt Create Omada RADIUS Profile.
-7. Attempt Create Test WPA2-Enterprise SSID.
-8. If automation fails, use the Manual Fallback Instructions panel.
-
-Staging values:
-
-```text
-RADIUS Server: 192.168.50.70
-Authentication Port: 11812
-Accounting Port: 11813
-Accounting: Enabled
-Interim Update: 300 seconds
-SSID: 3J-Test-WiFi
-Security: WPA2-Enterprise
-```
-
-Production values:
-
-```text
-RADIUS Server: 192.168.50.70
-Authentication Port: 1812
-Accounting Port: 1813
-Accounting: Enabled
-Interim Update: 300 seconds
-```
-
-For Phase 1E, use staging first. Do not configure production WiFi until staging real-device testing passes.
-
-Omada API endpoint paths vary across controller versions. The backend isolates endpoint guesses in the Omada API client adapter, saves sanitized automation logs, and shows manual fallback values instead of crashing if Omada rejects an endpoint.
-
-If users cannot connect after the Omada profile is created, check the FreeRADIUS logs to identify the real NAS source IP. It may be the Omada Controller IP `192.168.50.71` or the AP management IP. Add that IP as a NAS client using the same shared secret.
-
-## Captive Portal Priority
-
-Omada remains useful for AP adoption, AP monitoring, and SSID management, but the main customer access direction is now Captive Portal + Voucher.
-
-Planned captive portal values:
-
-```text
-Open SSID: from APs Deployment -> Sites -> Configurations -> SSID and Security
-Portal URL: http://192.168.50.70/portal
-Staging Admin: http://192.168.50.70:8080/admin
-Portal Server: 3JCentralPisowifi
-Voucher Source: 3JCentralPisowifi Database
-Access Decision: Voucher + Wallet + Session rules
-```
-
-WPA2-Enterprise RADIUS profile and test SSID automation should be treated as advanced/lab tooling. Customers should not be asked for WPA2 identity, anonymous identity, or WiFi password in the main PisoWiFi-style experience.
-
-## Phase 2C Captive Portal Integration
-
-The main Omada customer setup is now:
-
-```text
-Open SSID: from APs Deployment -> Sites -> Configurations -> SSID and Security
-Portal URL: http://192.168.50.70:8080/portal
-Portal Server: 3JCentralPisowifi
-Voucher Source: PostgreSQL voucher tables
-Access Decision: 3JCentralPisowifi
-```
-
-Admin -> Captive Portal now includes:
-- Portal Settings.
-- Omada Integration actions.
-- Test Flow checklist.
-- Portal Sessions.
-- Omada Authorization Logs.
-- Manual Setup Guide.
-
-Automation attempts to create the open SSID, configure an external portal profile, and authorize a client after voucher validation. Omada API endpoint behavior can vary by controller version, so the manual setup guide is always the fallback.
-
-For one-AP testing, configure the Omada walled garden/pre-auth access to allow:
-- `192.168.50.70`
-- `http://192.168.50.70:8080/portal`
-- DNS if your Omada version requires it before authentication
+Client authorized but no internet:
+- Confirm the SSID VLAN matches the station customer VLAN.
+- Confirm MikroTik station transport has DHCP/NAT/routing pushed.
+- Confirm Omada portal policy allows internet after authorization.

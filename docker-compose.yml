@@ -54,16 +54,6 @@ services:
       api:
         condition: service_started
 
-  radius:
-    build:
-      context: ./services/radius
-    restart: unless-stopped
-    env_file:
-      - .env
-    depends_on:
-      postgres:
-        condition: service_healthy
-
   proxy:
     image: nginx:1.27-alpine
     restart: unless-stopped

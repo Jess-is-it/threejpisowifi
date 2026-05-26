@@ -3,23 +3,48 @@
 Every future AI agent, developer, or maintainer must read this file before changing the project. Update it whenever architecture, deployment, features, commands, branches, workflows, or decisions change.
 
 ## 1. Project overview
-3JCentralPisowifi is an admin-managed WiFi access control foundation for manual RADIUS testing. Phase 1 establishes the source-of-truth database, admin portal, installer/updater, and FreeRADIUS integration.
+3JCentralPisowifi is now focused on Omada Captive Portal + Voucher customer access. 3JCentralPisowifi validates vouchers, tracks wallet/access/session state, and authorizes clients through Omada captive portal APIs. MikroTik remains for station VLAN/DHCP/NAT transport and read-only preflight validation.
 
 ## 2. Business goal
-Create a dependable central system where operators can manage test WiFi users, manual time balance, NAS/router/AP clients, RADIUS authentication, and accounting records before later commercial integrations are considered.
+Create a dependable central system where operators can manage vouchers, wallet credit, Omada AP/site/SSID readiness, MikroTik station transport, and customer-facing captive portal access before later commercial integrations are considered.
 
 ## 3. Current phase
-Phase 1: Source of Truth + Manual RADIUS Test MVP.
+Active cleanup phase: remove retired RADIUS/WPA2-Enterprise lab tooling, AI/OpenAI assistant surfaces, and MikroTik HotSpot enforcement surfaces from the active system.
 
-## 4. Phase 1 scope
+## Active Product Direction — May 2026 Cleanup
+- Primary customer flow: Omada open SSID captive portal -> `/portal` voucher entry -> voucher/wallet validation -> Omada client authorization.
+- MikroTik flow: station VLAN/DHCP/NAT/trunk transport only. MikroTik HotSpot enforcement, login.html sync, and HotSpot diagnostics are removed from the active system.
+- Wallet must remain. Wallet crediting is still reused by voucher redemption and future access/accounting work.
+- Old Omada install/manage automation must remain. The Omada Controller page still supports controller install/start/stop/restart/backup/host-network management and API settings.
+- RADIUS/FreeRADIUS, NAS client management, RADIUS packet tests, RADIUS accounting sessions, Omada RADIUS profile automation, WPA2-Enterprise test SSID automation, and AI/OpenAI assistant workflows are retired and should not be restored unless the project owner explicitly asks.
+- Read-only MikroTik preflight scanning remains because it is needed to validate VLAN, subnet, pool, DHCP, routing, PPPoE, OSPF, WireGuard, and firewall risks before station transport changes.
+- Database tables and historical migrations for retired features may remain for audit/history, but active UI/API flows should not expose those features.
+
+## Random MAC Handling — Device Session Token
+- Random/private WiFi MAC handling uses a 3J device-session token, not Google login, browser fingerprinting, or a user prompt.
+- After a successful voucher redemption, `/portal` returns a secure random `device_token`; the browser stores it locally and sends it on later portal loads.
+- PostgreSQL stores only a hash of the device token. Raw device tokens must not be logged, returned to admin APIs, or stored in clear text.
+- If the same token returns with a different Omada/MikroTik client MAC while access time remains, the backend silently re-authorizes the new MAC for the remaining time.
+- The voucher is not redeemed again and no new time is credited during a MAC rebind.
+- MAC rebinds are limited and logged in `portal_mac_rebind_events` and `portal_events`.
+- If the phone/browser loses local storage, the system cannot prove it is the same device; the operator can handle that manually later.
+- Google login remains a future optional account/wallet feature only. It is not required for voucher random-MAC handling.
+
+## Captive Portal — Portal Notifs
+- Admin -> Captive Portal -> Portal Notifs configures customer-facing notification messages.
+- Notifications include voucher success, remaining-time reminder, time-consumed, and restored-session messages.
+- Template tags include `<TIME>`, `<REMAINING>`, `<VOUCHER>`, `<SSID>`, `<EXPIRES_AT>`, `<BRAND>`, and `<STATUS>`.
+- The portal attempts browser/Web Notifications where the phone browser allows them and always shows an in-portal fallback message.
+- The system cannot customize the Android/iOS built-in `Sign in to WiFi network` notification text.
+
+## 4. Historical Phase 1 scope
+The Phase 1 notes below are historical context. The active May 2026 product direction above supersedes any old RADIUS/WPA2/NAS/session workflow references.
+
 - One-line Ubuntu installer and updater.
 - Separate production and staging deployments on the same server.
 - PostgreSQL as the source of truth.
-- FreeRADIUS connected to PostgreSQL-backed application rules.
 - Admin Portal at `/admin`.
-- Admin login, manual user creation, manual balance top-up, NAS/router/AP client management.
-- RADIUS authentication testing and accounting/session tracking.
-- Single-device rejection using active session grace logic.
+- Admin login, wallet/manual top-up, vouchers, Omada management, and MikroTik station transport.
 
 ## 5. Phase 1 exclusions
 - Coinslot integration.
@@ -60,7 +85,7 @@ Production:
 - Database: `centralwifi_prod`
 - Volumes: `centralwifi_prod_postgres_data`, `centralwifi_prod_redis_data`
 - Web: `80/tcp`
-- RADIUS: `1812/udp`, `1813/udp`
+- RADIUS service: removed from active compose runtime.
 
 Staging:
 - Branch: staging
@@ -69,7 +94,7 @@ Staging:
 - Database: `centralwifi_staging`
 - Volumes: `centralwifi_staging_postgres_data`, `centralwifi_staging_redis_data`
 - Web: `8080/tcp`
-- RADIUS: `11812/udp`, `11813/udp`
+- RADIUS service: removed from active compose runtime.
 
 ## 9. Production server details
 Production runs from `/opt/3jcentralpisowifi-production` using `/opt/3jcentralpisowifi-production/.env`. It tracks `master` and exposes the Admin Portal at `http://SERVER-IP/admin`.
@@ -78,10 +103,10 @@ Production runs from `/opt/3jcentralpisowifi-production` using `/opt/3jcentralpi
 Staging runs from `/opt/3jcentralpisowifi-staging` using `/opt/3jcentralpisowifi-staging/.env`. It tracks `staging` and exposes the Admin Portal at `http://SERVER-IP:8080/admin`.
 
 ## 11. Technical architecture
-Nginx reverse proxy routes `/admin` to the React admin portal and `/api` to FastAPI. FastAPI manages source-of-truth data in PostgreSQL, serves uploaded branding assets from an environment-specific Docker volume, and uses Redis for health/cache readiness. FreeRADIUS handles UDP RADIUS auth/accounting and calls local helper scripts that enforce rules using PostgreSQL.
+Nginx reverse proxy routes `/admin` to the React admin portal, `/portal` to the customer portal, and `/api` to FastAPI. FastAPI manages source-of-truth data in PostgreSQL, serves uploaded branding assets from an environment-specific Docker volume, and uses Redis for health/cache readiness. Omada handles captive portal enforcement and client authorization; MikroTik handles station VLAN/DHCP/NAT transport.
 
 ## 12. Source of truth explanation
-PostgreSQL is the only source of truth for admins, users, wallets, NAS/router/AP clients, transactions, sessions, audit logs, and auth logs. Network devices are clients of the RADIUS service and must not become the user database.
+PostgreSQL is the only source of truth for admins, users, wallets, vouchers, portal sessions, portal authorization logs, MikroTik station plans, Omada site/AP records, transactions, and audit logs. Network devices must not become the voucher or wallet database.
 
 ## 13. Tech stack
 - Ubuntu 22.04+
@@ -89,7 +114,6 @@ PostgreSQL is the only source of truth for admins, users, wallets, NAS/router/AP
 - FastAPI on Python 3.11+
 - PostgreSQL
 - Redis
-- FreeRADIUS 3.x
 - React with Tabler UI (`@tabler/core`) and Tabler Icons (`@tabler/icons-react`)
 - Nginx
 
@@ -110,11 +134,14 @@ Staging:
 ## 16. Admin portal features
 - Login
 - Dashboard
-- Users
+- Connected Devices
+- AP & Client Map
+- APs Deployment
+- Vouchers
 - Wallet / Manual Top-Up
-- Sessions
-- NAS / Router / AP Clients
-- RADIUS Test Guide
+- Captive Portal
+- Network -> MikroTik station transport/preflight/AP management
+- Omada Controller install/manage/API settings
 - System Health
 - Settings
 - Audit Logs
@@ -690,11 +717,10 @@ VLAN path planning:
 - MT-4 readiness requires a confirmed VLAN path plan.
 - If AP receives tagged VLAN, the SSID should use the customer VLAN ID. If AP receives untagged/access VLAN, downstream conversion must be confirmed as a warning.
 
-AI and safety:
-- AI prompt rules now treat PPPoE AC as possible HotSpot Gateway with caution, not default read-only/core.
-- AI must return `null` for `vlan_parent_interface` unless the operator already confirmed the VLAN path or scan/topology data proves the bridge/trunk.
-- Large client subnets bigger than `/22` show a pilot warning; `/24` or `/22` is preferred for first test.
-- RouterOS commands are still not generated or applied in MT-3.3.
+Retired AI planning notes:
+- The AI planning/VLAN Path Planner notes in older sections are historical only.
+- AI must not be reintroduced unless explicitly requested.
+- Current MikroTik setup is deterministic station transport plus AP-management planning.
 
 ## AI Network Assistant Removal — Manual MikroTik Setup Refocus
 
@@ -702,7 +728,7 @@ Decision:
 - The AI Network Assistant is removed from the active product workflow because it made the MikroTik captive portal setup too complicated for operators.
 - Admin -> Network -> MikroTik no longer shows the `AI Network Assistant` tab.
 - Read-only preflight scan data remains required because it provides RouterOS data for deterministic validation, but it is no longer a standalone MikroTik tab.
-- Manual setup under Admin -> Network -> MikroTik -> Configuration is again the active path for MikroTik captive portal work.
+- Manual setup under Admin -> Network -> MikroTik -> Configuration is the active path for MikroTik station transport and AP-management work.
 
 Removed from active UI/workflow:
 - AI Network Assistant overview.
@@ -723,17 +749,17 @@ Current MikroTik workflow:
 2. Add MikroTik router API credentials under `Add Router`.
 3. Return to `Configuration`.
 4. Run `Prescan All Routers` or run a scan from a router row.
-5. Click `View Scan Result` from the Configuration router table to open the scan result in a new browser tab/page and inspect existing VLANs, subnets, pools, DHCP, HotSpot, PPPoE, OSPF, WireGuard, routing, and firewall indicators.
+5. Click `View Scan Result` from the Configuration router table to open the scan result in a new browser tab/page and inspect existing VLANs, subnets, pools, DHCP, legacy HotSpot, PPPoE, OSPF, WireGuard, routing, and firewall indicators.
 6. Use `Add Station` to build the ordered router chain. The button remains disabled until the operator has engaged read-only preflight scanning.
 7. Set per-router bridge/tagged-port values from the station modal.
 8. Set station network values such as customer VLAN, client CIDR, gateway, DHCP pool, DNS, and local interface list.
 9. Use preflight scan data to validate that VLANs, subnets, and pools are not already used.
-10. Review station-generated RouterOS output before any future apply step.
+10. Open `Push Config` to review and push station transport steps one at a time.
 
 Safety:
 - AI must not be reintroduced unless explicitly requested.
 - No AI output may approve, generate, or apply MikroTik configuration.
-- The deterministic preflight/policy engine remains the authority for conflict detection.
+- Deterministic preflight validation remains the authority for conflict detection.
 - The active UI no longer shows `Deployment Mode Confirmation` or `Policy Decision` cards. Operators review raw scan results and station planning fields directly from the Configuration workflow.
 
 ## MikroTik Station Deployment Planning
@@ -744,9 +770,9 @@ The MikroTik workspace has moved from `Captive Portal -> MikroTik` into `Network
 
 Long-term network direction:
 - One station/substation should have its own captive portal customer VLAN and client subnet.
-- Roaming is seamless inside one station when APs use the same SSID, VLAN, subnet, and root HotSpot gateway path.
+- Roaming is seamless inside one station when APs use the same Omada open SSID, VLAN, subnet, and root MikroTik station gateway path.
 - Moving between stations may give the customer a new DHCP address, but vouchers/wallet/access remain global in 3JCentralPisowifi so the experience can still be seamless at the account/device layer.
-- DHCP and future HotSpot enforcement belong only on the root gateway router for that station.
+- DHCP/NAT transport belongs only on the root gateway router for that station. Captive portal redirect/enforcement belongs to Omada.
 - CRS/switch/trunk/transport routers must only carry the VLAN and may expose a VLAN monitoring interface for visibility; they must not own DHCP/HotSpot for the station.
 - Station plans now include a unique station code, customer VLAN, client subnet, HotSpot DNS/server planning fields, and portal URL.
 - Active station plans must not reuse the same station code, customer VLAN, or client subnet.
@@ -838,9 +864,9 @@ Removal behavior:
 - Remove Config remains conservative and station-scoped. Shared or unrelated MikroTik HotSpot objects are not removed.
 
 UI behavior:
-- The Add Station root gateway tab now has `Root HotSpot and portal enforcement` controls.
-- Operators can enable/disable HotSpot profile creation, HotSpot server creation, and pre-login portal/DNS allow rules per station.
-- The station review modal shows root HotSpot profile/server and walled garden status before the implementation modal sends any RouterOS write commands.
+- Superseded by OCP-1/OCP-2: Add Station no longer shows MikroTik HotSpot enforcement controls in the active UI.
+- Superseded by OCP-1/OCP-2: Operators no longer create MikroTik HotSpot profile/server or pre-login walled-garden rules from Station Push Config.
+- Superseded by OCP-1/OCP-2: Station review now focuses on VLAN/DHCP/NAT/trunk transport; Omada handles captive portal redirect/enforcement.
 
 ## Phase 5 — MikroTik HotSpot Portal Handoff + Voucher Authorization
 
@@ -900,10 +926,11 @@ Safety:
 - RouterOS HotSpot users accumulate `uptime`; reusing the same portal HotSpot username after a voucher expires can trigger `your uptime limit is reached`.
 - The MikroTik authorization flow now updates an existing portal HotSpot user's `limit-uptime` to current RouterOS uptime plus the new voucher duration before calling active login.
 - A voucher can authorize the HotSpot session successfully while the phone still has no internet if the station client subnet is not NATed or routed upstream.
-- Station root gateway plans now include a managed NAT masquerade rule scoped only by the station client subnet.
-- The managed NAT rule uses comment `3J Hotspot - NAT for VLAN {vlan_id} clients` so push/remove/detection remains station-scoped.
-- The station NAT rule intentionally does not depend on `out-interface-list=WAN`, because live testing showed the root gateway's active internet route may not match the existing WAN interface list, causing zero NAT hits.
-- Station diagnostics now checks for the managed NAT rule and reports internet readiness separately from voucher authorization readiness.
+- Station root gateway plans now include a managed WAN-only NAT masquerade rule for station client internet access.
+- The managed NAT rule uses comment `3J Station - NAT for VLAN {vlan_id} clients` and must include `out-interface-list=WAN`.
+- Omada captive portal requires the client IP to remain visible when the client reaches Omada/controller and the 3J portal server. Station plans therefore add a no-NAT `srcnat accept` rule before the station masquerade: `3J Station - preserve client IP for VLAN {vlan_id} to portal office subnet`.
+- Do not use broad source NAT from station client VLANs to the office subnet. It can make Omada see the gateway IP instead of the real phone IP and break portal popup/session matching.
+- Station diagnostics now checks both the WAN-only NAT rule and the no-NAT office portal exception.
 
 ## Phase 5.3 — Live Portal Countdown Status
 
@@ -943,8 +970,9 @@ Safety:
 - Station Push Config now adds station-scoped raw accept exceptions before broad raw notrack rules:
   - source client subnet, for example `10.77.0.0/24`
   - destination client subnet, for example `10.77.0.0/24`
-- The system does not disable or remove existing non-3J raw/notrack rules. It only adds managed exceptions for the station subnet.
-- Station remove config removes only the station-managed raw accept exceptions by exact comment.
+- The same protection is also required for central AP Management subnets because AP GUI traffic can fail when a broad raw `notrack` rule bypasses connection tracking. Push Config auto-detects active broad raw `notrack` rules and only shows/adds the managed raw accept exceptions when needed.
+- The system does not disable or remove existing non-3J raw/notrack rules. It only adds managed exceptions for the station or AP management subnet.
+- Station/AP Management remove config removes only the system-managed raw accept exceptions by exact comment.
 - HotSpot diagnostics now checks whether broad raw notrack exists and whether station tracking exceptions are present.
 
 ## Phase 5.7 — Captive-Check DNS Probe Mapping
@@ -1037,6 +1065,8 @@ Safety:
 - AP management is not a HotSpot network. It exists so Omada/AP control traffic stays off the customer captive VLAN while the open SSID still tags the customer VLAN.
 - Validation rejects AP management VLANs/subnets that overlap station customer HotSpot VLAN/subnet or existing scanned router VLAN/subnet/pool state.
 - AP management config is not pushed automatically. It uses the same step-by-step RouterOS push pattern as Station Push Config: detect existing matching objects, show every command, push one command at a time, and stop on the first error.
+- AP Management Push Config now detects broad active raw `notrack` rules and, when present, adds managed raw accept exceptions for source/destination AP management subnet traffic before the broad `notrack`. This allows AP GUI/control traffic such as `10.88.0.10` to remain connection-tracked without disabling the operator's existing raw rule.
+- AP Management Push Config no longer creates office-to-AP GUI masquerade/NAT. AP management transport should focus on VLAN interface, DHCP, Omada discovery/control reachability, and raw tracking exceptions only.
 
 ## Phase 5.16 — Tested MikroTik HotSpot Pattern Alignment
 
@@ -1048,3 +1078,170 @@ Safety:
 - Station-created DHCP servers are matched by name instead of relying on RouterOS `comment` support because RouterOS parameters vary by version.
 - Add Station remains focused on the customer HotSpot VLAN. Separate AP management VLAN setup remains in the HTML and AP Management workflow and will be refined next.
 - Station plans can now be deleted/archived from the system UI. Deleting a station plan does not remove RouterOS configuration; operators should use Remove Config first when router cleanup is needed.
+
+## OCP-1 — Omada Captive Portal Pivot Foundation
+
+- The project has pivoted away from MikroTik HotSpot as the primary captive portal enforcement layer.
+- MikroTik Stations now represent gateway/transport configuration only: customer VLAN interface, bridge VLAN trunk path, gateway IP, DHCP pool/server/network, local interface-list membership, NAT, and station-scoped raw tracking exceptions.
+- Station Push Config no longer creates MikroTik HotSpot profiles, HotSpot servers, walled garden entries, DHCP CAPPORT option 114, forced DNS redirect rules, Private DNS reject rules, IPv6 RA suppression rules, or managed `login.html` upload steps.
+- Omada Controller/AP captive portal will become the redirect/enforcement layer. The open SSID should use the station customer VLAN, while Omada will redirect unauthenticated clients to the 3J portal.
+- 3JCentralPisowifi remains the source of truth for vouchers, wallet/access, portal sessions, and logs. MikroTik remains the routed VLAN/DHCP/NAT transport for each station.
+- Existing legacy MikroTik HotSpot diagnostics and cleanup endpoints are retained for old test objects, but they are no longer part of the main Station push workflow.
+- Remove Config remains station-scoped and now removes both older `3J Hotspot` comments and new `3J Station` comments where applicable, so previous test objects can still be cleaned.
+- AP Management remains a separate workflow and will be refined after the Omada captive portal station flow is stable.
+
+## OCP-2 — Station Omada Captive Portal Readiness
+
+- Network -> MikroTik -> Configuration now exposes an `Omada Portal` action per station plan.
+- The station Omada portal plan binds together the station customer VLAN, MikroTik transport push progress, AP Deployment SSID, selected Omada site, Omada API status, portal URL, and connected AP count.
+- The readiness plan checks that the selected Omada site VLAN matches the station VLAN. The AP/open SSID must tag the same customer VLAN that the station root gateway serves with DHCP/NAT.
+- Omada automation actions are available from the station plan modal: test Omada API, create/update the open SSID, configure the external portal, and verify the captive portal setup.
+- Omada API automation remains best-effort because controller versions expose different API paths. The modal always includes manual fallback steps.
+- OCP-2 does not apply RouterOS configuration and does not reintroduce MikroTik HotSpot. Station Push Config remains the only explicit RouterOS write path and still handles VLAN/DHCP/NAT/trunk transport only.
+- 3JCentralPisowifi remains the source of truth for vouchers, wallet/access, portal sessions, and authorization logs. Omada handles AP/SSID captive portal redirect and device authorization.
+
+## OCP-3 — Station Omada Site Binding
+
+- MikroTik stations can now store their own Omada site binding with `omada_site_id`, `omada_site_name`, binding timestamp/admin, and a saved VLAN-match flag.
+- Add/Edit MikroTik Station includes a Station Omada Site selector. The selected Omada site should be the site that owns the APs for that station.
+- The station Omada Portal modal now requires a station-bound Omada site instead of relying only on the global captive portal selected site.
+- Omada readiness and automation actions target the station-bound Omada site where possible. The global selected Omada site is only a fallback/reference.
+- Station readiness checks still require the Omada/local site VLAN tag to match the MikroTik station customer VLAN.
+- New station saves no longer auto-generate MikroTik HotSpot profile/server/DNS names. The active station workflow is VLAN/DHCP/NAT/trunk transport plus Omada portal binding.
+- RouterOS HotSpot legacy cleanup/diagnostic code remains available only for previous field-test objects; it is not part of the active OCP station setup.
+
+## OCP-4 — Station Omada Action Tracking + VLAN-Aware SSID Automation
+
+- Station Omada automation now runs through station-scoped endpoints instead of only the global captive portal endpoints.
+- Omada action logs store the station, Omada site, SSID name, status, sanitized details, and timestamp so operators can see what was attempted per station.
+- The station `Omada Portal` modal shows recent station Omada action history and disables actions until prerequisites such as API credentials and station site binding are ready.
+- Create/Update Open SSID now passes the station customer VLAN ID to the Omada adapter. New Omada SSIDs should be created as open guest/portal SSIDs with VLAN enabled for the station VLAN where the controller API supports it.
+- If an SSID already exists, the system records the requested VLAN but operators must still verify the existing SSID VLAN directly in Omada because controller update paths can differ by version.
+- OCP-4 still does not reintroduce MikroTik HotSpot. MikroTik remains VLAN/DHCP/NAT/trunk transport; Omada handles captive portal redirect/enforcement; 3JCentralPisowifi remains voucher/wallet/session source of truth.
+
+## OCP-4.1 — AP Management Omada Discovery
+
+- AP Management now adds a MikroTik DHCP option 138 command when the Omada Controller host is an IPv4 address, normally `192.168.50.71`; RouterOS receives it in hex form, for example `0xC0A83247`.
+- The option name is `3J-OMADA-CONTROLLER-V{vlan}` and it is attached to the AP management DHCP network so APs on `10.111.0.0/24` can learn the controller address during DHCP.
+- AP Management and any remaining station AP-management push plan must also add managed MikroTik forward allow rules from the AP management subnet to the Omada Controller: UDP `29810` for discovery and TCP `29811-29817` for adoption, management, transfer, RTT/TTY, and device monitor features. Remove Config must remove those rules by exact `3J AP Management` comments.
+- The AP management root gateway already creates the connected route by having both the office-side network and AP management VLAN interface on the MikroTik. No static route is needed when the Omada server/default gateway can route back through the same MikroTik.
+- If the Omada server is not using the MikroTik/CCR as its default gateway, the office network still needs a return route to `10.111.0.0/24` via the CCR office IP.
+- The station Omada Portal readiness now labels AP count source as live Omada API vs local saved AP records, so stale local AP rows do not look like confirmed connected APs.
+
+## OCP-4.2 — AP Management VLAN Scope
+
+- Central AP Management now focuses only on tagged AP management VLAN transport between MikroTik routers, CRS, OLT, ONU, and AP paths.
+- Native/untagged AP-facing port automation is disabled for now because it adds too much complexity while captive portal work is the priority.
+- The system no longer asks operators to select native/untagged AP-facing ports and no longer generates bridge-port PVID or untagged bridge VLAN commands for AP Management pushes.
+- Operators will manually enable the AP management VLAN inside each AP before deploying it to the station path.
+- The root gateway still owns the single AP management VLAN interface, gateway IP, DHCP pool/server, DHCP network options, Omada option 138, LOCAL membership, and raw tracking exceptions.
+
+## OCP-4.3 — Omada AP Adoption and Configuration Apply Behavior
+
+- AP adoption status must mirror explicit Omada failures. If Omada reports `Adopt Failed` or `Managed by Others`, the List of APs page must show `ADOPT_FAILED` immediately instead of keeping the row in `ADOPTING`.
+- The List of APs page can show Omada-reported `ADOPTING`/`CONFIGURING` states, but 3JCentralPisowifi does not submit adoption anymore.
+- Sites -> Configuration saves global/per-site SSID, security, and site VLAN configuration only. It must not automatically push WiFi changes to APs.
+- AP Deployment Configurations no longer manages AP Device Account Credentials. Device account configuration is not required for the current Omada-managed AP/SSID/captive-portal flow.
+- AP adoption is handled manually inside Omada Controller. The List of APs page must not provide Add APs/adoption controls.
+- Omada site creation must not include `deviceAccountSetting`; site creation only creates/links the site and leaves AP local login/device credentials untouched.
+- After a user-triggered Push WiFi Config sync records an AP in PostgreSQL, the system displays it in List of APs. Operators manually click `Push WiFi Config` to refresh/apply managed SSIDs and the station/customer VLAN on those SSIDs.
+- The List of APs table shows an AP implementation progress badge, for example `2/2`. The AP details side panel shows the same checklist with each component status and message.
+- Connected APs are marked `PENDING` before the apply attempt. A successful Omada API apply marks them `APPLIED`; a partially successful apply marks them `PARTIAL`; a failed API apply marks them `FAILED` and stores the Omada error.
+- Omada WLAN automation remains controller-version dependent. If Omada rejects an existing SSID update endpoint, the system must show an AP configuration failure instead of silently marking the AP applied.
+- Central AP Management VLAN transport is handled by Network -> MikroTik -> AP Management. Device-side AP management VLAN changes are not pushed through Omada for now; operators manually set the AP management VLAN in the AP before station deployment.
+
+## OCP-4.4 — Omada AP Device Credential Safety Patch
+
+- The system can send AP adoption username/password fields only in the Omada adopt request when the operator enters them. It still does not include Omada `deviceAccountSetting` during site creation.
+- Historical `ap_deployments.adoption_device_account_*` tracking is cleared because those fields could imply that the system intentionally changed AP local credentials.
+- If an AP GUI login no longer accepts the expected credentials after earlier testing, factory-reset the AP, remove/re-add the AP row, and adopt again manually in Omada Controller. The corrected 3JCentralPisowifi flow must not change AP GUI/device credentials after adoption.
+- Device account credential changes, if ever needed in the future, must be implemented as a separate explicit feature with a preview, warning, and user confirmation. It must not be hidden inside Add Site, Add APs, or auto-apply.
+
+## OCP-4.5 — AP Adoption Status Truthfulness
+
+- The local AP deployment status must not mask Omada adoption failures with an adopting grace window.
+- If the controller API returns `Adopt Failed`, failed status/category/type, or `Managed by Others`, PostgreSQL and the List of APs UI must show `ADOPT_FAILED`.
+- AP adoption is now manual in Omada, so system retry/adopt endpoints are disabled and return that adoption must be completed in Omada Controller.
+
+## OCP-4.6 — Manual Omada Adoption + Manual WiFi Push
+
+- The List of APs page is now a local cached AP inventory grouped by saved site. It does not adopt APs and does not poll/read Omada while the page is open.
+- AP adoption must be performed manually in Omada Controller. 3JCentralPisowifi refreshes the selected site/AP from Omada only when the operator explicitly clicks `Push WiFi Config`.
+- WiFi/SSID/customer VLAN configuration is no longer auto-applied when an AP connects or when Sites -> Configuration is saved.
+- Operators explicitly push saved WiFi configuration from List of APs using `Push WiFi Config` at the site level or AP level.
+- This keeps AP adoption and AP configuration separated so Omada adoption problems do not accidentally trigger SSID/VLAN changes.
+- Omada AP detection, AP adopt, retry adopt, and live AP list polling from List of APs are disabled in this manual workflow.
+- List of APs delete now explicitly calls Omada delete/forget for the selected AP before marking the local row deleted. If Omada cannot confirm forget/delete, the UI must show a warning and the audit log must record the Omada failure details.
+- Cached AP statuses such as `CONFIGURING` are historical database values until a user-triggered Push WiFi Config refreshes the selected site from Omada.
+
+## OCP-4.4 — Manual AP Management VLAN on APs
+
+- Live field testing showed SSIDs can disappear or APs can fall into `Managed by Others` when the system changes the AP's own management VLAN through Omada after adoption while the AP was already manually configured for AP management VLAN.
+- The system no longer auto-applies device-side AP management VLAN settings to APs after adoption.
+- Network -> MikroTik -> AP Management remains responsible for MikroTik-side transport only: management VLAN interface, DHCP, option 138, raw tracking exceptions, and tagged trunk carrying through router/CRS/OLT/AP paths.
+- Operators will manually enable the AP management VLAN in the TP-Link/Omada AP before deploying it to the station path until the Omada AP-side workflow is proven safe.
+- AP auto-configuration after adoption is disabled. Managed SSIDs and the station/customer VLAN are pushed only by explicit Push WiFi Config actions.
+- AP implementation progress now counts only required AP-side system actions currently managed by 3JCentralPisowifi, typically `2/2`: WiFi SSIDs and SSID Customer VLAN.
+- Existing old `ap_management_vlan` checklist entries are ignored and removed by migration so stale `3/3` progress does not hide the current operating model.
+- When an AP is factory-reset and manually adopted again in Omada, operators should use Push WiFi Config to recreate the saved SSID/VLAN state.
+- Omada AP status code `11` is treated as `CONFIGURING`, not connected. The List of APs page keeps cached configuring APs visible without an active provisioning animation, and the backend does not mark AP configuration `APPLIED` until an explicit Push WiFi Config sync sees a real connected/normal state.
+- Omada `CONFIGURING` must not reset an already-applied AP implementation checklist. Otherwise a transient Connected -> Configuring -> Connected cycle can repeatedly reapply/delete/recreate SSIDs and keep the AP stuck in configuration sync.
+- Omada `Managed by Others` status/code/category is treated as `ADOPT_FAILED`, not connected. The controller can see the AP, but it cannot push site SSIDs/config until the AP is reset or adopted with the correct credentials.
+- A stale Omada IP or stale DHCP lease does not mean the AP is reachable. For AP management troubleshooting, compare the AP MAC in MikroTik bridge host tables against the expected management VLAN. If the AP is expected on VLAN `88` but is learned on another VID such as `201`, fix the VLAN/OLT/ONU/AP management path before expecting Omada to finish Configuring or broadcast managed SSIDs.
+
+## MikroTik IP/VLAN Safety Validation + Replacement Cleanup
+
+- All saved MikroTik Station and central AP Management plans must validate proposed IPs, subnets, pools, and VLAN IDs against the latest successful Prescan All Routers data before any plan can be saved.
+- Validation also checks MikroTik router API/management hosts. A planned gateway/subnet must not duplicate or contain an existing MikroTik router host IP, which prevents mistakes such as using `10.111.0.1` for AP management when that IP is already saved as a router access address.
+- Station customer VLAN/subnet, AP management VLAN/subnet, DHCP pools, and gateway IP fields are treated as critical network fields and must be rejected on overlap or duplicate with existing scanned RouterOS state unless the existing item is clearly marked as the same system-managed object.
+- MikroTik router host add/edit now rejects exact duplicate hosts and rejects router hosts that fall inside active Station or AP Management client subnets.
+- When a saved Station or AP Management plan is changed after a previous plan may have been pushed, the system stores a pending cleanup plan for the old system-managed RouterOS objects.
+- If an AP Management edit happened before cleanup tracking existed, the system can infer older AP Management cleanup from successful AP Management command history, so old pushed VLANs such as VLAN `111` still appear as remove steps before the current plan is pushed.
+- Push Config now shows old cleanup steps first, removes old managed objects one by one, and then pushes the updated config one by one. The modal must show cleanup/apply phases, progress, and stop on first error.
+- Central AP Management uses the root gateway for IP-layer objects: VLAN interface IP, DHCP pool, DHCP server, DHCP network, option 138, and LOCAL membership. Downstream CRS/trunk routers only carry the AP management VLAN tag and optional monitoring VLAN interface. If the subnet changes but the VLAN ID remains the same, the CRS should still show that VLAN after the updated config is pushed.
+- Configuration cards must show a visible cleanup-pending state after Station or AP Management edits, so operators know the next Push Config will remove old managed objects before applying the new plan.
+- Cleanup must only target 3JCentralPisowifi-managed names/comments/objects. The system must not remove unmanaged MikroTik configuration.
+
+## MikroTik Configuration Safety Rule
+
+- Any task that involves writing, changing, removing, enabling, disabling, or otherwise applying MikroTik/RouterOS configuration must be handled as a two-step process.
+- Codex must first show the exact RouterOS configuration, command, or API-backed action that will be run, including the target router and the purpose of the change.
+- Codex must not apply the MikroTik configuration until the user gives an explicit go signal after seeing the proposed configuration.
+- Read-only MikroTik checks, scans, diagnostics, and status queries can still run without this apply approval because they do not change RouterOS state.
+- Temporary test configuration must still follow the same rule and must include the cleanup/removal command if a rollback is expected.
+
+## Active Workflow Cleanup — 2026-05-23
+
+- Wallet remains active and must not be removed. It will be reused for voucher credit/access tracking.
+- Old Omada Controller install/manage automation remains active. Keep controller install, start, stop, restart, backup, host-network fix, SSH settings, API settings, site detection, and automation logs.
+- The active customer access flow is Omada captive portal redirect/enforcement plus 3J voucher validation and Omada authorization. Customers should not use WPA2-Enterprise/RADIUS credentials.
+- The active MikroTik flow is station transport: VLAN, DHCP, NAT, AP management transport, and raw tracking exceptions. MikroTik HotSpot enforcement is retired.
+- The admin UI removes active RADIUS/WPA2-Enterprise lab pages, old Sessions navigation, NAS/RADIUS client management, OpenAI settings, AI Network Assistant, AI explain/chat/smoke-test/draft-plan workflows, MikroTik HotSpot login.html sync, and legacy single-router MikroTik HotSpot setup controls.
+- The backend returns `410 Gone` for removed RADIUS, NAS, AI/OpenAI assistant, Omada RADIUS automation, WPA2-Enterprise test SSID, MikroTik HotSpot login.html sync, HotSpot diagnostics, and legacy single-router HotSpot apply endpoints.
+- Docker Compose no longer runs the FreeRADIUS service in active staging/production compose files.
+- Historical database tables and migrations are intentionally left in place for audit/history and to avoid destructive data loss. Do not build new active features on those retired tables unless the owner explicitly reopens that workflow.
+- Read-only MikroTik preflight scanning remains active and should continue to label old `/ip hotspot` findings as legacy HotSpot objects for conflict awareness only.
+
+## Office AP Path Transport Retired — 2026-05-25
+
+- The Network -> MikroTik -> Office AP Path tab is removed from the active UI. The working adoption process is now: connect the AP directly to the office subnet, adopt it in Omada, then set the AP management VLAN after successful adoption before moving the AP to the field path.
+- Dedicated AP Management remains active for production transport planning. Office-subnet path transport is parked because it adds unnecessary complexity to the current workflow.
+- Existing RouterOS objects previously created by Office AP Path must be cleaned up only after Codex previews the exact removal commands and the operator explicitly approves the cleanup. Do not remove unmanaged MikroTik configuration.
+
+## Omada Site Sync — 2026-05-25
+
+- Sites Deployments local records are treated as the system planning source of truth. After an Omada Controller reinstall, those local sites may no longer exist in Omada.
+- The Sites page includes a Sync Omada Sites action. It relinks local sites by name when they already exist in Omada, or creates the missing Omada site and saves the new Omada site ID locally.
+- Site list rows expose Omada sync status so stale links are visible instead of silently showing old controller IDs.
+
+## Station Voucher Fairness / Anti-Tethering — 2026-05-25
+
+- One voucher is intended for one directly connected customer device. A phone that redeems a voucher must not be able to share that access to other phones through its own hotspot.
+- Omada cannot reliably enforce this by itself because tethered devices are hidden behind the authorized phone's NAT. Enforcement belongs on the MikroTik station root gateway where the customer VLAN traffic exits.
+- Station Push Config now includes managed one-device voucher fairness rules on the root gateway:
+  - `/ip firewall mangle` postrouting TTL clamp to set return traffic to `TTL=1` toward the station client VLAN.
+  - `/ip firewall filter` drops for common tethered source TTL values `63` and `127`.
+  - If an active forward FastTrack rule exists, station-scoped established/related accept rules are inserted before it so the TTL guard is not bypassed.
+- These rules are station-scoped by customer subnet, VLAN interface, and exact `3J Station - ... VLAN {id}` comments.
+- Station Remove Config removes only those managed anti-tethering rules by exact comments.
+- This blocks normal phone hotspot sharing but is not a cryptographic guarantee. A rooted or deliberately modified client may still attempt TTL manipulation, so future abuse monitoring/counters may be added.

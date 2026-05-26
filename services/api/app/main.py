@@ -185,10 +185,20 @@ class ApMapUpdate(BaseModel):
     longitude: float = Field(ge=-180, le=180)
 
 
+class ApSiteWifiConfigurationUpdate(BaseModel):
+    use_same_ssid: bool = True
+    same_ssid_name: str = "3J-FreeWiFi"
+    ssid_2g: str = "3J-FreeWiFi-2G"
+    ssid_5g: str = "3J-FreeWiFi-5G"
+    band_steering_enabled: bool = True
+    security_mode: str = "OPEN"
+    security_password: Optional[str] = None
+
+
 class ApDeploymentConfigurationUpdate(BaseModel):
     auto_apply_enabled: bool = True
-    device_account_username: Optional[str] = None
-    device_account_password: Optional[str] = None
+    apply_scope: str = "ALL"
+    ssid_scope: str = "GLOBAL"
     use_same_ssid: bool = True
     same_ssid_name: str = "3J-FreeWiFi"
     ssid_2g: str = "3J-FreeWiFi-2G"
@@ -197,11 +207,13 @@ class ApDeploymentConfigurationUpdate(BaseModel):
     security_mode: str = "OPEN"
     security_password: Optional[str] = None
     site_vlans: dict[str, Optional[int]] = Field(default_factory=dict)
+    site_wifi_settings: dict[str, ApSiteWifiConfigurationUpdate] = Field(default_factory=dict)
 
 
 class ApDeploymentConfigurationApplyRequest(BaseModel):
     site_id: Optional[str] = None
     ap_id: Optional[str] = None
+    section: str = "WIFI"
 
 
 class LocationCreate(BaseModel):
@@ -276,6 +288,10 @@ class OmadaWebTestRequest(BaseModel):
     https_port: Optional[int] = Field(default=None, ge=1, le=65535)
 
 
+class OmadaUninstallRequest(BaseModel):
+    confirmation: str
+
+
 class OmadaNasCreate(BaseModel):
     name: str = "Omada Controller Staging"
     ip_address: str = "192.168.50.71"
@@ -291,7 +307,6 @@ class OmadaApiSettingsUpdate(BaseModel):
     verify_tls: Optional[bool] = None
     username: Optional[str] = None
     password: Optional[str] = None
-    controller_id: Optional[str] = None
     remember_credentials: Optional[bool] = True
 
 
@@ -376,10 +391,13 @@ class VoucherRedeemTest(BaseModel):
 
 class PortalSessionRequest(BaseModel):
     portal_session_id: Optional[str] = None
+    device_token: Optional[str] = None
     mac: Optional[str] = None
     ip: Optional[str] = None
     client_mac: Optional[str] = None
     clientMac: Optional[str] = None
+    clientIp: Optional[str] = None
+    clientIP: Optional[str] = None
     client_ip: Optional[str] = None
     ap_mac: Optional[str] = None
     apMac: Optional[str] = None
@@ -388,7 +406,15 @@ class PortalSessionRequest(BaseModel):
     vlan_id: Optional[str] = None
     vid: Optional[str] = None
     ssid: Optional[str] = None
+    ssidName: Optional[str] = None
+    ssid_name: Optional[str] = None
     site: Optional[str] = None
+    siteId: Optional[str] = None
+    site_id: Optional[str] = None
+    siteName: Optional[str] = None
+    site_name: Optional[str] = None
+    radioId: Optional[str] = None
+    radio_id: Optional[str] = None
     gateway: Optional[str] = None
     redirect_url: Optional[str] = None
     redirectUrl: Optional[str] = None
@@ -418,12 +444,25 @@ class CaptivePortalSettingsUpdate(BaseModel):
     selected_omada_site_id: Optional[str] = None
     selected_omada_site_name: Optional[str] = None
     test_checklist_progress: Optional[dict] = None
+    portal_notifications_enabled: Optional[bool] = None
+    portal_success_notification_enabled: Optional[bool] = None
+    portal_success_notification_message: Optional[str] = None
+    portal_remaining_notification_enabled: Optional[bool] = None
+    portal_remaining_notification_trigger_seconds: Optional[int] = Field(default=None, ge=0)
+    portal_remaining_notification_message: Optional[str] = None
+    portal_expired_notification_enabled: Optional[bool] = None
+    portal_expired_notification_message: Optional[str] = None
+    portal_reconnect_notification_enabled: Optional[bool] = None
+    portal_reconnect_notification_message: Optional[str] = None
     status: Optional[str] = None
 
 
 class OmadaPortalConfigureRequest(BaseModel):
     portal_url: Optional[str] = None
     ssid_name: Optional[str] = None
+    site_id: Optional[str] = None
+    site_name: Optional[str] = None
+    vlan_id: Optional[int] = Field(default=None, ge=1, le=4094)
 
 
 class MikrotikRouterCreate(BaseModel):
@@ -507,9 +546,9 @@ class MikrotikStationCreate(BaseModel):
     create_dhcp_server: bool = True
     dns_servers: Optional[str] = Field(default=None, max_length=400)
     local_interface_list: Optional[str] = Field(default="LOCAL", max_length=120)
-    create_hotspot_profile: bool = True
-    create_hotspot_server: bool = True
-    create_walled_garden: bool = True
+    create_hotspot_profile: bool = False
+    create_hotspot_server: bool = False
+    create_walled_garden: bool = False
     hotspot_profile_name: Optional[str] = Field(default=None, max_length=200)
     hotspot_html_directory: Optional[str] = Field(default="hotspot", max_length=160)
     hotspot_dns_name: Optional[str] = Field(default=None, max_length=200)
@@ -526,7 +565,14 @@ class MikrotikStationCreate(BaseModel):
     ap_management_dhcp_server_name: Optional[str] = Field(default=None, max_length=200)
     ap_management_dhcp_lease_time: Optional[str] = Field(default="1h", max_length=80)
     ap_management_dns_servers: Optional[str] = Field(default=None, max_length=400)
+    omada_site_id: Optional[str] = Field(default=None, max_length=160)
+    omada_site_name: Optional[str] = Field(default=None, max_length=200)
     routers: list[MikrotikStationRouterPayload] = Field(default_factory=list)
+
+
+class MikrotikStationOmadaBindingUpdate(BaseModel):
+    omada_site_id: Optional[str] = Field(default=None, max_length=160)
+    omada_site_name: Optional[str] = Field(default=None, max_length=200)
 
 
 class MikrotikApManagementRouterPayload(BaseModel):
@@ -550,6 +596,21 @@ class MikrotikApManagementConfigPayload(BaseModel):
     dns_servers: Optional[str] = Field(default=None, max_length=400)
     local_interface_list: Optional[str] = Field(default="LOCAL", max_length=120)
     routers: list[MikrotikApManagementRouterPayload] = Field(default_factory=list)
+
+
+class MikrotikOfficeApPathRouterPayload(BaseModel):
+    router_id: str
+    bridge_name: Optional[str] = Field(default=None, max_length=200)
+    tagged_ports: Optional[str] = Field(default=None, max_length=1200)
+    notes: Optional[str] = Field(default=None, max_length=1200)
+
+
+class MikrotikOfficeApPathConfigPayload(BaseModel):
+    config_name: str = Field(default="Office AP Path", min_length=1, max_length=160)
+    office_bridge_name: str = Field(default="MANAGEMENT LAN", min_length=1, max_length=200)
+    transport_vlan_id: int = Field(default=1030, ge=1, le=4094)
+    transport_vlan_interface_name: Optional[str] = Field(default=None, max_length=200)
+    routers: list[MikrotikOfficeApPathRouterPayload] = Field(default_factory=list)
 
 
 class MikrotikConfigurationStepApply(BaseModel):
@@ -1184,7 +1245,6 @@ def public_omada_api_settings(row=None):
         "verify_tls": row["verify_tls"],
         "username": row["username"],
         "has_password": bool(row.get("password_encrypted")),
-        "controller_id": row["controller_id"],
         "selected_site_id": row["selected_site_id"],
         "selected_site_name": row["selected_site_name"],
         "last_login_success_at": row["last_login_success_at"],
@@ -1204,7 +1264,9 @@ def omada_api_client_from_settings():
         row["username"],
         password,
         verify_tls=bool(row["verify_tls"]),
-        controller_id=row.get("controller_id"),
+        # Controller IDs change after Omada reinstall/restore. Keep this
+        # transient so stale database values cannot poison later API calls.
+        controller_id=None,
     )
 
 
@@ -1387,6 +1449,79 @@ def routeros_truthy(value) -> bool:
     return str(value or "").strip().lower() in {"true", "yes", "1"}
 
 
+def routeros_query_words(print_path: str, query_fields: Optional[dict] = None, proplist: Optional[str] = None) -> list[str]:
+    words = [print_path] + [
+        f"?{key}={value}"
+        for key, value in (query_fields or {}).items()
+        if value not in (None, "")
+    ]
+    if proplist:
+        words.append(f"=.proplist={proplist}")
+    return words
+
+
+def routeros_active_broad_notrack_condition() -> dict:
+    return {
+        "print_path": "/ip/firewall/raw/print",
+        "query": {"chain": "prerouting", "action": "notrack"},
+        "match": "active_broad_notrack",
+        "label": "active broad raw notrack rule",
+        "missing_message": "No active broad raw notrack rule was detected; this tracking exception is not required.",
+    }
+
+
+def routeros_active_fasttrack_condition() -> dict:
+    return {
+        "print_path": "/ip/firewall/filter/print",
+        "query": {"chain": "forward", "action": "fasttrack-connection"},
+        "match": "active_fasttrack",
+        "label": "active forward fasttrack rule",
+        "missing_message": "No active FastTrack rule was detected; this anti-tether FastTrack bypass is not required.",
+    }
+
+
+def routeros_condition_label(condition: Optional[dict]) -> str:
+    if not condition:
+        return ""
+    if condition.get("label"):
+        return condition["label"]
+    query = condition.get("query") or {}
+    return ", ".join(f"{key}={value}" for key, value in query.items()) or condition.get("print_path") or "condition"
+
+
+def routeros_condition_rows(sock, condition: Optional[dict]) -> list[dict]:
+    if not condition:
+        return []
+    print_path = condition.get("print_path")
+    if not print_path:
+        return []
+    proplist = condition.get("proplist")
+    if condition.get("match") == "active_broad_notrack":
+        proplist = proplist or ".id,chain,action,src-address,dst-address,disabled,comment"
+    if condition.get("match") == "active_fasttrack":
+        proplist = proplist or ".id,chain,action,disabled,comment"
+    rows = routeros_read_result_after_send(sock, routeros_query_words(print_path, condition.get("query"), proplist))
+    if condition.get("match") == "active_broad_notrack":
+        return [
+            row
+            for row in rows
+            if not routeros_truthy(row.get("disabled"))
+            and str(row.get("chain") or "").strip().lower() == "prerouting"
+            and str(row.get("action") or "").strip().lower() == "notrack"
+            and not str(row.get("src-address") or "").strip()
+            and not str(row.get("dst-address") or "").strip()
+        ]
+    if condition.get("match") == "active_fasttrack":
+        return [
+            row
+            for row in rows
+            if not routeros_truthy(row.get("disabled"))
+            and str(row.get("chain") or "").strip().lower() == "forward"
+            and str(row.get("action") or "").strip().lower() == "fasttrack-connection"
+        ]
+    return rows
+
+
 def routeros_execute_commands(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, commands: list, timeout: float = 8.0):
     raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
     sock = raw_sock
@@ -1403,6 +1538,17 @@ def routeros_execute_commands(host: str, port: int, username: Optional[str], pas
             path = command.get("path")
             params = command.get("params") or {}
             label = command.get("label") or path
+            only_if_query_exists = command.get("only_if_query_exists")
+            if only_if_query_exists:
+                condition_rows = routeros_condition_rows(sock, only_if_query_exists)
+                if not condition_rows:
+                    results.append({
+                        "label": label,
+                        "status": "SKIPPED",
+                        "message": only_if_query_exists.get("missing_message") or "Required RouterOS condition was not detected; this step is not required.",
+                        "condition": routeros_condition_label(only_if_query_exists),
+                    })
+                    continue
             verify = command.get("verify")
             if verify and verify.get("words"):
                 existing = routeros_read_result_after_send(sock, verify["words"])
@@ -1437,18 +1583,16 @@ def routeros_execute_commands(host: str, port: int, username: Optional[str], pas
                 place_print_path = place_query.get("print_path")
                 place_fields = place_query.get("query") or {}
                 if place_print_path and place_fields:
-                    place_rows = routeros_read_result_after_send(
-                        sock,
-                        [place_print_path] + [f"?{key}={value}" for key, value in place_fields.items() if value not in (None, "")],
-                    )
+                    place_rows = routeros_condition_rows(sock, place_query)
                     if place_rows and place_rows[0].get(".id"):
                         params = {**params, "place-before": place_rows[0][".id"]}
-            if command.get("merge_bridge_vlan_tagged"):
+            if command.get("merge_bridge_vlan_tagged") or command.get("merge_bridge_vlan_members"):
                 print_path = routeros_print_path_for_add(path)
                 bridge = params.get("bridge")
                 vlan_ids = params.get("vlan-ids")
                 desired_tagged = params.get("tagged")
-                if print_path and bridge and vlan_ids and desired_tagged:
+                desired_untagged = params.get("untagged")
+                if print_path and bridge and vlan_ids and (desired_tagged or desired_untagged):
                     existing = routeros_read_result_after_send(sock, [print_path, f"?bridge={bridge}", f"?vlan-ids={vlan_ids}"])
                     if existing:
                         editable_existing = [item for item in existing if not routeros_truthy(item.get("dynamic"))]
@@ -1465,17 +1609,33 @@ def routeros_execute_commands(host: str, port: int, username: Optional[str], pas
                             continue
                         existing_item = editable_existing[0]
                         existing_tagged = existing_item.get("tagged") or ""
+                        existing_untagged = existing_item.get("untagged") or ""
                         merged_tagged = station_dedupe_csv(existing_tagged, desired_tagged)
+                        merged_untagged = station_dedupe_csv(existing_untagged, desired_untagged)
                         existing_set = {item.strip() for item in existing_tagged.split(",") if item.strip()}
                         merged_set = {item.strip() for item in merged_tagged.split(",") if item.strip()}
-                        if merged_set == existing_set:
-                            results.append({"label": label, "status": "SKIPPED", "message": "Existing static bridge VLAN already has the required tagged members.", "existing_count": len(editable_existing), "dynamic_existing_count": len(existing) - len(editable_existing)})
+                        existing_untagged_set = {item.strip() for item in existing_untagged.split(",") if item.strip()}
+                        merged_untagged_set = {item.strip() for item in merged_untagged.split(",") if item.strip()}
+                        tagged_ok = not desired_tagged or merged_set == existing_set
+                        untagged_ok = not desired_untagged or merged_untagged_set == existing_untagged_set
+                        if tagged_ok and untagged_ok:
+                            results.append({"label": label, "status": "SKIPPED", "message": "Existing static bridge VLAN already has the required tagged/untagged members.", "existing_count": len(editable_existing), "dynamic_existing_count": len(existing) - len(editable_existing)})
                             continue
                         item_id = existing_item.get(".id")
                         if not item_id:
                             raise RuntimeError("Existing bridge VLAN item has no RouterOS ID.")
-                        routeros_read_result_after_send(sock, ["/interface/bridge/vlan/set", f"=.id={item_id}", f"=tagged={merged_tagged}"])
-                        results.append({"label": label, "status": "SUCCESS", "message": f"Updated existing static bridge VLAN tagged members to {merged_tagged}.", "existing_count": len(editable_existing), "dynamic_existing_count": len(existing) - len(editable_existing)})
+                        set_words = ["/interface/bridge/vlan/set", f"=.id={item_id}"]
+                        if desired_tagged:
+                            set_words.append(f"=tagged={merged_tagged}")
+                        if desired_untagged:
+                            set_words.append(f"=untagged={merged_untagged}")
+                        routeros_read_result_after_send(sock, set_words)
+                        changed = []
+                        if desired_tagged:
+                            changed.append(f"tagged={merged_tagged}")
+                        if desired_untagged:
+                            changed.append(f"untagged={merged_untagged}")
+                        results.append({"label": label, "status": "SUCCESS", "message": f"Updated existing static bridge VLAN members: {', '.join(changed)}.", "existing_count": len(editable_existing), "dynamic_existing_count": len(existing) - len(editable_existing)})
                         continue
             unique_query = None
             if command.get("existing_query"):
@@ -1755,19 +1915,36 @@ def routeros_detect_remove_targets(host: str, port: int, username: Optional[str]
         routeros_login_socket(sock, username, password)
         items = []
         found_count = 0
-        for command in commands:
+        for index, command in enumerate(commands):
             label = command.get("label") or command.get("print_path") or "Managed item"
+            verify = command.get("verify")
+            if verify and verify.get("words"):
+                existing = routeros_read_result_after_send(sock, verify["words"])
+                already_clean = routeros_verify_matches(existing, verify)
+                needs_action = bool(existing) and not already_clean
+                found_count += 1 if needs_action else 0
+                items.append({
+                    "label": label,
+                    "command_index": index,
+                    "status": "FOUND" if needs_action else "NOT_FOUND",
+                    "found_count": 1 if needs_action else 0,
+                    "query_label": verify.get("label") or ", ".join(verify.get("words") or []),
+                    "existing_count": len(existing),
+                    "message": verify.get("not_found_message") if needs_action else routeros_verify_message(verify),
+                })
+                continue
             print_path = command.get("print_path")
             query_field = command.get("query_field")
             query_value = command.get("query_value")
             if not print_path or not query_field or query_value in (None, ""):
-                items.append({"label": label, "status": "SKIPPED", "found_count": 0, "message": "Detection command is incomplete."})
+                items.append({"label": label, "command_index": index, "status": "SKIPPED", "found_count": 0, "message": "Detection command is incomplete."})
                 continue
             existing = routeros_read_result_after_send(sock, [print_path, f"?{query_field}={query_value}"])
             count = len(existing)
             found_count += count
             items.append({
                 "label": label,
+                "command_index": index,
                 "status": "FOUND" if count else "NOT_FOUND",
                 "found_count": count,
                 "query_field": query_field,
@@ -1807,11 +1984,63 @@ def routeros_detect_station_apply_targets(host: str, port: int, username: Option
         found_count = 0
         for index, command in enumerate(commands):
             label = command.get("label") or command.get("path") or f"Command {index + 1}"
+            if command.get("operation") == "REMOVE_OLD":
+                verify = command.get("verify")
+                if verify and verify.get("words"):
+                    existing = routeros_read_result_after_send(sock, verify["words"])
+                    matched = routeros_verify_matches(existing, verify)
+                    already_clean = not existing or matched
+                    found_count += 1 if already_clean else 0
+                    items.append({
+                        "label": label,
+                        "command_index": index,
+                        "status": "FOUND" if already_clean else "NOT_FOUND",
+                        "found_count": 1 if already_clean else 0,
+                        "query_label": verify.get("label") or ", ".join(verify.get("words") or []),
+                        "existing_count": len(existing),
+                        "message": "Old managed setting is already absent." if not existing else routeros_verify_message(verify) if matched else verify.get("not_found_message") or "Old managed setting still needs cleanup.",
+                    })
+                    continue
+                print_path = command.get("print_path")
+                query_field = command.get("query_field")
+                query_value = command.get("query_value")
+                if not print_path or not query_field or query_value in (None, ""):
+                    items.append({"label": label, "command_index": index, "status": "UNKNOWN", "found_count": 0, "message": "No safe cleanup detection query is available for this old config removal step."})
+                    continue
+                existing = routeros_read_result_after_send(sock, [print_path, f"?{query_field}={query_value}"])
+                already_clean = len(existing) == 0
+                found_count += 1 if already_clean else 0
+                items.append({
+                    "label": label,
+                    "command_index": index,
+                    "status": "FOUND" if already_clean else "NOT_FOUND",
+                    "found_count": 1 if already_clean else 0,
+                    "query_label": f"{query_field}={query_value}",
+                    "existing_count": len(existing),
+                    "message": "Old managed object is already absent." if already_clean else "Old managed object still exists and will be removed before the new config is pushed.",
+                })
+                continue
             path = command.get("path")
             params = command.get("params") or {}
             print_path = routeros_print_path_for_add(path or "")
             query_words = None
             query_label = ""
+            only_if_query_exists = command.get("only_if_query_exists")
+            if only_if_query_exists:
+                condition_rows = routeros_condition_rows(sock, only_if_query_exists)
+                if not condition_rows:
+                    found_count += 1
+                    items.append({
+                        "label": label,
+                        "command_index": index,
+                        "status": "FOUND",
+                        "found_count": 1,
+                        "query_label": routeros_condition_label(only_if_query_exists),
+                        "existing_count": 0,
+                        "message": only_if_query_exists.get("missing_message") or "Required RouterOS condition was not detected; this step is not required.",
+                        "condition_skipped": True,
+                    })
+                    continue
             verify = command.get("verify")
             if verify and verify.get("words"):
                 existing = routeros_read_result_after_send(sock, verify["words"])
@@ -1845,16 +2074,21 @@ def routeros_detect_station_apply_targets(host: str, port: int, username: Option
                     "message": "This step updates an existing RouterOS item. Detection requires a verification rule.",
                 })
                 continue
-            if command.get("merge_bridge_vlan_tagged") and print_path:
+            if (command.get("merge_bridge_vlan_tagged") or command.get("merge_bridge_vlan_members")) and print_path:
                 bridge = params.get("bridge")
                 vlan_ids = params.get("vlan-ids")
                 tagged = {item.strip() for item in str(params.get("tagged") or "").split(",") if item.strip()}
+                untagged = {item.strip() for item in str(params.get("untagged") or "").split(",") if item.strip()}
                 if bridge and vlan_ids:
                     query_words = [print_path, f"?bridge={bridge}", f"?vlan-ids={vlan_ids}"]
                     query_label = f"bridge={bridge}, vlan-ids={vlan_ids}"
                     existing = routeros_read_result_after_send(sock, query_words)
                     static_rows = [row for row in existing if not routeros_truthy(row.get("dynamic"))]
-                    matched = any(tagged.issubset({item.strip() for item in str(row.get("tagged") or "").split(",") if item.strip()}) for row in static_rows)
+                    matched = any(
+                        tagged.issubset({item.strip() for item in str(row.get("tagged") or "").split(",") if item.strip()})
+                        and untagged.issubset({item.strip() for item in str(row.get("untagged") or "").split(",") if item.strip()})
+                        for row in static_rows
+                    )
                     found_count += 1 if matched else 0
                     items.append({
                         "label": label,
@@ -1863,7 +2097,7 @@ def routeros_detect_station_apply_targets(host: str, port: int, username: Option
                         "found_count": 1 if matched else 0,
                         "query_label": query_label,
                         "dynamic_existing_count": len(existing) - len(static_rows),
-                        "message": "Static bridge VLAN row has the required tagged members." if matched else "No static bridge VLAN row has all required tagged members yet.",
+                        "message": "Static bridge VLAN row has the required tagged/untagged members." if matched else "No static bridge VLAN row has all required tagged/untagged members yet.",
                     })
                     continue
             if command.get("existing_query") and print_path:
@@ -3232,6 +3466,9 @@ volumes:
       - "29812:29812"
       - "29813:29813"
       - "29814:29814"
+      - "29815:29815"
+      - "29816:29816"
+      - "29817:29817"
     environment:
       - TZ=Asia/Manila
     volumes:
@@ -3258,7 +3495,7 @@ def detect_omada(settings):
             ("compose_file", "test -f /opt/omada-controller/docker-compose.yml && echo yes || echo no"),
             ("containers", "docker ps -a --filter label=com.docker.compose.project=omada_controller --format '{{.Names}} {{.Status}}' 2>/dev/null || true"),
             ("version", "docker ps --filter label=com.docker.compose.project=omada_controller --format '{{.Image}}' 2>/dev/null | head -1 || true"),
-            ("ports", "ss -lntup 2>/dev/null | egrep '(:8088|:8043|:8843|:29810|:29811|:29812|:29813|:29814)' || true"),
+            ("ports", "ss -lntup 2>/dev/null | egrep '(:8088|:8043|:8843|:29810|:29811|:29812|:29813|:29814|:29815|:29816|:29817)' || true"),
         ]
         for label, command in checks:
             code, out = run_ssh(client, command, sudo_mode="NONE", timeout=30)
@@ -3331,6 +3568,14 @@ def run_omada_action(action: str, admin_id, log_id=None):
                         ("Recreating Omada Controller in host network mode", 55, "cd /opt/omada-controller && docker compose -p omada_controller down --remove-orphans && docker compose -p omada_controller up -d"),
                         ("Verifying Docker network mode", 82, "docker inspect omada_controller-omada-controller-1 --format 'NetworkMode={{.HostConfig.NetworkMode}}'"),
                         ("Checking Omada container status", 92, "cd /opt/omada-controller && docker compose -p omada_controller ps"),
+                    ]
+                elif action == "UNINSTALL":
+                    commands = [
+                        ("Stopping and removing Omada containers", 20, "test ! -d /opt/omada-controller || (cd /opt/omada-controller && docker compose -p omada_controller down -v --remove-orphans)"),
+                        ("Removing leftover Omada project containers", 45, "docker ps -a --filter label=com.docker.compose.project=omada_controller -q | xargs -r docker rm -f"),
+                        ("Removing leftover Omada project volumes", 62, "docker volume ls -q --filter label=com.docker.compose.project=omada_controller | xargs -r docker volume rm -f"),
+                        ("Removing Omada install directory", 78, "rm -rf /opt/omada-controller"),
+                        ("Verifying Omada uninstall", 92, "test ! -e /opt/omada-controller && ! docker ps -a --filter label=com.docker.compose.project=omada_controller --format '{{.Names}}' | grep -q ."),
                     ]
                 else:
                     raise HTTPException(status_code=400, detail="Unsupported Omada action")
@@ -3671,10 +3916,6 @@ def health():
         "environment": os.getenv("APP_ENV", "unknown"),
         "database": db_ok,
         "redis": bool(redis_ok),
-        "radius_ports": {
-            "auth": int(os.getenv("RADIUS_AUTH_PORT", "1812")),
-            "accounting": int(os.getenv("RADIUS_ACCT_PORT", "1813")),
-        },
     }
 
 
@@ -3744,40 +3985,142 @@ def normalize_mac(mac: Optional[str]) -> Optional[str]:
     return ":".join(clean[i:i + 2] for i in range(0, 12, 2)).upper()
 
 
+def portal_device_token_hash(token: Optional[str]) -> Optional[str]:
+    token_text = str(token or "").strip()
+    if len(token_text) < 24:
+        return None
+    seed = os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET") or os.getenv("POSTGRES_PASSWORD") or "change-me"
+    return hmac.new(seed.encode(), token_text.encode(), sha256).hexdigest()
+
+
+def new_portal_device_token() -> str:
+    return secrets.token_urlsafe(36)
+
+
+def portal_mac_rebind_limit() -> int:
+    try:
+        return max(int(os.getenv("PORTAL_MAC_REBIND_MAX_PER_SESSION", "3")), 0)
+    except ValueError:
+        return 3
+
+
+def portal_mac_rebind_cooldown_seconds() -> int:
+    try:
+        return max(int(os.getenv("PORTAL_MAC_REBIND_COOLDOWN_SECONDS", "60")), 0)
+    except ValueError:
+        return 60
+
+
+def portal_effective_mac_from_session(session: dict) -> Optional[str]:
+    if not session:
+        return None
+    return normalize_mac(
+        session.get("omada_client_mac")
+        or session.get("mikrotik_client_mac")
+        or session.get("client_mac")
+    )
+
+
+def portal_effective_mac_from_context(ctx: dict) -> Optional[str]:
+    return normalize_mac(ctx.get("client_mac"))
+
+
+def raw_query_value(raw: dict, *names: str):
+    if not isinstance(raw, dict):
+        return None
+    for name in names:
+        value = raw.get(name)
+        if value not in (None, ""):
+            return value
+    lower_names = {name.lower() for name in names}
+    for key, value in raw.items():
+        if str(key).lower() in lower_names and value not in (None, ""):
+            return value
+    return None
+
+
+def looks_like_omada_site_id(value: Optional[str]) -> bool:
+    return bool(re.fullmatch(r"[A-Fa-f0-9]{16,64}", str(value or "").strip()))
+
+
 def portal_context(payload: PortalSessionRequest) -> dict:
     raw = payload.raw_query_params or {}
     raw_server_name = raw.get("server-name") or raw.get("server_name") or raw.get("server")
     link_login = payload.link_login or raw.get("link-login") or raw.get("link_login")
     link_login_only = payload.link_login_only or raw.get("link-login-only") or raw.get("link_login_only")
     link_orig = payload.link_orig or raw.get("link-orig") or raw.get("link_orig")
+    raw_site = payload.site or raw_query_value(raw, "site")
+    site_id = payload.site_id or payload.siteId or raw_query_value(raw, "site_id", "siteId")
+    site_name = payload.site_name or payload.siteName or raw_query_value(raw, "site_name", "siteName")
+    if raw_site and looks_like_omada_site_id(raw_site):
+        site_id = site_id or raw_site
+    else:
+        site_name = site_name or raw_site
     return {
-        "client_mac": payload.client_mac or payload.clientMac or payload.mac or raw.get("client_mac") or raw.get("clientMac") or raw.get("mac"),
-        "client_ip": payload.client_ip or payload.ip or raw.get("client_ip") or raw.get("clientIp") or raw.get("ip"),
-        "ap_mac": payload.ap_mac or payload.apMac or raw.get("ap_mac") or raw.get("apMac"),
-        "gateway_mac": payload.gateway_mac or payload.gatewayMac or raw.get("gateway_mac") or raw.get("gatewayMac"),
-        "vlan_id": payload.vlan_id or payload.vid or raw.get("vlan_id") or raw.get("vid"),
-        "ssid": payload.ssid or raw.get("ssid"),
-        "site": payload.site or raw.get("site"),
-        "gateway": payload.gateway or raw.get("gateway"),
-        "redirect_url": payload.redirect_url or payload.redirectUrl or raw.get("redirect_url") or raw.get("redirectUrl"),
-        "nas_id": payload.nas_id or raw.get("nas_id") or raw.get("nasId") or raw_server_name,
+        "client_mac": payload.client_mac or payload.clientMac or payload.mac or raw_query_value(raw, "client_mac", "clientMac", "mac", "cid"),
+        "client_ip": payload.client_ip or payload.clientIp or payload.clientIP or payload.ip or raw_query_value(raw, "client_ip", "clientIp", "clientIP", "ip"),
+        "ap_mac": payload.ap_mac or payload.apMac or raw_query_value(raw, "ap_mac", "apMac", "ap"),
+        "gateway_mac": payload.gateway_mac or payload.gatewayMac or raw_query_value(raw, "gateway_mac", "gatewayMac"),
+        "vlan_id": payload.vlan_id or payload.vid or raw_query_value(raw, "vlan_id", "vid", "vlanId"),
+        "ssid": payload.ssid or payload.ssidName or payload.ssid_name or raw_query_value(raw, "ssid", "ssidName", "ssid_name"),
+        "site": raw_site,
+        "site_id": site_id,
+        "site_name": site_name,
+        "radio_id": payload.radioId or payload.radio_id or raw_query_value(raw, "radioId", "radio_id", "rid"),
+        "gateway": payload.gateway or raw_query_value(raw, "gateway"),
+        "redirect_url": payload.redirect_url or payload.redirectUrl or raw_query_value(raw, "redirect_url", "redirectUrl", "u"),
+        "nas_id": payload.nas_id or raw_query_value(raw, "nas_id", "nasId") or raw_server_name,
         "mikrotik_server_name": payload.server_name or raw_server_name,
         "mikrotik_link_login": link_login,
         "mikrotik_link_login_only": link_login_only,
         "mikrotik_link_orig": link_orig,
-        "mikrotik_chap_id": payload.chap_id or raw.get("chap-id") or raw.get("chap_id"),
-        "mikrotik_chap_challenge": payload.chap_challenge or raw.get("chap-challenge") or raw.get("chap_challenge"),
-        "auth_token": payload.authToken or payload.token or raw.get("authToken") or raw.get("token") or raw.get("t"),
+        "mikrotik_chap_id": payload.chap_id or raw_query_value(raw, "chap-id", "chap_id"),
+        "mikrotik_chap_challenge": payload.chap_challenge or raw_query_value(raw, "chap-challenge", "chap_challenge"),
+        "auth_token": payload.authToken or payload.token or raw_query_value(raw, "authToken", "token", "t"),
         "raw_query_params": raw,
     }
 
 
+def resolve_omada_site_from_context(ctx: dict) -> tuple[Optional[str], Optional[str]]:
+    site_id = (ctx.get("site_id") or "").strip() or None
+    site_name = (ctx.get("site_name") or "").strip() or None
+    site_value = (ctx.get("site") or "").strip()
+    if site_value:
+        if looks_like_omada_site_id(site_value):
+            site_id = site_id or site_value
+        else:
+            site_name = site_name or site_value
+    site_row = find_site_deployment_by_omada(site_id, site_name)
+    if site_row:
+        site_id = site_row.get("omada_site_id") or site_id
+        site_name = site_row.get("site_name") or site_name
+    return site_id, site_name
+
+
+def find_site_deployment_by_ssid_name(ssid_name: Optional[str]) -> Optional[dict]:
+    clean_ssid = str(ssid_name or "").strip()
+    if not clean_ssid:
+        return None
+    return fetch_one(
+        """
+        SELECT sd.*
+        FROM site_deployments sd
+        LEFT JOIN ap_site_wifi_configuration sw ON sw.site_id = sd.id
+        WHERE sd.deployment_status <> 'INACTIVE'
+          AND (
+            lower(sw.ssid_2g) = lower(%s)
+            OR lower(sw.ssid_5g) = lower(%s)
+            OR lower(sw.same_ssid_name) = lower(%s)
+          )
+        ORDER BY sd.updated_at DESC
+        LIMIT 1
+        """,
+        (clean_ssid, clean_ssid, clean_ssid),
+    )
+
+
 def portal_source(payload: PortalSessionRequest) -> str:
     ctx = portal_context(payload)
-    gateway = (ctx["gateway"] or "").lower()
-    nas_id = (ctx["nas_id"] or "").lower()
-    if ctx.get("mikrotik_link_login") or ctx.get("mikrotik_link_login_only") or ctx.get("mikrotik_server_name") or ("mikrotik" in gateway or "mikrotik" in nas_id):
-        return "MIKROTIK"
     if ctx["site"] or ctx["ap_mac"] or ctx["client_mac"] or ctx["auth_token"]:
         return "OMADA"
     if any([ctx["client_ip"], ctx["ssid"], ctx["gateway"], ctx["redirect_url"], ctx["nas_id"]]):
@@ -3879,8 +4222,82 @@ def station_for_root_gateway_ip(gateway_ip: Optional[str]):
     )
 
 
+def portal_session_has_current_gateway_access(session: Optional[dict]) -> bool:
+    if not session:
+        return False
+    if session.get("source") not in {"OMADA", "MIKROTIK"}:
+        return False
+    if not session.get("user_id") or not session.get("voucher_id"):
+        return False
+    if session.get("status") not in {"ACCESS_GRANTED", "VOUCHER_REDEEMED"}:
+        return False
+    access_expires_at = aware_utc(session.get("access_expires_at"))
+    return bool(access_expires_at and access_expires_at > datetime.now(timezone.utc))
+
+
+def find_current_gateway_session_for_context(cur, ctx: dict, request: Request) -> Optional[dict]:
+    conditions = []
+    params = []
+    candidate_ip = ctx.get("client_ip") or public_ip(request)
+    if candidate_ip:
+        try:
+            candidate_ip = str(ip_address(str(candidate_ip).strip()))
+            conditions.append("client_ip = %s::inet")
+            params.append(candidate_ip)
+        except ValueError:
+            pass
+
+    candidate_mac = portal_effective_mac_from_context(ctx)
+    clean_mac = re.sub(r"[^A-Fa-f0-9]", "", candidate_mac or "").lower()
+    if len(clean_mac) == 12:
+        conditions.append(
+            """
+            (
+              regexp_replace(lower(coalesce(client_mac::text, '')), '[^a-f0-9]', '', 'g') = %s
+              OR regexp_replace(lower(coalesce(omada_client_mac::text, '')), '[^a-f0-9]', '', 'g') = %s
+              OR regexp_replace(lower(coalesce(mikrotik_client_mac::text, '')), '[^a-f0-9]', '', 'g') = %s
+            )
+            """
+        )
+        params.extend([clean_mac, clean_mac, clean_mac])
+
+    if not conditions:
+        return None
+
+    cur.execute(
+        f"""
+        SELECT *
+        FROM portal_sessions
+        WHERE source IN ('OMADA', 'MIKROTIK')
+          AND user_id IS NOT NULL
+          AND voucher_id IS NOT NULL
+          AND status IN ('ACCESS_GRANTED', 'VOUCHER_REDEEMED')
+          AND access_expires_at IS NOT NULL
+          AND access_expires_at > now()
+          AND ({' OR '.join(conditions)})
+        ORDER BY access_expires_at DESC, updated_at DESC
+        LIMIT 1
+        """,
+        tuple(params),
+    )
+    return cur.fetchone()
+
+
 def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
-    public_session_id = payload.portal_session_id or secrets.token_urlsafe(18)
+    incoming_device_token_hash = portal_device_token_hash(payload.device_token)
+    token_session = None
+    if incoming_device_token_hash:
+        cur.execute(
+            """
+            SELECT public_session_id
+            FROM portal_sessions
+            WHERE device_token_hash = %s
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (incoming_device_token_hash,),
+        )
+        token_session = cur.fetchone()
     source = portal_source(payload)
     ctx = portal_context(payload)
     request_ip = public_ip(request)
@@ -3892,22 +4309,40 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             ctx["client_ip"] = request_ip
         if not ctx.get("vlan_id"):
             ctx["vlan_id"] = str(request_station["vlan_id"])
-        if not ctx.get("mikrotik_server_name"):
-            ctx["mikrotik_server_name"] = station_hotspot_server_name(request_station)
-        if source == "MANUAL_TEST":
-            source = "MIKROTIK"
+    if not (ctx.get("site_id") or ctx.get("site_name") or ctx.get("site")) and ctx.get("ssid"):
+        ssid_site = find_site_deployment_by_ssid_name(ctx.get("ssid"))
+        if ssid_site:
+            ctx["site_id"] = ssid_site.get("omada_site_id")
+            ctx["site_name"] = ssid_site.get("site_name")
+            ctx["site"] = ssid_site.get("omada_site_id") or ssid_site.get("site_name")
+    omada_site_id, omada_site_name = resolve_omada_site_from_context(ctx)
+    current_gateway_session = find_current_gateway_session_for_context(cur, ctx, request)
+    preferred_token_session_id = None
+    if token_session:
+        cur.execute("SELECT * FROM portal_sessions WHERE public_session_id = %s", (token_session["public_session_id"],))
+        token_session_row = cur.fetchone()
+        if portal_session_has_current_gateway_access(token_session_row):
+            preferred_token_session_id = token_session_row["public_session_id"]
+    public_session_id = (
+        preferred_token_session_id
+        or (current_gateway_session or {}).get("public_session_id")
+        or (token_session or {}).get("public_session_id")
+        or payload.portal_session_id
+        or secrets.token_urlsafe(18)
+    )
     cur.execute(
         """
         INSERT INTO portal_sessions(public_session_id, client_mac, client_ip, ap_mac, ssid, site, gateway, nas_id, redirect_url, user_agent, source,
-                                    gateway_mac, vlan_id, raw_query_params, omada_site_name, omada_client_mac, omada_ap_mac,
+                                    gateway_mac, vlan_id, raw_query_params, omada_site_id, omada_site_name, omada_client_mac, omada_ap_mac,
                                     omada_gateway_mac, omada_token_encrypted, omada_redirect_url, omada_authorization_status,
                                     mikrotik_client_mac, mikrotik_client_ip, mikrotik_server_name, mikrotik_link_login,
                                     mikrotik_link_login_only, mikrotik_link_orig, mikrotik_chap_id, mikrotik_chap_challenge,
-                                    mikrotik_authorization_status)
-        VALUES (%s, %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                    mikrotik_authorization_status, device_token_hash, device_token_created_at, device_token_last_seen_at)
+        VALUES (%s, %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 CASE WHEN %s = 'OMADA' THEN 'PENDING' WHEN %s = 'MANUAL_TEST' THEN 'MANUAL_TEST' ELSE 'NOT_REQUIRED' END,
                 %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s, %s,
-                CASE WHEN %s = 'MIKROTIK' THEN 'PENDING' WHEN %s = 'MANUAL_TEST' THEN 'MANUAL_TEST' ELSE 'NOT_REQUIRED' END)
+                CASE WHEN %s = 'MIKROTIK' THEN 'PENDING' WHEN %s = 'MANUAL_TEST' THEN 'MANUAL_TEST' ELSE 'NOT_REQUIRED' END,
+                %s::text, CASE WHEN %s::text IS NULL THEN NULL ELSE now() END, CASE WHEN %s::text IS NULL THEN NULL ELSE now() END)
         ON CONFLICT (public_session_id) DO UPDATE
         SET client_mac = COALESCE(EXCLUDED.client_mac, portal_sessions.client_mac),
             client_ip = COALESCE(EXCLUDED.client_ip, portal_sessions.client_ip),
@@ -3920,6 +4355,7 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             nas_id = COALESCE(EXCLUDED.nas_id, portal_sessions.nas_id),
             redirect_url = COALESCE(EXCLUDED.redirect_url, portal_sessions.redirect_url),
             raw_query_params = COALESCE(EXCLUDED.raw_query_params, portal_sessions.raw_query_params),
+            omada_site_id = COALESCE(EXCLUDED.omada_site_id, portal_sessions.omada_site_id),
             omada_site_name = COALESCE(EXCLUDED.omada_site_name, portal_sessions.omada_site_name),
             omada_client_mac = COALESCE(EXCLUDED.omada_client_mac, portal_sessions.omada_client_mac),
             omada_ap_mac = COALESCE(EXCLUDED.omada_ap_mac, portal_sessions.omada_ap_mac),
@@ -3934,6 +4370,12 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             mikrotik_link_orig = COALESCE(EXCLUDED.mikrotik_link_orig, portal_sessions.mikrotik_link_orig),
             mikrotik_chap_id = COALESCE(EXCLUDED.mikrotik_chap_id, portal_sessions.mikrotik_chap_id),
             mikrotik_chap_challenge = COALESCE(EXCLUDED.mikrotik_chap_challenge, portal_sessions.mikrotik_chap_challenge),
+            device_token_hash = COALESCE(EXCLUDED.device_token_hash, portal_sessions.device_token_hash),
+            device_token_created_at = COALESCE(portal_sessions.device_token_created_at, EXCLUDED.device_token_created_at),
+            device_token_last_seen_at = CASE
+                WHEN EXCLUDED.device_token_hash IS NOT NULL THEN now()
+                ELSE portal_sessions.device_token_last_seen_at
+            END,
             user_agent = EXCLUDED.user_agent,
             source = CASE WHEN portal_sessions.source = 'MANUAL_TEST' THEN EXCLUDED.source ELSE portal_sessions.source END,
             omada_authorization_status = CASE
@@ -3962,7 +4404,8 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             ctx["gateway_mac"],
             ctx["vlan_id"],
             Json(ctx["raw_query_params"] or {}),
-            ctx["site"],
+            omada_site_id,
+            omada_site_name,
             ctx["client_mac"],
             ctx["ap_mac"],
             ctx["gateway_mac"],
@@ -3980,6 +4423,9 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             ctx["mikrotik_chap_challenge"],
             source,
             source,
+            incoming_device_token_hash,
+            incoming_device_token_hash,
+            incoming_device_token_hash,
         ),
     )
     return cur.fetchone()
@@ -3998,7 +4444,7 @@ def create_portal_event(cur, session_id, event_type: str, request: Request, mess
             message,
             public_ip(request),
             request.headers.get("user-agent"),
-            Json(raw_context or {}),
+            Json(sanitize_summary(raw_context or {})),
         ),
     )
 
@@ -4101,6 +4547,278 @@ def portal_access_view(session, wallet, redemption=None):
     }
 
 
+def ensure_portal_device_token(cur, session: dict, provided_token: Optional[str] = None) -> Optional[str]:
+    provided_hash = portal_device_token_hash(provided_token)
+    current_hash = session.get("device_token_hash")
+    if provided_hash and current_hash and hmac.compare_digest(str(provided_hash), str(current_hash)):
+        cur.execute(
+            "UPDATE portal_sessions SET device_token_last_seen_at = now(), updated_at = now() WHERE id = %s",
+            (session["id"],),
+        )
+        return provided_token
+    if current_hash:
+        return None
+    token = new_portal_device_token()
+    token_hash = portal_device_token_hash(token)
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET device_token_hash = %s,
+            device_token_created_at = COALESCE(device_token_created_at, now()),
+            device_token_last_seen_at = now(),
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (token_hash, session["id"]),
+    )
+    session["device_token_hash"] = token_hash
+    return token
+
+
+def latest_portal_redemption(cur, session: dict):
+    if not session.get("user_id"):
+        return None
+    cur.execute(
+        """
+        SELECT r.*, v.code AS voucher_code
+        FROM voucher_redemptions r
+        LEFT JOIN vouchers v ON v.id = r.voucher_id
+        WHERE r.user_id = %s
+        ORDER BY r.created_at DESC
+        LIMIT 1
+        """,
+        (session["user_id"],),
+    )
+    return cur.fetchone()
+
+
+def portal_session_access_state(cur, session: dict) -> dict:
+    wallet = portal_wallet_status(cur, session)
+    redemption = latest_portal_redemption(cur, session)
+    return portal_access_view(session, wallet, redemption)
+
+
+def latest_successful_portal_authorization(cur, session: dict):
+    if session.get("source") == "OMADA":
+        cur.execute(
+            """
+            SELECT client_mac, NULL::inet AS client_ip, ssid, site_id, site_name,
+                   omada_request_summary->>'radio_id' AS radio_id,
+                   authorization_duration_seconds, access_expires_at, created_at
+            FROM omada_portal_authorizations
+            WHERE portal_session_id = %s AND status = 'SUCCESS'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (session["id"],),
+        )
+        return cur.fetchone()
+    if session.get("source") == "MIKROTIK":
+        cur.execute(
+            """
+            SELECT client_mac, client_ip, NULL::text AS ssid, NULL::text AS site_id, NULL::text AS site_name,
+                   NULL::text AS radio_id, authorization_duration_seconds, access_expires_at, created_at
+            FROM mikrotik_portal_authorizations
+            WHERE portal_session_id = %s AND status = 'SUCCESS'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (session["id"],),
+        )
+        return cur.fetchone()
+    return None
+
+
+def latest_omada_authorization_matches_context(latest_authorization: Optional[dict], ctx: dict) -> bool:
+    if not latest_authorization:
+        return False
+    latest_mac = normalize_mac(latest_authorization.get("client_mac"))
+    current_mac = portal_effective_mac_from_context(ctx)
+    if not latest_mac or latest_mac != current_mac:
+        return False
+    current_ssid = str(ctx.get("ssid") or "").strip()
+    latest_ssid = str(latest_authorization.get("ssid") or "").strip()
+    if current_ssid and latest_ssid and current_ssid != latest_ssid:
+        return False
+    current_site_id = str(ctx.get("site_id") or "").strip()
+    latest_site_id = str(latest_authorization.get("site_id") or "").strip()
+    if current_site_id and latest_site_id and current_site_id != latest_site_id:
+        return False
+    current_radio_id = str(ctx.get("radio_id") or "").strip()
+    latest_radio_id = str(latest_authorization.get("radio_id") or "").strip()
+    if current_radio_id and latest_radio_id and current_radio_id != latest_radio_id:
+        return False
+    return True
+
+
+def append_previous_client_macs(existing_value, old_mac: Optional[str], new_mac: Optional[str]) -> list:
+    existing = existing_value if isinstance(existing_value, list) else []
+    normalized_seen = {
+        normalize_mac((item or {}).get("mac") if isinstance(item, dict) else item)
+        for item in existing
+    }
+    next_items = list(existing)
+    for mac, role in ((old_mac, "OLD"), (new_mac, "NEW")):
+        normalized = normalize_mac(mac)
+        if not normalized or normalized in normalized_seen:
+            continue
+        next_items.append({"mac": normalized, "role": role, "recorded_at": datetime.now(timezone.utc).isoformat()})
+        normalized_seen.add(normalized)
+    return next_items
+
+
+def record_portal_mac_rebind_event(
+    cur,
+    session: dict,
+    old_mac: Optional[str],
+    new_mac: Optional[str],
+    old_ip: Optional[str],
+    new_ip: Optional[str],
+    remaining_seconds: int,
+    status: str,
+    message: str,
+    summary: Optional[dict] = None,
+):
+    cur.execute(
+        """
+        INSERT INTO portal_mac_rebind_events(portal_session_id, voucher_id, user_id, source, old_client_mac, new_client_mac,
+                                             old_client_ip, new_client_ip, remaining_seconds, status, message, authorization_summary)
+        VALUES (%s, %s, %s, %s, %s, %s, NULLIF(%s, '')::inet, NULLIF(%s, '')::inet, %s, %s, %s, %s)
+        """,
+        (
+            session.get("id"),
+            session.get("voucher_id"),
+            session.get("user_id"),
+            session.get("source"),
+            old_mac,
+            new_mac,
+            str(old_ip or ""),
+            str(new_ip or ""),
+            remaining_seconds,
+            status,
+            message,
+            Json(sanitize_summary(summary or {})),
+        ),
+    )
+
+
+def attempt_portal_device_mac_rebind(cur, session: dict, payload: PortalSessionRequest, request: Request) -> dict:
+    token_hash = portal_device_token_hash(payload.device_token)
+    current_hash = session.get("device_token_hash")
+    token_matches = bool(token_hash and current_hash and hmac.compare_digest(str(token_hash), str(current_hash)))
+    if session.get("source") not in {"OMADA", "MIKROTIK"}:
+        return {"status": "SKIPPED", "message": None}
+    if not session.get("voucher_id") or not session.get("user_id"):
+        return {"status": "SKIPPED", "message": None}
+
+    ctx = portal_context(payload)
+    new_mac = portal_effective_mac_from_context(ctx)
+    if not new_mac:
+        return {"status": "SKIPPED", "message": None}
+
+    latest_authorization = latest_successful_portal_authorization(cur, session)
+    old_mac = normalize_mac((latest_authorization or {}).get("client_mac")) or portal_effective_mac_from_session(session)
+    mac_changed = bool(old_mac and old_mac != new_mac)
+    omada_context_needs_refresh = bool(
+        session.get("source") == "OMADA"
+        and old_mac
+        and old_mac == new_mac
+        and not latest_omada_authorization_matches_context(latest_authorization, ctx)
+        and (ctx.get("ssid") or ctx.get("site_id") or ctx.get("radio_id"))
+    )
+    if mac_changed and not token_matches:
+        return {"status": "SKIPPED", "message": None}
+    if not old_mac or (not mac_changed and not omada_context_needs_refresh):
+        cur.execute(
+            "UPDATE portal_sessions SET device_token_last_seen_at = now(), updated_at = now() WHERE id = %s",
+            (session["id"],),
+        )
+        return {"status": "SKIPPED", "message": None}
+
+    access_view = portal_session_access_state(cur, session)
+    remaining_seconds = int(access_view.get("remaining_time_seconds") or 0)
+    if access_view.get("access_expired") or remaining_seconds <= 0:
+        message = "Device token was recognized, but the access time is already fully consumed."
+        record_portal_mac_rebind_event(cur, session, old_mac, new_mac, (latest_authorization or {}).get("client_ip"), ctx.get("client_ip") or public_ip(request), remaining_seconds, "SKIPPED", message)
+        create_portal_event(cur, session["id"], "MAC_REBIND_SKIPPED", request, message, raw_context={"old_mac": mask_mac(old_mac), "new_mac": mask_mac(new_mac)})
+        return {"status": "SKIPPED", "message": message}
+
+    max_rebinds = portal_mac_rebind_limit()
+    if mac_changed and max_rebinds and int(session.get("mac_rebind_count") or 0) >= max_rebinds:
+        message = "Device token was recognized, but the MAC transfer limit for this voucher session was reached."
+        record_portal_mac_rebind_event(cur, session, old_mac, new_mac, (latest_authorization or {}).get("client_ip"), ctx.get("client_ip") or public_ip(request), remaining_seconds, "FAILED", message)
+        create_portal_event(cur, session["id"], "MAC_REBIND_FAILED", request, message, raw_context={"old_mac": mask_mac(old_mac), "new_mac": mask_mac(new_mac)})
+        return {"status": "FAILED", "message": message}
+
+    cooldown_seconds = portal_mac_rebind_cooldown_seconds()
+    last_rebind_at = aware_utc(session.get("last_mac_rebind_at"))
+    if mac_changed and cooldown_seconds and last_rebind_at and datetime.now(timezone.utc) - last_rebind_at < timedelta(seconds=cooldown_seconds):
+        message = "Device token was recognized, but MAC transfer cooldown is still active."
+        record_portal_mac_rebind_event(cur, session, old_mac, new_mac, (latest_authorization or {}).get("client_ip"), ctx.get("client_ip") or public_ip(request), remaining_seconds, "SKIPPED", message)
+        create_portal_event(cur, session["id"], "MAC_REBIND_SKIPPED", request, message, raw_context={"old_mac": mask_mac(old_mac), "new_mac": mask_mac(new_mac)})
+        return {"status": "SKIPPED", "message": message}
+
+    cur.execute("SELECT * FROM vouchers WHERE id = %s", (session["voucher_id"],))
+    voucher = cur.fetchone()
+    cur.execute("SELECT * FROM users WHERE id = %s", (session["user_id"],))
+    user = cur.fetchone()
+    if not voucher or not user:
+        message = "Device token was recognized, but the voucher session record is incomplete."
+        record_portal_mac_rebind_event(cur, session, old_mac, new_mac, (latest_authorization or {}).get("client_ip"), ctx.get("client_ip") or public_ip(request), remaining_seconds, "FAILED", message)
+        create_portal_event(cur, session["id"], "MAC_REBIND_FAILED", request, message, raw_context={"old_mac": mask_mac(old_mac), "new_mac": mask_mac(new_mac)})
+        return {"status": "FAILED", "message": message}
+
+    create_portal_event(
+        cur,
+        session["id"],
+        "MAC_REBIND_ATTEMPT",
+        request,
+        "Re-authorizing this WiFi connection with remaining time.",
+        raw_context={
+            "old_mac": mask_mac(old_mac),
+            "new_mac": mask_mac(new_mac),
+            "latest_ssid": (latest_authorization or {}).get("ssid"),
+            "current_ssid": ctx.get("ssid"),
+            "remaining_seconds": remaining_seconds,
+            "mac_changed": mac_changed,
+        },
+    )
+
+    access_expires_at = aware_utc(access_view.get("access_expires_at")) or (datetime.now(timezone.utc) + timedelta(seconds=remaining_seconds))
+    if session["source"] == "OMADA":
+        authorization = attempt_omada_authorization(cur, session, voucher, user, remaining_seconds, access_expires_at, payload)
+    else:
+        authorization = attempt_mikrotik_authorization(cur, session, voucher, user, remaining_seconds, access_expires_at, payload)
+
+    if authorization.get("status") != "SUCCESS":
+        message = "Device token was recognized, but the new WiFi MAC could not be authorized."
+        record_portal_mac_rebind_event(cur, session, old_mac, new_mac, (latest_authorization or {}).get("client_ip"), ctx.get("client_ip") or public_ip(request), remaining_seconds, "FAILED", message, authorization)
+        create_portal_event(cur, session["id"], "MAC_REBIND_FAILED", request, message, raw_context={"old_mac": mask_mac(old_mac), "new_mac": mask_mac(new_mac), "authorization": sanitize_summary(authorization)})
+        return {"status": "FAILED", "message": message, "authorization_error": authorization.get("error")}
+
+    previous_macs = append_previous_client_macs(session.get("previous_client_macs"), old_mac, new_mac) if mac_changed else (session.get("previous_client_macs") or [])
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET mac_rebind_count = mac_rebind_count + %s,
+            last_mac_rebind_at = CASE WHEN %s::boolean THEN now() ELSE last_mac_rebind_at END,
+            previous_client_macs = %s,
+            device_token_last_seen_at = now(),
+            last_error = NULL,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (1 if mac_changed else 0, mac_changed, Json(previous_macs), session["id"]),
+    )
+    updated_session = cur.fetchone()
+    session.update(updated_session)
+    message = "Reconnected with remaining time." if mac_changed else "This WiFi band was re-authorized with remaining time."
+    record_portal_mac_rebind_event(cur, session, old_mac, new_mac, (latest_authorization or {}).get("client_ip"), ctx.get("client_ip") or public_ip(request), remaining_seconds, "SUCCESS", message, authorization)
+    create_portal_event(cur, session["id"], "MAC_REBIND_SUCCESS", request, message, raw_context={"old_mac": mask_mac(old_mac), "new_mac": mask_mac(new_mac), "current_ssid": ctx.get("ssid"), "remaining_seconds": remaining_seconds, "mac_changed": mac_changed})
+    return {"status": "SUCCESS", "message": message, "remaining_time_seconds": remaining_seconds}
+
+
 def ensure_captive_portal_settings():
     row = fetch_one("SELECT * FROM captive_portal_settings ORDER BY created_at ASC LIMIT 1")
     if row:
@@ -4110,7 +4828,7 @@ def ensure_captive_portal_settings():
             cur.execute(
                 """
                 INSERT INTO captive_portal_settings(portal_mode, open_ssid_name, portal_url_staging, portal_url_production, status)
-                VALUES ('MIKROTIK', '3J-FreeWiFi', 'http://192.168.50.70:8080/portal', 'http://192.168.50.70/portal', 'READY_FOR_TEST')
+                VALUES ('OMADA', '3J-FreeWiFi', 'http://192.168.50.70:8080/portal', 'http://192.168.50.70/portal', 'READY_FOR_TEST')
                 RETURNING *
                 """
             )
@@ -4138,6 +4856,21 @@ def captive_portal_ssid_from_ap_configuration(config: Optional[dict] = None) -> 
     }
 
 
+def captive_portal_ssid_names_from_ap_configuration(config: Optional[dict] = None) -> list[str]:
+    portal_ssid = captive_portal_ssid_from_ap_configuration(config)
+    if portal_ssid["use_same_ssid"]:
+        return [portal_ssid["same_ssid_name"]]
+    names = [portal_ssid["ssid_2g"], portal_ssid["ssid_5g"]]
+    return list(dict.fromkeys([name for name in names if name]))
+
+
+def captive_portal_ssid_config_for_omada_site(site_id: Optional[str] = None, site_name: Optional[str] = None) -> tuple[dict, Optional[dict]]:
+    ap_config = ensure_ap_deployment_configuration()
+    site = find_site_deployment_by_omada(site_id, site_name) if (site_id or site_name) else None
+    wifi_config = site_wifi_configuration_for_site(site, ap_config)
+    return wifi_config, site
+
+
 def public_captive_portal_settings(row=None):
     row = row or ensure_captive_portal_settings()
     design = fetch_one("SELECT * FROM portal_design_templates ORDER BY updated_at DESC LIMIT 1")
@@ -4155,6 +4888,28 @@ def public_captive_portal_settings(row=None):
         "selected_omada_site_id": row["selected_omada_site_id"],
         "selected_omada_site_name": row["selected_omada_site_name"],
         "test_checklist_progress": row["test_checklist_progress"] or {},
+        "portal_notifications_enabled": bool(row.get("portal_notifications_enabled")),
+        "portal_success_notification_enabled": bool(row.get("portal_success_notification_enabled")),
+        "portal_success_notification_message": row.get("portal_success_notification_message") or "Voucher accepted. Remaining time: <TIME>.",
+        "portal_remaining_notification_enabled": bool(row.get("portal_remaining_notification_enabled")),
+        "portal_remaining_notification_trigger_seconds": int(row.get("portal_remaining_notification_trigger_seconds") or 0),
+        "portal_remaining_notification_message": row.get("portal_remaining_notification_message") or "Reminder: only <TIME> remaining on your WiFi voucher.",
+        "portal_expired_notification_enabled": bool(row.get("portal_expired_notification_enabled")),
+        "portal_expired_notification_message": row.get("portal_expired_notification_message") or "Your WiFi voucher time is fully consumed. Enter a new voucher to continue.",
+        "portal_reconnect_notification_enabled": bool(row.get("portal_reconnect_notification_enabled")),
+        "portal_reconnect_notification_message": row.get("portal_reconnect_notification_message") or "Your WiFi session was restored. Remaining time: <TIME>.",
+        "portal_notifications": {
+            "enabled": bool(row.get("portal_notifications_enabled")),
+            "success_enabled": bool(row.get("portal_success_notification_enabled")),
+            "success_message": row.get("portal_success_notification_message") or "Voucher accepted. Remaining time: <TIME>.",
+            "remaining_enabled": bool(row.get("portal_remaining_notification_enabled")),
+            "remaining_trigger_seconds": int(row.get("portal_remaining_notification_trigger_seconds") or 0),
+            "remaining_message": row.get("portal_remaining_notification_message") or "Reminder: only <TIME> remaining on your WiFi voucher.",
+            "expired_enabled": bool(row.get("portal_expired_notification_enabled")),
+            "expired_message": row.get("portal_expired_notification_message") or "Your WiFi voucher time is fully consumed. Enter a new voucher to continue.",
+            "reconnect_enabled": bool(row.get("portal_reconnect_notification_enabled")),
+            "reconnect_message": row.get("portal_reconnect_notification_message") or "Your WiFi session was restored. Remaining time: <TIME>.",
+        },
         "status": row["status"],
         "custom_html": design["html_template"] if design else "",
         "custom_css": design["css_template"] if design else "",
@@ -4163,12 +4918,253 @@ def public_captive_portal_settings(row=None):
     }
 
 
-def log_captive_portal_test(action: str, status: str, message: str, details: dict = None):
+OMADA_PORTAL_ENABLE_ACTIONS = (
+    "STATION_CONFIGURE_EXTERNAL_PORTAL",
+    "CONFIGURE_EXTERNAL_PORTAL",
+)
+
+
+def portal_profile_name_for_station(station: Optional[dict], site: Optional[dict] = None) -> str:
+    if station and station.get("station_name"):
+        return f"3JCentralPisowifi External Portal - {station['station_name']}"
+    if site and site.get("site_name"):
+        return f"3JCentralPisowifi External Portal - {site['site_name']}"
+    return "3JCentralPisowifi External Portal"
+
+
+def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClient] = None) -> dict:
+    ap_config = ensure_ap_deployment_configuration()
+    site_rows = {
+        str(row.get("omada_site_id") or ""): row
+        for row in local_site_deployments_for_ap_inventory()
+        if row.get("omada_site_id")
+    }
+    ap_rows = fetch_all(
+        """
+        SELECT *
+        FROM ap_deployments
+        WHERE deployment_status <> 'DELETED'
+        ORDER BY site_name, display_name, mac
+        """
+    )
+    site_portal_status = {}
+    portal_client = client
+    if api_configured and portal_client is None:
+        try:
+            _, portal_client = omada_api_client_from_settings()
+        except Exception:
+            portal_client = None
+    for site_id, site in site_rows.items():
+        wifi_config = site_wifi_configuration_for_site(site, ap_config)
+        desired_ssids = sorted(desired_wifi_ssid_names(wifi_config))
+        vlan_tag, vlan_source, station = effective_customer_vlan_for_site(site)
+        status = {
+            "site_id": site_id,
+            "site_name": site.get("site_name"),
+            "desired_ssids": desired_ssids,
+            "vlan_id": vlan_tag,
+            "vlan_source": vlan_source,
+            "portal_enabled": False,
+            "portal_error": None,
+            "details": {},
+        }
+        if not desired_ssids:
+            status["portal_error"] = "No desired SSID names are configured for this site."
+        elif not api_configured:
+            status["portal_error"] = "Omada API credentials are not configured."
+        elif portal_client:
+            try:
+                details = portal_client.external_portal_ssid_status_if_supported(site_id, desired_ssids)
+                status["details"] = sanitize_summary(details)
+                status["portal_enabled"] = bool(details.get("all_portal_enabled"))
+                if not details.get("all_present"):
+                    missing = [item.get("ssid") for item in details.get("ssids", []) if not item.get("exists")]
+                    status["portal_error"] = f"SSID missing in Omada portal candidates: {', '.join(missing)}" if missing else "One or more desired SSIDs are missing in Omada."
+                elif not details.get("all_portal_enabled"):
+                    missing = [item.get("ssid") for item in details.get("ssids", []) if not item.get("portal_enabled")]
+                    status["portal_error"] = f"SSID not attached to Omada portal: {', '.join(missing)}" if missing else "Desired SSIDs are not attached to an enabled external portal."
+            except Exception as exc:
+                response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
+                status["portal_error"] = str(exc)
+                status["details"] = sanitize_summary(response_summary)
+        site_portal_status[site_id] = status
+
+    aps = []
+    for row in ap_rows:
+        site_id = str(row.get("omada_site_id") or "")
+        site_status = site_portal_status.get(site_id) or {
+            "site_id": site_id,
+            "site_name": row.get("site_name"),
+            "desired_ssids": [],
+            "vlan_id": None,
+            "portal_enabled": False,
+            "portal_error": "AP site is not linked to a local site deployment record.",
+            "details": {},
+        }
+        connected = row.get("deployment_status") == "CONNECTED"
+        portal_connected = bool(connected and site_status.get("portal_enabled"))
+        reason = None
+        if not connected:
+            reason = f"AP status is {row.get('deployment_status') or 'unknown'}."
+        elif not site_status.get("portal_enabled"):
+            reason = site_status.get("portal_error") or "SSID is not attached to the Omada portal."
+        aps.append({
+            "id": str(row["id"]),
+            "name": row.get("display_name"),
+            "mac": mask_mac(row.get("mac")),
+            "site_id": site_id,
+            "site_name": row.get("site_name") or site_status.get("site_name"),
+            "ip": row.get("ip_address"),
+            "model": row.get("model"),
+            "status": row.get("deployment_status"),
+            "omada_status": row.get("last_omada_status"),
+            "desired_ssids": site_status.get("desired_ssids") or [],
+            "vlan_id": site_status.get("vlan_id"),
+            "portal_connected": portal_connected,
+            "portal_status": "CONNECTED" if portal_connected else "NOT_CONNECTED",
+            "reason": reason,
+        })
+    total = len(aps)
+    connected_count = len([item for item in aps if item["portal_connected"]])
+    return {
+        "total": total,
+        "connected": connected_count,
+        "not_connected": total - connected_count,
+        "aps": aps,
+        "sites": list(site_portal_status.values()),
+    }
+
+
+def captive_portal_omada_status_payload() -> dict:
+    settings = ensure_captive_portal_settings()
+    api_settings = ensure_omada_api_settings()
+    bound_stations = fetch_all(
+        """
+        SELECT id, station_name, station_code, vlan_id, client_network_cidr, omada_site_id, omada_site_name, status
+        FROM mikrotik_stations
+        WHERE status <> 'ARCHIVED'
+          AND (
+            NULLIF(TRIM(COALESCE(omada_site_id, '')), '') IS NOT NULL
+            OR NULLIF(TRIM(COALESCE(omada_site_name, '')), '') IS NOT NULL
+          )
+        ORDER BY updated_at DESC
+        """
+    )
+    latest_enable = fetch_one(
+        """
+        SELECT id, action, status, message, omada_site_id, omada_site_name, ssid_name, station_id, created_at
+        FROM captive_portal_test_logs
+        WHERE action = ANY(%s)
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (list(OMADA_PORTAL_ENABLE_ACTIONS),),
+    )
+    latest_success = fetch_one(
+        """
+        SELECT id, action, status, message, omada_site_id, omada_site_name, ssid_name, station_id, created_at
+        FROM captive_portal_test_logs
+        WHERE action = ANY(%s) AND status = 'SUCCESS'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (list(OMADA_PORTAL_ENABLE_ACTIONS),),
+    )
+    api_configured = bool(api_settings.get("username") and api_settings.get("password_encrypted"))
+    selected_site_ready = bool(settings.get("selected_omada_site_id") or settings.get("selected_omada_site_name"))
+    portal_coverage = omada_portal_ap_coverage(api_configured)
+    portal_total = int(portal_coverage.get("total") or 0)
+    portal_connected = int(portal_coverage.get("connected") or 0)
+    if not api_configured:
+        status = "DOWN"
+        message = "Omada API credentials are not configured."
+    elif not bound_stations and not selected_site_ready:
+        status = "DOWN"
+        message = "No MikroTik station is bound to an Omada site yet."
+    elif portal_total > 0 and portal_connected == portal_total:
+        status = "UP"
+        message = f"Omada portal is attached to the expected SSID(s) for {portal_connected}/{portal_total} AP(s)."
+    elif portal_total > 0 and portal_connected > 0:
+        status = "PARTIAL"
+        message = f"Omada portal is attached for {portal_connected}/{portal_total} AP(s). Review APs not connected to portal."
+    elif latest_enable and latest_enable.get("status") == "FAILED":
+        status = "DOWN"
+        message = latest_enable.get("message") or "Latest Omada portal enable attempt failed."
+    elif latest_success:
+        status = "NEEDS_SETUP"
+        message = "Latest portal action succeeded, but no connected AP is currently confirmed against the Omada portal SSID list."
+    else:
+        status = "NEEDS_SETUP"
+        message = "Omada portal has not been enabled from this system yet."
+    return {
+        "status": status,
+        "message": message,
+        "api_configured": api_configured,
+        "controller": api_settings.get("api_base_url") or api_settings.get("controller_host"),
+        "selected_site_id": settings.get("selected_omada_site_id"),
+        "selected_site_name": settings.get("selected_omada_site_name"),
+        "bound_station_count": len(bound_stations),
+        "portal_ap_count": portal_total,
+        "portal_ap_connected_count": portal_connected,
+        "portal_ap_not_connected_count": int(portal_coverage.get("not_connected") or 0),
+        "portal_ap_ratio": f"{portal_connected}/{portal_total}",
+        "portal_aps": portal_coverage.get("aps") or [],
+        "portal_sites": portal_coverage.get("sites") or [],
+        "bound_stations": [
+            {
+                "id": row.get("id"),
+                "station_name": row.get("station_name"),
+                "station_code": row.get("station_code"),
+                "vlan_id": row.get("vlan_id"),
+                "client_network_cidr": row.get("client_network_cidr"),
+                "omada_site_id": row.get("omada_site_id"),
+                "omada_site_name": row.get("omada_site_name"),
+                "status": row.get("status"),
+            }
+            for row in bound_stations
+        ],
+        "latest_enable_action": latest_enable,
+        "latest_success_action": latest_success,
+        "checked_at": datetime.now(timezone.utc),
+    }
+
+
+def log_captive_portal_test(
+    action: str,
+    status: str,
+    message: str,
+    details: dict = None,
+    station_id: str = None,
+    omada_site_id: str = None,
+    omada_site_name: str = None,
+    ssid_name: str = None,
+):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO captive_portal_test_logs(action, status, message, details) VALUES (%s, %s, %s, %s)",
-                (action, status, message, Json(sanitize_summary(details or {}))),
+                """
+                INSERT INTO captive_portal_test_logs(
+                    action,
+                    status,
+                    message,
+                    details,
+                    station_id,
+                    omada_site_id,
+                    omada_site_name,
+                    ssid_name
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    action,
+                    status,
+                    message,
+                    Json(sanitize_summary(details or {})),
+                    station_id,
+                    omada_site_id,
+                    omada_site_name,
+                    ssid_name,
+                ),
             )
 
 
@@ -4225,20 +5221,118 @@ def omada_selected_site(settings):
     return api_settings, site_id, site_name
 
 
+def omada_controller_discovery_ip() -> Optional[str]:
+    settings = ensure_omada_api_settings()
+    candidates = [
+        settings.get("controller_host"),
+        urlparse(settings.get("api_base_url") or "").hostname,
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return str(ip_address(str(candidate).strip()))
+        except ValueError:
+            continue
+    return None
+
+
+def ap_management_office_access_subnet() -> str:
+    value = (os.getenv("AP_MANAGEMENT_OFFICE_ACCESS_SUBNET") or "192.168.50.0/24").strip()
+    try:
+        return ip_network(value, strict=False).with_prefixlen
+    except ValueError:
+        return "192.168.50.0/24"
+
+
+def station_portal_office_access_subnet() -> str:
+    value = (
+        os.getenv("STATION_PORTAL_OFFICE_ACCESS_SUBNET")
+        or os.getenv("AP_MANAGEMENT_OFFICE_ACCESS_SUBNET")
+        or "192.168.50.0/24"
+    ).strip()
+    try:
+        return ip_network(value, strict=False).with_prefixlen
+    except ValueError:
+        return "192.168.50.0/24"
+
+
+def station_portal_host_ip(portal_url: Optional[str]) -> Optional[str]:
+    parsed = urlparse(portal_url if "://" in str(portal_url or "") else f"http://{portal_url or ''}")
+    host = parsed.hostname
+    if not host:
+        return None
+    try:
+        return str(ip_address(host))
+    except ValueError:
+        return None
+
+
+def station_portal_access_ports(portal_url: Optional[str]) -> str:
+    parsed = urlparse(portal_url if "://" in str(portal_url or "") else f"http://{portal_url or ''}")
+    ports = {80, 8080}
+    if parsed.port:
+        ports.add(int(parsed.port))
+    if (parsed.scheme or "").lower() == "https":
+        ports.add(443)
+    return ",".join(str(port) for port in sorted(ports))
+
+
+def omada_ap_discovery_udp_ports() -> str:
+    return (os.getenv("OMADA_AP_DISCOVERY_UDP_PORTS") or "29810").strip()
+
+
+def omada_ap_management_tcp_ports() -> str:
+    return (os.getenv("OMADA_AP_MANAGEMENT_TCP_PORTS") or "29811-29817").strip()
+
+
+def omada_forward_drop_place_before_query() -> dict:
+    return {
+        "print_path": "/ip/firewall/filter/print",
+        "query": {"chain": "forward", "action": "drop"},
+        "proplist": ".id,chain,action,disabled,comment",
+        "missing_message": "No forward drop rule was detected; Omada AP management allow rule can be appended safely.",
+    }
+
+
+def omada_ap_discovery_filter_comment(vlan_id: int) -> str:
+    return f"3J AP Management - allow Omada discovery from VLAN {vlan_id}"
+
+
+def omada_ap_management_filter_comment(vlan_id: int) -> str:
+    return f"3J AP Management - allow Omada management ports from VLAN {vlan_id}"
+
+
+def routeros_dhcp_option_ip_hex(ip_value: str) -> str:
+    return "0x" + ip_address(ip_value).packed.hex().upper()
+
+
 def attempt_omada_authorization(cur, session, voucher, user, duration_seconds: int, access_expires_at, payload: PortalRedeemRequest):
     settings = ensure_captive_portal_settings()
-    api_settings, site_id, site_name = omada_selected_site(settings)
+    api_settings, global_site_id, global_site_name = omada_selected_site(settings)
     ctx = portal_context(payload)
+    ctx_site_id, ctx_site_name = resolve_omada_site_from_context(ctx)
+    session_site_id = (session.get("omada_site_id") or "").strip() or None
+    session_site_name = (session.get("omada_site_name") or "").strip() or None
+    if session_site_name and looks_like_omada_site_id(session_site_name):
+        session_site_id = session_site_id or session_site_name
+        session_site_name = None
+    site_row = find_site_deployment_by_omada(session_site_id or ctx_site_id or global_site_id, session_site_name or ctx_site_name or global_site_name)
+    site_id = (site_row or {}).get("omada_site_id") or session_site_id or ctx_site_id or global_site_id
+    site_name = (site_row or {}).get("site_name") or session_site_name or ctx_site_name or global_site_name
     client_mac = ctx["client_mac"] or session.get("omada_client_mac") or session.get("client_mac")
     ap_mac = ctx["ap_mac"] or session.get("omada_ap_mac") or session.get("ap_mac")
     gateway_mac = ctx["gateway_mac"] or session.get("omada_gateway_mac") or session.get("gateway_mac")
+    ssid_name = ctx["ssid"] or session.get("ssid")
+    radio_id = ctx.get("radio_id") or (ctx.get("raw_query_params") or {}).get("radioId")
     request_summary = {
         "site_id": site_id,
-        "site_name": site_name or ctx["site"],
+        "site_name": site_name or ctx["site_name"] or ctx["site"],
         "client_mac": mask_mac(client_mac),
         "ap_mac": mask_mac(ap_mac),
         "gateway_mac": mask_mac(gateway_mac),
-        "ssid": ctx["ssid"] or session.get("ssid"),
+        "ssid_name": ssid_name,
+        "radio_id": radio_id,
         "duration_seconds": duration_seconds,
         "has_token": bool(ctx["auth_token"]),
     }
@@ -4257,9 +5351,9 @@ def attempt_omada_authorization(cur, session, voucher, user, duration_seconds: i
             client_mac,
             ap_mac,
             gateway_mac,
-            site_name or ctx["site"],
+            site_name or ctx["site_name"] or ctx["site"],
             site_id,
-            ctx["ssid"] or session.get("ssid"),
+            ssid_name,
             duration_seconds,
             access_expires_at,
             Json(sanitize_summary(request_summary)),
@@ -4289,12 +5383,16 @@ def attempt_omada_authorization(cur, session, voucher, user, duration_seconds: i
         "clientMac": client_mac,
         "apMac": ap_mac,
         "gatewayMac": gateway_mac,
-        "ssid": ctx["ssid"] or session.get("ssid"),
-        "site": site_name or ctx["site"],
+        "ssidName": ssid_name,
+        "ssid": ssid_name,
+        "site": site_name or ctx["site_name"] or ctx["site"],
+        "siteId": site_id,
+        "radioId": radio_id,
+        "authType": 4,
         "authToken": ctx["auth_token"],
         "token": ctx["auth_token"],
         "duration": duration_seconds,
-        "time": duration_seconds,
+        "time": int(duration_seconds * 1000),
         "expire": int(access_expires_at.timestamp()) if access_expires_at else None,
     }
     try:
@@ -4697,6 +5795,7 @@ def portal_settings():
         "show_powered_by": branding["portal_show_powered_by"],
         "accent_color": branding["accent_color"],
         "company_logo_url": branding["company_logo_url"],
+        "portal_notifications": public_captive_portal_settings().get("portal_notifications", {}),
         "custom_html": design["html_template"] if design else "",
         "custom_css": design["css_template"] if design else "",
     }
@@ -4708,12 +5807,20 @@ def create_or_update_portal_session(payload: PortalSessionRequest, request: Requ
         with conn.cursor() as cur:
             session = ensure_portal_session(cur, payload, request)
             create_portal_event(cur, session["id"], "PORTAL_VIEW", request, "Portal viewed", raw_context=payload.model_dump())
+            mac_rebind = attempt_portal_device_mac_rebind(cur, session, payload, request)
+            device_token = None
+            incoming_hash = portal_device_token_hash(payload.device_token)
+            if incoming_hash and session.get("device_token_hash") and hmac.compare_digest(str(incoming_hash), str(session["device_token_hash"])):
+                device_token = payload.device_token
     return {
         "portal_session_id": session["public_session_id"],
+        "device_token": device_token,
         "status": session["status"],
         "source": session["source"],
         "omada_authorization_status": session.get("omada_authorization_status"),
         "mikrotik_authorization_status": session.get("mikrotik_authorization_status"),
+        "mac_rebind_status": mac_rebind.get("status"),
+        "mac_rebind_message": mac_rebind.get("message"),
         "device_detected": session["source"] in {"OMADA", "MIKROTIK", "UNKNOWN"},
     }
 
@@ -4738,6 +5845,35 @@ def portal_redeem(payload: PortalRedeemRequest, request: Request):
                 return {"status": "FAILED", "message": "Too many attempts. Please wait a few minutes before trying again.", "portal_session_id": session["public_session_id"]}
             create_portal_event(cur, session["id"], "VOUCHER_SUBMITTED", request, "Voucher submitted", payload.voucher_code, payload.model_dump())
             user = ensure_portal_user(cur, session)
+            if session.get("voucher_id") and session.get("source") in {"OMADA", "MIKROTIK"}:
+                cur.execute("SELECT * FROM vouchers WHERE id = %s", (session["voucher_id"],))
+                existing_voucher = cur.fetchone()
+                token_hash = portal_device_token_hash(payload.device_token)
+                token_matches = bool(token_hash and session.get("device_token_hash") and hmac.compare_digest(str(token_hash), str(session["device_token_hash"])))
+                if existing_voucher and token_matches and normalize_voucher_code(payload.voucher_code) == normalize_voucher_code(existing_voucher["code"]):
+                    mac_rebind = attempt_portal_device_mac_rebind(cur, session, payload, request)
+                    cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
+                    session = cur.fetchone()
+                    access_view = portal_session_access_state(cur, session)
+                    if access_view["connected"] or mac_rebind.get("status") in {"SUCCESS", "SKIPPED"}:
+                        message = mac_rebind.get("message") or "Voucher session restored. You may now use the internet."
+                        return {
+                            "status": "SUCCESS",
+                            "message": message,
+                            "portal_session_id": session["public_session_id"],
+                            "device_token": payload.device_token,
+                            "username": user["username"],
+                            "remaining_time_seconds": access_view["remaining_time_seconds"],
+                            "valid_until": access_view["valid_until"],
+                            "unlimited": access_view["unlimited"],
+                            "time_added_seconds": 0,
+                            "authorization_status": session.get("mikrotik_authorization_status") if session["source"] == "MIKROTIK" else session.get("omada_authorization_status"),
+                            "access_expires_at": access_view["access_expires_at"],
+                            "access_expired": access_view["access_expired"],
+                            "connected": access_view["connected"],
+                            "redirect_url": session.get("mikrotik_link_orig") or session.get("redirect_url"),
+                            "mac_rebind_status": mac_rebind.get("status"),
+                        }
             if session["source"] == "OMADA":
                 voucher, failure = validate_voucher_for_portal(cur, payload.voucher_code)
                 if failure:
@@ -4869,12 +6005,14 @@ def portal_redeem(payload: PortalRedeemRequest, request: Request):
                 session = cur.fetchone()
                 success_message = "Voucher accepted. You may now use the internet." if session["source"] in {"OMADA", "MIKROTIK"} else "Voucher accepted. Your access has been loaded."
                 create_portal_event(cur, session["id"], "VOUCHER_REDEEM_SUCCESS", request, success_message, payload.voucher_code, {"result": result["status"], "authorization_status": session.get("omada_authorization_status") or session.get("mikrotik_authorization_status")})
+                device_token = ensure_portal_device_token(cur, session, payload.device_token)
                 wallet = portal_wallet_status(cur, session)
                 access_view = portal_access_view(session, wallet)
                 return {
                     "status": "SUCCESS",
                     "message": success_message,
                     "portal_session_id": session["public_session_id"],
+                    "device_token": device_token,
                     "username": user["username"],
                     "remaining_time_seconds": access_view["remaining_time_seconds"],
                     "valid_until": access_view["valid_until"],
@@ -5048,14 +6186,28 @@ def dashboard(admin=Depends(current_admin)):
         """
         SELECT
           (SELECT count(*) FROM users) AS total_users,
-          (SELECT count(*) FROM nas_clients WHERE status = 'active') AS nas_clients,
-          (SELECT count(*) FROM sessions WHERE stop_time IS NULL) AS active_sessions
+          (SELECT count(*) FROM portal_sessions WHERE access_granted_at IS NOT NULL AND (access_expires_at IS NULL OR access_expires_at > now())) AS active_sessions,
+          (SELECT count(*) FROM portal_sessions WHERE created_at > now() - interval '24 hours') AS portal_sessions_24h,
+          (SELECT count(*) FROM mikrotik_routers) AS network_devices,
+          (SELECT count(*) FROM vouchers) AS vouchers
         """
     )
-    recent_auth = fetch_all(
-        "SELECT username, nas_ip::text, calling_station_id, result, reply_message, diagnostic_reason, created_at FROM radius_auth_logs ORDER BY created_at DESC LIMIT 10"
+    recent_access = fetch_all(
+        """
+        SELECT
+            e.event_type AS event,
+            COALESCE(s.ssid, '-') AS ssid,
+            COALESCE(s.site, s.omada_site_name, '-') AS site,
+            e.voucher_code_masked,
+            e.message,
+            e.created_at
+        FROM portal_events e
+        LEFT JOIN portal_sessions s ON s.id = e.portal_session_id
+        ORDER BY e.created_at DESC
+        LIMIT 10
+        """
     )
-    return {"environment": os.getenv("APP_ENV", "unknown"), "health": health_data, "stats": stats, "recent_auth": recent_auth}
+    return {"environment": os.getenv("APP_ENV", "unknown"), "health": health_data, "stats": stats, "recent_access": recent_access}
 
 
 @app.get("/api/users")
@@ -5734,9 +6886,16 @@ def list_site_deployments(admin=Depends(current_admin)):
                     "ap_connected_count": None,
                     "ap_error": str(exc),
                 }
+    live_site_ids = {str(site.get("site_id") or "") for site in omada_sites if site.get("site_id")}
+    live_site_names = {str(site.get("site_name") or "").strip().lower() for site in omada_sites if site.get("site_name")}
+    live_sites_by_name = {str(site.get("site_name") or "").strip().lower(): site for site in omada_sites if site.get("site_name")}
     for row in rows:
         site_id = row.get("omada_site_id")
+        site_name_key = str(row.get("site_name") or "").strip().lower()
         summary = ap_counts.get(str(site_id)) if site_id else None
+        if not summary and site_name_key in live_sites_by_name:
+            matched_live_site_id = live_sites_by_name[site_name_key].get("site_id")
+            summary = ap_counts.get(str(matched_live_site_id)) if matched_live_site_id else None
         row["ap_total_count"] = summary.get("ap_total_count") if summary else 0
         row["ap_connected_count"] = summary.get("ap_connected_count") if summary else 0
         row["ap_error"] = summary.get("ap_error") if summary else None
@@ -5778,11 +6937,52 @@ def list_site_deployments(admin=Depends(current_admin)):
             "updated_at": None,
             "source": "OMADA_CONTROLLER",
             "is_omada_detected": True,
+            "omada_sync_status": "SYNCED",
             "ap_total_count": (ap_counts.get(str(site_id)) or {}).get("ap_total_count") or 0,
             "ap_connected_count": (ap_counts.get(str(site_id)) or {}).get("ap_connected_count") or 0,
             "ap_error": (ap_counts.get(str(site_id)) or {}).get("ap_error"),
         })
+    for row in rows:
+        if row.get("is_omada_detected"):
+            continue
+        site_id = str(row.get("omada_site_id") or "")
+        site_name = str(row.get("site_name") or "").strip().lower()
+        if site_id and site_id in live_site_ids:
+            row["omada_sync_status"] = "SYNCED"
+        elif site_name and site_name in live_site_names:
+            row["omada_sync_status"] = "NAME_MATCH_RELINK_NEEDED"
+        elif site_id:
+            row["omada_sync_status"] = "MISSING_IN_OMADA"
+        else:
+            row["omada_sync_status"] = "LOCAL_ONLY"
     return rows
+
+
+def local_site_deployments_for_ap_inventory() -> list[dict]:
+    """Return saved site rows without contacting Omada Controller."""
+    rows = fetch_all(
+        """
+        SELECT s.*, a.username AS created_by_username
+        FROM site_deployments s
+        LEFT JOIN admins a ON a.id = s.created_by_admin_id
+        ORDER BY s.created_at DESC
+        """
+    )
+    tombstones = fetch_all("SELECT omada_site_id, site_name FROM site_deployment_tombstones")
+    tombstone_ids = {str(row.get("omada_site_id") or "") for row in tombstones if row.get("omada_site_id")}
+    tombstone_names = {str(row.get("site_name") or "").strip().lower() for row in tombstones if row.get("site_name")}
+    local_rows = []
+    for row in rows:
+        if str(row.get("omada_site_id") or "") in tombstone_ids:
+            continue
+        if str(row.get("site_name") or "").strip().lower() in tombstone_names:
+            continue
+        row["source"] = row.get("source") or "LOCAL_CACHE"
+        row["ap_total_count"] = 0
+        row["ap_connected_count"] = 0
+        row["ap_error"] = None
+        local_rows.append(row)
+    return local_rows
 
 
 def normalize_ap_mac(mac: Optional[str]) -> str:
@@ -5798,15 +6998,70 @@ def ap_status_from_omada(ap: dict) -> str:
     status = str(ap.get("status") or "").lower()
     code = ap.get("status_code")
     category = ap.get("status_category")
-    if status in {"connected", "online", "normal"} or code in (14, 15, 16, 17) or category == 1:
+    fail_type = ap.get("adopt_fail_type")
+    site_id = str(ap.get("site_id") or "").upper()
+    has_site_assignment = bool(site_id and site_id != "PENDING-SITE")
+    has_management_ip = bool(ap.get("ip"))
+    stale_seconds = int(os.getenv("AP_OMADA_STALE_SECONDS", "300"))
+    last_seen_age = omada_last_seen_age_seconds(ap.get("last_seen"))
+    has_live_telemetry = ap_has_live_telemetry(ap)
+    if "configuring" in status or code in (10, 11, 12, 13):
+        return "CONFIGURING"
+    if status in {"connected", "online", "normal"} or "adopted" in status or code in (14, 15, 16, 17) or category == 1:
         return "CONNECTED"
-    if "adopt failed" in status or "failed" in status or code in (24, 25) or category == 4:
+    if "managed by others" in status or code in (26, 27, 30) or category == 3:
+        return "ADOPT_FAILED"
+    if (
+        "adopt failed" in status
+        or "failed" in status
+        or code in (24, 25)
+        or category == 4
+        or fail_type not in (None, "", 0, "0")
+    ):
         return "ADOPT_FAILED"
     if "adopting" in status or code in (22, 23):
         return "ADOPTING"
+    if "pending" in status or code in (0, 20, 21) or category == 0 or str(ap.get("site_id") or "").upper() == "PENDING-SITE":
+        if has_management_ip and has_site_assignment and has_live_telemetry and (last_seen_age is None or last_seen_age <= stale_seconds):
+            return "CONNECTED"
+        if has_site_assignment and last_seen_age is not None and last_seen_age > stale_seconds:
+            return "DISCONNECTED"
+        return "PENDING"
     if "disconnected" in status or code in (0, 1, 30, 31, 32, 33) or category == 5:
         return "DISCONNECTED"
     return "ADOPTING"
+
+
+def omada_last_seen_age_seconds(last_seen) -> Optional[float]:
+    if last_seen in (None, ""):
+        return None
+    try:
+        numeric = float(last_seen)
+    except (TypeError, ValueError):
+        return None
+    if numeric > 100000000000:
+        numeric = numeric / 1000
+    try:
+        timestamp = datetime.fromtimestamp(numeric, timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
+    return max(0.0, (datetime.now(timezone.utc) - timestamp).total_seconds())
+
+
+def ap_has_live_telemetry(ap: dict) -> bool:
+    return bool(
+        ap.get("uptime")
+        or ap.get("uptime_seconds")
+        or ap.get("radio_2g")
+        or ap.get("radio_5g")
+        or ap.get("radio_5g2")
+        or ap.get("radio_6g")
+        or ap.get("cpu_util") is not None
+        or ap.get("mem_util") is not None
+        or ap.get("download") is not None
+        or ap.get("upload") is not None
+        or int(ap.get("client_count") or 0) > 0
+    )
 
 
 def ap_is_pending_candidate(ap: dict) -> bool:
@@ -5821,10 +7076,162 @@ def ap_is_pending_candidate(ap: dict) -> bool:
     )
 
 
+def ap_adoption_error_from_omada(ap: dict, status: str) -> Optional[str]:
+    if status != "ADOPT_FAILED":
+        return None
+    fail_type = ap.get("adopt_fail_type")
+    status_text = ap.get("status") or "Adopt Failed"
+    if "managed by others" in str(status_text).lower() or ap.get("status_code") in (26, 27, 30) or ap.get("status_category") == 3:
+        return "Omada reports this AP is managed by another controller/account. Factory reset it or complete adoption manually in Omada Controller."
+    if fail_type:
+        return f"Omada reported adoption failed ({status_text}, type {fail_type})."
+    return f"Omada reported adoption failed ({status_text})."
+
+
+def ap_status_notice_from_omada(ap: dict, status: str) -> Optional[str]:
+    stale_seconds = int(os.getenv("AP_CONFIGURING_STALE_SECONDS", "600"))
+    last_seen_age = omada_last_seen_age_seconds(ap.get("last_seen"))
+    if status == "DISCONNECTED":
+        if last_seen_age is not None:
+            minutes = int(last_seen_age // 60)
+            return (
+                f"Omada has stale AP data; the last controller update is about {minutes} minute(s) old. "
+                "Check that the AP management VLAN reaches the controller and that the AP is on the expected management VLAN."
+            )
+        return "Omada does not report this AP as reachable. Check AP power, AP management VLAN, and controller reachability."
+    if status != "CONFIGURING":
+        return None
+    if last_seen_age is not None and last_seen_age > stale_seconds:
+        minutes = int(last_seen_age // 60)
+        return (
+            f"Omada is still configuring this AP, but its last controller update is about {minutes} minute(s) old. "
+            "Check AP management VLAN reachability, controller discovery/ports, and downstream trunk/ONU path."
+        )
+    return "Omada is still configuring this AP. SSIDs may not broadcast until controller sync finishes."
+
+
+def ap_resolved_deployment_status(local: Optional[dict], omada_status: str) -> str:
+    local_status = (local or {}).get("deployment_status")
+    if omada_status in ("CONNECTED", "CONFIGURING", "ADOPT_FAILED", "DISCONNECTED"):
+        return omada_status
+    if omada_status == "PENDING" and local_status in ("ADOPTING", "ADOPT_FAILED"):
+        return local_status
+    return omada_status
+
+
+def ap_local_adopting_failure_reason(row: Optional[dict]) -> Optional[str]:
+    if not row or row.get("deployment_status") != "ADOPTING":
+        return None
+    last_omada_status = str(row.get("last_omada_status") or "").lower()
+    if "managed by others" in last_omada_status:
+        return "Omada reports this AP is managed by another controller/account. Factory reset it, then adopt again."
+    if "adopt failed" in last_omada_status or "failed" in last_omada_status:
+        return "Omada reported adoption failed."
+    timeout_seconds = int(os.getenv("AP_ADOPTION_STUCK_SECONDS", "120"))
+    timestamp = row.get("updated_at") or row.get("created_at")
+    if isinstance(timestamp, str):
+        try:
+            timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            timestamp = None
+    if timestamp and getattr(timestamp, "tzinfo", None) is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    if timestamp and (datetime.now(timezone.utc) - timestamp).total_seconds() > timeout_seconds:
+        return "Omada did not report adoption progress after submission. Check the controller adoption result and AP management reachability."
+    return None
+
+
+def finalize_stuck_adopting_ap(row: dict) -> dict:
+    reason = ap_local_adopting_failure_reason(row)
+    if not reason:
+        return row
+    updated = fetch_one(
+        """
+        UPDATE ap_deployments
+        SET deployment_status = 'ADOPT_FAILED',
+            last_error = %s,
+            updated_at = now()
+        WHERE id = %s
+          AND deployment_status = 'ADOPTING'
+        RETURNING *
+        """,
+        (reason, row["id"]),
+    )
+    return updated or row
+
+
+def ap_component(key: str, label: str, status: str, message: str, required: bool = True, details: dict = None) -> dict:
+    return {
+        "key": key,
+        "label": label,
+        "status": (status or "PENDING").upper(),
+        "message": message or "",
+        "required": bool(required),
+        "details": sanitize_summary(details or {}),
+    }
+
+
+def ap_configuration_components_from_row(row: dict) -> dict:
+    value = (row or {}).get("configuration_components_json") or {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            value = {}
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): component
+        for key, component in value.items()
+        if isinstance(component, dict)
+        and str(key) not in {"device_account"}
+    }
+
+
+def ap_configuration_progress_from_components(components: dict) -> dict:
+    required = [component for component in (components or {}).values() if component.get("required", True)]
+    total = len(required)
+    completed = len([component for component in required if str(component.get("status") or "").upper() == "SUCCESS"])
+    failed = len([component for component in required if str(component.get("status") or "").upper() in {"FAILED", "ERROR"}])
+    pending = len([component for component in required if str(component.get("status") or "").upper() in {"PENDING", "APPLYING"}])
+    if total == 0:
+        state = "PENDING"
+        label = "Not checked"
+    elif failed:
+        state = "FAILED"
+        label = f"{completed}/{total}"
+    elif completed == total:
+        state = "SUCCESS"
+        label = f"{completed}/{total}"
+    elif pending:
+        state = "PENDING"
+        label = f"{completed}/{total}"
+    else:
+        state = "PARTIAL"
+        label = f"{completed}/{total}"
+    return {
+        "completed": completed,
+        "total": total,
+        "failed": failed,
+        "pending": pending,
+        "label": label,
+        "state": state,
+    }
+
+
+def ap_device_account_fingerprint(username: Optional[str], password: Optional[str]) -> Optional[str]:
+    username = (username or "").strip()
+    password = password or ""
+    if not username or not password:
+        return None
+    return sha256(f"{username}\0{password}".encode("utf-8")).hexdigest()
+
+
 def public_ap_deployment(row: dict, ap: dict = None) -> dict:
     ap = ap or {}
     raw_omada = row.get("raw_omada") if isinstance(row.get("raw_omada"), dict) else {}
-    status = row.get("deployment_status") or ap.get("local_status") or "ADOPTING"
+    status = row.get("deployment_status") or ap.get("local_status") or "PENDING"
+    configuration_components = ap_configuration_components_from_row(row)
     return {
         "id": str(row["id"]) if row.get("id") else ap.get("id"),
         "mac": row.get("mac") or ap.get("mac"),
@@ -5839,6 +7246,7 @@ def public_ap_deployment(row: dict, ap: dict = None) -> dict:
         "site_id": row.get("omada_site_id") or ap.get("site_id"),
         "site_name": row.get("site_name") or ap.get("site_name"),
         "status": "Adopt Failed" if status == "ADOPT_FAILED" else status.replace("_", " ").title(),
+        "omada_status": row.get("last_omada_status") or ap.get("status"),
         "local_status": status,
         "status_code": ap.get("status_code"),
         "status_category": ap.get("status_category"),
@@ -5863,6 +7271,8 @@ def public_ap_deployment(row: dict, ap: dict = None) -> dict:
         "last_error": row.get("last_error"),
         "configuration_status": row.get("configuration_status") or "PENDING",
         "configuration_error": row.get("configuration_error"),
+        "configuration_components": configuration_components,
+        "configuration_progress": ap_configuration_progress_from_components(configuration_components),
         "configured_at": row.get("configured_at"),
         "map_latitude": row.get("map_latitude"),
         "map_longitude": row.get("map_longitude"),
@@ -5873,7 +7283,20 @@ def public_ap_deployment(row: dict, ap: dict = None) -> dict:
     }
 
 
-def upsert_ap_deployment(cur, site_id: str, site_name: Optional[str], mac: str, display_name: Optional[str], admin_id=None, status: str = "ADOPTING", last_error: Optional[str] = None, ap: dict = None):
+def upsert_ap_deployment(
+    cur,
+    site_id: str,
+    site_name: Optional[str],
+    mac: str,
+    display_name: Optional[str],
+    admin_id=None,
+    status: str = "PENDING",
+    last_error: Optional[str] = None,
+    ap: dict = None,
+    adoption_device_account_username: Optional[str] = None,
+    adoption_device_account_fingerprint: Optional[str] = None,
+    adoption_device_account_applied: Optional[bool] = None,
+):
     normalized = normalize_ap_mac(mac)
     if not normalized:
         return None
@@ -5883,8 +7306,9 @@ def upsert_ap_deployment(cur, site_id: str, site_name: Optional[str], mac: str, 
         """
         INSERT INTO ap_deployments(omada_site_id, site_name, mac, normalized_mac, display_name, model, ip_address,
                                    firmware_version, serial_number, deployment_status, configuration_status, last_error, last_omada_status,
-                                   raw_omada, created_by_admin_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDING', %s, %s, %s, %s)
+                                   raw_omada, created_by_admin_id, adoption_device_account_username, adoption_device_account_fingerprint,
+                                   adoption_device_account_applied, adoption_device_account_applied_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PENDING', %s, %s, %s, %s, %s, %s, COALESCE(%s, false), CASE WHEN COALESCE(%s, false) THEN now() ELSE NULL END)
         ON CONFLICT (omada_site_id, normalized_mac) DO UPDATE SET
             site_name = COALESCE(EXCLUDED.site_name, ap_deployments.site_name),
             mac = EXCLUDED.mac,
@@ -5896,12 +7320,39 @@ def upsert_ap_deployment(cur, site_id: str, site_name: Optional[str], mac: str, 
             deployment_status = EXCLUDED.deployment_status,
             configuration_status = CASE
                 WHEN ap_deployments.deployment_status = 'DELETED' THEN 'PENDING'
+                WHEN EXCLUDED.deployment_status = 'ADOPTING' THEN 'PENDING'
+                WHEN ap_deployments.deployment_status <> 'CONNECTED'
+                     AND EXCLUDED.deployment_status = 'CONNECTED'
+                     AND ap_deployments.configuration_status IN ('FAILED', 'PARTIAL') THEN 'PENDING'
                 WHEN EXCLUDED.deployment_status IN ('ADOPTING', 'CONNECTED') AND ap_deployments.configuration_status = 'NOT_CONFIGURED' THEN 'PENDING'
                 ELSE ap_deployments.configuration_status
+            END,
+            configuration_components_json = CASE
+                WHEN ap_deployments.deployment_status = 'DELETED'
+                     OR EXCLUDED.deployment_status = 'ADOPTING'
+                THEN '{}'::jsonb
+                ELSE ap_deployments.configuration_components_json
+            END,
+            configuration_error = CASE
+                WHEN EXCLUDED.deployment_status = 'ADOPTING' THEN NULL
+                WHEN ap_deployments.deployment_status <> 'CONNECTED'
+                     AND EXCLUDED.deployment_status = 'CONNECTED'
+                     AND ap_deployments.configuration_status IN ('FAILED', 'PARTIAL') THEN NULL
+                ELSE ap_deployments.configuration_error
+            END,
+            configured_at = CASE
+                WHEN ap_deployments.deployment_status = 'DELETED'
+                     OR EXCLUDED.deployment_status = 'ADOPTING'
+                THEN NULL
+                ELSE ap_deployments.configured_at
             END,
             last_error = EXCLUDED.last_error,
             last_omada_status = EXCLUDED.last_omada_status,
             raw_omada = EXCLUDED.raw_omada,
+            adoption_device_account_username = NULL,
+            adoption_device_account_fingerprint = NULL,
+            adoption_device_account_applied = false,
+            adoption_device_account_applied_at = NULL,
             updated_at = now()
         RETURNING *
         """,
@@ -5920,9 +7371,62 @@ def upsert_ap_deployment(cur, site_id: str, site_name: Optional[str], mac: str, 
             ap.get("status"),
             Json(sanitize_summary(ap)) if ap else Json({}),
             admin_id,
+            (adoption_device_account_username or "").strip() or None,
+            adoption_device_account_fingerprint,
+            adoption_device_account_applied,
+            adoption_device_account_applied,
         ),
     )
     return cur.fetchone()
+
+
+def sync_site_aps_from_omada(site: dict, admin_id=None, client: Optional[OmadaApiClient] = None, reason: str = "AP inventory refresh") -> dict:
+    """Refresh AP rows from Omada using read-only device inventory calls."""
+    site_id = str(site.get("omada_site_id") or "")
+    if not site_id:
+        return {"status": "SKIPPED", "message": "Site has no Omada site ID.", "synced": 0}
+    if client is None:
+        _, client = omada_api_client_from_settings()
+    result = client.get_site_aps(site_id, site.get("site_name"))
+    omada_aps = result.get("aps", [])
+    local_for_site = {
+        row["normalized_mac"]: row
+        for row in fetch_all(
+            "SELECT * FROM ap_deployments WHERE omada_site_id = %s AND deployment_status <> 'DELETED'",
+            (site_id,),
+        )
+    }
+    synced = 0
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for ap in omada_aps:
+                normalized = normalize_ap_mac(ap.get("mac"))
+                if not normalized:
+                    continue
+                local = local_for_site.get(normalized)
+                if not local and ap_is_pending_candidate(ap):
+                    continue
+                status = ap_resolved_deployment_status(local, ap_status_from_omada(ap))
+                display_name = local.get("display_name") if local else (ap.get("name") or ap_name_from_mac(ap.get("mac")))
+                error = ap_adoption_error_from_omada(ap, status) or ap_status_notice_from_omada(ap, status)
+                row = upsert_ap_deployment(cur, site_id, site.get("site_name"), ap.get("mac"), display_name, admin_id, status, error, ap)
+                if row:
+                    local_for_site[normalized] = row
+                    synced += 1
+    return {
+        "status": "SUCCESS",
+        "message": f"Synced {synced} AP record(s) from Omada for {reason}.",
+        "synced": synced,
+        "details": sanitize_summary(result.get("response_summary") or {}),
+    }
+
+
+def sync_site_aps_from_omada_for_push(site: dict, admin_id=None) -> dict:
+    return sync_site_aps_from_omada(site, admin_id=admin_id, reason="explicit Push Config")
+
+
+def sync_site_aps_from_omada_for_inventory(site: dict, client: OmadaApiClient, admin_id=None) -> dict:
+    return sync_site_aps_from_omada(site, admin_id=admin_id, client=client, reason="List of APs read-only status refresh")
 
 
 def get_known_ap_identities(normalized_macs: list[str]) -> dict:
@@ -5969,8 +7473,7 @@ def public_ap_deployment_configuration(row: dict) -> dict:
     return {
         "id": row["id"],
         "auto_apply_enabled": row["auto_apply_enabled"],
-        "device_account_username": row.get("device_account_username") or "",
-        "has_device_account_password": bool(row.get("device_account_password_encrypted")),
+        "ssid_scope": row.get("ssid_scope") or "GLOBAL",
         "use_same_ssid": row["use_same_ssid"],
         "same_ssid_name": row["same_ssid_name"],
         "ssid_2g": row["ssid_2g"],
@@ -5990,6 +7493,170 @@ def validate_ssid_name(value: str, label: str) -> str:
     if len(value) > 32:
         raise HTTPException(status_code=400, detail=f"{label} must be 32 characters or less.")
     return value
+
+
+def public_ap_site_wifi_configuration(row: dict) -> dict:
+    return {
+        "site_id": str(row["site_id"]),
+        "use_same_ssid": bool(row.get("use_same_ssid")),
+        "same_ssid_name": row.get("same_ssid_name") or "3J-FreeWiFi",
+        "ssid_2g": row.get("ssid_2g") or "3J-FreeWiFi-2G",
+        "ssid_5g": row.get("ssid_5g") or "3J-FreeWiFi-5G",
+        "band_steering_enabled": bool(row.get("band_steering_enabled")),
+        "security_mode": row.get("security_mode") or "OPEN",
+        "has_security_password": bool(row.get("security_password_encrypted")),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def validate_wifi_configuration_values(values, existing_security_password: Optional[str] = None, label: str = "WiFi") -> dict:
+    security_mode = (values.security_mode or "OPEN").upper() if hasattr(values, "security_mode") else (values.get("security_mode") or "OPEN").upper()
+    if security_mode not in {"OPEN", "WPA2_PSK", "WPA_WPA2_PSK"}:
+        raise HTTPException(status_code=400, detail=f"{label}: unsupported security mode.")
+    same_ssid_name = validate_ssid_name(values.same_ssid_name if hasattr(values, "same_ssid_name") else values.get("same_ssid_name"), f"{label} same SSID name")
+    ssid_2g = validate_ssid_name(values.ssid_2g if hasattr(values, "ssid_2g") else values.get("ssid_2g"), f"{label} 2.4GHz SSID name")
+    ssid_5g = validate_ssid_name(values.ssid_5g if hasattr(values, "ssid_5g") else values.get("ssid_5g"), f"{label} 5GHz SSID name")
+    new_password = values.security_password if hasattr(values, "security_password") else values.get("security_password")
+    security_password = new_password if new_password is not None and new_password != "" else existing_security_password
+    if security_mode != "OPEN" and not security_password:
+        raise HTTPException(status_code=400, detail=f"{label}: WiFi password is required unless security mode is Open.")
+    if security_password and (len(security_password) < 8 or len(security_password) > 64):
+        raise HTTPException(status_code=400, detail=f"{label}: WiFi password must be 8-64 characters.")
+    return {
+        "use_same_ssid": bool(values.use_same_ssid if hasattr(values, "use_same_ssid") else values.get("use_same_ssid")),
+        "same_ssid_name": same_ssid_name,
+        "ssid_2g": ssid_2g,
+        "ssid_5g": ssid_5g,
+        "band_steering_enabled": bool(values.band_steering_enabled if hasattr(values, "band_steering_enabled") else values.get("band_steering_enabled")),
+        "security_mode": security_mode,
+        "security_password": security_password,
+    }
+
+
+def site_wifi_configuration_for_site(site: Optional[dict], global_config: dict) -> dict:
+    if not site or (global_config.get("ssid_scope") or "GLOBAL") != "PER_SITE":
+        return global_config
+    row = fetch_one("SELECT * FROM ap_site_wifi_configuration WHERE site_id = %s", (site["id"],))
+    if not row:
+        return global_config
+    merged = dict(global_config)
+    merged.update({
+        "use_same_ssid": row.get("use_same_ssid"),
+        "same_ssid_name": row.get("same_ssid_name"),
+        "ssid_2g": row.get("ssid_2g"),
+        "ssid_5g": row.get("ssid_5g"),
+        "band_steering_enabled": row.get("band_steering_enabled"),
+        "security_mode": row.get("security_mode"),
+        "security_password_encrypted": row.get("security_password_encrypted"),
+    })
+    return merged
+
+
+def bound_station_for_omada_site(omada_site_id: Optional[str] = None, site_name: Optional[str] = None) -> Optional[dict]:
+    clean_site_id = (omada_site_id or "").strip()
+    clean_site_name = (site_name or "").strip()
+    clauses = []
+    params = []
+    if clean_site_id:
+        clauses.append("omada_site_id = %s")
+        params.append(clean_site_id)
+    if clean_site_name:
+        clauses.append("lower(coalesce(omada_site_name, '')) = lower(%s)")
+        params.append(clean_site_name)
+    if not clauses:
+        return None
+    return fetch_one(
+        f"""
+        SELECT *
+        FROM mikrotik_stations
+        WHERE status <> 'ARCHIVED'
+          AND ({' OR '.join(clauses)})
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1
+        """,
+        tuple(params),
+    )
+
+
+def effective_customer_vlan_for_site(site: Optional[dict]) -> tuple[Optional[int], str, Optional[dict]]:
+    if not site:
+        return None, "NONE", None
+    station = bound_station_for_omada_site(site.get("omada_site_id"), site.get("site_name"))
+    if station and station.get("vlan_id") is not None:
+        return int(station["vlan_id"]), "MIKROTIK_STATION", station
+    if site.get("vlan_tag") is not None:
+        return int(site["vlan_tag"]), "SITE_DEPLOYMENT", None
+    return None, "NONE", None
+
+
+def sync_site_vlan_from_station_row(cur, station: dict, admin_id: Optional[str] = None) -> Optional[dict]:
+    omada_site_id = (station.get("omada_site_id") or "").strip() or None
+    omada_site_name = (station.get("omada_site_name") or "").strip() or None
+    if not (omada_site_id or omada_site_name):
+        return None
+    cur.execute(
+        """
+        SELECT *
+        FROM site_deployments
+        WHERE (%s::text IS NOT NULL AND omada_site_id = %s)
+           OR (%s::text IS NOT NULL AND lower(site_name) = lower(%s))
+        LIMIT 1
+        """,
+        (omada_site_id, omada_site_id, omada_site_name, omada_site_name),
+    )
+    site = cur.fetchone()
+    if site:
+        cur.execute(
+            """
+            UPDATE site_deployments
+            SET vlan_tag = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (station["vlan_id"], site["id"]),
+        )
+        site = cur.fetchone()
+    else:
+        cur.execute(
+            """
+            INSERT INTO site_deployments(site_name, omada_site_id, deployment_status, notes, created_by_admin_id, vlan_tag)
+            VALUES (%s, %s, 'ACTIVE', %s, %s, %s)
+            RETURNING *
+            """,
+            (
+                omada_site_name or f"Omada Site {omada_site_id}",
+                omada_site_id,
+                "Linked automatically from MikroTik Station binding so AP SSIDs use the station customer VLAN.",
+                admin_id,
+                station["vlan_id"],
+            ),
+        )
+        site = cur.fetchone()
+    if omada_site_id:
+        cur.execute(
+            """
+            UPDATE ap_deployments
+            SET configuration_status = 'PENDING',
+                configuration_error = NULL,
+                configured_at = NULL,
+                configuration_components_json = '{}'::jsonb,
+                updated_at = now()
+            WHERE omada_site_id = %s
+              AND deployment_status = 'CONNECTED'
+            """,
+            (omada_site_id,),
+        )
+    cur.execute(
+        """
+        UPDATE mikrotik_stations
+        SET omada_site_vlan_confirmed = TRUE,
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (station["id"],),
+    )
+    return site
 
 
 def log_ap_configuration(ap_row: Optional[dict], action: str, status: str, message: str, request_summary: dict = None, response_summary: dict = None):
@@ -6015,6 +7682,79 @@ def log_ap_configuration(ap_row: Optional[dict], action: str, status: str, messa
             )
 
 
+def ap_configuration_apply_components(
+    *,
+    apply_wlan: bool,
+    apply_ap_management: bool,
+    ap_management_row: Optional[dict],
+    vlan_tag: Optional[int],
+    results: dict,
+) -> dict:
+    components = {}
+    if apply_wlan:
+        wlan = results.get("wlan") or {}
+        if not isinstance(wlan, dict):
+            wlan = {}
+        ssids = wlan.get("ssids") if isinstance(wlan, dict) else []
+        ssid_failures = [
+            ssid for ssid in (ssids or [])
+            if isinstance(ssid, dict) and (
+                ssid.get("replace_unsupported")
+                or ssid.get("message")
+                or (ssid.get("created") is False and ssid.get("updated") is False and not ssid.get("recreated"))
+            )
+        ]
+        if wlan.get("status") == "FAILED":
+            components["wifi_ssids"] = ap_component("wifi_ssids", "WiFi SSIDs", "FAILED", wlan.get("message") or "WiFi SSIDs were not configured.", True, wlan)
+        elif ssid_failures:
+            components["wifi_ssids"] = ap_component("wifi_ssids", "WiFi SSIDs", "FAILED", "One or more Omada SSIDs could not be created or updated automatically.", True, {"failures": ssid_failures})
+        elif wlan.get("configured"):
+            components["wifi_ssids"] = ap_component("wifi_ssids", "WiFi SSIDs", "SUCCESS", f"{len(ssids or [])} SSID configuration(s) applied.", True, wlan)
+        else:
+            components["wifi_ssids"] = ap_component("wifi_ssids", "WiFi SSIDs", "PENDING", "WiFi SSIDs have not been applied yet.", True, wlan)
+
+        if vlan_tag is None:
+            components["ssid_customer_vlan"] = ap_component("ssid_customer_vlan", "SSID Customer VLAN", "FAILED", "No station customer VLAN is bound to this Omada site.", True)
+        elif components["wifi_ssids"]["status"] == "SUCCESS":
+            components["ssid_customer_vlan"] = ap_component("ssid_customer_vlan", "SSID Customer VLAN", "SUCCESS", f"SSID traffic is configured for VLAN {vlan_tag}.", True, {"vlan_id": vlan_tag})
+        else:
+            components["ssid_customer_vlan"] = ap_component("ssid_customer_vlan", "SSID Customer VLAN", "FAILED", f"VLAN {vlan_tag} could not be confirmed because WiFi SSID configuration failed.", True, {"vlan_id": vlan_tag})
+
+        portal = results.get("portal") or {}
+        if not isinstance(portal, dict):
+            portal = {}
+        if portal.get("status") == "FAILED":
+            components["portal_ssid_binding"] = ap_component("portal_ssid_binding", "Omada Portal SSID Binding", "FAILED", portal.get("message") or "SSID(s) were not attached to the Omada portal profile.", True, portal)
+        elif portal.get("operation") or portal.get("ssid_ids"):
+            found = portal.get("found_ssids") or portal.get("requested_ssids") or []
+            components["portal_ssid_binding"] = ap_component("portal_ssid_binding", "Omada Portal SSID Binding", "SUCCESS", f"{len(found)} SSID(s) attached to Omada External Portal.", True, portal)
+        else:
+            components["portal_ssid_binding"] = ap_component("portal_ssid_binding", "Omada Portal SSID Binding", "PENDING", "SSID(s) have not been attached to Omada External Portal yet.", True, portal)
+
+    cleanup = results.get("wlan_cleanup") or {}
+    if isinstance(cleanup, dict) and cleanup.get("cleanup"):
+        failed_cleanup = cleanup.get("failed") or []
+        components["old_ssid_cleanup"] = ap_component(
+            "old_ssid_cleanup",
+            "Old Managed SSID Cleanup",
+            "FAILED" if failed_cleanup else "SUCCESS",
+            "Old system-created SSIDs were checked." if not failed_cleanup else "One or more old system-created SSIDs could not be removed.",
+            False,
+            cleanup,
+        )
+    if apply_ap_management:
+        ap_management = results.get("ap_management") or {}
+        if not ap_management_row:
+            components["ap_management_vlan"] = ap_component("ap_management_vlan", "AP Management VLAN", "FAILED", "No central AP management plan is saved in Network -> MikroTik -> AP Management.", True)
+        elif ap_management.get("status") == "FAILED":
+            components["ap_management_vlan"] = ap_component("ap_management_vlan", "AP Management VLAN", "FAILED", ap_management.get("message") or "AP management VLAN was not applied.", True, ap_management)
+        elif ap_management.get("configured"):
+            components["ap_management_vlan"] = ap_component("ap_management_vlan", "AP Management VLAN", "SUCCESS", f"AP management VLAN {ap_management_row.get('vlan_id')} applied through Omada.", True, ap_management)
+        else:
+            components["ap_management_vlan"] = ap_component("ap_management_vlan", "AP Management VLAN", "PENDING", "AP management VLAN has not been applied yet.", True, ap_management)
+    return components
+
+
 def build_deployment_config_payload(config: dict, vlan_tag: Optional[int]) -> dict:
     security_mode = (config.get("security_mode") or "OPEN").upper()
     return {
@@ -6029,7 +7769,131 @@ def build_deployment_config_payload(config: dict, vlan_tag: Optional[int]) -> di
     }
 
 
-def apply_configuration_to_ap(ap_row: dict, admin_id: Optional[str] = None, force: bool = False) -> dict:
+def desired_wifi_ssid_names(wifi_config: dict) -> set[str]:
+    if wifi_config.get("use_same_ssid"):
+        return {(wifi_config.get("same_ssid_name") or "3J-FreeWiFi").strip()}
+    return {
+        (wifi_config.get("ssid_2g") or "3J-FreeWiFi-2G").strip(),
+        (wifi_config.get("ssid_5g") or "3J-FreeWiFi-5G").strip(),
+    }
+
+
+def extract_wlan_ssids_from_summary(summary: dict) -> list[dict]:
+    if not isinstance(summary, dict):
+        return []
+    wlan = summary.get("wlan")
+    if isinstance(wlan, dict):
+        return [item for item in (wlan.get("ssids") or []) if isinstance(item, dict) and item.get("ssid")]
+    return []
+
+
+def managed_ssid_candidates_for_site(omada_site_id: str) -> list[dict]:
+    rows = fetch_all(
+        """
+        SELECT omada_site_id, wlan_id, ssid_id, ssid_name, band, status
+        FROM ap_managed_ssids
+        WHERE omada_site_id = %s
+        """,
+        (omada_site_id,),
+    )
+    removed_names = {row["ssid_name"] for row in rows if row.get("status") == "REMOVED"}
+    candidates = {
+        row["ssid_name"]: dict(row)
+        for row in rows
+        if row.get("status") in ("ACTIVE", "REMOVE_FAILED")
+    }
+    logs = fetch_all(
+        """
+        SELECT response_summary
+        FROM ap_configuration_logs
+        WHERE omada_site_id = %s
+          AND action = 'APPLY_DEPLOYMENT_CONFIGURATION'
+        ORDER BY created_at DESC
+        LIMIT 100
+        """,
+        (omada_site_id,),
+    )
+    for log in logs:
+        for ssid in extract_wlan_ssids_from_summary(log.get("response_summary")):
+            name = ssid.get("ssid")
+            if not name or name in removed_names or name in candidates:
+                continue
+            candidates[name] = {
+                "omada_site_id": omada_site_id,
+                "wlan_id": ssid.get("wlan_id"),
+                "ssid_id": ssid.get("ssid_id"),
+                "ssid_name": name,
+                "band": ssid.get("band"),
+                "status": "ACTIVE",
+            }
+    return list(candidates.values())
+
+
+def record_managed_ssid(omada_site_id: str, ssid: dict, status: str = "ACTIVE", error: str = None):
+    name = ssid.get("ssid") or ssid.get("ssid_name")
+    if not name:
+        return
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ap_managed_ssids(omada_site_id, wlan_id, ssid_id, ssid_name, band, status, last_error, response_summary, removed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s = 'REMOVED' THEN now() ELSE NULL END)
+                ON CONFLICT (omada_site_id, ssid_name) DO UPDATE SET
+                    wlan_id = COALESCE(EXCLUDED.wlan_id, ap_managed_ssids.wlan_id),
+                    ssid_id = COALESCE(EXCLUDED.ssid_id, ap_managed_ssids.ssid_id),
+                    band = COALESCE(EXCLUDED.band, ap_managed_ssids.band),
+                    status = EXCLUDED.status,
+                    last_error = EXCLUDED.last_error,
+                    response_summary = EXCLUDED.response_summary,
+                    removed_at = CASE WHEN EXCLUDED.status = 'REMOVED' THEN now() ELSE NULL END,
+                    updated_at = now()
+                """,
+                (
+                    omada_site_id,
+                    ssid.get("wlan_id"),
+                    ssid.get("ssid_id"),
+                    name,
+                    ssid.get("band"),
+                    status,
+                    error,
+                    Json(sanitize_summary(ssid.get("response_summary") or ssid)),
+                    status,
+                ),
+            )
+
+
+def cleanup_old_managed_ssids(client: OmadaApiClient, omada_site_id: str, desired_names: set[str]) -> dict:
+    cleanup = []
+    for ssid in managed_ssid_candidates_for_site(omada_site_id):
+        name = ssid.get("ssid_name")
+        if not name or name in desired_names:
+            continue
+        if not ssid.get("ssid_id"):
+            cleanup.append({"ssid": name, "status": "SKIPPED", "message": "SSID ID is not known, so the old SSID could not be removed automatically."})
+            continue
+        try:
+            result = client.delete_ssid_if_supported(
+                omada_site_id,
+                ssid.get("wlan_id"),
+                ssid.get("ssid_id"),
+                name,
+            )
+            record_managed_ssid(omada_site_id, {"ssid": name, **ssid, "response_summary": result.get("response_summary")}, status="REMOVED")
+            cleanup.append({"ssid": name, "status": "REMOVED", "result": sanitize_summary(result)})
+        except OmadaApiError as exc:
+            record_managed_ssid(omada_site_id, {"ssid": name, **ssid, "response_summary": exc.response_summary}, status="REMOVE_FAILED", error=str(exc))
+            cleanup.append({"ssid": name, "status": "FAILED", "message": str(exc), "response_summary": sanitize_summary(exc.response_summary)})
+    return {"cleanup": cleanup, "failed": [item for item in cleanup if item.get("status") == "FAILED"]}
+
+
+def apply_configuration_to_ap(
+    ap_row: dict,
+    admin_id: Optional[str] = None,
+    force: bool = False,
+    apply_wlan: bool = True,
+    apply_ap_management: bool = False,
+) -> dict:
     config = ensure_ap_deployment_configuration()
     if not config.get("auto_apply_enabled") and not force:
         return {"status": "SKIPPED", "message": "Automatic AP configuration is disabled."}
@@ -6039,54 +7903,242 @@ def apply_configuration_to_ap(ap_row: dict, admin_id: Optional[str] = None, forc
         return {"status": "SKIPPED", "message": "AP is not connected yet."}
     if ap_row.get("configuration_status") == "APPLIED" and not force:
         return {"status": "SKIPPED", "message": "AP configuration is already applied."}
+    if not apply_wlan and not apply_ap_management:
+        return {"status": "SKIPPED", "message": "No AP configuration section was selected."}
 
     site = fetch_one("SELECT * FROM site_deployments WHERE omada_site_id = %s LIMIT 1", (ap_row["omada_site_id"],))
-    vlan_tag = site.get("vlan_tag") if site else None
+    vlan_tag, vlan_source, bound_station = effective_customer_vlan_for_site(site or {"omada_site_id": ap_row.get("omada_site_id"), "site_name": ap_row.get("site_name")})
+    wifi_config = site_wifi_configuration_for_site(site, config)
+    ap_management_row = latest_mikrotik_ap_management_config_row()
     request_summary = {
         "site_id": ap_row["omada_site_id"],
         "ap_mac": mask_mac(ap_row["mac"]),
         "vlan_tag": vlan_tag,
-        "vlan_mode": "tagged" if vlan_tag is not None else "disabled",
-        "ssid_mode": "same" if config["use_same_ssid"] else "separate",
-        "security_mode": config["security_mode"],
-        "device_account": bool(config.get("device_account_username") and config.get("device_account_password_encrypted")),
+        "vlan_source": vlan_source,
+        "station_id": str(bound_station["id"]) if bound_station else None,
+        "vlan_mode": "tagged" if vlan_tag is not None else "missing",
+        "ssid_scope": config.get("ssid_scope") or "GLOBAL",
+        "ssid_mode": "same" if wifi_config["use_same_ssid"] else "separate",
+        "security_mode": wifi_config["security_mode"],
+        "ap_management_vlan": ap_management_row.get("vlan_id") if ap_management_row else None,
+        "ap_management_network": ap_management_row.get("network_cidr") if ap_management_row else None,
+        "ap_management_mode": "manual_on_ap_not_omada_auto_apply",
     }
+    initial_components = ap_configuration_components_from_row(ap_row)
+    if apply_wlan:
+        initial_components["wifi_ssids"] = ap_component("wifi_ssids", "WiFi SSIDs", "PENDING", "Waiting for Omada WiFi configuration.")
+        initial_components["ssid_customer_vlan"] = ap_component(
+            "ssid_customer_vlan",
+            "SSID Customer VLAN",
+            "PENDING" if vlan_tag is not None else "FAILED",
+            f"Waiting to apply VLAN {vlan_tag} to the SSIDs." if vlan_tag is not None else "No station customer VLAN is bound to this Omada site.",
+        )
+        initial_components["portal_ssid_binding"] = ap_component(
+            "portal_ssid_binding",
+            "Omada Portal SSID Binding",
+            "PENDING",
+            "Waiting to attach the pushed SSID(s) to Omada External Portal.",
+        )
+    if apply_ap_management:
+        initial_components["ap_management_vlan"] = ap_component(
+            "ap_management_vlan",
+            "AP Management VLAN",
+            "PENDING" if ap_management_row and ap_management_row.get("vlan_id") else "FAILED",
+            f"Waiting to apply AP management VLAN {ap_management_row.get('vlan_id')}." if ap_management_row and ap_management_row.get("vlan_id") else "No central AP management VLAN is saved.",
+        )
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE ap_deployments SET configuration_status = 'APPLYING', configuration_error = NULL, updated_at = now() WHERE id = %s", (ap_row["id"],))
+            cur.execute(
+                """
+                UPDATE ap_deployments
+                SET configuration_status = 'APPLYING',
+                    configuration_error = NULL,
+                    configuration_components_json = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (Json(initial_components), ap_row["id"]),
+            )
     try:
         _, client = omada_api_client_from_settings()
         results = {}
-        device_username = (config.get("device_account_username") or "").strip()
-        device_password = decrypt_secret(config.get("device_account_password_encrypted"))
-        if device_username and device_password:
-            results["device_account"] = client.configure_ap_device_account_if_supported(
-                str(ap_row["omada_site_id"]),
-                ap_row["mac"],
-                device_username,
-                device_password,
-            )
-        results["wlan"] = client.configure_site_wlan_defaults_if_supported(
-            str(ap_row["omada_site_id"]),
-            build_deployment_config_payload(config, vlan_tag),
-        )
+        errors = []
+        warnings = []
+        if apply_wlan:
+            try:
+                if vlan_tag is None:
+                    raise OmadaApiError("SSID customer VLAN is missing. Bind this Omada site to a MikroTik Station before applying AP WiFi configuration.")
+                results["wlan"] = client.configure_site_wlan_defaults_if_supported(
+                    str(ap_row["omada_site_id"]),
+                    build_deployment_config_payload(wifi_config, vlan_tag),
+                )
+                for ssid in (results["wlan"].get("ssids") or []):
+                    record_managed_ssid(str(ap_row["omada_site_id"]), ssid, status="ACTIVE")
+                ssid_failures = [
+                    ssid for ssid in (results["wlan"].get("ssids") or [])
+                    if isinstance(ssid, dict) and (
+                        ssid.get("replace_unsupported")
+                        or ssid.get("message")
+                        or (ssid.get("created") is False and ssid.get("updated") is False and not ssid.get("recreated"))
+                    )
+                ]
+                if ssid_failures:
+                    warnings.append("WiFi/SSID: one or more Omada SSIDs could not be created or updated automatically.")
+                cleanup_result = cleanup_old_managed_ssids(
+                    client,
+                    str(ap_row["omada_site_id"]),
+                    desired_wifi_ssid_names(wifi_config),
+                )
+                if cleanup_result.get("cleanup"):
+                    results["wlan_cleanup"] = cleanup_result
+                if cleanup_result.get("failed"):
+                    warnings.append("Old SSID cleanup: one or more previous system-created SSIDs could not be removed automatically.")
+                try:
+                    portal_settings = ensure_captive_portal_settings()
+                    portal_url = portal_settings.get("portal_url_production") or portal_settings.get("portal_url_staging")
+                    desired_ssids = sorted(desired_wifi_ssid_names(wifi_config))
+                    portal_payload = {
+                        "name": portal_profile_name_for_station(bound_station, site),
+                        "portalUrl": portal_url,
+                        "externalPortalUrl": portal_url,
+                        "ssidNames": desired_ssids,
+                        "vlanId": vlan_tag,
+                        "httpsRedirectEnable": False,
+                    }
+                    controller_portal_url = {}
+                    try:
+                        controller_portal_url = client.ensure_controller_portal_url_manual_if_supported()
+                    except Exception as exc:
+                        warnings.append(f"Portal global URL mode: {exc}")
+                    results["portal"] = client.configure_external_portal_if_supported(str(ap_row["omada_site_id"]), portal_payload)
+                    if controller_portal_url:
+                        results["portal"]["controller_portal_url"] = controller_portal_url
+                    try:
+                        results["portal"]["pre_auth_access"] = client.ensure_pre_auth_access_for_portal(str(ap_row["omada_site_id"]), portal_url)
+                    except Exception as exc:
+                        warnings.append(f"Portal pre-auth access: {exc}")
+                except OmadaApiError as exc:
+                    results["portal"] = {
+                        "status": "FAILED",
+                        "message": str(exc),
+                        "response_summary": sanitize_summary(exc.response_summary),
+                    }
+                    errors.append(f"Portal SSID binding: {exc}")
+            except OmadaApiError as exc:
+                results["wlan"] = {
+                    "status": "FAILED",
+                    "message": str(exc),
+                    "response_summary": sanitize_summary(exc.response_summary),
+                }
+                errors.append(f"WiFi/SSID: {exc}")
+        if apply_ap_management:
+            try:
+                if not ap_management_row or not ap_management_row.get("vlan_id"):
+                    raise OmadaApiError("Central AP management VLAN is missing. Save AP Management in Network -> MikroTik before pushing AP management to an AP.")
+                results["ap_management"] = client.configure_ap_management_vlan_if_supported(
+                    str(ap_row["omada_site_id"]),
+                    str(ap_row["mac"]),
+                    int(ap_management_row["vlan_id"]),
+                )
+            except OmadaApiError as exc:
+                results["ap_management"] = {
+                    "status": "FAILED",
+                    "message": str(exc),
+                    "response_summary": sanitize_summary(exc.response_summary),
+                }
+                errors.append(f"AP management: {exc}")
+        components = {
+            **initial_components,
+            **ap_configuration_apply_components(
+            apply_wlan=apply_wlan,
+            apply_ap_management=apply_ap_management,
+            ap_management_row=ap_management_row,
+            vlan_tag=vlan_tag,
+            results=results,
+            ),
+        }
+        if errors:
+            message = "AP configuration failed: " + " | ".join(errors)
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE ap_deployments
+                        SET configuration_status = 'FAILED',
+                            configuration_error = %s,
+                            configuration_components_json = %s,
+                            updated_at = now()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (message, Json(components), ap_row["id"]),
+                    )
+                    updated = cur.fetchone()
+            log_ap_configuration(updated or ap_row, "APPLY_DEPLOYMENT_CONFIGURATION", "FAILED", message, request_summary, results)
+            if admin_id:
+                audit(admin_id, "apply_ap_deployment_configuration_failed", "ap_deployment", str(ap_row["id"]), {"error": message, **request_summary})
+            return {"status": "FAILED", "message": message, "ap": public_ap_deployment(updated or ap_row), "result": sanitize_summary(results)}
+        if warnings:
+            message = "AP configuration applied with warnings: " + " | ".join(warnings)
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE ap_deployments
+                        SET configuration_status = 'PARTIAL',
+                            configuration_error = %s,
+                            configuration_components_json = %s,
+                            configured_at = now(),
+                            updated_at = now()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (message, Json(components), ap_row["id"]),
+                    )
+                    updated = cur.fetchone()
+            log_ap_configuration(updated or ap_row, "APPLY_DEPLOYMENT_CONFIGURATION", "PARTIAL", message, request_summary, results)
+            if admin_id:
+                audit(admin_id, "apply_ap_deployment_configuration_partial", "ap_deployment", str(ap_row["id"]), {"warning": message, **request_summary})
+            return {"status": "PARTIAL", "message": message, "ap": public_ap_deployment(updated or ap_row), "result": sanitize_summary(results)}
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE ap_deployments SET configuration_status = 'APPLIED', configuration_error = NULL, configured_at = now(), updated_at = now() WHERE id = %s RETURNING *",
-                    (ap_row["id"],),
+                    """
+                    UPDATE ap_deployments
+                    SET configuration_status = 'APPLIED',
+                        configuration_error = NULL,
+                        configuration_components_json = %s,
+                        configured_at = now(),
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (Json(components), ap_row["id"]),
                 )
                 updated = cur.fetchone()
-        log_ap_configuration(updated or ap_row, "APPLY_DEPLOYMENT_CONFIGURATION", "SUCCESS", "AP deployment configuration applied.", request_summary, results)
+        success_parts = []
+        if apply_wlan:
+            success_parts.append("WiFi/SSID")
+        if apply_ap_management:
+            success_parts.append("AP management VLAN")
+        success_message = f"{' and '.join(success_parts)} applied." if success_parts else "AP deployment configuration applied."
+        log_ap_configuration(updated or ap_row, "APPLY_DEPLOYMENT_CONFIGURATION", "SUCCESS", success_message, request_summary, results)
         if admin_id:
             audit(admin_id, "apply_ap_deployment_configuration", "ap_deployment", str(ap_row["id"]), request_summary)
-        return {"status": "SUCCESS", "message": "AP deployment configuration applied.", "ap": public_ap_deployment(updated or ap_row), "result": sanitize_summary(results)}
+        return {"status": "SUCCESS", "message": success_message, "ap": public_ap_deployment(updated or ap_row), "result": sanitize_summary(results)}
     except Exception as exc:
         response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE ap_deployments SET configuration_status = 'FAILED', configuration_error = %s, updated_at = now() WHERE id = %s RETURNING *",
+                    """
+                    UPDATE ap_deployments
+                    SET configuration_status = 'FAILED',
+                        configuration_error = %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
                     (str(exc), ap_row["id"]),
                 )
                 updated = cur.fetchone()
@@ -6098,13 +8150,21 @@ def apply_configuration_to_ap(ap_row: dict, admin_id: Optional[str] = None, forc
 
 @app.get("/api/ap-deployments/sites")
 def list_ap_deployment_sites(admin=Depends(current_admin)):
-    sites = list_site_deployments(admin)
-    omada_error = None
+    sites = local_site_deployments_for_ap_inventory()
+    ap_config = ensure_ap_deployment_configuration()
+    ap_management_row = latest_mikrotik_ap_management_config_row()
+    ap_management_summary = {
+        "configured": bool(ap_management_row),
+        "status": ap_management_row.get("status") if ap_management_row else "NOT_CONFIGURED",
+        "vlan_id": ap_management_row.get("vlan_id") if ap_management_row else None,
+        "vlan_interface_name": ap_management_row.get("vlan_interface_name") if ap_management_row else None,
+        "network_cidr": ap_management_row.get("network_cidr") if ap_management_row else None,
+        "gateway_ip": ap_management_row.get("gateway_ip") if ap_management_row else None,
+        "pool_start_ip": ap_management_row.get("pool_start_ip") if ap_management_row else None,
+        "pool_end_ip": ap_management_row.get("pool_end_ip") if ap_management_row else None,
+    }
     client = None
-    local_rows = fetch_all("SELECT * FROM ap_deployments WHERE deployment_status <> 'DELETED'")
-    local_by_site = {}
-    for row in local_rows:
-        local_by_site.setdefault(str(row["omada_site_id"]), {})[row["normalized_mac"]] = row
+    omada_error = None
     try:
         _, client = omada_api_client_from_settings()
     except Exception as exc:
@@ -6114,55 +8174,75 @@ def list_ap_deployment_sites(admin=Depends(current_admin)):
         site["ap_error"] = site.get("ap_error")
         site["pending_ap_count"] = 0
         site["pending_ap_error"] = None
+        wifi_config = site_wifi_configuration_for_site(site, ap_config)
+        effective_vlan, vlan_source, bound_station = effective_customer_vlan_for_site(site)
+        site["ssid_configuration"] = {
+            "scope": ap_config.get("ssid_scope") or "GLOBAL",
+            "use_same_ssid": bool(wifi_config.get("use_same_ssid")),
+            "same_ssid_name": wifi_config.get("same_ssid_name"),
+            "ssid_2g": wifi_config.get("ssid_2g"),
+            "ssid_5g": wifi_config.get("ssid_5g"),
+            "band_steering_enabled": bool(wifi_config.get("band_steering_enabled")),
+            "security_mode": wifi_config.get("security_mode") or "OPEN",
+            "has_security_password": bool(wifi_config.get("security_password_encrypted")),
+            "customer_vlan_id": effective_vlan,
+            "vlan_source": vlan_source,
+            "station_name": bound_station.get("station_name") if bound_station else None,
+            "vlan_mode": "tagged" if effective_vlan is not None else "untagged",
+            "desired_ssids": sorted(desired_wifi_ssid_names(wifi_config)),
+        }
+        site["ap_management_configuration"] = ap_management_summary
+        site["network_warning"] = None
+        if effective_vlan is None:
+            site["network_warning"] = "This Omada site has no customer VLAN bound. Bind it to a MikroTik Station before pushing WiFi config so SSIDs are tagged to the station customer VLAN."
+        elif site.get("vlan_tag") is None and vlan_source == "MIKROTIK_STATION":
+            site["network_warning"] = f"This site is using VLAN {effective_vlan} from bound station {bound_station.get('station_name') if bound_station else ''}. The local site VLAN record will be synced when the station binding is saved."
         omada_site_id = site.get("omada_site_id")
         site_id = str(omada_site_id) if omada_site_id else ""
-        local_for_site = local_by_site.get(site_id, {})
-        if not client or not omada_site_id:
-            site["aps"] = [public_ap_deployment(row) for row in local_for_site.values()]
-            continue
-        merged = {}
-        try:
-            result = client.get_site_aps(site_id, site.get("site_name"))
-            omada_aps = result.get("aps", [])
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    for ap in omada_aps:
-                        normalized = normalize_ap_mac(ap.get("mac"))
-                        if not normalized:
-                            continue
-                        local = local_for_site.get(normalized)
-                        if not local and ap_is_pending_candidate(ap):
-                            continue
-                        status = ap_status_from_omada(ap)
-                        display_name = local.get("display_name") if local else (ap.get("name") or ap_name_from_mac(ap.get("mac")))
-                        error = "Omada reported adoption failed." if status == "ADOPT_FAILED" else None
-                        row = upsert_ap_deployment(cur, site_id, site.get("site_name"), ap.get("mac"), display_name, admin["id"], status, error, ap)
-                        local_for_site[normalized] = row
-                        merged[normalized] = public_ap_deployment(row, ap)
-        except Exception as exc:
-            site["ap_error"] = str(exc)
-        for normalized, row in local_for_site.items():
-            if normalized not in merged:
-                merged[normalized] = public_ap_deployment(row)
-        site["aps"] = list(merged.values())
-        for index, ap_public in enumerate(site["aps"]):
-            if ap_public.get("local_status") == "CONNECTED" and ap_public.get("configuration_status") == "PENDING":
-                row = fetch_one("SELECT * FROM ap_deployments WHERE id = %s", (ap_public["id"],))
-                if row:
-                    applied = apply_configuration_to_ap(row)
-                    if applied.get("ap"):
-                        site["aps"][index] = applied["ap"]
+        site["ap_sync_result"] = None
+        if client and omada_site_id:
+            try:
+                site["ap_sync_result"] = sync_site_aps_from_omada_for_inventory(site, client, admin["id"] if admin else None)
+            except Exception as exc:
+                response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
+                site["ap_error"] = f"Could not refresh AP status from Omada: {exc}"
+                site["ap_error_details"] = sanitize_summary(response_summary)
+        local_for_site = {
+            row["normalized_mac"]: row
+            for row in fetch_all(
+                "SELECT * FROM ap_deployments WHERE omada_site_id = %s AND deployment_status <> 'DELETED' ORDER BY display_name, mac",
+                (site_id,),
+            )
+        } if site_id else {}
+        site["aps"] = [public_ap_deployment(row) for row in local_for_site.values()]
+        if client and omada_site_id:
+            try:
+                pending = client.detect_adoptable_aps(site_id)
+                site["pending_ap_count"] = len([
+                    ap for ap in pending.get("aps", [])
+                    if normalize_ap_mac(ap.get("mac")) not in local_for_site
+                ])
+            except Exception as exc:
+                site["pending_ap_error"] = str(exc)
+        failed_aps = [ap for ap in site["aps"] if ap.get("local_status") == "ADOPT_FAILED"]
+        site["adoption_failed_count"] = len(failed_aps)
+        site["adoption_failed_aps"] = [
+            {
+                "id": ap.get("id"),
+                "name": ap.get("display_name") or ap.get("name") or ap.get("mac_bound_name") or ap.get("mac"),
+                "mac": mask_mac(ap.get("mac")),
+                "message": ap.get("last_error") or "Omada reported adoption failed.",
+            }
+            for ap in failed_aps
+        ]
         site["ap_total_count"] = len(site["aps"])
         site["ap_connected_count"] = len([ap for ap in site["aps"] if ap.get("local_status") == "CONNECTED"])
-        try:
-            pending = client.detect_adoptable_aps(site_id)
-            site["pending_ap_count"] = len([
-                ap for ap in pending.get("aps", [])
-                if normalize_ap_mac(ap.get("mac")) not in local_for_site
-            ])
-        except Exception as exc:
-            site["pending_ap_error"] = str(exc)
-    return {"sites": sites, "omada_error": omada_error}
+    return {
+        "sites": sites,
+        "omada_error": omada_error,
+        "omada_live_sync": "PENDING_DETECTION_ONLY",
+        "message": "List of APs uses local cached records for adopted APs. Omada is contacted for Add APs pending detection and explicit Push WiFi Config only.",
+    }
 
 
 def ap_map_error(ap: dict) -> Optional[str]:
@@ -6544,32 +8624,7 @@ def update_ap_deployment(ap_id: str, payload: ApDeploymentUpdate, admin=Depends(
 
 @app.post("/api/ap-deployments/{ap_id}/retry")
 def retry_ap_deployment(ap_id: str, admin=Depends(current_admin)):
-    row = fetch_one("SELECT * FROM ap_deployments WHERE id::text = %s AND deployment_status <> 'DELETED'", (ap_id,))
-    if not row:
-        raise HTTPException(status_code=404, detail="AP deployment not found")
-    try:
-        _, client = omada_api_client_from_settings()
-        result = client.adopt_aps_if_supported(row["omada_site_id"], [row["mac"]])
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE ap_deployments SET deployment_status = 'ADOPTING', last_error = NULL, updated_at = now() WHERE id = %s RETURNING *",
-                    (row["id"],),
-                )
-                updated = cur.fetchone()
-        audit(admin["id"], "retry_omada_ap_adoption", "ap_deployment", ap_id, {"mac": mask_mac(row["mac"])})
-        return {"status": "SUCCESS", "message": "AP adoption retry submitted.", "ap": public_ap_deployment(updated), "result": sanitize_summary(result)}
-    except Exception as exc:
-        response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE ap_deployments SET deployment_status = 'ADOPT_FAILED', last_error = %s, updated_at = now() WHERE id = %s RETURNING *",
-                    (str(exc), row["id"]),
-                )
-                updated = cur.fetchone()
-        audit(admin["id"], "retry_omada_ap_adoption_failed", "ap_deployment", ap_id, {"mac": mask_mac(row["mac"]), "error": str(exc), "response": sanitize_summary(response_summary)})
-        return {"status": "FAILED", "message": f"AP adoption retry failed: {exc}", "ap": public_ap_deployment(updated), "details": sanitize_summary(response_summary)}
+    raise HTTPException(status_code=410, detail="AP adoption retry is handled manually in Omada Controller.")
 
 
 @app.delete("/api/ap-deployments/{ap_id}")
@@ -6577,18 +8632,68 @@ def delete_ap_deployment(ap_id: str, admin=Depends(current_admin)):
     row = fetch_one("SELECT * FROM ap_deployments WHERE id::text = %s AND deployment_status <> 'DELETED'", (ap_id,))
     if not row:
         raise HTTPException(status_code=404, detail="AP deployment not found")
-    omada_result = None
+    omada_delete_attempted = False
+    omada_deleted = False
     omada_error = None
-    try:
-        _, client = omada_api_client_from_settings()
-        omada_result = client.delete_ap_if_supported(row["omada_site_id"], row["mac"])
-    except Exception as exc:
-        omada_error = str(exc)
+    omada_result = {}
+    response_summary = {}
+    if row.get("omada_site_id") and row.get("mac"):
+        try:
+            _, client = omada_api_client_from_settings()
+            omada_delete_attempted = True
+            result = client.delete_ap_if_supported(str(row["omada_site_id"]), str(row["mac"]))
+            omada_deleted = bool(result.get("deleted"))
+            omada_result = sanitize_summary(result)
+            response_summary = sanitize_summary(result.get("response_summary") or {})
+        except HTTPException as exc:
+            omada_delete_attempted = True
+            omada_error = str(exc.detail or exc)
+            response_summary = {}
+        except Exception as exc:
+            omada_delete_attempted = True
+            response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
+            omada_error = str(exc)
+        if omada_error:
+            audit(
+                admin["id"],
+                "delete_ap_deployment_omada_failed",
+                "ap_deployment",
+                ap_id,
+                {
+                    "site_id": row.get("omada_site_id"),
+                    "mac": mask_mac(row["mac"]),
+                    "error": omada_error,
+                    "response": sanitize_summary(response_summary),
+                },
+            )
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("UPDATE ap_deployments SET deployment_status = 'DELETED', last_error = %s, updated_at = now() WHERE id = %s", (omada_error, row["id"]))
-    audit(admin["id"], "delete_ap_deployment", "ap_deployment", ap_id, {"mac": mask_mac(row["mac"]), "omada_deleted": bool(omada_result), "omada_error": omada_error})
-    return {"status": "ok", "omada_deleted": bool(omada_result), "omada_error": omada_error, "result": sanitize_summary(omada_result or {})}
+            cur.execute("UPDATE ap_deployments SET deployment_status = 'DELETED', last_error = NULL, updated_at = now() WHERE id = %s", (row["id"],))
+    audit(
+        admin["id"],
+        "delete_ap_deployment",
+        "ap_deployment",
+        ap_id,
+        {
+            "site_id": row.get("omada_site_id"),
+            "mac": mask_mac(row["mac"]),
+            "omada_contacted": omada_delete_attempted,
+            "omada_deleted": omada_deleted,
+            "omada_error": omada_error,
+            "response": sanitize_summary(response_summary),
+        },
+    )
+    return {
+        "status": "ok",
+        "omada_deleted": omada_deleted,
+        "omada_error": omada_error,
+        "message": (
+            "AP was deleted locally and forgotten in Omada."
+            if omada_deleted
+            else "AP row was removed locally, but Omada delete/forget was not confirmed."
+        ),
+        "result": omada_result,
+    }
 
 
 @app.get("/api/site-deployments/options")
@@ -6624,6 +8729,11 @@ def get_site_deployment_configuration(admin=Depends(current_admin)):
         }
         for site in list_site_deployments(admin)
     ]
+    site_wifi_rows = fetch_all("SELECT * FROM ap_site_wifi_configuration")
+    site_wifi_settings = {
+        str(row["site_id"]): public_ap_site_wifi_configuration(row)
+        for row in site_wifi_rows
+    }
     logs = fetch_all(
         """
         SELECT id, ap_deployment_id, omada_site_id, site_name, ap_mac, action, status, message, created_at
@@ -6643,6 +8753,7 @@ def get_site_deployment_configuration(admin=Depends(current_admin)):
     return {
         "configuration": public_ap_deployment_configuration(config),
         "sites": sites,
+        "site_wifi_settings": site_wifi_settings,
         "mikrotik_vlans": [
             {
                 "router_id": str(row["id"]),
@@ -6658,50 +8769,127 @@ def get_site_deployment_configuration(admin=Depends(current_admin)):
     }
 
 
+@app.patch("/api/site-deployments/{site_id}/wifi-configuration")
+def update_site_wifi_configuration(site_id: str, payload: ApSiteWifiConfigurationUpdate, admin=Depends(current_admin)):
+    config = ensure_ap_deployment_configuration()
+    if (config.get("ssid_scope") or "GLOBAL") != "PER_SITE":
+        raise HTTPException(status_code=400, detail="Different SSID/security per site is not enabled. Enable it in Sites -> Configurations first.")
+    site = fetch_one(
+        """
+        SELECT *
+        FROM site_deployments
+        WHERE id::text = %s OR omada_site_id = %s
+        LIMIT 1
+        """,
+        (site_id, site_id),
+    )
+    if not site:
+        raise HTTPException(status_code=404, detail="Site not found")
+    existing = fetch_one("SELECT * FROM ap_site_wifi_configuration WHERE site_id = %s", (site["id"],))
+    existing_password = decrypt_secret(existing.get("security_password_encrypted")) if existing else decrypt_secret(config.get("security_password_encrypted"))
+    values = validate_wifi_configuration_values(payload, existing_password, site.get("site_name") or "Site WiFi")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ap_site_wifi_configuration(
+                    site_id,
+                    use_same_ssid,
+                    same_ssid_name,
+                    ssid_2g,
+                    ssid_5g,
+                    band_steering_enabled,
+                    security_mode,
+                    security_password_encrypted,
+                    updated_by_admin_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (site_id) DO UPDATE SET
+                    use_same_ssid = EXCLUDED.use_same_ssid,
+                    same_ssid_name = EXCLUDED.same_ssid_name,
+                    ssid_2g = EXCLUDED.ssid_2g,
+                    ssid_5g = EXCLUDED.ssid_5g,
+                    band_steering_enabled = EXCLUDED.band_steering_enabled,
+                    security_mode = EXCLUDED.security_mode,
+                    security_password_encrypted = EXCLUDED.security_password_encrypted,
+                    updated_by_admin_id = EXCLUDED.updated_by_admin_id,
+                    updated_at = now()
+                RETURNING *
+                """,
+                (
+                    site["id"],
+                    values["use_same_ssid"],
+                    values["same_ssid_name"],
+                    values["ssid_2g"],
+                    values["ssid_5g"],
+                    values["band_steering_enabled"],
+                    values["security_mode"],
+                    encrypt_secret(values["security_password"]) if values["security_mode"] != "OPEN" else None,
+                    admin["id"],
+                ),
+            )
+            row = cur.fetchone()
+            cur.execute(
+                """
+                UPDATE ap_deployments
+                SET configuration_status = 'PENDING',
+                    configuration_error = NULL,
+                    configured_at = NULL,
+                    configuration_components_json = '{}'::jsonb,
+                    updated_at = now()
+                WHERE omada_site_id = %s
+                  AND deployment_status = 'CONNECTED'
+                """,
+                (site.get("omada_site_id"),),
+            )
+    audit(admin["id"], "update_site_wifi_configuration", "site_deployment", str(site["id"]), {
+        "site_name": site.get("site_name"),
+        "omada_site_id": site.get("omada_site_id"),
+        "use_same_ssid": values["use_same_ssid"],
+        "security_mode": values["security_mode"],
+    })
+    return {
+        "status": "SUCCESS",
+        "message": f"WiFi settings saved for {site.get('site_name')}. Use Push WiFi Config on each connected AP to apply it.",
+        "site_wifi_configuration": public_ap_site_wifi_configuration(row),
+    }
+
+
 @app.put("/api/site-deployments/configuration")
 def update_site_deployment_configuration(payload: ApDeploymentConfigurationUpdate, admin=Depends(current_admin)):
     config = ensure_ap_deployment_configuration()
-    security_mode = (payload.security_mode or "OPEN").upper()
-    if security_mode not in {"OPEN", "WPA2_PSK", "WPA_WPA2_PSK"}:
-        raise HTTPException(status_code=400, detail="Unsupported security mode.")
-    same_ssid_name = validate_ssid_name(payload.same_ssid_name, "Same SSID name")
-    ssid_2g = validate_ssid_name(payload.ssid_2g, "2.4GHz SSID name")
-    ssid_5g = validate_ssid_name(payload.ssid_5g, "5GHz SSID name")
-    device_username = (payload.device_account_username or "").strip() or None
-    if device_username and not re.match(r"^[!-~]{4,64}$", device_username):
-        raise HTTPException(status_code=400, detail="Device account username must be 4-64 visible ASCII characters.")
-    existing_device_password = decrypt_secret(config.get("device_account_password_encrypted"))
-    existing_security_password = decrypt_secret(config.get("security_password_encrypted"))
-    device_password = payload.device_account_password if payload.device_account_password is not None and payload.device_account_password != "" else existing_device_password
-    security_password = payload.security_password if payload.security_password is not None and payload.security_password != "" else existing_security_password
-    if device_username and not device_password:
-        raise HTTPException(status_code=400, detail="Device account password is required when a username is set.")
-    if device_password and not device_username:
-        raise HTTPException(status_code=400, detail="Device account username is required when a password is set.")
-    if device_password and (
-        len(device_password) < 8
-        or len(device_password) > 64
-        or not re.search(r"[a-z]", device_password)
-        or not re.search(r"[A-Z]", device_password)
-        or not re.search(r"\d", device_password)
-        or not re.search(r"[^A-Za-z0-9]", device_password)
-    ):
-        raise HTTPException(status_code=400, detail="Device account password must be 8-64 characters and include uppercase, lowercase, number, and symbol.")
-    if security_mode != "OPEN" and not security_password:
-        raise HTTPException(status_code=400, detail="WiFi password is required unless security mode is Open.")
-    if security_password and (len(security_password) < 8 or len(security_password) > 64):
-        raise HTTPException(status_code=400, detail="WiFi password must be 8-64 characters.")
+    ssid_scope = (payload.ssid_scope or "GLOBAL").upper()
+    if ssid_scope not in {"GLOBAL", "PER_SITE"}:
+        raise HTTPException(status_code=400, detail="SSID strategy must be Global or Per Site.")
+    apply_scope = (payload.apply_scope or "ALL").upper()
+    if apply_scope not in {"ALL", "WIFI"}:
+        raise HTTPException(status_code=400, detail="Invalid AP configuration apply scope.")
+    global_wifi = validate_wifi_configuration_values(payload, decrypt_secret(config.get("security_password_encrypted")), "Global WiFi")
 
     sites = list_site_deployments(admin)
     site_ids = {str(site["id"]) for site in sites}
+    existing_site_wifi = {
+        str(row["site_id"]): row
+        for row in fetch_all("SELECT * FROM ap_site_wifi_configuration")
+    }
+    validated_site_wifi = {}
+    if ssid_scope == "PER_SITE":
+        for site in sites:
+            key = str(site["id"])
+            values = payload.site_wifi_settings.get(key)
+            if not values:
+                continue
+            existing_password = decrypt_secret((existing_site_wifi.get(key) or {}).get("security_password_encrypted"))
+            validated_site_wifi[key] = validate_wifi_configuration_values(values, existing_password, site.get("site_name") or "Site WiFi")
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE ap_deployment_configuration
                 SET auto_apply_enabled = %s,
-                    device_account_username = %s,
-                    device_account_password_encrypted = %s,
+                    device_account_username = NULL,
+                    device_account_password_encrypted = NULL,
+                    ssid_scope = %s,
                     use_same_ssid = %s,
                     same_ssid_name = %s,
                     ssid_2g = %s,
@@ -6715,83 +8903,186 @@ def update_site_deployment_configuration(payload: ApDeploymentConfigurationUpdat
                 RETURNING *
                 """,
                 (
-                    payload.auto_apply_enabled,
-                    device_username,
-                    encrypt_secret(device_password),
-                    payload.use_same_ssid,
-                    same_ssid_name,
-                    ssid_2g,
-                    ssid_5g,
-                    payload.band_steering_enabled,
-                    security_mode,
-                    encrypt_secret(security_password) if security_mode != "OPEN" else None,
+                    False,
+                    ssid_scope,
+                    global_wifi["use_same_ssid"],
+                    global_wifi["same_ssid_name"],
+                    global_wifi["ssid_2g"],
+                    global_wifi["ssid_5g"],
+                    global_wifi["band_steering_enabled"],
+                    global_wifi["security_mode"],
+                    encrypt_secret(global_wifi["security_password"]) if global_wifi["security_mode"] != "OPEN" else None,
                     admin["id"],
                 ),
             )
             updated_config = cur.fetchone()
-            for site in sites:
-                key = str(site["id"])
-                vlan_value = payload.site_vlans.get(key)
-                normalized_vlan = None
-                if vlan_value not in (None, ""):
-                    normalized_vlan = int(vlan_value)
-                    if normalized_vlan < 1 or normalized_vlan > 4094:
-                        raise HTTPException(status_code=400, detail=f"VLAN tag for {site['site_name']} must be between 1 and 4094.")
-                if key.startswith("omada-") or site.get("is_omada_detected"):
-                    cur.execute(
-                        "SELECT * FROM site_deployments WHERE omada_site_id = %s OR lower(site_name) = lower(%s) LIMIT 1",
-                        (site.get("omada_site_id"), site.get("site_name")),
-                    )
-                    existing_site = cur.fetchone()
-                    if existing_site:
-                        cur.execute("UPDATE site_deployments SET vlan_tag = %s, updated_at = now() WHERE id = %s", (normalized_vlan, existing_site["id"]))
-                    else:
+            if ssid_scope == "PER_SITE":
+                for site in sites:
+                    key = str(site["id"])
+                    if key not in validated_site_wifi:
+                        continue
+                    values = validated_site_wifi[key]
+                    if key.startswith("omada-") or site.get("is_omada_detected"):
                         cur.execute(
-                            """
-                            INSERT INTO site_deployments(site_name, omada_site_id, deployment_status, notes, created_by_admin_id, application_scenario,
-                                                         vlan_tag)
-                            VALUES (%s, %s, 'ACTIVE', %s, %s, %s, %s)
-                            """,
-                            (
-                                site.get("site_name") or "Unnamed Omada Site",
-                                site.get("omada_site_id"),
-                                "Linked automatically when AP deployment VLAN was configured.",
-                                admin["id"],
-                                site.get("application_scenario"),
-                                normalized_vlan,
-                            ),
+                            "SELECT * FROM site_deployments WHERE omada_site_id = %s OR lower(site_name) = lower(%s) LIMIT 1",
+                            (site.get("omada_site_id"), site.get("site_name")),
                         )
-                else:
-                    cur.execute("UPDATE site_deployments SET vlan_tag = %s, updated_at = now() WHERE id = %s", (normalized_vlan, site["id"]))
-            unknown = set(payload.site_vlans.keys()) - site_ids
-            if unknown:
-                raise HTTPException(status_code=400, detail="One or more VLAN entries refer to an unknown site.")
+                        site_row = cur.fetchone()
+                        if not site_row:
+                            cur.execute(
+                                """
+                                INSERT INTO site_deployments(site_name, omada_site_id, deployment_status, notes, created_by_admin_id, application_scenario)
+                                VALUES (%s, %s, 'ACTIVE', %s, %s, %s)
+                                RETURNING *
+                                """,
+                                (
+                                    site.get("site_name") or "Unnamed Omada Site",
+                                    site.get("omada_site_id"),
+                                    "Linked automatically when per-site WiFi configuration was saved.",
+                                    admin["id"],
+                                    site.get("application_scenario"),
+                                ),
+                            )
+                            site_row = cur.fetchone()
+                        site_id_for_wifi = site_row["id"]
+                    else:
+                        site_id_for_wifi = site["id"]
+                    cur.execute(
+                        """
+                        INSERT INTO ap_site_wifi_configuration(
+                            site_id,
+                            use_same_ssid,
+                            same_ssid_name,
+                            ssid_2g,
+                            ssid_5g,
+                            band_steering_enabled,
+                            security_mode,
+                            security_password_encrypted,
+                            updated_by_admin_id
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (site_id) DO UPDATE SET
+                            use_same_ssid = EXCLUDED.use_same_ssid,
+                            same_ssid_name = EXCLUDED.same_ssid_name,
+                            ssid_2g = EXCLUDED.ssid_2g,
+                            ssid_5g = EXCLUDED.ssid_5g,
+                            band_steering_enabled = EXCLUDED.band_steering_enabled,
+                            security_mode = EXCLUDED.security_mode,
+                            security_password_encrypted = EXCLUDED.security_password_encrypted,
+                            updated_by_admin_id = EXCLUDED.updated_by_admin_id,
+                            updated_at = now()
+                        """,
+                        (
+                            site_id_for_wifi,
+                            values["use_same_ssid"],
+                            values["same_ssid_name"],
+                            values["ssid_2g"],
+                            values["ssid_5g"],
+                            values["band_steering_enabled"],
+                            values["security_mode"],
+                            encrypt_secret(values["security_password"]) if values["security_mode"] != "OPEN" else None,
+                            admin["id"],
+                        ),
+                    )
+            if payload.site_vlans:
+                for site in sites:
+                    key = str(site["id"])
+                    if key not in payload.site_vlans:
+                        continue
+                    vlan_value = payload.site_vlans.get(key)
+                    normalized_vlan = None
+                    if vlan_value not in (None, ""):
+                        normalized_vlan = int(vlan_value)
+                        if normalized_vlan < 1 or normalized_vlan > 4094:
+                            raise HTTPException(status_code=400, detail=f"VLAN tag for {site['site_name']} must be between 1 and 4094.")
+                    if key.startswith("omada-") or site.get("is_omada_detected"):
+                        cur.execute(
+                            "SELECT * FROM site_deployments WHERE omada_site_id = %s OR lower(site_name) = lower(%s) LIMIT 1",
+                            (site.get("omada_site_id"), site.get("site_name")),
+                        )
+                        existing_site = cur.fetchone()
+                        if existing_site:
+                            cur.execute("UPDATE site_deployments SET vlan_tag = %s, updated_at = now() WHERE id = %s", (normalized_vlan, existing_site["id"]))
+                        else:
+                            cur.execute(
+                                """
+                                INSERT INTO site_deployments(site_name, omada_site_id, deployment_status, notes, created_by_admin_id, application_scenario,
+                                                             vlan_tag)
+                                VALUES (%s, %s, 'ACTIVE', %s, %s, %s, %s)
+                                """,
+                                (
+                                    site.get("site_name") or "Unnamed Omada Site",
+                                    site.get("omada_site_id"),
+                                    "Linked automatically when AP deployment VLAN was configured.",
+                                    admin["id"],
+                                    site.get("application_scenario"),
+                                    normalized_vlan,
+                                ),
+                            )
+                    else:
+                        cur.execute("UPDATE site_deployments SET vlan_tag = %s, updated_at = now() WHERE id = %s", (normalized_vlan, site["id"]))
+                unknown = set(payload.site_vlans.keys()) - site_ids
+                if unknown:
+                    raise HTTPException(status_code=400, detail="One or more VLAN entries refer to an unknown site.")
             cur.execute(
                 """
                 UPDATE ap_deployments
                 SET configuration_status = 'PENDING',
                     configuration_error = NULL,
                     configured_at = NULL,
+                    configuration_components_json = '{}'::jsonb,
                     updated_at = now()
                 WHERE deployment_status = 'CONNECTED'
                 """
             )
+    apply_summary = None
     audit(admin["id"], "save_ap_site_configuration", "ap_deployment_configuration", "1", {
-        "auto_apply_enabled": payload.auto_apply_enabled,
-        "ssid_mode": "same" if payload.use_same_ssid else "separate",
-        "security_mode": security_mode,
+        "auto_apply_enabled": False,
+        "apply_scope": apply_scope,
+        "ssid_scope": ssid_scope,
+        "ssid_mode": "same" if global_wifi["use_same_ssid"] else "separate",
+        "security_mode": global_wifi["security_mode"],
         "vlan_tagged_site_count": len([site_id for site_id, value in payload.site_vlans.items() if value not in (None, "")]),
+        "auto_apply_summary": sanitize_summary(apply_summary) if apply_summary else None,
     })
+    base_message = "Sites configuration saved."
+    base_message = f"{base_message} AP WiFi configuration is not pushed automatically; use Push WiFi Config from List of APs."
     return {
         "status": "SUCCESS",
-        "message": "Sites configuration saved. Connected APs were marked pending for configuration.",
+        "message": base_message,
         "configuration": public_ap_deployment_configuration(updated_config),
+        "apply_summary": apply_summary,
         "missing_vlan_sites": [],
     }
 
 
 @app.post("/api/site-deployments/configuration/apply")
 def apply_site_deployment_configuration(payload: ApDeploymentConfigurationApplyRequest = ApDeploymentConfigurationApplyRequest(), admin=Depends(current_admin)):
+    section = (payload.section or "WIFI").upper()
+    if section not in {"WIFI", "AP_MANAGEMENT", "ALL"}:
+        raise HTTPException(status_code=400, detail="Invalid AP configuration section.")
+    sync_result = None
+    if payload.site_id:
+        site = fetch_one(
+            """
+            SELECT *
+            FROM site_deployments
+            WHERE omada_site_id = %s OR id::text = %s
+            LIMIT 1
+            """,
+            (payload.site_id, payload.site_id),
+        )
+        if site:
+            try:
+                sync_result = sync_site_aps_from_omada_for_push(site, admin["id"])
+            except Exception as exc:
+                response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
+                sync_result = {
+                    "status": "FAILED",
+                    "message": f"Could not refresh APs from Omada before Push WiFi Config: {exc}",
+                    "error": str(exc),
+                    "details": sanitize_summary(response_summary),
+                }
     params = []
     where = ["deployment_status = 'CONNECTED'"]
     if payload.ap_id:
@@ -6801,14 +9092,38 @@ def apply_site_deployment_configuration(payload: ApDeploymentConfigurationApplyR
         where.append("omada_site_id = %s")
         params.append(payload.site_id)
     rows = fetch_all(f"SELECT * FROM ap_deployments WHERE {' AND '.join(where)} ORDER BY updated_at DESC", tuple(params))
-    results = [apply_configuration_to_ap(row, admin["id"], force=True) for row in rows]
+    apply_wlan = section in {"WIFI", "ALL"}
+    apply_ap_management = section in {"AP_MANAGEMENT", "ALL"}
+    results = [
+        apply_configuration_to_ap(
+            row,
+            admin["id"],
+            force=True,
+            apply_wlan=apply_wlan,
+            apply_ap_management=apply_ap_management,
+        )
+        for row in rows
+    ]
     success_count = len([item for item in results if item.get("status") == "SUCCESS"])
+    partial_count = len([item for item in results if item.get("status") == "PARTIAL"])
     failed_count = len([item for item in results if item.get("status") == "FAILED"])
     skipped_count = len([item for item in results if item.get("status") == "SKIPPED"])
+    sync_failed = bool(sync_result and sync_result.get("status") == "FAILED")
+    if sync_failed:
+        overall_status = "FAILED"
+        message = sync_result.get("message") or "Could not refresh APs from Omada before Push WiFi Config."
+    elif not rows:
+        overall_status = "FAILED"
+        label = "AP management" if section == "AP_MANAGEMENT" else "WiFi"
+        message = f"No connected APs were found after the selected Push {label} Config sync. Adopt/connect APs in Omada first, then try again."
+    else:
+        overall_status = "SUCCESS" if failed_count == 0 and partial_count == 0 else "PARTIAL" if failed_count == 0 else "FAILED"
+        message = f"Configuration apply completed: {success_count} succeeded, {partial_count} partial, {failed_count} failed, {skipped_count} skipped."
     return {
-        "status": "SUCCESS" if failed_count == 0 else "FAILED",
-        "message": f"Configuration apply completed: {success_count} succeeded, {failed_count} failed, {skipped_count} skipped.",
-        "summary": {"success": success_count, "failed": failed_count, "skipped": skipped_count},
+        "status": overall_status,
+        "message": message,
+        "summary": {"success": success_count, "partial": partial_count, "failed": failed_count, "skipped": skipped_count},
+        "sync_result": sync_result,
         "results": sanitize_summary(results),
     }
 
@@ -6929,23 +9244,6 @@ def create_site_deployment(payload: SiteDeploymentCreate, admin=Depends(current_
     application_scenario = (payload.application_scenario or "Office").strip() or "Office"
     country_region = (payload.country_region or general.get("country_region") or "Philippines").strip() or "Philippines"
     time_zone = (payload.time_zone or general.get("time_zone") or "Asia/Manila").strip() or "Asia/Manila"
-    device_account_username = (payload.device_account_username or "").strip()
-    device_account_password = payload.device_account_password or ""
-    if not device_account_username or not device_account_password:
-        raise HTTPException(status_code=400, detail="Omada Device Account username and password are required to create a site.")
-    if not re.match(r"^[!-~]{4,64}$", device_account_username):
-        raise HTTPException(status_code=400, detail="Omada Device Account username must be 4-64 visible ASCII characters.")
-    if (
-        len(device_account_password) < 8
-        or len(device_account_password) > 64
-        or not re.search(r"[a-z]", device_account_password)
-        or not re.search(r"[A-Z]", device_account_password)
-        or not re.search(r"\d", device_account_password)
-        or not re.search(r"[^A-Za-z0-9]", device_account_password)
-    ):
-        raise HTTPException(status_code=400, detail="Omada Device Account password must be 8-64 characters and include uppercase, lowercase, number, and symbol.")
-    if not re.match(r"^[A-Za-z0-9!@#$%*]+$", device_account_password):
-        raise HTTPException(status_code=400, detail="Omada Device Account password can use letters, numbers, and these symbols: ! @ # $ % *")
     omada_site_id = None
     omada_result = None
     location = None
@@ -6960,8 +9258,6 @@ def create_site_deployment(payload: SiteDeploymentCreate, admin=Depends(current_
             application_scenario,
             country_region,
             time_zone,
-            device_account_username,
-            device_account_password,
         )
         omada_site_id = omada_result.get("site_id")
     except Exception as exc:
@@ -7024,6 +9320,169 @@ def create_site_deployment(payload: SiteDeploymentCreate, admin=Depends(current_
                 raise
     audit(admin["id"], "create_site_deployment", "site_deployment", str(row["id"]), {"site_name": row["site_name"], "omada_site_id": omada_site_id, "omada_created": bool(omada_result and omada_result.get("created"))})
     return {**row, "omada_created": bool(omada_result and omada_result.get("created")), "omada_result": sanitize_summary(omada_result or {})}
+
+
+@app.post("/api/site-deployments/sync-omada")
+def sync_site_deployments_to_omada(admin=Depends(current_admin)):
+    local_rows = fetch_all(
+        """
+        SELECT *
+        FROM site_deployments
+        ORDER BY created_at ASC
+        """
+    )
+    tombstones = fetch_all("SELECT omada_site_id, site_name FROM site_deployment_tombstones")
+    tombstone_ids = {str(row.get("omada_site_id") or "") for row in tombstones if row.get("omada_site_id")}
+    tombstone_names = {str(row.get("site_name") or "").strip().lower() for row in tombstones if row.get("site_name")}
+    local_rows = [
+        row for row in local_rows
+        if str(row.get("omada_site_id") or "") not in tombstone_ids
+        and str(row.get("site_name") or "").strip().lower() not in tombstone_names
+    ]
+    if not local_rows:
+        return {
+            "status": "SUCCESS",
+            "message": "No local sites need Omada sync.",
+            "total": 0,
+            "linked": 0,
+            "created": 0,
+            "failed": 0,
+            "results": [],
+        }
+    try:
+        _, client = omada_api_client_from_settings()
+        existing_result = client.get_sites()
+    except Exception as exc:
+        response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
+        audit(admin["id"], "sync_site_deployments_omada_failed", "site_deployments", None, {"error": str(exc), "response": sanitize_summary(response_summary)})
+        raise HTTPException(status_code=400, detail=f"Could not connect to Omada Controller for site sync: {exc}") from exc
+
+    general = system_settings_payload().get("general", {})
+    existing_sites = existing_result.get("sites", [])
+    existing_by_id = {str(site.get("site_id") or ""): site for site in existing_sites if site.get("site_id")}
+    existing_by_name = {str(site.get("site_name") or "").strip().lower(): site for site in existing_sites if site.get("site_name")}
+    results = []
+    linked = 0
+    created = 0
+    failed = 0
+
+    for row in local_rows:
+        site_name = str(row.get("site_name") or "").strip()
+        if not site_name:
+            failed += 1
+            results.append({
+                "site_id": str(row.get("id")),
+                "site_name": site_name or "Unnamed Site",
+                "status": "FAILED",
+                "message": "Local site has no site name.",
+            })
+            continue
+        current_site_id = str(row.get("omada_site_id") or "")
+        matched_site = existing_by_id.get(current_site_id) if current_site_id else None
+        matched_site = matched_site or existing_by_name.get(site_name.lower())
+        try:
+            if matched_site:
+                omada_site_id = matched_site.get("site_id")
+                application_scenario = matched_site.get("application_scenario") or row.get("application_scenario") or "Office"
+                with get_conn() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            """
+                            UPDATE site_deployments
+                            SET omada_site_id = %s,
+                                application_scenario = COALESCE(%s, application_scenario),
+                                deployment_status = 'ACTIVE',
+                                updated_at = now()
+                            WHERE id = %s
+                            """,
+                            (omada_site_id, application_scenario, row["id"]),
+                        )
+                        clear_site_deployment_tombstone(cur, omada_site_id, site_name)
+                linked += 1
+                results.append({
+                    "site_id": str(row["id"]),
+                    "site_name": site_name,
+                    "omada_site_id": omada_site_id,
+                    "status": "LINKED",
+                    "message": "Local site linked to an existing Omada site.",
+                })
+                continue
+
+            application_scenario = (row.get("application_scenario") or "Office").strip() or "Office"
+            country_region = (row.get("country_region") or general.get("country_region") or "Philippines").strip() or "Philippines"
+            time_zone = (row.get("time_zone") or general.get("time_zone") or "Asia/Manila").strip() or "Asia/Manila"
+            created_site = client.create_site_if_supported(
+                site_name,
+                application_scenario,
+                country_region,
+                time_zone,
+            )
+            omada_site_id = created_site.get("site_id")
+            if not omada_site_id:
+                refreshed = client.get_sites().get("sites", [])
+                matched_site = next((site for site in refreshed if str(site.get("site_name") or "").strip().lower() == site_name.lower()), None)
+                omada_site_id = (matched_site or {}).get("site_id")
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE site_deployments
+                        SET omada_site_id = %s,
+                            deployment_status = 'ACTIVE',
+                            updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (omada_site_id, row["id"]),
+                    )
+                    clear_site_deployment_tombstone(cur, omada_site_id, site_name)
+            if created_site.get("created"):
+                created += 1
+                status = "CREATED"
+                message = "Missing Omada site was created and linked."
+            else:
+                linked += 1
+                status = "LINKED"
+                message = "Local site linked to Omada by name."
+            results.append({
+                "site_id": str(row["id"]),
+                "site_name": site_name,
+                "omada_site_id": omada_site_id,
+                "status": status,
+                "message": message,
+                "omada_result": sanitize_summary(created_site),
+            })
+            if omada_site_id:
+                existing_by_id[str(omada_site_id)] = {"site_id": omada_site_id, "site_name": site_name, "application_scenario": application_scenario}
+            existing_by_name[site_name.lower()] = {"site_id": omada_site_id, "site_name": site_name, "application_scenario": application_scenario}
+        except Exception as exc:
+            response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
+            failed += 1
+            results.append({
+                "site_id": str(row["id"]),
+                "site_name": site_name,
+                "status": "FAILED",
+                "message": str(exc),
+                "response": sanitize_summary(response_summary),
+            })
+
+    status = "SUCCESS" if failed == 0 else "FAILED" if failed == len(local_rows) else "PARTIAL_SUCCESS"
+    message = f"Omada site sync completed: {created} created, {linked} linked, {failed} failed."
+    audit(
+        admin["id"],
+        "sync_site_deployments_omada",
+        "site_deployments",
+        None,
+        {"status": status, "total": len(local_rows), "created": created, "linked": linked, "failed": failed},
+    )
+    return {
+        "status": status,
+        "message": message,
+        "total": len(local_rows),
+        "linked": linked,
+        "created": created,
+        "failed": failed,
+        "results": results,
+    }
 
 
 @app.patch("/api/site-deployments/{deployment_id}")
@@ -7243,6 +9702,16 @@ def save_captive_portal_settings(payload: CaptivePortalSettingsUpdate, admin=Dep
         "selected_omada_site_id",
         "selected_omada_site_name",
         "test_checklist_progress",
+        "portal_notifications_enabled",
+        "portal_success_notification_enabled",
+        "portal_success_notification_message",
+        "portal_remaining_notification_enabled",
+        "portal_remaining_notification_trigger_seconds",
+        "portal_remaining_notification_message",
+        "portal_expired_notification_enabled",
+        "portal_expired_notification_message",
+        "portal_reconnect_notification_enabled",
+        "portal_reconnect_notification_message",
         "status",
     }
     updates = {key: value for key, value in payload.model_dump(exclude_none=True).items() if key in allowed}
@@ -7255,6 +9724,64 @@ def save_captive_portal_settings(payload: CaptivePortalSettingsUpdate, admin=Dep
             cur.execute(f"UPDATE captive_portal_settings SET {assignments} WHERE id = %s", tuple(params))
     audit(admin["id"], "save_captive_portal_settings", "captive_portal_settings", str(current["id"]), sanitize_summary(updates))
     return public_captive_portal_settings()
+
+
+@app.get("/api/captive-portal/omada/status")
+def captive_portal_omada_status(admin=Depends(current_admin)):
+    return captive_portal_omada_status_payload()
+
+
+@app.post("/api/captive-portal/omada/enable")
+def captive_portal_enable_omada(admin=Depends(current_admin)):
+    stations = fetch_all(
+        """
+        SELECT *
+        FROM mikrotik_stations
+        WHERE status <> 'ARCHIVED'
+          AND (
+            NULLIF(TRIM(COALESCE(omada_site_id, '')), '') IS NOT NULL
+            OR NULLIF(TRIM(COALESCE(omada_site_name, '')), '') IS NOT NULL
+          )
+        ORDER BY updated_at DESC
+        """
+    )
+    if not stations:
+        message = "Bind at least one MikroTik station to an Omada site before enabling Omada captive portal."
+        log_captive_portal_test("ENABLE_OMADA_PORTAL", "FAILED", message, {"reason": "no_bound_station"})
+        return {"status": "FAILED", "message": message, "results": [], "omada_status": captive_portal_omada_status_payload()}
+
+    results = []
+    for station in stations:
+        station_result = {
+            "station_id": station["id"],
+            "station_name": station["station_name"],
+            "omada_site_id": station.get("omada_site_id"),
+            "omada_site_name": station.get("omada_site_name"),
+            "vlan_id": station.get("vlan_id"),
+            "steps": [],
+        }
+        for action_key in ("test_omada", "create_open_ssid", "configure_external_portal", "verify"):
+            result = run_station_omada_action(str(station["id"]), action_key, admin)
+            station_result["steps"].append({
+                "action": action_key,
+                "status": result.get("status"),
+                "message": result.get("message") or result.get("error"),
+                "manual_fallback": bool(result.get("manual_fallback")),
+            })
+            if action_key == "test_omada" and result.get("status") != "SUCCESS":
+                break
+        configure_step = next((step for step in station_result["steps"] if step["action"] == "configure_external_portal"), None)
+        verify_step = next((step for step in station_result["steps"] if step["action"] == "verify"), None)
+        station_result["status"] = "SUCCESS" if configure_step and configure_step.get("status") == "SUCCESS" and verify_step and verify_step.get("status") == "SUCCESS" else "FAILED"
+        results.append(station_result)
+
+    success_count = len([item for item in results if item.get("status") == "SUCCESS"])
+    failed_count = len(results) - success_count
+    status = "SUCCESS" if success_count and not failed_count else "PARTIAL" if success_count else "FAILED"
+    message = f"Omada portal enable completed: {success_count} station(s) ready, {failed_count} station(s) failed."
+    log_captive_portal_test("ENABLE_OMADA_PORTAL", status, message, {"results": sanitize_summary(results)})
+    audit(admin["id"], "enable_omada_captive_portal", "captive_portal_settings", None, {"status": status, "success": success_count, "failed": failed_count})
+    return {"status": status, "message": message, "results": sanitize_summary(results), "omada_status": captive_portal_omada_status_payload()}
 
 
 MIKROTIK_SETUP_STEP_KEYS = [
@@ -7612,6 +10139,10 @@ def station_routeros_add_command(label: str, path: str, params: dict, **metadata
         "preview": routeros_cli_add_preview(path, params),
     }
     command.update(metadata)
+    place_query = command.get("place_before_query") or {}
+    place_fields = place_query.get("query") or {}
+    if place_fields:
+        command["preview"] = f"{command['preview']} place-before=[find {' '.join(f'{key}={value}' for key, value in place_fields.items())}]"
     return command
 
 
@@ -7745,33 +10276,188 @@ def station_interface_is_pppoe(interface: dict) -> bool:
     return "pppoe" in text
 
 
+def station_interface_is_physical_port(interface: dict) -> bool:
+    name = str(interface.get("name") or interface.get("default-name") or "").strip().lower()
+    interface_type = str(interface.get("type") or "").strip().lower()
+    return "ether" in interface_type or name.startswith(("ether", "sfp", "combo"))
+
+
 def station_existing_vlan_is_managed(snapshot: dict, vlan_id: int, vlan_interface_name: str, marker: Optional[str] = None) -> bool:
-    marker = (marker or f"3j hotspot - vlan {vlan_id}").lower()
+    markers = [str(marker).lower()] if marker else [f"3j hotspot - vlan {vlan_id}", f"3j station - vlan {vlan_id}"]
     for item in mikrotik_snapshot_items(snapshot, "interface_vlans"):
         if vlan_id not in parse_routeros_vlan_ids(item.get("vlan-id")):
             continue
         if str(item.get("name") or "") == vlan_interface_name:
             return True
-        if marker in str(item.get("comment") or "").lower():
+        existing_comment = str(item.get("comment") or "").lower()
+        if any(item_marker in existing_comment for item_marker in markers):
             return True
     for item in mikrotik_snapshot_items(snapshot, "bridge_vlans"):
         if routeros_truthy(item.get("dynamic")):
             continue
         if vlan_id not in parse_routeros_vlan_ids(item.get("vlan-ids")):
             continue
-        if marker in str(item.get("comment") or "").lower():
+        existing_comment = str(item.get("comment") or "").lower()
+        if any(item_marker in existing_comment for item_marker in markers):
             return True
     return False
+
+
+def latest_successful_mikrotik_scan_rows() -> list[dict]:
+    return fetch_all(
+        """
+        SELECT DISTINCT ON (s.router_id)
+               s.*,
+               mr.router_name,
+               mr.host
+        FROM mikrotik_preflight_scans s
+        JOIN mikrotik_routers mr ON mr.id = s.router_id
+        WHERE s.scan_status = 'SUCCESS'
+        ORDER BY s.router_id, s.created_at DESC
+        """
+    )
+
+
+def mikrotik_managed_comment(comment: Optional[str], managed_markers: list[str]) -> bool:
+    comment_text = str(comment or "").lower()
+    return any(marker and marker.lower() in comment_text for marker in managed_markers)
+
+
+def mikrotik_global_resource_conflict_errors(
+    label: str,
+    vlan_id: int,
+    network,
+    gateway_ip,
+    pool_start,
+    pool_end,
+    pool_name: str,
+    managed_markers: list[str],
+) -> list[str]:
+    """Validate proposed MikroTik-managed IP/VLAN resources against all scanned routers.
+
+    This is intentionally network-wide because Prescan All Routers is the safety
+    baseline. Router-local validation catches target-chain mistakes; this catches
+    critical duplicate management IPs/subnets such as using an address that is
+    already saved as another MikroTik API host.
+    """
+    errors = []
+    proposed_pool = (int(pool_start), int(pool_end))
+    router_hosts = fetch_all(
+        """
+        SELECT id, router_name, host
+        FROM mikrotik_routers
+        WHERE host IS NOT NULL AND btrim(host) <> ''
+        """
+    )
+    for row in router_hosts:
+        try:
+            host_ip = ip_address(str(row.get("host") or "").strip())
+        except ValueError:
+            continue
+        if host_ip.version != 4:
+            continue
+        if gateway_ip and host_ip == gateway_ip:
+            errors.append(
+                f"{label} gateway IP {gateway_ip} is already used as MikroTik router host "
+                f"{row.get('router_name') or row.get('host')}. Choose a different subnet/gateway or update the router record first."
+            )
+            continue
+        if network and host_ip in network:
+            errors.append(
+                f"{label} subnet {network.with_prefixlen} contains MikroTik router host "
+                f"{row.get('router_name') or row.get('host')} ({host_ip}). Use a subnet that does not include existing router management/API IPs."
+            )
+
+    for scan in latest_successful_mikrotik_scan_rows():
+        router_label = scan.get("router_name") or scan.get("host") or scan.get("router_id")
+        snapshot = scan.get("sanitized_snapshot_json") or {}
+        for row in mikrotik_snapshot_items(snapshot, "ip_addresses"):
+            existing_network = parse_routeros_ip_network(row.get("address"))
+            if not existing_network or not network.overlaps(existing_network):
+                continue
+            if mikrotik_managed_comment(row.get("comment"), managed_markers):
+                continue
+            errors.append(
+                f"{label} subnet {network.with_prefixlen} overlaps {existing_network} on {router_label} "
+                f"interface {row.get('interface') or 'unknown'}."
+            )
+        existing_vlan_ids = set()
+        for row in mikrotik_snapshot_items(snapshot, "interface_vlans"):
+            if mikrotik_managed_comment(row.get("comment"), managed_markers):
+                continue
+            existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-id")))
+        for row in mikrotik_snapshot_items(snapshot, "bridge_vlans"):
+            if routeros_truthy(row.get("dynamic")) or mikrotik_managed_comment(row.get("comment"), managed_markers):
+                continue
+            existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-ids")))
+        if vlan_id in existing_vlan_ids:
+            errors.append(f"{label} VLAN {vlan_id} already exists on {router_label} and is not marked as system-managed.")
+
+        for row in mikrotik_snapshot_items(snapshot, "ip_pools"):
+            if str(row.get("name") or "") == str(pool_name or ""):
+                continue
+            for existing_range in parse_routeros_pool_ranges(row.get("ranges")):
+                if mikrotik_ranges_overlap(proposed_pool, existing_range):
+                    errors.append(
+                        f"{label} DHCP pool {pool_start}-{pool_end} overlaps pool {row.get('name') or 'unknown'} "
+                        f"on {router_label}: {row.get('ranges')}."
+                    )
+    return errors
+
+
+def validate_mikrotik_router_host_value(host: str, router_id: Optional[str] = None):
+    text = str(host or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="MikroTik router host is required.")
+    try:
+        host_ip = ip_address(text)
+    except ValueError:
+        # DNS names are allowed for RouterOS API hosts, but subnet conflict checks
+        # only apply to literal IP addresses.
+        host_ip = None
+    duplicate = fetch_one(
+        """
+        SELECT id, router_name, host
+        FROM mikrotik_routers
+        WHERE lower(btrim(host)) = lower(btrim(%s))
+          AND (%s::uuid IS NULL OR id <> %s::uuid)
+        LIMIT 1
+        """,
+        (text, router_id, router_id),
+    )
+    if duplicate:
+        raise HTTPException(status_code=400, detail=f"MikroTik router host {text} is already used by {duplicate['router_name']}.")
+    if not host_ip or host_ip.version != 4:
+        return
+    ap_config = latest_mikrotik_ap_management_config_row()
+    if ap_config:
+        try:
+            ap_network = ip_network(ap_config["network_cidr"], strict=False)
+        except ValueError:
+            ap_network = None
+        if ap_network and host_ip in ap_network:
+            raise HTTPException(
+                status_code=400,
+                detail=f"MikroTik router host {text} is inside the central AP management subnet {ap_network.with_prefixlen}. Router API/management IPs must not duplicate planned AP management client space.",
+            )
+    for station in fetch_all("SELECT station_name, client_network_cidr FROM mikrotik_stations WHERE status <> 'ARCHIVED'"):
+        try:
+            station_network = ip_network(station["client_network_cidr"], strict=False)
+        except ValueError:
+            continue
+        if host_ip in station_network:
+            raise HTTPException(
+                status_code=400,
+                detail=f"MikroTik router host {text} is inside station client subnet {station_network.with_prefixlen} used by {station['station_name']}.",
+            )
 
 
 def station_validate_router_path(payload: MikrotikStationCreate, station_id: Optional[str], network, pool_start, pool_end, ap_management: Optional[dict] = None):
     errors = []
     vlan_id = int(payload.vlan_id)
-    vlan_interface_name = (payload.vlan_interface_name or "").strip() or f"VLAN{vlan_id}-3J-HOTSPOT"
-    pool_name = (payload.pool_name or "").strip() or f"POOL-3J-HOTSPOT-V{vlan_id}"
-    dhcp_server_name = (payload.dhcp_server_name or "").strip() or f"DHCP-3J-HOTSPOT-V{vlan_id}"
-    hotspot_profile_name = (payload.hotspot_profile_name or "").strip() or f"PROFILE-3J-HOTSPOT-V{vlan_id}"
-    hotspot_server_name = (payload.hotspot_server_name or "").strip() or f"HS-3J-HOTSPOT-V{vlan_id}"
+    vlan_interface_name = (payload.vlan_interface_name or "").strip() or f"VLAN{vlan_id}-3J-CLIENTS"
+    pool_name = (payload.pool_name or "").strip() or f"POOL-3J-CLIENTS-V{vlan_id}"
+    dhcp_server_name = (payload.dhcp_server_name or "").strip() or f"DHCP-3J-CLIENTS-V{vlan_id}"
     ap_vlan_id = int(ap_management["vlan_id"]) if ap_management else None
     ap_vlan_interface_name = ap_management["vlan_interface_name"] if ap_management else None
     ap_pool_name = ap_management["pool_name"] if ap_management else None
@@ -7816,7 +10502,8 @@ def station_validate_router_path(payload: MikrotikStationCreate, station_id: Opt
                 existing_network = parse_routeros_ip_network(row.get("address"))
                 existing_interface = str(row.get("interface") or "")
                 existing_comment = str(row.get("comment") or "").lower()
-                if existing_network and network.overlaps(existing_network) and existing_interface != vlan_interface_name and f"3j hotspot - vlan {vlan_id}" not in existing_comment:
+                managed_customer_vlan = f"3j hotspot - vlan {vlan_id}" in existing_comment or f"3j station - vlan {vlan_id}" in existing_comment
+                if existing_network and network.overlaps(existing_network) and existing_interface != vlan_interface_name and not managed_customer_vlan:
                     errors.append(f"{router_label}: client subnet {network.with_prefixlen} overlaps existing router network {existing_network} on {existing_interface or 'unknown interface'}.")
                 if ap_management and existing_network and ap_management["network"].overlaps(existing_network) and existing_interface != ap_vlan_interface_name and f"3j ap management - vlan {ap_vlan_id}" not in existing_comment:
                     errors.append(f"{router_label}: AP management subnet {ap_management['network'].with_prefixlen} overlaps existing router network {existing_network} on {existing_interface or 'unknown interface'}.")
@@ -7837,7 +10524,8 @@ def station_validate_router_path(payload: MikrotikStationCreate, station_id: Opt
                     existing_comment = str(row.get("comment") or "").lower()
                     if existing_name == dhcp_server_name:
                         continue
-                    if existing_interface == vlan_interface_name and f"3j hotspot - dhcp server for vlan {vlan_id}" not in existing_comment:
+                    managed_dhcp_interface = f"3j hotspot - dhcp server for vlan {vlan_id}" in existing_comment or f"3j station - dhcp server for vlan {vlan_id}" in existing_comment
+                    if existing_interface == vlan_interface_name and not managed_dhcp_interface:
                         errors.append(f"{router_label}: DHCP server already exists on {vlan_interface_name}. Disable station DHCP creation or choose a different VLAN interface.")
             if ap_management:
                 for row in mikrotik_snapshot_items(snapshot, "dhcp_servers"):
@@ -7848,20 +10536,6 @@ def station_validate_router_path(payload: MikrotikStationCreate, station_id: Opt
                         continue
                     if existing_interface == ap_vlan_interface_name and f"3j ap management - dhcp server for vlan {ap_vlan_id}" not in existing_comment:
                         errors.append(f"{router_label}: DHCP server already exists on AP management interface {ap_vlan_interface_name}. Choose a different AP management VLAN or disable the conflicting DHCP server first.")
-            if payload.create_hotspot_profile:
-                for row in mikrotik_snapshot_items(snapshot, "hotspot_profiles"):
-                    existing_name = str(row.get("name") or "")
-                    if existing_name == hotspot_profile_name:
-                        continue
-            if payload.create_hotspot_server:
-                for row in mikrotik_snapshot_items(snapshot, "hotspots"):
-                    existing_name = str(row.get("name") or "")
-                    existing_interface = str(row.get("interface") or "")
-                    existing_comment = str(row.get("comment") or "").lower()
-                    if existing_name == hotspot_server_name:
-                        continue
-                    if existing_interface == vlan_interface_name and existing_name != hotspot_server_name and f"3j hotspot - hotspot server for vlan {vlan_id}" not in existing_comment:
-                        errors.append(f"{router_label}: another HotSpot server already exists on {vlan_interface_name}. Choose a different VLAN/interface or remove the existing HotSpot server first.")
     if errors:
         raise HTTPException(status_code=400, detail=" ".join(errors))
 
@@ -7869,18 +10543,11 @@ def station_validate_router_path(payload: MikrotikStationCreate, station_id: Opt
 def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
     vlan_id = int(station["vlan_id"])
     network = ip_network(station["client_network_cidr"], strict=False)
-    vlan_interface_name = station.get("vlan_interface_name") or f"VLAN{vlan_id}-3J-HOTSPOT"
-    pool_name = station.get("pool_name") or f"POOL-3J-HOTSPOT-V{vlan_id}"
-    dhcp_server_name = station.get("dhcp_server_name") or f"DHCP-3J-HOTSPOT-V{vlan_id}"
+    vlan_interface_name = station.get("vlan_interface_name") or f"VLAN{vlan_id}-3J-CLIENTS"
+    pool_name = station.get("pool_name") or f"POOL-3J-CLIENTS-V{vlan_id}"
+    dhcp_server_name = station.get("dhcp_server_name") or f"DHCP-3J-CLIENTS-V{vlan_id}"
     dhcp_lease_time = station.get("dhcp_lease_time") or "1h"
     create_dhcp_server = bool(station.get("create_dhcp_server", True))
-    hotspot_profile_name = station.get("hotspot_profile_name") or f"PROFILE-3J-HOTSPOT-V{vlan_id}"
-    hotspot_html_directory = station.get("hotspot_html_directory") or "hotspot"
-    hotspot_dns_name = station.get("hotspot_dns_name") or default_hotspot_dns_name(station.get("station_code"))
-    hotspot_server_name = station.get("hotspot_server_name") or f"HS-3J-HOTSPOT-V{vlan_id}"
-    create_hotspot_profile = bool(station.get("create_hotspot_profile", True))
-    create_hotspot_server = bool(station.get("create_hotspot_server", True))
-    create_walled_garden = bool(station.get("create_walled_garden", True))
     portal_url = station.get("portal_url") or "http://192.168.50.70:8080/portal"
     ap_management_enabled = bool(station.get("ap_management_enabled"))
     ap_management_vlan_id = int(station.get("ap_management_vlan_id") or 111)
@@ -7893,28 +10560,40 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
     ap_management_dhcp_server_name = station.get("ap_management_dhcp_server_name") or f"DHCP-AP-MGMT-V{ap_management_vlan_id}"
     ap_management_dhcp_lease_time = station.get("ap_management_dhcp_lease_time") or "1h"
     ap_management_dns_servers = normalize_upstream_dns_servers(station.get("ap_management_dns_servers"), ap_management_gateway_ip)
-    parsed_portal_url = portal_url if "://" in portal_url else f"http://{portal_url}"
-    parsed_portal = urlparse(parsed_portal_url)
-    portal_host = parsed_portal.hostname or "192.168.50.70"
-    portal_port = parsed_portal.port or (443 if parsed_portal.scheme == "https" else 80)
-    capport_url = station_capport_url(station)
-    capport_option_name = f"3J-CAPPORT-V{vlan_id}"
-    client_dns_servers = str(station["gateway_ip"])
+    client_dns_servers = normalize_upstream_dns_servers(station.get("dns_servers"), str(station["gateway_ip"]))
     upstream_dns_servers = normalize_upstream_dns_servers(station.get("dns_servers"), str(station["gateway_ip"]))
     local_interface_list = station.get("local_interface_list") or "LOCAL"
-    nat_comment = f"3J Hotspot - NAT for VLAN {vlan_id} clients"
-    dns_udp_redirect_comment = f"3J Hotspot - force DNS UDP to router for VLAN {vlan_id}"
-    dns_tcp_redirect_comment = f"3J Hotspot - force DNS TCP to router for VLAN {vlan_id}"
-    raw_client_tracking_comment = f"3J Hotspot - keep VLAN {vlan_id} client traffic tracked"
-    raw_return_tracking_comment = f"3J Hotspot - keep VLAN {vlan_id} return traffic tracked"
-    private_dns_reject_comment = f"3J Hotspot - reject Private DNS TLS for VLAN {vlan_id}"
-    legacy_http_probe_redirect_comment = f"3J Hotspot - send unauth HTTP to portal for VLAN {vlan_id}"
-    ipv6_ra_suppress_comment = f"3J Hotspot - suppress IPv6 RA on VLAN {vlan_id}"
+    nat_comment = f"3J Station - NAT for VLAN {vlan_id} clients"
+    station_no_nat_office_comment = f"3J Station - preserve client IP for VLAN {vlan_id} to portal office subnet"
+    station_omada_portal_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to Omada portal"
+    station_portal_server_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to 3J portal server"
+    anti_tether_ttl_clamp_comment = f"3J Station - anti-tether return TTL clamp for VLAN {vlan_id}"
+    anti_tether_low_ttl_comment = f"3J Station - block likely tethered low TTL for VLAN {vlan_id}"
+    anti_tether_windows_ttl_comment = f"3J Station - block likely tethered Windows TTL for VLAN {vlan_id}"
+    anti_tether_fasttrack_src_comment = f"3J Station - keep VLAN {vlan_id} source traffic out of FastTrack for TTL guard"
+    anti_tether_fasttrack_dst_comment = f"3J Station - keep VLAN {vlan_id} return traffic out of FastTrack for TTL guard"
+    anti_tether_fasttrack_src_comment = f"3J Station - keep VLAN {vlan_id} source traffic out of FastTrack for TTL guard"
+    anti_tether_fasttrack_dst_comment = f"3J Station - keep VLAN {vlan_id} return traffic out of FastTrack for TTL guard"
+    raw_client_tracking_comment = f"3J Station - keep VLAN {vlan_id} client traffic tracked"
+    raw_return_tracking_comment = f"3J Station - keep VLAN {vlan_id} return traffic tracked"
+    ap_management_raw_tracking_comment = f"3J AP Management - keep VLAN {ap_management_vlan_id} AP management traffic tracked"
+    ap_management_raw_return_tracking_comment = f"3J AP Management - keep VLAN {ap_management_vlan_id} AP management return traffic tracked"
+    omada_controller_ip = omada_controller_discovery_ip()
+    portal_host_ip = station_portal_host_ip(portal_url)
+    portal_office_subnet = station_portal_office_access_subnet()
+    portal_access_ports = station_portal_access_ports(portal_url)
+    omada_discovery_udp_ports = omada_ap_discovery_udp_ports()
+    omada_management_tcp_ports = omada_ap_management_tcp_ports()
+    omada_discovery_filter_comment = omada_ap_discovery_filter_comment(ap_management_vlan_id)
+    omada_management_filter_comment = omada_ap_management_filter_comment(ap_management_vlan_id)
     router_plans = []
     for index, router in enumerate(routers):
         bridge_name = (router.get("bridge_name") or "").strip()
         tagged_ports = (router.get("tagged_ports") or "").strip()
+        untagged_ports = (router.get("untagged_ports") or "").strip()
         effective_tagged_ports = station_dedupe_csv(bridge_name, tagged_ports)
+        effective_untagged_ports = station_dedupe_csv(untagged_ports)
+        untagged_port_list = [port.strip() for port in effective_untagged_ports.split(",") if port.strip()]
         is_root = index == 0
         role = "ROOT_GATEWAY" if is_root else "TRUNK_HELPER"
         commands = []
@@ -8000,13 +10679,71 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                         },
                         existing_query={"interface": ap_management_vlan_interface_name, "list": local_interface_list},
                     ),
+                    *([
+                        station_routeros_add_command(
+                            "Allow Omada discovery from AP management VLAN",
+                            "/ip/firewall/filter/add",
+                            {
+                                "chain": "forward",
+                                "src-address": ap_management_network.with_prefixlen,
+                                "dst-address": omada_controller_ip,
+                                "protocol": "udp",
+                                "dst-port": omada_discovery_udp_ports,
+                                "action": "accept",
+                                "comment": omada_discovery_filter_comment,
+                            },
+                            unique_comment=omada_discovery_filter_comment,
+                            place_before_query=omada_forward_drop_place_before_query(),
+                        ),
+                        station_routeros_add_command(
+                            "Allow Omada AP management ports from AP management VLAN",
+                            "/ip/firewall/filter/add",
+                            {
+                                "chain": "forward",
+                                "src-address": ap_management_network.with_prefixlen,
+                                "dst-address": omada_controller_ip,
+                                "protocol": "tcp",
+                                "dst-port": omada_management_tcp_ports,
+                                "action": "accept",
+                                "comment": omada_management_filter_comment,
+                            },
+                            unique_comment=omada_management_filter_comment,
+                            place_before_query=omada_forward_drop_place_before_query(),
+                        ),
+                    ] if omada_controller_ip else []),
+                    station_routeros_add_command(
+                        "Keep AP management traffic tracked before global raw notrack",
+                        "/ip/firewall/raw/add",
+                        {
+                            "chain": "prerouting",
+                            "src-address": ap_management_network.with_prefixlen,
+                            "action": "accept",
+                            "comment": ap_management_raw_tracking_comment,
+                        },
+                        unique_comment=ap_management_raw_tracking_comment,
+                        only_if_query_exists=routeros_active_broad_notrack_condition(),
+                        place_before_query=routeros_active_broad_notrack_condition(),
+                    ),
+                    station_routeros_add_command(
+                        "Keep AP GUI return traffic tracked before global raw notrack",
+                        "/ip/firewall/raw/add",
+                        {
+                            "chain": "prerouting",
+                            "dst-address": ap_management_network.with_prefixlen,
+                            "action": "accept",
+                            "comment": ap_management_raw_return_tracking_comment,
+                        },
+                        unique_comment=ap_management_raw_return_tracking_comment,
+                        only_if_query_exists=routeros_active_broad_notrack_condition(),
+                        place_before_query=routeros_active_broad_notrack_condition(),
+                    ),
                 ])
             commands.extend([
                 station_routeros_add_command(
                     f"Create VLAN {vlan_id} interface",
                     "/interface/vlan/add",
                     {
-                        "comment": f"3J Hotspot - VLAN {vlan_id} interface on {bridge_name}",
+                        "comment": f"3J Station - VLAN {vlan_id} interface on {bridge_name}",
                         "interface": bridge_name,
                         "name": vlan_interface_name,
                         "vlan-id": str(vlan_id),
@@ -8019,7 +10756,7 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                     "/interface/bridge/vlan/add",
                     {
                         "bridge": bridge_name,
-                        "comment": f"3J Hotspot - VLAN {vlan_id} trunk to next station router",
+                        "comment": f"3J Station - VLAN {vlan_id} trunk to next station router",
                         "tagged": effective_tagged_ports,
                         "vlan-ids": str(vlan_id),
                     },
@@ -8031,11 +10768,11 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                     "/ip/address/add",
                     {
                         "address": f"{station['gateway_ip']}/{network.prefixlen}",
-                        "comment": f"3J Hotspot - VLAN {vlan_id} gateway",
+                        "comment": f"3J Station - VLAN {vlan_id} gateway",
                         "interface": vlan_interface_name,
                         "network": str(network.network_address),
                     },
-                    unique_comment=f"3J Hotspot - VLAN {vlan_id} gateway",
+                    existing_query={"interface": vlan_interface_name, "address": f"{station['gateway_ip']}/{network.prefixlen}"},
                 ),
                 station_routeros_add_command(
                     "Create DHCP pool",
@@ -8067,32 +10804,14 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                     "/ip/dhcp-server/network/add",
                     {
                         "address": network.with_prefixlen,
-                        "comment": f"3J Hotspot - DHCP options for VLAN {vlan_id}",
+                        "comment": f"3J Station - DHCP options for VLAN {vlan_id}",
                         "dns-server": client_dns_servers,
                         "gateway": str(station["gateway_ip"]),
                     },
                     existing_query={"address": network.with_prefixlen},
                 ),
-                station_routeros_set_command(
-                    "Enable router DNS for captive portal popup detection",
-                    "/ip/dns/set",
-                    {
-                        "allow-remote-requests": "yes",
-                        "servers": upstream_dns_servers,
-                    },
-                    verify={
-                        "words": ["/ip/dns/print", "=.proplist=allow-remote-requests,servers"],
-                        "checks": [
-                            {"field": "allow-remote-requests", "value": "yes", "truthy": True},
-                            {"field": "servers", "value": upstream_dns_servers},
-                        ],
-                        "label": "/ip dns allow-remote-requests",
-                        "message": "RouterOS DNS is already enabled with the configured upstream DNS servers.",
-                        "not_found_message": "RouterOS DNS remote requests or upstream DNS servers need to be updated.",
-                    },
-                ),
                 station_routeros_set_existing_command(
-                    "Set DHCP DNS to HotSpot gateway only",
+                    "Set DHCP DNS for client VLAN",
                     "/ip/dhcp-server/network/print",
                     {"address": network.with_prefixlen},
                     "/ip/dhcp-server/network/set",
@@ -8104,59 +10823,165 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                         "field": "dns-server",
                         "value": client_dns_servers,
                         "label": "DHCP client DNS",
-                        "message": "DHCP clients already receive only the HotSpot gateway as DNS.",
-                        "not_found_message": "DHCP clients do not yet receive only the HotSpot gateway as DNS.",
-                    },
-                ),
-                station_routeros_add_command(
-                    "Create DHCP captive portal option",
-                    "/ip/dhcp-server/option/add",
-                    {
-                        "name": capport_option_name,
-                        "code": "114",
-                        "value": f"'{capport_url}'",
-                    },
-                    unique_field="name",
-                    unique_value=capport_option_name,
-                ),
-                station_routeros_set_existing_command(
-                    "Attach captive portal option to DHCP network",
-                    "/ip/dhcp-server/network/print",
-                    {"address": network.with_prefixlen},
-                    "/ip/dhcp-server/network/set",
-                    {
-                        "dhcp-option": capport_option_name,
-                    },
-                    verify={
-                        "words": ["/ip/dhcp-server/network/print", f"?address={network.with_prefixlen}", "=.proplist=.id,address,dhcp-option"],
-                        "field": "dhcp-option",
-                        "value": capport_option_name,
-                        "contains": True,
-                        "label": "DHCP network captive portal option",
-                        "message": "DHCP network already advertises the captive portal option.",
-                        "not_found_message": "DHCP network does not advertise the captive portal option yet.",
+                        "message": "DHCP clients already receive the configured DNS servers.",
+                        "not_found_message": "DHCP clients do not yet receive the configured DNS servers.",
                     },
                 ),
                 station_routeros_add_command(
                     "Allow VLAN as local/LAN interface",
                     "/interface/list/member/add",
                     {
-                        "comment": f"3J Hotspot - allow VLAN {vlan_id} as local/LAN interface",
+                        "comment": f"3J Station - allow VLAN {vlan_id} as local/LAN interface",
                         "interface": vlan_interface_name,
                         "list": local_interface_list,
                     },
                     existing_query={"interface": vlan_interface_name, "list": local_interface_list},
                 ),
                 station_routeros_add_command(
-                    "Create internet NAT for HotSpot clients",
+                    "Preserve client IP when VLAN reaches Omada/portal office subnet",
                     "/ip/firewall/nat/add",
                     {
                         "chain": "srcnat",
                         "src-address": network.with_prefixlen,
+                        "dst-address": portal_office_subnet,
+                        "action": "accept",
+                        "comment": station_no_nat_office_comment,
+                    },
+                    unique_comment=station_no_nat_office_comment,
+                    place_before_query={
+                        "print_path": "/ip/firewall/nat/print",
+                        "query": {"comment": nat_comment},
+                        "proplist": ".id,comment",
+                    },
+                ),
+                *([
+                    station_routeros_add_command(
+                        "Allow VLAN clients to Omada captive portal entry",
+                        "/ip/firewall/filter/add",
+                        {
+                            "chain": "forward",
+                            "src-address": network.with_prefixlen,
+                            "dst-address": omada_controller_ip,
+                            "protocol": "tcp",
+                            "dst-port": "8088,8843",
+                            "action": "accept",
+                            "comment": station_omada_portal_filter_comment,
+                        },
+                        unique_comment=station_omada_portal_filter_comment,
+                        place_before_query=omada_forward_drop_place_before_query(),
+                    ),
+                ] if omada_controller_ip else []),
+                *([
+                    station_routeros_add_command(
+                        "Allow VLAN clients to 3J voucher portal server",
+                        "/ip/firewall/filter/add",
+                        {
+                            "chain": "forward",
+                            "src-address": network.with_prefixlen,
+                            "dst-address": portal_host_ip,
+                            "protocol": "tcp",
+                            "dst-port": portal_access_ports,
+                            "action": "accept",
+                            "comment": station_portal_server_filter_comment,
+                        },
+                        unique_comment=station_portal_server_filter_comment,
+                        place_before_query=omada_forward_drop_place_before_query(),
+                    ),
+                ] if portal_host_ip else []),
+                station_routeros_add_command(
+                    "Create internet NAT for client VLAN",
+                    "/ip/firewall/nat/add",
+                    {
+                        "chain": "srcnat",
+                        "src-address": network.with_prefixlen,
+                        "out-interface-list": "WAN",
                         "action": "masquerade",
                         "comment": nat_comment,
                     },
                     unique_comment=nat_comment,
+                ),
+                station_routeros_set_existing_command(
+                    "Restrict client VLAN NAT to WAN interfaces",
+                    "/ip/firewall/nat/print",
+                    {"comment": nat_comment},
+                    "/ip/firewall/nat/set",
+                    {
+                        "out-interface-list": "WAN",
+                    },
+                    verify={
+                        "words": ["/ip/firewall/nat/print", f"?comment={nat_comment}", "=.proplist=.id,out-interface-list"],
+                        "field": "out-interface-list",
+                        "value": "WAN",
+                        "label": "client VLAN NAT scope",
+                        "message": "Client VLAN NAT is already restricted to WAN interfaces.",
+                        "not_found_message": "Client VLAN NAT is not yet restricted to WAN interfaces.",
+                    },
+                ),
+                station_routeros_add_command(
+                    "Keep station client source traffic out of FastTrack",
+                    "/ip/firewall/filter/add",
+                    {
+                        "chain": "forward",
+                        "connection-state": "established,related",
+                        "src-address": network.with_prefixlen,
+                        "action": "accept",
+                        "comment": anti_tether_fasttrack_src_comment,
+                    },
+                    unique_comment=anti_tether_fasttrack_src_comment,
+                    only_if_query_exists=routeros_active_fasttrack_condition(),
+                    place_before_query=routeros_active_fasttrack_condition(),
+                ),
+                station_routeros_add_command(
+                    "Keep station client return traffic out of FastTrack",
+                    "/ip/firewall/filter/add",
+                    {
+                        "chain": "forward",
+                        "connection-state": "established,related",
+                        "dst-address": network.with_prefixlen,
+                        "action": "accept",
+                        "comment": anti_tether_fasttrack_dst_comment,
+                    },
+                    unique_comment=anti_tether_fasttrack_dst_comment,
+                    only_if_query_exists=routeros_active_fasttrack_condition(),
+                    place_before_query=routeros_active_fasttrack_condition(),
+                ),
+                station_routeros_add_command(
+                    "Enable one-device voucher TTL guard",
+                    "/ip/firewall/mangle/add",
+                    {
+                        "chain": "postrouting",
+                        "dst-address": network.with_prefixlen,
+                        "out-interface": vlan_interface_name,
+                        "action": "change-ttl",
+                        "new-ttl": "set:1",
+                        "passthrough": "no",
+                        "comment": anti_tether_ttl_clamp_comment,
+                    },
+                    unique_comment=anti_tether_ttl_clamp_comment,
+                ),
+                station_routeros_add_command(
+                    "Block likely phone hotspot sharing traffic",
+                    "/ip/firewall/filter/add",
+                    {
+                        "chain": "forward",
+                        "src-address": network.with_prefixlen,
+                        "ttl": "equal:63",
+                        "action": "drop",
+                        "comment": anti_tether_low_ttl_comment,
+                    },
+                    unique_comment=anti_tether_low_ttl_comment,
+                ),
+                station_routeros_add_command(
+                    "Block likely Windows-over-phone hotspot sharing traffic",
+                    "/ip/firewall/filter/add",
+                    {
+                        "chain": "forward",
+                        "src-address": network.with_prefixlen,
+                        "ttl": "equal:127",
+                        "action": "drop",
+                        "comment": anti_tether_windows_ttl_comment,
+                    },
+                    unique_comment=anti_tether_windows_ttl_comment,
                 ),
                 station_routeros_add_command(
                     "Keep client traffic tracked before global raw notrack",
@@ -8168,10 +10993,8 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                         "comment": raw_client_tracking_comment,
                     },
                     unique_comment=raw_client_tracking_comment,
-                    place_before_query={
-                        "print_path": "/ip/firewall/raw/print",
-                        "query": {"chain": "prerouting", "action": "notrack"},
-                    },
+                    only_if_query_exists=routeros_active_broad_notrack_condition(),
+                    place_before_query=routeros_active_broad_notrack_condition(),
                 ),
                 station_routeros_add_command(
                     "Keep return traffic tracked before global raw notrack",
@@ -8183,145 +11006,9 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                         "comment": raw_return_tracking_comment,
                     },
                     unique_comment=raw_return_tracking_comment,
-                    place_before_query={
-                        "print_path": "/ip/firewall/raw/print",
-                        "query": {"chain": "prerouting", "action": "notrack"},
-                    },
+                    only_if_query_exists=routeros_active_broad_notrack_condition(),
+                    place_before_query=routeros_active_broad_notrack_condition(),
                 ),
-                station_routeros_add_command(
-                    "Force client DNS UDP to HotSpot gateway",
-                    "/ip/firewall/nat/add",
-                    {
-                        "chain": "dstnat",
-                        "src-address": network.with_prefixlen,
-                        "protocol": "udp",
-                        "dst-port": "53",
-                        "action": "redirect",
-                        "to-ports": "53",
-                        "comment": dns_udp_redirect_comment,
-                    },
-                    unique_comment=dns_udp_redirect_comment,
-                ),
-                station_routeros_add_command(
-                    "Force client DNS TCP to HotSpot gateway",
-                    "/ip/firewall/nat/add",
-                    {
-                        "chain": "dstnat",
-                        "src-address": network.with_prefixlen,
-                        "protocol": "tcp",
-                        "dst-port": "53",
-                        "action": "redirect",
-                        "to-ports": "53",
-                        "comment": dns_tcp_redirect_comment,
-                    },
-                    unique_comment=dns_tcp_redirect_comment,
-                ),
-                station_routeros_add_command(
-                    "Reject Android Private DNS TLS during captive check",
-                    "/ip/firewall/filter/add",
-                    {
-                        "chain": "input",
-                        "src-address": network.with_prefixlen,
-                        "protocol": "tcp",
-                        "dst-port": "853",
-                        "action": "reject",
-                        "reject-with": "tcp-reset",
-                        "comment": private_dns_reject_comment,
-                    },
-                    unique_comment=private_dns_reject_comment,
-                    place_before_query={
-                        "print_path": "/ip/firewall/filter/print",
-                        "query": {"chain": "input", "action": "jump"},
-                    },
-                ),
-                station_routeros_add_command(
-                    "Suppress IPv6 router advertisements on HotSpot VLAN",
-                    "/ipv6/nd/add",
-                    {
-                        "interface": vlan_interface_name,
-                        "ra-lifetime": "0s",
-                        "advertise-dns": "no",
-                        "disabled": "no",
-                        "comment": ipv6_ra_suppress_comment,
-                    },
-                    existing_query={"interface": vlan_interface_name},
-                ),
-                *([
-                    station_routeros_add_command(
-                        "Create HotSpot profile",
-                        "/ip/hotspot/profile/add",
-                        {
-                            "name": hotspot_profile_name,
-                            "hotspot-address": str(station["gateway_ip"]),
-                            "dns-name": hotspot_dns_name,
-                            "html-directory": hotspot_html_directory,
-                            "login-by": "cookie,http-chap",
-                        },
-                        unique_field="name",
-                        unique_value=hotspot_profile_name,
-                    )
-                ] if create_hotspot_profile else []),
-                *([
-                    station_routeros_add_command(
-                        "Create HotSpot server on root gateway",
-                        "/ip/hotspot/add",
-                        {
-                            "name": hotspot_server_name,
-                            "interface": vlan_interface_name,
-                            "profile": hotspot_profile_name,
-                            "address-pool": "none",
-                            "disabled": "no",
-                        },
-                        unique_field="name",
-                        unique_value=hotspot_server_name,
-                    )
-                ] if create_hotspot_server else []),
-                *([
-                    station_routeros_add_command(
-                        "Allow portal server before login",
-                        "/ip/hotspot/walled-garden/ip/add",
-                        {
-                            "action": "accept",
-                            "dst-address": portal_host,
-                            "comment": f"3J Hotspot - portal server for VLAN {vlan_id}",
-                        },
-                        unique_comment=f"3J Hotspot - portal server for VLAN {vlan_id}",
-                    ),
-                    station_routeros_add_command(
-                        f"Allow portal URL TCP port {portal_port}",
-                        "/ip/hotspot/walled-garden/ip/add",
-                        {
-                            "action": "accept",
-                            "protocol": "tcp",
-                            "dst-address": portal_host,
-                            "dst-port": str(portal_port),
-                            "comment": f"3J Hotspot - portal URL for VLAN {vlan_id}",
-                        },
-                        unique_comment=f"3J Hotspot - portal URL for VLAN {vlan_id}",
-                    ),
-                    station_routeros_add_command(
-                        "Allow DNS UDP before login",
-                        "/ip/hotspot/walled-garden/ip/add",
-                        {
-                            "action": "accept",
-                            "protocol": "udp",
-                            "dst-port": "53",
-                            "comment": f"3J Hotspot - DNS UDP for VLAN {vlan_id}",
-                        },
-                        unique_comment=f"3J Hotspot - DNS UDP for VLAN {vlan_id}",
-                    ),
-                    station_routeros_add_command(
-                        "Allow DNS TCP before login",
-                        "/ip/hotspot/walled-garden/ip/add",
-                        {
-                            "action": "accept",
-                            "protocol": "tcp",
-                            "dst-port": "53",
-                            "comment": f"3J Hotspot - DNS TCP for VLAN {vlan_id}",
-                        },
-                        unique_comment=f"3J Hotspot - DNS TCP for VLAN {vlan_id}",
-                    ),
-                ] if create_walled_garden else []),
             ])
         else:
             previous_name = routers[index - 1].get("router_name") or "previous router"
@@ -8357,7 +11044,7 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                     f"Create VLAN {vlan_id} monitoring interface",
                     "/interface/vlan/add",
                     {
-                        "comment": f"3J Hotspot - VLAN {vlan_id} monitor interface on {bridge_name}",
+                        "comment": f"3J Station - VLAN {vlan_id} monitor interface on {bridge_name}",
                         "interface": bridge_name,
                         "name": vlan_interface_name,
                         "vlan-id": str(vlan_id),
@@ -8370,7 +11057,7 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                     "/interface/bridge/vlan/add",
                     {
                         "bridge": bridge_name,
-                        "comment": f"3J Hotspot - VLAN {vlan_id} trunk from {previous_name} to OLT/APs",
+                        "comment": f"3J Station - VLAN {vlan_id} trunk from {previous_name} to OLT/APs",
                         "tagged": effective_tagged_ports,
                         "vlan-ids": str(vlan_id),
                     },
@@ -8389,8 +11076,9 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
             "effective_tagged_ports": effective_tagged_ports,
             "commands": commands,
         })
-    return {
-        "summary": "Root router creates the AP management VLAN and customer HotSpot VLAN. Downstream routers carry both VLANs as tagged trunks toward OLT/AP paths.",
+    plan = {
+        "summary": "Root router creates the customer VLAN gateway, DHCP, and NAT path. Downstream routers carry the VLAN as tagged trunks toward OLT/AP paths. Omada handles captive portal redirect/enforcement; MikroTik HotSpot is not created.",
+        "enforcement_mode": "OMADA_CAPTIVE_PORTAL",
         "station_code": station.get("station_code"),
         "vlan_id": vlan_id,
         "client_network_cidr": network.with_prefixlen,
@@ -8401,18 +11089,7 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
         "create_dhcp_server": create_dhcp_server,
         "dns_servers": client_dns_servers,
         "router_upstream_dns_servers": upstream_dns_servers,
-        "hotspot_profile_name": hotspot_profile_name,
-        "hotspot_html_directory": hotspot_html_directory,
-        "hotspot_dns_name": hotspot_dns_name,
-        "hotspot_server_name": hotspot_server_name,
-        "create_hotspot_profile": create_hotspot_profile,
-        "create_hotspot_server": create_hotspot_server,
-        "create_walled_garden": create_walled_garden,
         "portal_url": portal_url,
-        "portal_host": portal_host,
-        "portal_port": portal_port,
-        "capport_url": capport_url,
-        "capport_option_name": capport_option_name,
         "ap_management_enabled": ap_management_enabled,
         "ap_management_vlan_id": ap_management_vlan_id,
         "ap_management_vlan_interface_name": ap_management_vlan_interface_name,
@@ -8423,31 +11100,58 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
         "ap_management_dhcp_server_name": ap_management_dhcp_server_name,
         "ap_management_dhcp_lease_time": ap_management_dhcp_lease_time,
         "ap_management_dns_servers": ap_management_dns_servers,
+        "omada_controller_ip": omada_controller_ip,
+        "portal_host_ip": portal_host_ip,
+        "portal_office_subnet": portal_office_subnet,
+        "portal_access_ports": portal_access_ports,
+        "omada_ap_discovery_udp_ports": omada_discovery_udp_ports,
+        "omada_ap_management_tcp_ports": omada_management_tcp_ports,
         "nat_comment": nat_comment,
-        "dns_udp_redirect_comment": dns_udp_redirect_comment,
-        "dns_tcp_redirect_comment": dns_tcp_redirect_comment,
+        "station_no_nat_office_comment": station_no_nat_office_comment,
+        "station_omada_portal_filter_comment": station_omada_portal_filter_comment,
+        "station_portal_server_filter_comment": station_portal_server_filter_comment,
+        "anti_tethering_enabled": True,
+        "anti_tether_ttl_clamp_comment": anti_tether_ttl_clamp_comment,
+        "anti_tether_low_ttl_comment": anti_tether_low_ttl_comment,
+        "anti_tether_windows_ttl_comment": anti_tether_windows_ttl_comment,
+        "anti_tether_fasttrack_src_comment": anti_tether_fasttrack_src_comment,
+        "anti_tether_fasttrack_dst_comment": anti_tether_fasttrack_dst_comment,
         "raw_client_tracking_comment": raw_client_tracking_comment,
         "raw_return_tracking_comment": raw_return_tracking_comment,
-        "private_dns_reject_comment": private_dns_reject_comment,
-        "ipv6_ra_suppress_comment": ipv6_ra_suppress_comment,
         "router_plans": router_plans,
     }
+    return combine_pending_cleanup_with_apply_plan(
+        plan,
+        station.get("pending_cleanup_plan_json"),
+        station.get("pending_cleanup_reason"),
+    )
 
 
 def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> dict:
     vlan_id = int(station["vlan_id"])
-    vlan_interface_name = station.get("vlan_interface_name") or f"VLAN{vlan_id}-3J-HOTSPOT"
-    pool_name = station.get("pool_name") or f"POOL-3J-HOTSPOT-V{vlan_id}"
-    dhcp_server_name = station.get("dhcp_server_name") or f"DHCP-3J-HOTSPOT-V{vlan_id}"
+    vlan_interface_name = station.get("vlan_interface_name") or f"VLAN{vlan_id}-3J-CLIENTS"
+    pool_name = station.get("pool_name") or f"POOL-3J-CLIENTS-V{vlan_id}"
+    dhcp_server_name = station.get("dhcp_server_name") or f"DHCP-3J-CLIENTS-V{vlan_id}"
     hotspot_profile_name = station.get("hotspot_profile_name") or f"PROFILE-3J-HOTSPOT-V{vlan_id}"
     hotspot_server_name = station.get("hotspot_server_name") or f"HS-3J-HOTSPOT-V{vlan_id}"
     local_interface_list = station.get("local_interface_list") or "LOCAL"
     network = ip_network(station["client_network_cidr"], strict=False)
     nat_comment = f"3J Hotspot - NAT for VLAN {vlan_id} clients"
+    station_nat_comment = f"3J Station - NAT for VLAN {vlan_id} clients"
+    station_no_nat_office_comment = f"3J Station - preserve client IP for VLAN {vlan_id} to portal office subnet"
+    station_omada_portal_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to Omada portal"
+    station_portal_server_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to 3J portal server"
+    anti_tether_ttl_clamp_comment = f"3J Station - anti-tether return TTL clamp for VLAN {vlan_id}"
+    anti_tether_low_ttl_comment = f"3J Station - block likely tethered low TTL for VLAN {vlan_id}"
+    anti_tether_windows_ttl_comment = f"3J Station - block likely tethered Windows TTL for VLAN {vlan_id}"
+    anti_tether_fasttrack_src_comment = f"3J Station - keep VLAN {vlan_id} source traffic out of FastTrack for TTL guard"
+    anti_tether_fasttrack_dst_comment = f"3J Station - keep VLAN {vlan_id} return traffic out of FastTrack for TTL guard"
     dns_udp_redirect_comment = f"3J Hotspot - force DNS UDP to router for VLAN {vlan_id}"
     dns_tcp_redirect_comment = f"3J Hotspot - force DNS TCP to router for VLAN {vlan_id}"
     raw_client_tracking_comment = f"3J Hotspot - keep VLAN {vlan_id} client traffic tracked"
+    station_raw_client_tracking_comment = f"3J Station - keep VLAN {vlan_id} client traffic tracked"
     raw_return_tracking_comment = f"3J Hotspot - keep VLAN {vlan_id} return traffic tracked"
+    station_raw_return_tracking_comment = f"3J Station - keep VLAN {vlan_id} return traffic tracked"
     private_dns_reject_comment = f"3J Hotspot - reject Private DNS TLS for VLAN {vlan_id}"
     legacy_http_probe_redirect_comment = f"3J Hotspot - send unauth HTTP to portal for VLAN {vlan_id}"
     ipv6_ra_suppress_comment = f"3J Hotspot - suppress IPv6 RA on VLAN {vlan_id}"
@@ -8456,9 +11160,15 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
     ap_management_vlan_interface_name = station.get("ap_management_vlan_interface_name") or f"VLAN{ap_management_vlan_id}-AP-MGMT"
     ap_management_pool_name = station.get("ap_management_pool_name") or f"POOL-AP-MGMT-V{ap_management_vlan_id}"
     ap_management_dhcp_server_name = station.get("ap_management_dhcp_server_name") or f"DHCP-AP-MGMT-V{ap_management_vlan_id}"
+    ap_management_raw_tracking_comment = f"3J AP Management - keep VLAN {ap_management_vlan_id} AP management traffic tracked"
+    ap_management_raw_return_tracking_comment = f"3J AP Management - keep VLAN {ap_management_vlan_id} AP management return traffic tracked"
+    ap_management_gui_nat_comment = f"3J AP Management - office GUI access to VLAN {ap_management_vlan_id} APs"
+    ap_management_omada_discovery_filter_comment = omada_ap_discovery_filter_comment(ap_management_vlan_id)
+    ap_management_omada_management_filter_comment = omada_ap_management_filter_comment(ap_management_vlan_id)
     router_plans = []
     for index, router in reversed(list(enumerate(routers))):
         bridge_name = (router.get("bridge_name") or "").strip()
+        untagged_ports = [port.strip() for port in str(router.get("untagged_ports") or "").split(",") if port.strip()]
         is_root = index == 0
         role = "ROOT_GATEWAY" if is_root else "TRUNK_HELPER"
         previous_name = routers[index - 1].get("router_name") if index > 0 else None
@@ -8502,28 +11212,124 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
                     f"3J Hotspot - portal server for VLAN {vlan_id}",
                 ),
                 station_routeros_remove_command(
-                    "Remove VLAN from local/LAN interface list",
+                    "Remove legacy VLAN from local/LAN interface list",
                     "/interface/list/member/print",
                     "comment",
                     f"3J Hotspot - allow VLAN {vlan_id} as local/LAN interface",
                 ),
                 station_routeros_remove_command(
-                    "Remove internet NAT for HotSpot clients",
+                    "Remove VLAN from local/LAN interface list",
+                    "/interface/list/member/print",
+                    "comment",
+                    f"3J Station - allow VLAN {vlan_id} as local/LAN interface",
+                ),
+                station_routeros_remove_command(
+                    "Remove legacy internet NAT for HotSpot clients",
                     "/ip/firewall/nat/print",
                     "comment",
                     nat_comment,
                 ),
                 station_routeros_remove_command(
-                    "Remove raw client tracking exception",
+                    "Remove internet NAT for client VLAN",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    station_nat_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove client-IP preservation rule for portal office subnet",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    station_no_nat_office_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove Omada captive portal allow rule",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    station_omada_portal_filter_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove 3J portal server allow rule",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    station_portal_server_filter_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove anti-tether return TTL guard",
+                    "/ip/firewall/mangle/print",
+                    "comment",
+                    anti_tether_ttl_clamp_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove anti-tether FastTrack source bypass",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    anti_tether_fasttrack_src_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove anti-tether FastTrack return bypass",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    anti_tether_fasttrack_dst_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove likely phone hotspot sharing block",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    anti_tether_low_ttl_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove likely Windows-over-phone hotspot sharing block",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    anti_tether_windows_ttl_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove old temporary client-IP preservation rule",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    f"3J TEMP - Do not NAT VLAN{vlan_id} to Omada/portal office subnet",
+                ),
+                station_routeros_remove_command(
+                    "Remove old temporary office-subnet masquerade rule",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    f"3J TEMP - Captive portal VLAN{vlan_id} to office subnet NAT",
+                ),
+                station_routeros_remove_command(
+                    "Remove old temporary Omada portal allow rule",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    f"3J TEMP - Omada captive portal handoff from VLAN{vlan_id}",
+                ),
+                station_routeros_remove_command(
+                    "Remove old temporary 3J portal server allow rule",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    f"3J TEMP - Portal server access from VLAN{vlan_id}",
+                ),
+                station_routeros_remove_command(
+                    "Remove legacy raw client tracking exception",
                     "/ip/firewall/raw/print",
                     "comment",
                     raw_client_tracking_comment,
                 ),
                 station_routeros_remove_command(
-                    "Remove raw return tracking exception",
+                    "Remove raw client tracking exception",
+                    "/ip/firewall/raw/print",
+                    "comment",
+                    station_raw_client_tracking_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove legacy raw return tracking exception",
                     "/ip/firewall/raw/print",
                     "comment",
                     raw_return_tracking_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove raw return tracking exception",
+                    "/ip/firewall/raw/print",
+                    "comment",
+                    station_raw_return_tracking_comment,
                 ),
                 station_routeros_remove_command(
                     "Remove forced client DNS UDP redirect",
@@ -8556,10 +11362,16 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
                     legacy_http_probe_redirect_comment,
                 ),
                 station_routeros_remove_command(
-                    "Remove DHCP network options",
+                    "Remove legacy DHCP network options",
                     "/ip/dhcp-server/network/print",
                     "comment",
                     f"3J Hotspot - DHCP options for VLAN {vlan_id}",
+                ),
+                station_routeros_remove_command(
+                    "Remove DHCP network options",
+                    "/ip/dhcp-server/network/print",
+                    "comment",
+                    f"3J Station - DHCP options for VLAN {vlan_id}",
                 ),
                 station_routeros_remove_command(
                     "Remove DHCP captive portal option",
@@ -8589,16 +11401,28 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
                     pool_name,
                 ),
                 station_routeros_remove_command(
-                    f"Remove VLAN {vlan_id} gateway IP",
+                    f"Remove legacy VLAN {vlan_id} gateway IP",
                     "/ip/address/print",
                     "comment",
                     f"3J Hotspot - VLAN {vlan_id} gateway",
                 ),
                 station_routeros_remove_command(
-                    f"Remove station-created bridge VLAN {vlan_id}",
+                    f"Remove VLAN {vlan_id} gateway IP",
+                    "/ip/address/print",
+                    "comment",
+                    f"3J Station - VLAN {vlan_id} gateway",
+                ),
+                station_routeros_remove_command(
+                    f"Remove legacy station-created bridge VLAN {vlan_id}",
                     "/interface/bridge/vlan/print",
                     "comment",
                     f"3J Hotspot - VLAN {vlan_id} trunk to next station router",
+                ),
+                station_routeros_remove_command(
+                    f"Remove station-created bridge VLAN {vlan_id}",
+                    "/interface/bridge/vlan/print",
+                    "comment",
+                    f"3J Station - VLAN {vlan_id} trunk to next station router",
                 ),
                 station_routeros_remove_command(
                     f"Remove VLAN {vlan_id} interface",
@@ -8614,6 +11438,36 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
                         "/interface/list/member/print",
                         "comment",
                         f"3J AP Management - allow VLAN {ap_management_vlan_id} as local/LAN interface",
+                    ),
+                    station_routeros_remove_command(
+                        "Remove AP management raw tracking exception",
+                        "/ip/firewall/raw/print",
+                        "comment",
+                        ap_management_raw_tracking_comment,
+                    ),
+                    station_routeros_remove_command(
+                        "Remove AP management raw return tracking exception",
+                        "/ip/firewall/raw/print",
+                        "comment",
+                        ap_management_raw_return_tracking_comment,
+                    ),
+                    station_routeros_remove_command(
+                        "Remove AP management office GUI access NAT",
+                        "/ip/firewall/nat/print",
+                        "comment",
+                        ap_management_gui_nat_comment,
+                    ),
+                    station_routeros_remove_command(
+                        "Remove Omada discovery allow rule",
+                        "/ip/firewall/filter/print",
+                        "comment",
+                        ap_management_omada_discovery_filter_comment,
+                    ),
+                    station_routeros_remove_command(
+                        "Remove Omada AP management ports allow rule",
+                        "/ip/firewall/filter/print",
+                        "comment",
+                        ap_management_omada_management_filter_comment,
                     ),
                     station_routeros_remove_command(
                         "Remove AP management DHCP server",
@@ -8655,10 +11509,16 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
         else:
             commands.extend([
                 station_routeros_remove_command(
-                    f"Remove station-created bridge VLAN {vlan_id}",
+                    f"Remove legacy station-created bridge VLAN {vlan_id}",
                     "/interface/bridge/vlan/print",
                     "comment",
                     f"3J Hotspot - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
+                ),
+                station_routeros_remove_command(
+                    f"Remove station-created bridge VLAN {vlan_id}",
+                    "/interface/bridge/vlan/print",
+                    "comment",
+                    f"3J Station - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
                 ),
                 station_routeros_remove_command(
                     f"Remove VLAN {vlan_id} monitoring interface",
@@ -8700,6 +11560,120 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
         "ap_management_vlan_id": ap_management_vlan_id,
         "router_plans": router_plans,
     }
+
+
+def command_with_push_metadata(command: dict, phase: str, operation: str, sequence: int, cleanup_reason: Optional[str] = None) -> dict:
+    enriched = {**(command or {})}
+    enriched["phase"] = phase
+    enriched["operation"] = operation
+    enriched["global_sequence"] = sequence
+    if cleanup_reason:
+        enriched["cleanup_reason"] = cleanup_reason
+    return enriched
+
+
+def normalize_cleanup_plan(plan) -> Optional[dict]:
+    if not plan:
+        return None
+    if isinstance(plan, str):
+        try:
+            return json.loads(plan)
+        except Exception:
+            return None
+    if isinstance(plan, dict):
+        return plan
+    return None
+
+
+def merge_cleanup_plans(*plans) -> Optional[dict]:
+    merged_router_plans = []
+    seen = set()
+    for plan in plans:
+        normalized = normalize_cleanup_plan(plan)
+        if not normalized:
+            continue
+        for router_plan in normalized.get("router_plans") or []:
+            commands = []
+            for command in router_plan.get("commands") or []:
+                key = (
+                    router_plan.get("router_id"),
+                    command.get("print_path") or command.get("path") or command.get("label"),
+                    command.get("query_field") or json.dumps(command.get("set_existing_query") or command.get("verify") or {}, sort_keys=True),
+                    command.get("query_value") or json.dumps(command.get("params") or {}, sort_keys=True),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                commands.append(command)
+            if commands:
+                merged_router_plans.append({**router_plan, "commands": commands})
+    if not merged_router_plans:
+        return None
+    return {
+        "summary": "Remove previous system-managed MikroTik objects before applying the updated plan.",
+        "router_plans": merged_router_plans,
+    }
+
+
+def combine_pending_cleanup_with_apply_plan(apply_plan: dict, pending_cleanup_plan, cleanup_reason: Optional[str] = None) -> dict:
+    cleanup_plan = normalize_cleanup_plan(pending_cleanup_plan)
+    sequence = 0
+    router_order = []
+    router_map = {}
+
+    def ensure_router_plan(source: dict) -> dict:
+        router_id = str(source.get("router_id") or "")
+        if router_id not in router_map:
+            router_order.append(router_id)
+            router_map[router_id] = {
+                "router_id": router_id,
+                "router_name": source.get("router_name"),
+                "host": source.get("host"),
+                "sequence_order": source.get("sequence_order", len(router_order)),
+                "role": source.get("role"),
+                "bridge_name": source.get("bridge_name"),
+                "tagged_ports": source.get("tagged_ports"),
+                "untagged_ports": source.get("untagged_ports"),
+                "effective_tagged_ports": source.get("effective_tagged_ports"),
+                "effective_untagged_ports": source.get("effective_untagged_ports"),
+                "commands": [],
+            }
+        return router_map[router_id]
+
+    if cleanup_plan:
+        for router_plan in cleanup_plan.get("router_plans") or []:
+            target = ensure_router_plan(router_plan)
+            for command in router_plan.get("commands") or []:
+                target["commands"].append(command_with_push_metadata(command, "CLEANUP_OLD", "REMOVE_OLD", sequence, cleanup_reason))
+                sequence += 1
+
+    for router_plan in apply_plan.get("router_plans") or []:
+        target = ensure_router_plan(router_plan)
+        for command in router_plan.get("commands") or []:
+            target["commands"].append(command_with_push_metadata(command, "APPLY_NEW", "APPLY_NEW", sequence))
+            sequence += 1
+
+    combined = {**apply_plan, "router_plans": [router_map[router_id] for router_id in router_order]}
+    if cleanup_plan:
+        combined["has_pending_cleanup"] = True
+        combined["pending_cleanup_reason"] = cleanup_reason or "Configuration changed since the previous plan was saved."
+        combined["summary"] = f"Old managed objects will be removed before applying the updated plan. {apply_plan.get('summary') or ''}".strip()
+    else:
+        combined["has_pending_cleanup"] = False
+    return combined
+
+
+def mikrotik_plan_command_refs(plan: dict) -> list[tuple[str, int]]:
+    refs = []
+    for router_plan in plan.get("router_plans") or []:
+        for command_index, command in enumerate(router_plan.get("commands") or []):
+            sequence = command.get("global_sequence")
+            try:
+                sequence_value = int(sequence)
+            except (TypeError, ValueError):
+                sequence_value = 999999
+            refs.append((sequence_value, router_plan.get("router_id"), command_index))
+    return [(router_id, command_index) for _, router_id, command_index in sorted(refs, key=lambda item: item[0])]
 
 
 def mikrotik_hotspot_login_portal_url(station: Optional[dict] = None) -> str:
@@ -8892,6 +11866,27 @@ def station_router_rows(station_id: str) -> list[dict]:
     )
 
 
+def find_site_deployment_by_omada(site_id: Optional[str] = None, site_name: Optional[str] = None) -> Optional[dict]:
+    normalized_site_id = (site_id or "").strip()
+    normalized_site_name = (site_name or "").strip()
+    if normalized_site_id:
+        row = fetch_one("SELECT * FROM site_deployments WHERE omada_site_id = %s LIMIT 1", (normalized_site_id,))
+        if row:
+            return row
+    if normalized_site_name:
+        return fetch_one("SELECT * FROM site_deployments WHERE lower(site_name) = lower(%s) LIMIT 1", (normalized_site_name,))
+    return None
+
+
+def site_vlan_matches_station(site_row: Optional[dict], station_vlan_id: int) -> bool:
+    if not site_row or site_row.get("vlan_tag") is None:
+        return False
+    try:
+        return int(site_row.get("vlan_tag")) == int(station_vlan_id)
+    except (TypeError, ValueError):
+        return False
+
+
 def public_mikrotik_station(row: dict) -> dict:
     routers = station_router_rows(str(row["id"]))
     login_file_path = mikrotik_hotspot_login_file_path(row)
@@ -8903,24 +11898,25 @@ def public_mikrotik_station(row: dict) -> dict:
         "station_code": row.get("station_code"),
         "description": row.get("description"),
         "vlan_id": row["vlan_id"],
-        "vlan_interface_name": row.get("vlan_interface_name") or f"VLAN{row['vlan_id']}-3J-HOTSPOT",
+        "vlan_interface_name": row.get("vlan_interface_name") or f"VLAN{row['vlan_id']}-3J-CLIENTS",
         "client_network_cidr": row["client_network_cidr"],
         "gateway_ip": row["gateway_ip"],
         "pool_start_ip": row["pool_start_ip"],
         "pool_end_ip": row["pool_end_ip"],
-        "pool_name": row.get("pool_name") or f"POOL-3J-HOTSPOT-V{row['vlan_id']}",
-        "dhcp_server_name": row.get("dhcp_server_name") or f"DHCP-3J-HOTSPOT-V{row['vlan_id']}",
+        "pool_name": row.get("pool_name") or f"POOL-3J-CLIENTS-V{row['vlan_id']}",
+        "dhcp_server_name": row.get("dhcp_server_name") or f"DHCP-3J-CLIENTS-V{row['vlan_id']}",
         "dhcp_lease_time": row.get("dhcp_lease_time") or "1h",
         "create_dhcp_server": bool(row.get("create_dhcp_server", True)),
         "dns_servers": row.get("dns_servers"),
         "local_interface_list": row.get("local_interface_list") or "LOCAL",
-        "create_hotspot_profile": bool(row.get("create_hotspot_profile", True)),
-        "create_hotspot_server": bool(row.get("create_hotspot_server", True)),
-        "create_walled_garden": bool(row.get("create_walled_garden", True)),
-        "hotspot_profile_name": row.get("hotspot_profile_name") or f"PROFILE-3J-HOTSPOT-V{row['vlan_id']}",
+        "enforcement_mode": "OMADA_CAPTIVE_PORTAL",
+        "create_hotspot_profile": False,
+        "create_hotspot_server": False,
+        "create_walled_garden": False,
+        "hotspot_profile_name": row.get("hotspot_profile_name"),
         "hotspot_html_directory": row.get("hotspot_html_directory") or "hotspot",
         "hotspot_dns_name": row.get("hotspot_dns_name"),
-        "hotspot_server_name": row.get("hotspot_server_name") or f"HS-3J-HOTSPOT-V{row['vlan_id']}",
+        "hotspot_server_name": row.get("hotspot_server_name"),
         "portal_url": station_portal_url(row),
         "ap_management_enabled": bool(row.get("ap_management_enabled")),
         "ap_management_vlan_id": row.get("ap_management_vlan_id"),
@@ -8933,6 +11929,10 @@ def public_mikrotik_station(row: dict) -> dict:
         "ap_management_dhcp_server_name": row.get("ap_management_dhcp_server_name") or (f"DHCP-AP-MGMT-V{row.get('ap_management_vlan_id')}" if row.get("ap_management_vlan_id") else None),
         "ap_management_dhcp_lease_time": row.get("ap_management_dhcp_lease_time") or "1h",
         "ap_management_dns_servers": row.get("ap_management_dns_servers"),
+        "omada_site_id": row.get("omada_site_id"),
+        "omada_site_name": row.get("omada_site_name"),
+        "omada_site_vlan_confirmed": bool(row.get("omada_site_vlan_confirmed")),
+        "omada_site_bound_at": row.get("omada_site_bound_at"),
         "hotspot_login_file_path": login_file_path,
         "hotspot_login_expected_hash": login_hash,
         "hotspot_login_sync": {
@@ -8942,9 +11942,14 @@ def public_mikrotik_station(row: dict) -> dict:
             "content_hash": latest_login_sync.get("content_hash") if latest_login_sync else None,
             "expected_hash": login_hash,
             "is_current": bool(latest_login_sync and latest_login_sync.get("sync_status") == "SUCCESS" and latest_login_sync.get("content_hash") == login_hash),
+            "legacy_only": True,
             "created_at": latest_login_sync.get("created_at") if latest_login_sync else None,
         },
         "status": row["status"],
+        "has_pending_cleanup": bool(row.get("pending_cleanup_plan_json")),
+        "pending_cleanup_reason": row.get("pending_cleanup_reason"),
+        "pending_cleanup_created_at": row.get("pending_cleanup_created_at"),
+        "pending_cleanup_resolved_at": row.get("pending_cleanup_resolved_at"),
         "routers": [
             {
                 "id": item["id"],
@@ -8966,6 +11971,499 @@ def public_mikrotik_station(row: dict) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+def station_omada_action_logs(station_id: str, limit: int = 8) -> list[dict]:
+    rows = fetch_all(
+        """
+        SELECT id,
+               action,
+               status,
+               message,
+               details,
+               omada_site_id,
+               omada_site_name,
+               ssid_name,
+               created_at
+        FROM captive_portal_test_logs
+        WHERE station_id = %s
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
+        (station_id, limit),
+    )
+    return rows
+
+
+def station_omada_portal_plan(row: dict, admin=None) -> dict:
+    routers = station_router_rows(str(row["id"]))
+    settings = ensure_captive_portal_settings()
+    api_settings, global_site_id, global_site_name = omada_selected_site(settings)
+    station_site_id = (row.get("omada_site_id") or "").strip()
+    station_site_name = (row.get("omada_site_name") or "").strip()
+    site_id = station_site_id or global_site_id
+    site_name = station_site_name or global_site_name
+    uses_station_site = bool(station_site_id or station_site_name)
+    ap_config = ensure_ap_deployment_configuration()
+    portal_url = station_portal_url(row)
+    selected_site = find_site_deployment_by_omada(site_id, site_name)
+    if selected_site:
+        resolved_site_id = (selected_site.get("omada_site_id") or "").strip()
+        resolved_site_name = (selected_site.get("site_name") or "").strip()
+        if resolved_site_id:
+            site_id = resolved_site_id
+            station_site_id = resolved_site_id if uses_station_site else station_site_id
+        if resolved_site_name:
+            site_name = resolved_site_name
+            station_site_name = resolved_site_name if uses_station_site else station_site_name
+    wifi_config = site_wifi_configuration_for_site(selected_site, ap_config)
+    portal_ssid = captive_portal_ssid_from_ap_configuration(wifi_config)
+    selected_site_vlan = selected_site.get("vlan_tag") if selected_site else None
+    ap_where = ["deployment_status <> 'DELETED'"]
+    ap_params = []
+    if site_id:
+        ap_where.append("omada_site_id = %s")
+        ap_params.append(site_id)
+    elif site_name:
+        ap_where.append("lower(coalesce(site_name, '')) = lower(%s)")
+        ap_params.append(site_name)
+    local_ap_summary = fetch_one(
+        f"""
+        SELECT
+          COUNT(*) AS total_aps,
+          COUNT(*) FILTER (WHERE deployment_status = 'CONNECTED') AS connected_aps
+        FROM ap_deployments
+        WHERE {' AND '.join(ap_where)}
+        """,
+        tuple(ap_params),
+    )
+    ap_summary = dict(local_ap_summary or {"total_aps": 0, "connected_aps": 0})
+    ap_summary["source"] = "LOCAL_AP_DEPLOYMENTS"
+    ap_summary["local_total_aps"] = int((local_ap_summary or {}).get("total_aps") or 0)
+    ap_summary["local_connected_aps"] = int((local_ap_summary or {}).get("connected_aps") or 0)
+    ap_summary["omada_error"] = None
+    if site_id and api_settings.get("username") and api_settings.get("password_encrypted"):
+        try:
+            _, omada_client = omada_api_client_from_settings()
+            live_summary = omada_client.get_site_ap_summary(site_id)
+            ap_summary.update({
+                "total_aps": int(live_summary.get("ap_total_count") or 0),
+                "connected_aps": int(live_summary.get("ap_connected_count") or 0),
+                "source": "OMADA_API",
+                "omada_error": None,
+            })
+        except Exception as exc:
+            ap_summary["omada_error"] = sanitize_routeros_text(str(exc))
+    transport_status = None
+    try:
+        transport_status = mikrotik_station_managed_configuration_status(str(row["id"]), quiet=True, admin=admin or {"id": None})
+    except Exception as exc:
+        transport_status = {
+            "status": "ERROR",
+            "message": sanitize_routeros_text(str(exc)),
+            "push_progress": {"pushed_steps": 0, "total_steps": 0, "routers": []},
+        }
+    progress = transport_status.get("push_progress") or {}
+    total_steps = int(progress.get("total_steps") or 0)
+    pushed_steps = int(progress.get("pushed_steps") or 0)
+
+    checks = []
+
+    def add_check(key: str, label: str, status: str, detail: str, action: str = None):
+        checks.append({
+            "key": key,
+            "label": label,
+            "status": status,
+            "detail": detail,
+            "action": action,
+        })
+
+    add_check(
+        "station_transport",
+        "MikroTik station transport pushed",
+        "READY" if total_steps and pushed_steps >= total_steps else "NEEDS_ACTION",
+        f"{pushed_steps}/{total_steps} station VLAN/DHCP/NAT/trunk step(s) detected on MikroTik.",
+        "Push Config first" if not total_steps or pushed_steps < total_steps else None,
+    )
+    add_check(
+        "omada_api",
+        "Omada API configured",
+        "READY" if api_settings.get("username") and api_settings.get("password_encrypted") else "NEEDS_ACTION",
+        f"Controller: {api_settings.get('api_base_url') or api_settings.get('controller_host') or 'not configured'}",
+        "Add Omada API credentials" if not api_settings.get("username") or not api_settings.get("password_encrypted") else None,
+    )
+    add_check(
+        "omada_site",
+        "Station Omada site bound",
+        "READY" if uses_station_site else "NEEDS_ACTION",
+        site_name or site_id or "No Omada site is bound to this station yet.",
+        "Bind this station to the Omada site that owns its APs" if not uses_station_site else None,
+    )
+    site_vlan_status = "WARNING"
+    site_vlan_detail = "No local site VLAN tag is saved for the selected Omada site. Set the site VLAN in APs Deployment -> Sites -> Configurations."
+    if selected_site_vlan is not None:
+        site_vlan_status = "READY" if int(selected_site_vlan) == int(row["vlan_id"]) else "BLOCKED"
+        site_vlan_detail = (
+            f"Selected Omada site VLAN {selected_site_vlan} matches station VLAN {row['vlan_id']}."
+            if site_vlan_status == "READY"
+            else f"Selected Omada site VLAN {selected_site_vlan} does not match station VLAN {row['vlan_id']}."
+        )
+    add_check(
+        "ssid_vlan",
+        "SSID VLAN matches station VLAN",
+        site_vlan_status,
+        site_vlan_detail,
+        "Set AP site VLAN to match the station VLAN" if site_vlan_status != "READY" else None,
+    )
+    add_check(
+        "ssid_security",
+        "SSID is open for captive portal",
+        "READY" if portal_ssid["security_mode"] == "OPEN" else "NEEDS_ACTION",
+        f"{portal_ssid['display_ssid']} uses {portal_ssid['security_mode']} security.",
+        "Set SSID security to Open" if portal_ssid["security_mode"] != "OPEN" else None,
+    )
+    add_check(
+        "portal_url",
+        "Portal URL configured",
+        "READY" if portal_url else "NEEDS_ACTION",
+        portal_url or "Set the portal URL before configuring Omada external portal.",
+        "Set Portal URL" if not portal_url else None,
+    )
+    ap_total = int(ap_summary.get("total_aps") or 0)
+    ap_connected = int(ap_summary.get("connected_aps") or 0)
+    if ap_summary.get("source") == "OMADA_API":
+        ap_detail = f"Omada API currently reports {ap_connected}/{ap_total} AP(s) connected in this site."
+        if ap_total == 0:
+            ap_detail += " If the AP has a 10.111.x.x management IP, push/check AP Management so DHCP option 138 points it to the Omada controller."
+        elif ap_connected == 0:
+            ap_detail += " AP records exist in Omada but none are connected."
+    else:
+        ap_detail = f"Local saved AP records show {ap_connected}/{ap_total} AP(s) connected. Omada live AP count is unavailable."
+        if ap_summary.get("omada_error"):
+            ap_detail += f" Omada error: {ap_summary['omada_error']}"
+    add_check(
+        "ap_visibility",
+        "APs visible in selected Omada site",
+        "READY" if ap_connected > 0 else "WARNING",
+        ap_detail,
+        "Make sure AP management VLAN can reach Omada, then adopt/connect at least one AP for field testing" if ap_connected == 0 else None,
+    )
+
+    blockers = [item for item in checks if item["status"] == "BLOCKED"]
+    needs_action = [item for item in checks if item["status"] == "NEEDS_ACTION"]
+    warnings = [item for item in checks if item["status"] == "WARNING"]
+    overall_status = "BLOCKED" if blockers else "NEEDS_ACTION" if needs_action else "WARNING" if warnings else "READY"
+    manual_steps = [
+        f"Confirm MikroTik station {row['station_name']} has pushed VLAN {row['vlan_id']} transport from the root router through downstream CRS/OLT/AP path.",
+        f"In Omada, use SSID {portal_ssid['display_ssid']} and set the site/SSID VLAN to {row['vlan_id']}.",
+        f"Enable Omada captive portal / guest portal for the SSID and choose External Portal pointing to {portal_url}.",
+        "Allow pre-auth access to 192.168.50.70 and 192.168.50.70:8080 so clients can reach the voucher portal before authorization.",
+        "Test one AP/SSID first: connect a phone, confirm Omada redirects to /portal, redeem a voucher, and confirm Omada authorization logs update.",
+    ]
+    def station_action(key: str, label: str, endpoint: str, enabled: bool = True, disabled_reason: str = None) -> dict:
+        return {
+            "key": key,
+            "label": label,
+            "endpoint": endpoint,
+            "enabled": enabled,
+            "disabled_reason": disabled_reason,
+        }
+
+    site_ready = bool(site_id)
+    api_ready = bool(api_settings.get("username") and api_settings.get("password_encrypted"))
+    actions = [
+        station_action(
+            "test_omada",
+            "Test Omada API",
+            f"/api/network/mikrotik/stations/{row['id']}/omada-actions/test_omada",
+            enabled=api_ready,
+            disabled_reason=None if api_ready else "Add Omada API credentials first.",
+        ),
+        station_action(
+            "create_open_ssid",
+            "Create / Update Open SSID",
+            f"/api/network/mikrotik/stations/{row['id']}/omada-actions/create_open_ssid",
+            enabled=api_ready and site_ready,
+            disabled_reason=None if api_ready and site_ready else "Bind this station to an Omada site and verify API credentials first.",
+        ),
+        station_action(
+            "configure_external_portal",
+            "Configure External Portal",
+            f"/api/network/mikrotik/stations/{row['id']}/omada-actions/configure_external_portal",
+            enabled=api_ready and site_ready and bool(portal_url),
+            disabled_reason=None if api_ready and site_ready and portal_url else "Set Portal URL and bind this station to an Omada site first.",
+        ),
+        station_action(
+            "verify",
+            "Verify Captive Portal Setup",
+            f"/api/network/mikrotik/stations/{row['id']}/omada-actions/verify",
+            enabled=api_ready and site_ready,
+            disabled_reason=None if api_ready and site_ready else "Bind this station to an Omada site and verify API credentials first.",
+        ),
+    ]
+
+    recent_actions = station_omada_action_logs(str(row["id"]))
+
+    return {
+        "status": overall_status,
+        "message": "Omada captive portal plan is ready for field testing." if overall_status == "READY" else "Review the required Omada captive portal setup items before field testing.",
+        "station": {
+            "id": row["id"],
+            "station_name": row["station_name"],
+            "station_code": row.get("station_code"),
+            "status": row["status"],
+            "vlan_id": row["vlan_id"],
+            "client_network_cidr": row["client_network_cidr"],
+            "gateway_ip": row["gateway_ip"],
+            "portal_url": portal_url,
+            "omada_site_id": station_site_id or None,
+            "omada_site_name": station_site_name or None,
+            "omada_site_vlan_confirmed": bool(row.get("omada_site_vlan_confirmed")),
+            "routers": [
+                {
+                    "router_id": item["router_id"],
+                    "router_name": item["router_name"],
+                    "host": item["host"],
+                    "sequence_order": item["sequence_order"],
+                    "bridge_name": item.get("bridge_name"),
+                    "tagged_ports": item.get("tagged_ports"),
+                    "station_role": item.get("station_role"),
+                }
+                for item in routers
+            ],
+        },
+        "portal": {
+            "url": portal_url,
+            "staging_url": settings.get("portal_url_staging"),
+            "production_url": settings.get("portal_url_production"),
+            "post_login_redirect_url": settings.get("post_login_redirect_url"),
+        },
+        "ssid": {
+            **portal_ssid,
+            "required_vlan_id": row["vlan_id"],
+            "selected_site_vlan_id": selected_site_vlan,
+            "vlan_match": selected_site_vlan is not None and int(selected_site_vlan) == int(row["vlan_id"]),
+        },
+        "omada": {
+            "controller_host": api_settings.get("controller_host"),
+            "api_base_url": api_settings.get("api_base_url"),
+            "api_configured": bool(api_settings.get("username") and api_settings.get("password_encrypted")),
+            "selected_site_id": site_id,
+            "selected_site_name": site_name,
+            "station_site_bound": uses_station_site,
+            "global_selected_site_id": global_site_id,
+            "global_selected_site_name": global_site_name,
+            "selected_site_local_record_id": selected_site.get("id") if selected_site else None,
+            "selected_site_vlan_id": selected_site_vlan,
+            "ap_total_count": ap_total,
+            "ap_connected_count": ap_connected,
+            "ap_count_source": ap_summary.get("source"),
+            "local_ap_total_count": ap_summary.get("local_total_aps") or 0,
+            "local_ap_connected_count": ap_summary.get("local_connected_aps") or 0,
+            "ap_error": ap_summary.get("omada_error"),
+        },
+        "transport_status": transport_status,
+        "checks": checks,
+        "manual_steps": manual_steps,
+        "automation_actions": actions,
+        "recent_actions": recent_actions,
+        "last_action": recent_actions[0] if recent_actions else None,
+        "known_limitations": [
+            "Omada Controller API paths differ by controller version; if automation fails, use the manual steps in this plan.",
+            "OCP station setup does not apply RouterOS changes here. MikroTik station transport must be pushed separately from the station card.",
+            "If the Omada SSID already exists, verify its VLAN in Omada manually because update endpoints differ by controller version.",
+            "Omada handles redirect/enforcement. 3JCentralPisowifi remains the voucher/wallet/session source of truth.",
+        ],
+    }
+
+
+def update_station_omada_binding(station_id: str, payload: MikrotikStationOmadaBindingUpdate, admin: dict) -> dict:
+    station = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
+    if not station:
+        raise HTTPException(status_code=404, detail="MikroTik station not found")
+    omada_site_id = (payload.omada_site_id or "").strip() or None
+    omada_site_name = (payload.omada_site_name or "").strip() or None
+    site_row = find_site_deployment_by_omada(omada_site_id, omada_site_name)
+    if site_row:
+        omada_site_id = site_row.get("omada_site_id") or omada_site_id
+        omada_site_name = site_row.get("site_name") or omada_site_name
+    vlan_confirmed = bool(omada_site_id or omada_site_name) or site_vlan_matches_station(site_row, station["vlan_id"])
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE mikrotik_stations
+                SET omada_site_id = %s,
+                    omada_site_name = %s,
+                    omada_site_vlan_confirmed = %s,
+                    omada_site_bound_at = CASE WHEN %s::text IS NULL AND %s::text IS NULL THEN NULL ELSE now() END,
+                    omada_site_bound_by_admin_id = CASE WHEN %s::text IS NULL AND %s::text IS NULL THEN NULL ELSE %s::uuid END,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (
+                    omada_site_id,
+                    omada_site_name,
+                    vlan_confirmed,
+                    omada_site_id,
+                    omada_site_name,
+                    omada_site_id,
+                    omada_site_name,
+                    admin["id"],
+                    station_id,
+                ),
+            )
+            updated = cur.fetchone()
+            sync_site_vlan_from_station_row(cur, updated, admin["id"])
+            cur.execute("SELECT * FROM mikrotik_stations WHERE id = %s", (station_id,))
+            updated = cur.fetchone()
+    audit(
+        admin["id"],
+        "update_mikrotik_station_omada_site",
+        "mikrotik_stations",
+        station_id,
+        {"omada_site_id": omada_site_id, "omada_site_name": omada_site_name, "vlan_confirmed": vlan_confirmed},
+    )
+    return station_omada_portal_plan(updated, admin=admin)
+
+
+def run_station_omada_action(station_id: str, action_key: str, admin: dict) -> dict:
+    row = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="MikroTik station not found")
+    plan = station_omada_portal_plan(row, admin=admin)
+    action_map = {item["key"]: item for item in plan.get("automation_actions") or []}
+    action = action_map.get(action_key)
+    if not action:
+        raise HTTPException(status_code=404, detail="Unsupported station Omada action")
+
+    site_id = (plan.get("omada") or {}).get("selected_site_id")
+    site_name = (plan.get("omada") or {}).get("selected_site_name")
+    ssid_name = (plan.get("ssid") or {}).get("primary_ssid")
+    ssid_plan = plan.get("ssid") or {}
+    ssid_names = (
+        [ssid_plan.get("same_ssid_name")]
+        if ssid_plan.get("use_same_ssid")
+        else [ssid_plan.get("ssid_2g"), ssid_plan.get("ssid_5g")]
+    )
+    ssid_names = list(dict.fromkeys([str(name).strip() for name in ssid_names if str(name or "").strip()]))
+    portal_url = (plan.get("portal") or {}).get("url") or (plan.get("portal") or {}).get("staging_url")
+    vlan_id = row.get("vlan_id")
+
+    if not action.get("enabled"):
+        message = action.get("disabled_reason") or "This Omada station action is not ready yet."
+        log_captive_portal_test(
+            f"STATION_{action_key.upper()}",
+            "FAILED",
+            message,
+            {"station_id": station_id, "action": action_key, "plan_status": plan.get("status")},
+            station_id=station_id,
+            omada_site_id=site_id,
+            omada_site_name=site_name,
+            ssid_name=ssid_name,
+        )
+        return {"status": "FAILED", "message": message, "manual_fallback": True, "plan": station_omada_portal_plan(row, admin=admin)}
+
+    try:
+        settings, client = omada_api_client_from_settings()
+        if action_key == "test_omada":
+            login_result = client.test_login()
+            version_result = {}
+            try:
+                version_result = client.detect_controller_version()
+            except Exception as exc:
+                version_result = {"error": str(exc)}
+            details = {"login": login_result, "version": version_result}
+            message = "Omada API login succeeded for this station workflow."
+        elif action_key == "create_open_ssid":
+            ssid_results = [
+                client.create_open_ssid_if_supported(site_id, name, vlan_id=vlan_id)
+                for name in ssid_names
+            ]
+            cleanup_details = {}
+            ap_config = ensure_ap_deployment_configuration()
+            if (ap_config.get("ssid_scope") or "GLOBAL") == "PER_SITE":
+                stale_names = [
+                    name for name in captive_portal_ssid_names_from_ap_configuration(ap_config)
+                    if name not in set(ssid_names)
+                ]
+                if stale_names:
+                    cleanup_details = client.delete_ssids_by_name_if_supported(site_id, stale_names)
+            details = {"ssids": ssid_results, "ssid_names": ssid_names, "vlan_id": vlan_id, "stale_ssid_cleanup": cleanup_details}
+            message = f"Open SSID(s) created or already exist for VLAN {vlan_id}."
+        elif action_key == "configure_external_portal":
+            controller_portal_url = client.ensure_controller_portal_url_manual_if_supported()
+            omada_payload = {
+                "name": f"3JCentralPisowifi External Portal - {row['station_name']}",
+                "portalUrl": portal_url,
+                "externalPortalUrl": portal_url,
+                "ssidName": ssid_name,
+                "ssidNames": ssid_names,
+                "stationName": row["station_name"],
+                "vlanId": vlan_id,
+                "httpsRedirectEnable": False,
+            }
+            details = client.configure_external_portal_if_supported(site_id, omada_payload)
+            details["controller_portal_url"] = controller_portal_url
+            try:
+                details["pre_auth_access"] = client.ensure_pre_auth_access_for_portal(site_id, portal_url)
+            except Exception as exc:
+                details["pre_auth_access"] = {"status": "WARNING", "message": sanitize_routeros_text(str(exc))}
+            message = "External portal profile created or updated for this station."
+        elif action_key == "verify":
+            details = {
+                "portal_settings": public_captive_portal_settings(),
+                "omada_api_configured": True,
+                "selected_site_id": site_id,
+                "selected_site_name": site_name,
+                "ssid_name": ssid_name,
+                "station_vlan_id": vlan_id,
+                "portal_url": portal_url,
+                "portal_reachable": True,
+            }
+            message = "Station Omada captive portal setup has the required API, site, SSID, VLAN, and portal values."
+        else:
+            raise HTTPException(status_code=404, detail="Unsupported station Omada action")
+
+        log_captive_portal_test(
+            f"STATION_{action_key.upper()}",
+            "SUCCESS",
+            message,
+            {"station_id": station_id, "site_id": site_id, "site_name": site_name, "ssid": ssid_name, "vlan_id": vlan_id, "result": details},
+            station_id=station_id,
+            omada_site_id=site_id,
+            omada_site_name=site_name,
+            ssid_name=ssid_name,
+        )
+        audit(admin["id"], f"station_omada_{action_key}", "mikrotik_stations", station_id, {"site_id": site_id, "site_name": site_name, "ssid": ssid_name, "vlan_id": vlan_id})
+        return {
+            "status": "SUCCESS",
+            "message": message,
+            "result": sanitize_summary(details),
+            "plan": station_omada_portal_plan(row, admin=admin),
+        }
+    except Exception as exc:
+        response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
+        message = f"{action.get('label') or action_key} failed. Use the manual setup guide."
+        log_captive_portal_test(
+            f"STATION_{action_key.upper()}",
+            "FAILED",
+            message,
+            {"station_id": station_id, "site_id": site_id, "site_name": site_name, "ssid": ssid_name, "vlan_id": vlan_id, "error": str(exc), "response": response_summary},
+            station_id=station_id,
+            omada_site_id=site_id,
+            omada_site_name=site_name,
+            ssid_name=ssid_name,
+        )
+        return {
+            "status": "FAILED",
+            "message": message,
+            "error": str(exc),
+            "manual_fallback": True,
+            "details": sanitize_summary(response_summary),
+            "plan": station_omada_portal_plan(row, admin=admin),
+        }
 
 
 def ap_management_router_rows(config_id: str) -> list[dict]:
@@ -9034,6 +12532,18 @@ def normalize_ap_management_config_payload(payload: MikrotikApManagementConfigPa
             station_network = None
         if station_network and network.overlaps(station_network):
             raise HTTPException(status_code=400, detail=f"AP management subnet {network.with_prefixlen} overlaps customer subnet {station_network.with_prefixlen} from station {station['station_name']}.")
+    global_errors = mikrotik_global_resource_conflict_errors(
+        "AP management",
+        int(payload.vlan_id),
+        network,
+        gateway_ip,
+        pool_start,
+        pool_end,
+        (payload.pool_name or "").strip() or f"POOL-AP-MGMT-V{int(payload.vlan_id)}",
+        [f"3j ap management - vlan {int(payload.vlan_id)}"],
+    )
+    if global_errors:
+        raise HTTPException(status_code=400, detail=" ".join(global_errors))
     dns_servers = normalize_upstream_dns_servers(payload.dns_servers, str(gateway_ip))
     vlan_id = int(payload.vlan_id)
     return {
@@ -9071,8 +12581,6 @@ def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayloa
         router_label = router["router_name"] if router else f"router #{index + 1}"
         if not (item.bridge_name or "").strip():
             errors.append(f"{router_label}: bridge/interface is required.")
-        if not (item.tagged_ports or "").strip():
-            errors.append(f"{router_label}: tagged ports are required.")
         scan, snapshot = station_snapshot_for_router(item.router_id)
         if not scan:
             errors.append(f"{router_label}: run a successful Preflight Scan before saving AP management.")
@@ -9082,6 +12590,8 @@ def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayloa
             continue
         bridge_name = (item.bridge_name or "").strip()
         port_names = [port.strip() for port in str(item.tagged_ports or "").split(",") if port.strip()]
+        if not port_names:
+            errors.append(f"{router_label}: add at least one tagged trunk port for AP management VLAN {vlan_id}.")
         interfaces, live_interface_error, used_live_interfaces = station_interface_map_with_live_fallback(item.router_id, snapshot, [bridge_name, *port_names])
         if bridge_name and bridge_name not in interfaces:
             suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
@@ -9094,6 +12604,20 @@ def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayloa
                 errors.append(f"{router_label}: tagged port '{port_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
             elif station_interface_is_pppoe(interfaces[port_name]):
                 errors.append(f"{router_label}: tagged port '{port_name}' is PPPoE-related and cannot carry AP management VLAN.")
+        bridge_port_bridge_map = {
+            str(row.get("interface") or "").strip(): str(row.get("bridge") or "").strip()
+            for row in mikrotik_snapshot_items(snapshot, "bridge_ports")
+            if str(row.get("interface") or "").strip()
+        }
+        for interface_name, interface_data in interfaces.items():
+            live_bridge = str(interface_data.get("bridge") or "").strip()
+            if live_bridge:
+                bridge_port_bridge_map.setdefault(interface_name, live_bridge)
+        for port_name in port_names:
+            if port_name == bridge_name:
+                continue
+            if bridge_port_bridge_map.get(port_name) and bridge_port_bridge_map.get(port_name) != bridge_name:
+                errors.append(f"{router_label}: tagged port '{port_name}' belongs to bridge '{bridge_port_bridge_map[port_name]}', not selected bridge '{bridge_name}'. Choose a trunk port inside the selected bridge.")
         existing_vlan_ids = set()
         for row in mikrotik_snapshot_items(snapshot, "interface_vlans"):
             existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-id")))
@@ -9129,6 +12653,334 @@ def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayloa
         raise HTTPException(status_code=400, detail=" ".join(errors))
 
 
+def build_mikrotik_ap_management_remove_plan(config: dict, routers: list[dict]) -> dict:
+    vlan_id = int(config["vlan_id"])
+    vlan_interface_name = config.get("vlan_interface_name") or f"VLAN{vlan_id}-AP-MGMT"
+    pool_name = config.get("pool_name") or f"POOL-AP-MGMT-V{vlan_id}"
+    dhcp_server_name = config.get("dhcp_server_name") or f"DHCP-AP-MGMT-V{vlan_id}"
+    omada_dhcp_option_name = f"3J-OMADA-CONTROLLER-V{vlan_id}" if omada_controller_discovery_ip() else None
+    raw_ap_management_tracking_comment = f"3J AP Management - keep VLAN {vlan_id} AP management traffic tracked"
+    raw_ap_management_return_tracking_comment = f"3J AP Management - keep VLAN {vlan_id} AP management return traffic tracked"
+    ap_management_gui_nat_comment = f"3J AP Management - office GUI access to VLAN {vlan_id} APs"
+    omada_discovery_filter_comment = omada_ap_discovery_filter_comment(vlan_id)
+    omada_management_filter_comment = omada_ap_management_filter_comment(vlan_id)
+    router_plans = []
+    for index, router in reversed(list(enumerate(routers))):
+        bridge_name = (router.get("bridge_name") or "").strip()
+        untagged_ports = [port.strip() for port in str(router.get("untagged_ports") or "").split(",") if port.strip()]
+        is_root = index == 0
+        previous_name = routers[index - 1].get("router_name") if index > 0 else None
+        commands = []
+        if is_root:
+            commands.extend([
+                *[
+                    station_routeros_set_existing_command(
+                        f"Reset native AP management VLAN on {port_name}",
+                        "/interface/bridge/port/print",
+                        {"interface": port_name, "bridge": bridge_name},
+                        "/interface/bridge/port/set",
+                        {"pvid": "1"},
+                        verify={
+                            "words": ["/interface/bridge/port/print", f"?interface={port_name}", f"?bridge={bridge_name}", "=.proplist=interface,pvid"],
+                            "field": "pvid",
+                            "value": "1",
+                            "message": f"{port_name} already uses default PVID 1.",
+                            "not_found_message": f"{port_name} is still configured with a non-default AP management native VLAN.",
+                        },
+                    )
+                    for port_name in untagged_ports
+                ],
+                station_routeros_remove_command(
+                    f"Remove AP management-created native bridge port(s) for VLAN {vlan_id}",
+                    "/interface/bridge/port/print",
+                    "comment",
+                    f"3J AP Management - native VLAN {vlan_id} AP-facing port",
+                ),
+                station_routeros_remove_command(
+                    "Remove old AP management VLAN from local/LAN interface list",
+                    "/interface/list/member/print",
+                    "comment",
+                    f"3J AP Management - allow VLAN {vlan_id} as local/LAN interface",
+                ),
+                station_routeros_remove_command(
+                    "Remove AP management raw tracking exception",
+                    "/ip/firewall/raw/print",
+                    "comment",
+                    raw_ap_management_tracking_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove AP management raw return tracking exception",
+                    "/ip/firewall/raw/print",
+                    "comment",
+                    raw_ap_management_return_tracking_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove AP management office GUI access NAT",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    ap_management_gui_nat_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove Omada discovery allow rule",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    omada_discovery_filter_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove Omada AP management ports allow rule",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    omada_management_filter_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove old AP management DHCP server",
+                    "/ip/dhcp-server/print",
+                    "name",
+                    dhcp_server_name,
+                ),
+                station_routeros_remove_command(
+                    "Remove old AP management DHCP network options",
+                    "/ip/dhcp-server/network/print",
+                    "comment",
+                    f"3J AP Management - DHCP options for VLAN {vlan_id}",
+                ),
+                *([
+                    station_routeros_remove_command(
+                        "Remove old Omada controller DHCP discovery option",
+                        "/ip/dhcp-server/option/print",
+                        "name",
+                        omada_dhcp_option_name,
+                    )
+                ] if omada_dhcp_option_name else []),
+                station_routeros_remove_command(
+                    "Remove old AP management DHCP pool",
+                    "/ip/pool/print",
+                    "name",
+                    pool_name,
+                ),
+                station_routeros_remove_command(
+                    f"Remove old AP management VLAN {vlan_id} gateway IP",
+                    "/ip/address/print",
+                    "comment",
+                    f"3J AP Management - VLAN {vlan_id} gateway",
+                ),
+                station_routeros_remove_command(
+                    f"Remove old AP management bridge VLAN {vlan_id}",
+                    "/interface/bridge/vlan/print",
+                    "comment",
+                    f"3J AP Management - VLAN {vlan_id} trunk to AP path",
+                ),
+                station_routeros_remove_command(
+                    f"Remove old AP management native bridge VLAN {vlan_id}",
+                    "/interface/bridge/vlan/print",
+                    "comment",
+                    f"3J AP Management - VLAN {vlan_id} trunk/native to AP path",
+                ),
+                station_routeros_remove_command(
+                    f"Remove old AP management VLAN {vlan_id} interface",
+                    "/interface/vlan/print",
+                    "name",
+                    vlan_interface_name,
+                ),
+            ])
+        else:
+            commands.extend([
+                *[
+                    station_routeros_set_existing_command(
+                        f"Reset native AP management VLAN on {port_name}",
+                        "/interface/bridge/port/print",
+                        {"interface": port_name, "bridge": bridge_name},
+                        "/interface/bridge/port/set",
+                        {"pvid": "1"},
+                        verify={
+                            "words": ["/interface/bridge/port/print", f"?interface={port_name}", f"?bridge={bridge_name}", "=.proplist=interface,pvid"],
+                            "field": "pvid",
+                            "value": "1",
+                            "message": f"{port_name} already uses default PVID 1.",
+                            "not_found_message": f"{port_name} is still configured with a non-default AP management native VLAN.",
+                        },
+                    )
+                    for port_name in untagged_ports
+                ],
+                station_routeros_remove_command(
+                    f"Remove AP management-created native bridge port(s) for VLAN {vlan_id}",
+                    "/interface/bridge/port/print",
+                    "comment",
+                    f"3J AP Management - native VLAN {vlan_id} AP-facing port",
+                ),
+                station_routeros_remove_command(
+                    f"Remove old AP management bridge VLAN {vlan_id}",
+                    "/interface/bridge/vlan/print",
+                    "comment",
+                    f"3J AP Management - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
+                ),
+                station_routeros_remove_command(
+                    f"Remove old AP management native bridge VLAN {vlan_id}",
+                    "/interface/bridge/vlan/print",
+                    "comment",
+                    f"3J AP Management - VLAN {vlan_id} trunk/native from {previous_name or 'previous router'} to OLT/APs",
+                ),
+                station_routeros_remove_command(
+                    f"Remove old AP management VLAN {vlan_id} monitoring interface",
+                    "/interface/vlan/print",
+                    "name",
+                    vlan_interface_name,
+                ),
+            ])
+        router_plans.append({
+            "router_id": str(router["router_id"]),
+            "router_name": router.get("router_name"),
+            "host": router.get("host"),
+            "sequence_order": router.get("sequence_order", index),
+            "role": "ROOT_GATEWAY" if is_root else "TRUNK_HELPER",
+            "bridge_name": bridge_name,
+            "tagged_ports": router.get("tagged_ports"),
+            "untagged_ports": router.get("untagged_ports"),
+            "commands": commands,
+        })
+    return {
+        "summary": "Remove only AP management objects created by the system before applying a changed AP management plan.",
+        "vlan_id": vlan_id,
+        "network_cidr": config.get("network_cidr"),
+        "router_plans": router_plans,
+    }
+
+
+def ap_management_stale_cleanup_plan_from_logs(config: dict, routers: list[dict]) -> Optional[dict]:
+    current_vlan_id = int(config["vlan_id"])
+    rows = fetch_all(
+        """
+        SELECT router_id, action, command_label, command_preview, status, created_at
+        FROM mikrotik_ap_management_command_logs
+        WHERE config_id = %s
+          AND router_id IS NOT NULL
+          AND action IN ('APPLY', 'CLEANUP_OLD')
+          AND status IN ('SUCCESS', 'SKIPPED')
+        ORDER BY created_at ASC
+        """,
+        (str(config["id"]),),
+    )
+    if not rows:
+        return None
+
+    stale_by_router: dict[str, set[int]] = {}
+    cleanup_done_by_router: dict[str, set[int]] = {}
+    root_router_ids: set[str] = set()
+    for row in rows:
+        text = f"{row.get('command_label') or ''}\n{row.get('command_preview') or ''}"
+        if "AP management" not in text:
+            continue
+        vlan_ids = set()
+        for pattern in [
+            r"VLAN\s+(\d{1,4})",
+            r"VLAN(\d{1,4})-AP-MGMT",
+            r"V(\d{1,4})\b",
+            r"vlan-id=(\d{1,4})",
+            r"vlan-ids=(\d{1,4})",
+        ]:
+            for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+                try:
+                    value = int(match.group(1))
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= value <= 4094 and value != current_vlan_id:
+                    vlan_ids.add(value)
+        if not vlan_ids:
+            continue
+        router_id = str(row["router_id"])
+        if row.get("action") == "CLEANUP_OLD":
+            cleanup_done_by_router.setdefault(router_id, set()).update(vlan_ids)
+        else:
+            stale_by_router.setdefault(router_id, set()).update(vlan_ids)
+            if re.search(r"gateway IP|DHCP server|DHCP pool|DHCP network|local/LAN|discovery option|Omada discovery|Omada AP management", text, flags=re.IGNORECASE):
+                root_router_ids.add(router_id)
+
+    for router_id, cleaned_vlans in cleanup_done_by_router.items():
+        if router_id in stale_by_router:
+            stale_by_router[router_id] -= cleaned_vlans
+            if not stale_by_router[router_id]:
+                stale_by_router.pop(router_id, None)
+
+    if not stale_by_router:
+        return None
+
+    current_router_map = {str(item["router_id"]): item for item in routers}
+    router_ids = list(stale_by_router.keys())
+    router_rows = {
+        str(row["id"]): row
+        for row in fetch_all("SELECT id, router_name, host FROM mikrotik_routers WHERE id = ANY(%s::uuid[])", (router_ids,))
+    }
+    if not root_router_ids and routers:
+        root_router_ids.add(str(routers[0]["router_id"]))
+
+    router_plans = []
+    for router_id, vlan_ids in stale_by_router.items():
+        current_router = current_router_map.get(router_id) or {}
+        router_row = router_rows.get(router_id) or {}
+        sequence_order = current_router.get("sequence_order", 0 if router_id in root_router_ids else 99)
+        bridge_name = current_router.get("bridge_name")
+        is_root = router_id in root_router_ids or sequence_order == 0
+        role = "ROOT_GATEWAY" if is_root else "TRUNK_HELPER"
+        commands = []
+        previous_name = None
+        if not is_root and routers:
+            ordered = sorted(routers, key=lambda item: int(item.get("sequence_order") or 0))
+            current_index = next((index for index, item in enumerate(ordered) if str(item.get("router_id")) == router_id), None)
+            if current_index and current_index > 0:
+                previous_name = ordered[current_index - 1].get("router_name")
+            previous_name = previous_name or ordered[0].get("router_name")
+        for vlan_id in sorted(vlan_ids):
+            stale_config = {
+                "id": config["id"],
+                "vlan_id": vlan_id,
+                "vlan_interface_name": f"VLAN{vlan_id}-AP-MGMT",
+                "network_cidr": "",
+                "gateway_ip": "",
+                "pool_start_ip": "",
+                "pool_end_ip": "",
+                "pool_name": f"POOL-AP-MGMT-V{vlan_id}",
+                "dhcp_server_name": f"DHCP-AP-MGMT-V{vlan_id}",
+            }
+            if is_root:
+                commands.extend([
+                    station_routeros_remove_command("Remove old AP management VLAN from local/LAN interface list", "/interface/list/member/print", "comment", f"3J AP Management - allow VLAN {vlan_id} as local/LAN interface"),
+                    station_routeros_remove_command("Remove old AP management raw tracking exception", "/ip/firewall/raw/print", "comment", f"3J AP Management - keep VLAN {vlan_id} AP management traffic tracked"),
+                    station_routeros_remove_command("Remove old AP management raw return tracking exception", "/ip/firewall/raw/print", "comment", f"3J AP Management - keep VLAN {vlan_id} AP management return traffic tracked"),
+                    station_routeros_remove_command("Remove old AP management office GUI access NAT", "/ip/firewall/nat/print", "comment", f"3J AP Management - office GUI access to VLAN {vlan_id} APs"),
+                    station_routeros_remove_command("Remove old Omada discovery allow rule", "/ip/firewall/filter/print", "comment", omada_ap_discovery_filter_comment(vlan_id)),
+                    station_routeros_remove_command("Remove old Omada AP management ports allow rule", "/ip/firewall/filter/print", "comment", omada_ap_management_filter_comment(vlan_id)),
+                    station_routeros_remove_command("Remove old AP management DHCP server", "/ip/dhcp-server/print", "name", stale_config["dhcp_server_name"]),
+                    station_routeros_remove_command("Remove old AP management DHCP network options", "/ip/dhcp-server/network/print", "comment", f"3J AP Management - DHCP options for VLAN {vlan_id}"),
+                    station_routeros_remove_command("Remove old Omada controller DHCP discovery option", "/ip/dhcp-server/option/print", "name", f"3J-OMADA-CONTROLLER-V{vlan_id}"),
+                    station_routeros_remove_command("Remove old AP management DHCP pool", "/ip/pool/print", "name", stale_config["pool_name"]),
+                    station_routeros_remove_command(f"Remove old AP management VLAN {vlan_id} gateway IP", "/ip/address/print", "comment", f"3J AP Management - VLAN {vlan_id} gateway"),
+                    station_routeros_remove_command(f"Remove old AP management bridge VLAN {vlan_id}", "/interface/bridge/vlan/print", "comment", f"3J AP Management - VLAN {vlan_id} trunk to AP path"),
+                    station_routeros_remove_command(f"Remove old AP management VLAN {vlan_id} interface", "/interface/vlan/print", "name", stale_config["vlan_interface_name"]),
+                ])
+            else:
+                commands.extend([
+                    station_routeros_remove_command(f"Remove old AP management bridge VLAN {vlan_id}", "/interface/bridge/vlan/print", "comment", f"3J AP Management - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs"),
+                    station_routeros_remove_command(f"Remove old AP management VLAN {vlan_id} monitoring interface", "/interface/vlan/print", "name", stale_config["vlan_interface_name"]),
+                ])
+        if commands:
+            router_plans.append({
+                "router_id": router_id,
+                "router_name": current_router.get("router_name") or router_row.get("router_name"),
+                "host": current_router.get("host") or router_row.get("host"),
+                "sequence_order": sequence_order,
+                "role": role,
+                "bridge_name": bridge_name,
+                "tagged_ports": current_router.get("tagged_ports"),
+                "commands": commands,
+            })
+    if not router_plans:
+        return None
+    return {
+        "summary": "Remove older AP management config found in AP Management command history before applying the current plan.",
+        "router_plans": sorted(router_plans, key=lambda item: int(item.get("sequence_order") or 0), reverse=True),
+    }
+
+
 def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict:
     vlan_id = int(config["vlan_id"])
     network = ip_network(config["network_cidr"], strict=False)
@@ -9138,6 +12990,15 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
     dhcp_lease_time = config.get("dhcp_lease_time") or "1h"
     dns_servers = normalize_upstream_dns_servers(config.get("dns_servers"), str(config["gateway_ip"]))
     local_interface_list = config.get("local_interface_list") or "LOCAL"
+    omada_controller_ip = omada_controller_discovery_ip()
+    omada_dhcp_option_name = f"3J-OMADA-CONTROLLER-V{vlan_id}" if omada_controller_ip else None
+    omada_dhcp_option_value = routeros_dhcp_option_ip_hex(omada_controller_ip) if omada_controller_ip else None
+    raw_ap_management_tracking_comment = f"3J AP Management - keep VLAN {vlan_id} AP management traffic tracked"
+    raw_ap_management_return_tracking_comment = f"3J AP Management - keep VLAN {vlan_id} AP management return traffic tracked"
+    omada_discovery_udp_ports = omada_ap_discovery_udp_ports()
+    omada_management_tcp_ports = omada_ap_management_tcp_ports()
+    omada_discovery_filter_comment = omada_ap_discovery_filter_comment(vlan_id)
+    omada_management_filter_comment = omada_ap_management_filter_comment(vlan_id)
     router_plans = []
     for index, router in enumerate(routers):
         bridge_name = (router.get("bridge_name") or "").strip()
@@ -9161,7 +13022,7 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
                     unique_value=vlan_interface_name,
                 ),
                 station_routeros_add_command(
-                    f"Tag AP management VLAN {vlan_id} toward AP path",
+                    f"Carry AP management VLAN {vlan_id} toward AP path",
                     "/interface/bridge/vlan/add",
                     {
                         "bridge": bridge_name,
@@ -9170,7 +13031,7 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
                         "vlan-ids": str(vlan_id),
                     },
                     existing_query={"bridge": bridge_name, "vlan-ids": str(vlan_id)},
-                    merge_bridge_vlan_tagged=True,
+                    merge_bridge_vlan_members=True,
                 ),
                 station_routeros_add_command(
                     f"Add AP management VLAN {vlan_id} gateway IP",
@@ -9206,6 +13067,19 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
                     unique_field="name",
                     unique_value=dhcp_server_name,
                 ),
+                *([
+                    station_routeros_add_command(
+                        "Add Omada controller DHCP discovery option",
+                        "/ip/dhcp-server/option/add",
+                        {
+                            "name": omada_dhcp_option_name,
+                            "code": "138",
+                            "value": omada_dhcp_option_value,
+                        },
+                        unique_field="name",
+                        unique_value=omada_dhcp_option_name,
+                    ),
+                ] if omada_dhcp_option_name else []),
                 station_routeros_add_command(
                     "Add AP management DHCP network options",
                     "/ip/dhcp-server/network/add",
@@ -9213,10 +13087,35 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
                         "address": network.with_prefixlen,
                         "comment": f"3J AP Management - DHCP options for VLAN {vlan_id}",
                         "dns-server": dns_servers,
+                        **({"dhcp-option": omada_dhcp_option_name} if omada_dhcp_option_name else {}),
                         "gateway": str(config["gateway_ip"]),
                     },
                     existing_query={"address": network.with_prefixlen},
                 ),
+                *([
+                    station_routeros_add_command(
+                        "Attach Omada discovery option to AP management DHCP network",
+                        "/ip/dhcp-server/network/set",
+                        {"dhcp-option": omada_dhcp_option_name},
+                        set_existing_query={
+                            "print_path": "/ip/dhcp-server/network/print",
+                            "set_path": "/ip/dhcp-server/network/set",
+                            "query": {"address": network.with_prefixlen},
+                        },
+                        verify={
+                            "words": [
+                                "/ip/dhcp-server/network/print",
+                                f"?address={network.with_prefixlen}",
+                                "=.proplist=address,dhcp-option",
+                            ],
+                            "field": "dhcp-option",
+                            "value": omada_dhcp_option_name,
+                            "contains": True,
+                            "message": "AP management DHCP network already advertises the Omada controller discovery option.",
+                            "not_found_message": "AP management DHCP network is not advertising the Omada controller discovery option yet.",
+                        },
+                    ),
+                ] if omada_dhcp_option_name else []),
                 station_routeros_add_command(
                     "Allow AP management VLAN as local/LAN interface",
                     "/interface/list/member/add",
@@ -9226,6 +13125,64 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
                         "list": local_interface_list,
                     },
                     existing_query={"interface": vlan_interface_name, "list": local_interface_list},
+                ),
+                *([
+                    station_routeros_add_command(
+                        "Allow Omada discovery from AP management VLAN",
+                        "/ip/firewall/filter/add",
+                        {
+                            "chain": "forward",
+                            "src-address": network.with_prefixlen,
+                            "dst-address": omada_controller_ip,
+                            "protocol": "udp",
+                            "dst-port": omada_discovery_udp_ports,
+                            "action": "accept",
+                            "comment": omada_discovery_filter_comment,
+                        },
+                        unique_comment=omada_discovery_filter_comment,
+                        place_before_query=omada_forward_drop_place_before_query(),
+                    ),
+                    station_routeros_add_command(
+                        "Allow Omada AP management ports from AP management VLAN",
+                        "/ip/firewall/filter/add",
+                        {
+                            "chain": "forward",
+                            "src-address": network.with_prefixlen,
+                            "dst-address": omada_controller_ip,
+                            "protocol": "tcp",
+                            "dst-port": omada_management_tcp_ports,
+                            "action": "accept",
+                            "comment": omada_management_filter_comment,
+                        },
+                        unique_comment=omada_management_filter_comment,
+                        place_before_query=omada_forward_drop_place_before_query(),
+                    ),
+                ] if omada_controller_ip else []),
+                station_routeros_add_command(
+                    "Keep AP management traffic tracked before global raw notrack",
+                    "/ip/firewall/raw/add",
+                    {
+                        "chain": "prerouting",
+                        "src-address": network.with_prefixlen,
+                        "action": "accept",
+                        "comment": raw_ap_management_tracking_comment,
+                    },
+                    unique_comment=raw_ap_management_tracking_comment,
+                    only_if_query_exists=routeros_active_broad_notrack_condition(),
+                    place_before_query=routeros_active_broad_notrack_condition(),
+                ),
+                station_routeros_add_command(
+                    "Keep AP GUI return traffic tracked before global raw notrack",
+                    "/ip/firewall/raw/add",
+                    {
+                        "chain": "prerouting",
+                        "dst-address": network.with_prefixlen,
+                        "action": "accept",
+                        "comment": raw_ap_management_return_tracking_comment,
+                    },
+                    unique_comment=raw_ap_management_return_tracking_comment,
+                    only_if_query_exists=routeros_active_broad_notrack_condition(),
+                    place_before_query=routeros_active_broad_notrack_condition(),
                 ),
             ])
         else:
@@ -9253,7 +13210,7 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
                         "vlan-ids": str(vlan_id),
                     },
                     existing_query={"bridge": bridge_name, "vlan-ids": str(vlan_id)},
-                    merge_bridge_vlan_tagged=True,
+                    merge_bridge_vlan_members=True,
                 ),
             ])
         router_plans.append({
@@ -9267,7 +13224,7 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
             "effective_tagged_ports": effective_tagged_ports,
             "commands": commands,
         })
-    return {
+    plan = {
         "summary": "Central AP management creates one AP management VLAN/subnet on the root gateway and carries that VLAN through selected downstream routers toward OLT/AP paths.",
         "vlan_id": vlan_id,
         "vlan_interface_name": vlan_interface_name,
@@ -9278,8 +13235,19 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
         "dhcp_server_name": dhcp_server_name,
         "dhcp_lease_time": dhcp_lease_time,
         "dns_servers": dns_servers,
+        "omada_controller_discovery_ip": omada_controller_ip,
+        "omada_ap_discovery_udp_ports": omada_discovery_udp_ports,
+        "omada_ap_management_tcp_ports": omada_management_tcp_ports,
+        "omada_dhcp_option_name": omada_dhcp_option_name,
+        "omada_dhcp_option_value": omada_dhcp_option_value,
         "router_plans": router_plans,
     }
+    stale_cleanup_plan = ap_management_stale_cleanup_plan_from_logs(config, routers)
+    return combine_pending_cleanup_with_apply_plan(
+        plan,
+        merge_cleanup_plans(config.get("pending_cleanup_plan_json"), stale_cleanup_plan),
+        config.get("pending_cleanup_reason") or ("Older AP management RouterOS objects were detected from command history and will be removed before pushing the current plan." if stale_cleanup_plan else None),
+    )
 
 
 def public_mikrotik_ap_management_config(row: Optional[dict]) -> dict:
@@ -9301,6 +13269,10 @@ def public_mikrotik_ap_management_config(row: Optional[dict]) -> dict:
         "dns_servers": row.get("dns_servers"),
         "local_interface_list": row.get("local_interface_list") or "LOCAL",
         "status": row["status"],
+        "has_pending_cleanup": bool(row.get("pending_cleanup_plan_json")),
+        "pending_cleanup_reason": row.get("pending_cleanup_reason"),
+        "pending_cleanup_created_at": row.get("pending_cleanup_created_at"),
+        "pending_cleanup_resolved_at": row.get("pending_cleanup_resolved_at"),
         "routers": [
             {
                 "id": item["id"],
@@ -9318,6 +13290,7 @@ def public_mikrotik_ap_management_config(row: Optional[dict]) -> dict:
             for item in routers
         ],
         "plan": build_mikrotik_ap_management_plan(row, routers),
+        "remove_plan": build_mikrotik_ap_management_remove_plan(row, routers),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -9350,6 +13323,392 @@ def record_ap_management_command_log(config_id: str, router_id: Optional[str], a
 
 
 def public_ap_management_command_log(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "config_id": row["config_id"],
+        "router_id": row["router_id"],
+        "action": row["action"],
+        "command_index": row["command_index"],
+        "command_label": row["command_label"],
+        "command_preview": row["command_preview"],
+        "command_status": row["status"],
+        "message": row["message"],
+        "result": row.get("result_json") or {},
+        "router_name": row.get("router_name"),
+        "host": row.get("host"),
+        "created_at": row["created_at"],
+    }
+
+
+def latest_mikrotik_office_ap_path_config_row() -> Optional[dict]:
+    return fetch_one(
+        """
+        SELECT *
+        FROM mikrotik_office_ap_path_configs
+        WHERE status <> 'ARCHIVED'
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1
+        """
+    )
+
+
+def office_ap_path_router_rows(config_id: str) -> list[dict]:
+    return fetch_all(
+        """
+        SELECT pr.*, mr.router_name, mr.host, mr.api_port, mr.status AS api_status
+        FROM mikrotik_office_ap_path_routers pr
+        JOIN mikrotik_routers mr ON mr.id = pr.router_id
+        WHERE pr.config_id = %s
+        ORDER BY pr.sequence_order ASC
+        """,
+        (config_id,),
+    )
+
+
+def office_ap_path_default_config() -> dict:
+    return {
+        "id": None,
+        "config_name": "Office AP Path",
+        "office_bridge_name": "MANAGEMENT LAN",
+        "transport_vlan_id": 1030,
+        "transport_vlan_interface_name": "VLAN1030-OFFICE-AP-PATH",
+        "status": "DRAFT",
+        "routers": [],
+        "plan": {"router_plans": [], "summary": "Save an office AP path plan before reviewing RouterOS steps."},
+        "remove_plan": {"router_plans": [], "summary": "No office AP path plan is saved yet."},
+        "created_at": None,
+        "updated_at": None,
+    }
+
+
+def normalize_office_ap_path_payload(payload: MikrotikOfficeApPathConfigPayload) -> dict:
+    vlan_id = int(payload.transport_vlan_id)
+    return {
+        "config_name": payload.config_name.strip(),
+        "office_bridge_name": payload.office_bridge_name.strip(),
+        "transport_vlan_id": vlan_id,
+        "transport_vlan_interface_name": (payload.transport_vlan_interface_name or "").strip() or f"VLAN{vlan_id}-OFFICE-AP-PATH",
+    }
+
+
+def office_ap_path_config_signature_from_values(config: dict, routers: list[dict]) -> dict:
+    vlan_id = int(config.get("transport_vlan_id"))
+    return {
+        "office_bridge_name": str(config.get("office_bridge_name") or "").strip(),
+        "transport_vlan_id": vlan_id,
+        "transport_vlan_interface_name": str(config.get("transport_vlan_interface_name") or f"VLAN{vlan_id}-OFFICE-AP-PATH").strip(),
+        "routers": [
+            {
+                "router_id": str(item.get("router_id") or ""),
+                "bridge_name": str(item.get("bridge_name") or "").strip(),
+                "tagged_ports": station_dedupe_csv(item.get("tagged_ports")),
+            }
+            for item in sorted(routers, key=lambda row: int(row.get("sequence_order") or 0))
+        ],
+    }
+
+
+def office_ap_path_config_signature_from_payload(normalized: dict, payload: MikrotikOfficeApPathConfigPayload) -> dict:
+    return office_ap_path_config_signature_from_values(
+        normalized,
+        [
+            {
+                "router_id": item.router_id,
+                "bridge_name": item.bridge_name,
+                "tagged_ports": item.tagged_ports,
+                "sequence_order": index,
+            }
+            for index, item in enumerate(payload.routers)
+        ],
+    )
+
+
+def validate_office_ap_path_router_path(payload: MikrotikOfficeApPathConfigPayload, normalized: dict):
+    if not payload.routers:
+        raise HTTPException(status_code=400, detail="Add at least one MikroTik router to the office AP path chain.")
+    router_ids = [item.router_id for item in payload.routers]
+    if len(router_ids) != len(set(router_ids)):
+        raise HTTPException(status_code=400, detail="A MikroTik router can appear only once in the office AP path chain.")
+    existing_routers = fetch_all("SELECT id, router_name FROM mikrotik_routers WHERE id = ANY(%s::uuid[])", (router_ids,))
+    existing_ids = {str(row["id"]) for row in existing_routers}
+    missing_ids = [router_id for router_id in router_ids if router_id not in existing_ids]
+    if missing_ids:
+        raise HTTPException(status_code=400, detail="One or more selected MikroTik routers no longer exist.")
+    errors = []
+    vlan_id = normalized["transport_vlan_id"]
+    vlan_interface_name = normalized["transport_vlan_interface_name"]
+    office_bridge_name = normalized["office_bridge_name"]
+    for index, item in enumerate(payload.routers):
+        router = fetch_one("SELECT id, router_name FROM mikrotik_routers WHERE id = %s", (item.router_id,))
+        router_label = router["router_name"] if router else f"router #{index + 1}"
+        bridge_name = (item.bridge_name or "").strip()
+        port_names = [port.strip() for port in str(item.tagged_ports or "").split(",") if port.strip()]
+        if not bridge_name:
+            errors.append(f"{router_label}: transport bridge/interface is required.")
+        if not port_names:
+            errors.append(f"{router_label}: add at least one tagged trunk port for office AP path VLAN {vlan_id}.")
+        scan, snapshot = station_snapshot_for_router(item.router_id)
+        if not scan:
+            errors.append(f"{router_label}: run a successful Preflight Scan before saving the office AP path.")
+            continue
+        if scan.get("scan_status") != "SUCCESS":
+            errors.append(f"{router_label}: latest Preflight Scan failed. Re-scan before saving the office AP path.")
+            continue
+        selected_names = [bridge_name, *port_names]
+        if index == 0:
+            selected_names.append(office_bridge_name)
+        interfaces, live_interface_error, _ = station_interface_map_with_live_fallback(item.router_id, snapshot, selected_names)
+        if bridge_name and bridge_name not in interfaces:
+            suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
+            errors.append(f"{router_label}: selected transport bridge/interface '{bridge_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
+        elif bridge_name and station_interface_is_pppoe(interfaces[bridge_name]):
+            errors.append(f"{router_label}: '{bridge_name}' is PPPoE-related and cannot carry office AP path VLAN.")
+        if index == 0:
+            if office_bridge_name not in interfaces:
+                suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
+                errors.append(f"{router_label}: office bridge '{office_bridge_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
+            elif station_interface_is_pppoe(interfaces[office_bridge_name]):
+                errors.append(f"{router_label}: office bridge '{office_bridge_name}' is PPPoE-related and cannot be used as the office LAN bridge.")
+            if office_bridge_name == bridge_name:
+                errors.append(f"{router_label}: office bridge and transport bridge must be different. The system bridges a VLAN interface from the transport bridge into the office LAN bridge.")
+            for row in mikrotik_snapshot_items(snapshot, "interface_vlans"):
+                if str(row.get("name") or "") == vlan_interface_name and not station_existing_vlan_is_managed(snapshot, vlan_id, vlan_interface_name, f"3j office ap path - vlan {vlan_id}"):
+                    errors.append(f"{router_label}: VLAN interface name {vlan_interface_name} already exists and is not marked as system-managed.")
+        for port_name in port_names:
+            if port_name not in interfaces:
+                suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
+                errors.append(f"{router_label}: tagged port '{port_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
+            elif station_interface_is_pppoe(interfaces[port_name]):
+                errors.append(f"{router_label}: tagged port '{port_name}' is PPPoE-related and cannot carry office AP path VLAN.")
+        bridge_port_bridge_map = {
+            str(row.get("interface") or "").strip(): str(row.get("bridge") or "").strip()
+            for row in mikrotik_snapshot_items(snapshot, "bridge_ports")
+            if str(row.get("interface") or "").strip()
+        }
+        for interface_name, interface_data in interfaces.items():
+            live_bridge = str(interface_data.get("bridge") or "").strip()
+            if live_bridge:
+                bridge_port_bridge_map.setdefault(interface_name, live_bridge)
+        for port_name in port_names:
+            if port_name == bridge_name:
+                continue
+            if bridge_port_bridge_map.get(port_name) and bridge_port_bridge_map.get(port_name) != bridge_name:
+                errors.append(f"{router_label}: tagged port '{port_name}' belongs to bridge '{bridge_port_bridge_map[port_name]}', not selected transport bridge '{bridge_name}'. Choose a trunk port inside the selected bridge.")
+    if errors:
+        raise HTTPException(status_code=400, detail=" ".join(errors))
+
+
+def build_mikrotik_office_ap_path_remove_plan(config: dict, routers: list[dict]) -> dict:
+    vlan_id = int(config["transport_vlan_id"])
+    vlan_interface_name = config.get("transport_vlan_interface_name") or f"VLAN{vlan_id}-OFFICE-AP-PATH"
+    router_plans = []
+    for index, router in reversed(list(enumerate(routers))):
+        bridge_name = (router.get("bridge_name") or "").strip()
+        is_root = index == 0
+        previous_name = routers[index - 1].get("router_name") if index > 0 else None
+        commands = []
+        if is_root:
+            commands.extend([
+                station_routeros_remove_command(
+                    "Remove office AP path bridge-port into office LAN",
+                    "/interface/bridge/port/print",
+                    "comment",
+                    f"3J Office AP Path - bridge office LAN to VLAN {vlan_id}",
+                ),
+                station_routeros_remove_command(
+                    f"Remove office AP path bridge VLAN {vlan_id}",
+                    "/interface/bridge/vlan/print",
+                    "comment",
+                    f"3J Office AP Path - VLAN {vlan_id} transport to AP path",
+                ),
+                station_routeros_remove_command(
+                    f"Remove office AP path VLAN {vlan_id} interface",
+                    "/interface/vlan/print",
+                    "name",
+                    vlan_interface_name,
+                ),
+            ])
+        else:
+            commands.append(
+                station_routeros_remove_command(
+                    f"Remove office AP path VLAN {vlan_id} trunk",
+                    "/interface/bridge/vlan/print",
+                    "comment",
+                    f"3J Office AP Path - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
+                )
+            )
+        router_plans.append({
+            "router_id": str(router["router_id"]),
+            "router_name": router.get("router_name"),
+            "host": router.get("host"),
+            "sequence_order": router.get("sequence_order", index),
+            "role": "ROOT_GATEWAY" if is_root else "TRUNK_HELPER",
+            "bridge_name": bridge_name,
+            "tagged_ports": router.get("tagged_ports"),
+            "commands": commands,
+        })
+    return {
+        "summary": "Remove only 3J Office AP Path-created RouterOS objects by exact names/comments.",
+        "transport_vlan_id": vlan_id,
+        "transport_vlan_interface_name": vlan_interface_name,
+        "router_plans": router_plans,
+    }
+
+
+def build_mikrotik_office_ap_path_plan(config: dict, routers: list[dict]) -> dict:
+    vlan_id = int(config["transport_vlan_id"])
+    office_bridge_name = (config.get("office_bridge_name") or "").strip()
+    vlan_interface_name = config.get("transport_vlan_interface_name") or f"VLAN{vlan_id}-OFFICE-AP-PATH"
+    router_plans = []
+    for index, router in enumerate(routers):
+        bridge_name = (router.get("bridge_name") or "").strip()
+        tagged_ports = (router.get("tagged_ports") or "").strip()
+        effective_tagged_ports = station_dedupe_csv(bridge_name, tagged_ports)
+        is_root = index == 0
+        commands = []
+        if is_root:
+            commands.extend([
+                station_routeros_add_command(
+                    f"Create office AP path VLAN {vlan_id} interface",
+                    "/interface/vlan/add",
+                    {
+                        "comment": f"3J Office AP Path - VLAN {vlan_id} interface on {bridge_name}",
+                        "interface": bridge_name,
+                        "name": vlan_interface_name,
+                        "vlan-id": str(vlan_id),
+                    },
+                    unique_field="name",
+                    unique_value=vlan_interface_name,
+                ),
+                station_routeros_add_command(
+                    f"Carry office AP path VLAN {vlan_id} toward CRS/OLT/AP path",
+                    "/interface/bridge/vlan/add",
+                    {
+                        "bridge": bridge_name,
+                        "comment": f"3J Office AP Path - VLAN {vlan_id} transport to AP path",
+                        "tagged": effective_tagged_ports,
+                        "vlan-ids": str(vlan_id),
+                    },
+                    existing_query={"bridge": bridge_name, "vlan-ids": str(vlan_id)},
+                    merge_bridge_vlan_members=True,
+                ),
+                station_routeros_add_command(
+                    "Bridge office LAN into the AP path VLAN",
+                    "/interface/bridge/port/add",
+                    {
+                        "bridge": office_bridge_name,
+                        "comment": f"3J Office AP Path - bridge office LAN to VLAN {vlan_id}",
+                        "interface": vlan_interface_name,
+                    },
+                    existing_query={"bridge": office_bridge_name, "interface": vlan_interface_name},
+                ),
+            ])
+        else:
+            previous_name = routers[index - 1].get("router_name") or "previous router"
+            commands.append(
+                station_routeros_add_command(
+                    f"Carry office AP path VLAN {vlan_id} through this router",
+                    "/interface/bridge/vlan/add",
+                    {
+                        "bridge": bridge_name,
+                        "comment": f"3J Office AP Path - VLAN {vlan_id} trunk from {previous_name} to OLT/APs",
+                        "tagged": effective_tagged_ports,
+                        "vlan-ids": str(vlan_id),
+                    },
+                    existing_query={"bridge": bridge_name, "vlan-ids": str(vlan_id)},
+                    merge_bridge_vlan_members=True,
+                )
+            )
+        router_plans.append({
+            "router_id": str(router["router_id"]),
+            "router_name": router.get("router_name"),
+            "host": router.get("host"),
+            "sequence_order": router.get("sequence_order", index),
+            "role": "ROOT_GATEWAY" if is_root else "TRUNK_HELPER",
+            "bridge_name": bridge_name,
+            "tagged_ports": tagged_ports,
+            "effective_tagged_ports": effective_tagged_ports,
+            "commands": commands,
+        })
+    plan = {
+        "summary": "Office AP Path extends the existing office LAN to APs by carrying a transport VLAN through MikroTik/CRS/OLT paths. The AP/ONU-facing port must make this VLAN native/untagged outside RouterOS.",
+        "office_bridge_name": office_bridge_name,
+        "transport_vlan_id": vlan_id,
+        "transport_vlan_interface_name": vlan_interface_name,
+        "router_plans": router_plans,
+    }
+    return combine_pending_cleanup_with_apply_plan(
+        plan,
+        config.get("pending_cleanup_plan_json"),
+        config.get("pending_cleanup_reason"),
+    )
+
+
+def public_mikrotik_office_ap_path_config(row: Optional[dict]) -> dict:
+    if not row:
+        return office_ap_path_default_config()
+    routers = office_ap_path_router_rows(str(row["id"]))
+    return {
+        "id": row["id"],
+        "config_name": row["config_name"],
+        "office_bridge_name": row["office_bridge_name"],
+        "transport_vlan_id": row["transport_vlan_id"],
+        "transport_vlan_interface_name": row.get("transport_vlan_interface_name") or f"VLAN{row['transport_vlan_id']}-OFFICE-AP-PATH",
+        "status": row["status"],
+        "has_pending_cleanup": bool(row.get("pending_cleanup_plan_json")),
+        "pending_cleanup_reason": row.get("pending_cleanup_reason"),
+        "pending_cleanup_created_at": row.get("pending_cleanup_created_at"),
+        "pending_cleanup_resolved_at": row.get("pending_cleanup_resolved_at"),
+        "routers": [
+            {
+                "id": item["id"],
+                "router_id": item["router_id"],
+                "router_name": item["router_name"],
+                "host": item["host"],
+                "api_port": item["api_port"],
+                "api_status": item["api_status"],
+                "sequence_order": item["sequence_order"],
+                "router_role": item["router_role"],
+                "bridge_name": item.get("bridge_name"),
+                "tagged_ports": item.get("tagged_ports"),
+                "notes": item.get("notes"),
+            }
+            for item in routers
+        ],
+        "plan": build_mikrotik_office_ap_path_plan(row, routers),
+        "remove_plan": build_mikrotik_office_ap_path_remove_plan(row, routers),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def record_office_ap_path_command_log(config_id: str, router_id: Optional[str], action: str, command_index: Optional[int], command: Optional[dict], status: str, message: str, result: Optional[dict], admin_id: Optional[str]):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO mikrotik_office_ap_path_command_logs(
+                    config_id, router_id, action, command_index, command_label, command_preview,
+                    status, message, result_json, created_by_admin_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    config_id,
+                    router_id,
+                    action,
+                    command_index,
+                    (command or {}).get("label"),
+                    (command or {}).get("preview"),
+                    status,
+                    message,
+                    Json(sanitize_summary(result or {})),
+                    admin_id,
+                ),
+            )
+
+
+def public_office_ap_path_command_log(row: dict) -> dict:
     return {
         "id": row["id"],
         "config_id": row["config_id"],
@@ -9788,7 +14147,7 @@ def mikrotik_station_hotspot_diagnostics(station: dict, client_ip: Optional[str]
         add_check("capport_dhcp_option", "DHCP captive portal option", "WARNING", sanitize_routeros_text(str(exc)))
 
     try:
-        nat_comment = f"3J Hotspot - NAT for VLAN {station['vlan_id']} clients"
+        nat_comment = f"3J Station - NAT for VLAN {station['vlan_id']} clients"
         rows = query(
             "/ip/firewall/nat/print",
             f"?comment={nat_comment}",
@@ -9799,21 +14158,136 @@ def mikrotik_station_hotspot_diagnostics(station: dict, client_ip: Optional[str]
             row.get("chain") == "srcnat"
             and row.get("action") == "masquerade"
             and row.get("src-address") == station["client_network_cidr"]
+            and row.get("out-interface-list") == "WAN"
             for row in enabled_rows
         )
         add_check(
             "internet_nat",
             "Internet NAT",
             "OK" if has_station_nat else "FAILED",
-            "NAT masquerade exists for the station client subnet." if has_station_nat else "No enabled station NAT masquerade was found. Authorized clients may not have internet.",
+            "WAN-only NAT masquerade exists for the station client subnet." if has_station_nat else "No enabled WAN-only station NAT masquerade was found. Authorized clients may not have internet, or captive portal identity may be hidden from Omada.",
             {"expected_comment": nat_comment, "expected_src_address": station["client_network_cidr"], "rows": rows},
         )
     except Exception as exc:
         add_check("internet_nat", "Internet NAT", "WARNING", sanitize_routeros_text(str(exc)))
 
     try:
-        client_tracking_comment = f"3J Hotspot - keep VLAN {station['vlan_id']} client traffic tracked"
-        return_tracking_comment = f"3J Hotspot - keep VLAN {station['vlan_id']} return traffic tracked"
+        ttl_clamp_comment = f"3J Station - anti-tether return TTL clamp for VLAN {station['vlan_id']}"
+        low_ttl_comment = f"3J Station - block likely tethered low TTL for VLAN {station['vlan_id']}"
+        windows_ttl_comment = f"3J Station - block likely tethered Windows TTL for VLAN {station['vlan_id']}"
+        fasttrack_src_comment = f"3J Station - keep VLAN {station['vlan_id']} source traffic out of FastTrack for TTL guard"
+        fasttrack_dst_comment = f"3J Station - keep VLAN {station['vlan_id']} return traffic out of FastTrack for TTL guard"
+        vlan_interface = station.get("vlan_interface_name") or f"VLAN{station['vlan_id']}-3J-CLIENTS"
+        clamp_rows = query(
+            "/ip/firewall/mangle/print",
+            f"?comment={ttl_clamp_comment}",
+            "=.proplist=.id,chain,action,dst-address,out-interface,new-ttl,passthrough,disabled,comment",
+        )
+        low_ttl_rows = query(
+            "/ip/firewall/filter/print",
+            f"?comment={low_ttl_comment}",
+            "=.proplist=.id,chain,action,src-address,ttl,disabled,comment",
+        )
+        windows_ttl_rows = query(
+            "/ip/firewall/filter/print",
+            f"?comment={windows_ttl_comment}",
+            "=.proplist=.id,chain,action,src-address,ttl,disabled,comment",
+        )
+        active_fasttrack_rows = query(
+            "/ip/firewall/filter/print",
+            "?chain=forward",
+            "?action=fasttrack-connection",
+            "=.proplist=.id,chain,action,disabled,comment",
+        )
+        fasttrack_src_rows = query(
+            "/ip/firewall/filter/print",
+            f"?comment={fasttrack_src_comment}",
+            "=.proplist=.id,chain,action,connection-state,src-address,disabled,comment",
+        )
+        fasttrack_dst_rows = query(
+            "/ip/firewall/filter/print",
+            f"?comment={fasttrack_dst_comment}",
+            "=.proplist=.id,chain,action,connection-state,dst-address,disabled,comment",
+        )
+        clamp_ok = any(
+            row.get("chain") == "postrouting"
+            and row.get("action") == "change-ttl"
+            and row.get("dst-address") == station["client_network_cidr"]
+            and row.get("out-interface") == vlan_interface
+            and str(row.get("new-ttl") or "") == "set:1"
+            and not routeros_truthy(row.get("disabled"))
+            for row in clamp_rows
+        )
+        low_ok = any(
+            row.get("chain") == "forward"
+            and row.get("action") == "drop"
+            and row.get("src-address") == station["client_network_cidr"]
+            and str(row.get("ttl") or "") in {"equal:63", "63"}
+            and not routeros_truthy(row.get("disabled"))
+            for row in low_ttl_rows
+        )
+        windows_ok = any(
+            row.get("chain") == "forward"
+            and row.get("action") == "drop"
+            and row.get("src-address") == station["client_network_cidr"]
+            and str(row.get("ttl") or "") in {"equal:127", "127"}
+            and not routeros_truthy(row.get("disabled"))
+            for row in windows_ttl_rows
+        )
+        active_fasttrack = any(not routeros_truthy(row.get("disabled")) for row in active_fasttrack_rows)
+        fasttrack_src_ok = not active_fasttrack or any(
+            row.get("chain") == "forward"
+            and row.get("action") == "accept"
+            and row.get("src-address") == station["client_network_cidr"]
+            and not routeros_truthy(row.get("disabled"))
+            for row in fasttrack_src_rows
+        )
+        fasttrack_dst_ok = not active_fasttrack or any(
+            row.get("chain") == "forward"
+            and row.get("action") == "accept"
+            and row.get("dst-address") == station["client_network_cidr"]
+            and not routeros_truthy(row.get("disabled"))
+            for row in fasttrack_dst_rows
+        )
+        add_check(
+            "one_device_voucher_guard",
+            "One-device voucher guard",
+            "OK" if clamp_ok and low_ok and windows_ok and fasttrack_src_ok and fasttrack_dst_ok else "WARNING",
+            "Station anti-tethering TTL guard rules are present." if clamp_ok and low_ok and windows_ok and fasttrack_src_ok and fasttrack_dst_ok else "One or more anti-tethering TTL guard rules are missing. Phone hotspot sharing may still work until Push Config applies the new station security steps.",
+            {"ttl_clamp_rows": clamp_rows, "low_ttl_rows": low_ttl_rows, "windows_ttl_rows": windows_ttl_rows, "active_fasttrack_rows": active_fasttrack_rows, "fasttrack_source_rows": fasttrack_src_rows, "fasttrack_return_rows": fasttrack_dst_rows},
+        )
+    except Exception as exc:
+        add_check("one_device_voucher_guard", "One-device voucher guard", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        no_nat_comment = f"3J Station - preserve client IP for VLAN {station['vlan_id']} to portal office subnet"
+        office_subnet = station_portal_office_access_subnet()
+        rows = query(
+            "/ip/firewall/nat/print",
+            f"?comment={no_nat_comment}",
+            "=.proplist=.id,chain,action,src-address,dst-address,comment,disabled",
+        )
+        no_nat_ok = any(
+            row.get("chain") == "srcnat"
+            and row.get("action") == "accept"
+            and row.get("src-address") == station["client_network_cidr"]
+            and row.get("dst-address") == office_subnet
+            and not routeros_truthy(row.get("disabled"))
+            for row in rows
+        )
+        add_check(
+            "portal_office_no_nat",
+            "Omada portal client identity",
+            "OK" if no_nat_ok else "FAILED",
+            "VLAN clients keep their real IP when reaching Omada/portal servers, so Omada can match the captive session." if no_nat_ok else "Missing no-NAT exception to the Omada/portal office subnet. Omada may see the gateway IP instead of the client IP and fail captive portal handoff.",
+            {"expected_comment": no_nat_comment, "expected_src_address": station["client_network_cidr"], "expected_dst_address": office_subnet, "rows": rows},
+        )
+    except Exception as exc:
+        add_check("portal_office_no_nat", "Omada portal client identity", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        client_tracking_comment = f"3J Station - keep VLAN {station['vlan_id']} client traffic tracked"
+        return_tracking_comment = f"3J Station - keep VLAN {station['vlan_id']} return traffic tracked"
         client_rows = query("/ip/firewall/raw/print", f"?comment={client_tracking_comment}", "=.proplist=.id,chain,action,src-address,dst-address,disabled,comment")
         return_rows = query("/ip/firewall/raw/print", f"?comment={return_tracking_comment}", "=.proplist=.id,chain,action,src-address,dst-address,disabled,comment")
         broad_notrack_rows = [
@@ -9998,10 +14472,129 @@ def latest_mikrotik_ap_management_config_row() -> Optional[dict]:
     )
 
 
+def ap_management_config_signature_from_values(config: dict, routers: list[dict]) -> dict:
+    return {
+        "vlan_id": int(config.get("vlan_id")),
+        "vlan_interface_name": str(config.get("vlan_interface_name") or f"VLAN{config.get('vlan_id')}-AP-MGMT").strip(),
+        "network_cidr": str(config.get("network_cidr") or "").strip(),
+        "gateway_ip": str(config.get("gateway_ip") or "").strip(),
+        "pool_start_ip": str(config.get("pool_start_ip") or "").strip(),
+        "pool_end_ip": str(config.get("pool_end_ip") or "").strip(),
+        "pool_name": str(config.get("pool_name") or f"POOL-AP-MGMT-V{config.get('vlan_id')}").strip(),
+        "dhcp_server_name": str(config.get("dhcp_server_name") or f"DHCP-AP-MGMT-V{config.get('vlan_id')}").strip(),
+        "dhcp_lease_time": str(config.get("dhcp_lease_time") or "1h").strip(),
+        "dns_servers": str(config.get("dns_servers") or "").strip(),
+        "local_interface_list": str(config.get("local_interface_list") or "LOCAL").strip(),
+        "routers": [
+            {
+                "router_id": str(item.get("router_id") or ""),
+                "bridge_name": str(item.get("bridge_name") or "").strip(),
+                "tagged_ports": station_dedupe_csv(item.get("tagged_ports")),
+            }
+            for item in sorted(routers, key=lambda row: int(row.get("sequence_order") or 0))
+        ],
+    }
+
+
+def ap_management_config_signature_from_payload(normalized: dict, payload: MikrotikApManagementConfigPayload) -> dict:
+    return ap_management_config_signature_from_values(
+        {
+            "vlan_id": normalized["vlan_id"],
+            "vlan_interface_name": normalized["vlan_interface_name"],
+            "network_cidr": normalized["network"].with_prefixlen,
+            "gateway_ip": str(normalized["gateway_ip"]),
+            "pool_start_ip": str(normalized["pool_start"]),
+            "pool_end_ip": str(normalized["pool_end"]),
+            "pool_name": normalized["pool_name"],
+            "dhcp_server_name": normalized["dhcp_server_name"],
+            "dhcp_lease_time": normalized["dhcp_lease_time"],
+            "dns_servers": normalized["dns_servers"],
+            "local_interface_list": normalized["local_interface_list"],
+        },
+        [
+            {
+                "router_id": item.router_id,
+                "bridge_name": item.bridge_name,
+                "tagged_ports": item.tagged_ports,
+                "sequence_order": index,
+            }
+            for index, item in enumerate(payload.routers)
+        ],
+    )
+
+
+def station_config_signature_from_values(station: dict, routers: list[dict]) -> dict:
+    return {
+        "station_code": str(station.get("station_code") or "").strip(),
+        "vlan_id": int(station.get("vlan_id")),
+        "vlan_interface_name": str(station.get("vlan_interface_name") or f"VLAN{station.get('vlan_id')}-3J-CLIENTS").strip(),
+        "client_network_cidr": str(station.get("client_network_cidr") or "").strip(),
+        "gateway_ip": str(station.get("gateway_ip") or "").strip(),
+        "pool_start_ip": str(station.get("pool_start_ip") or "").strip(),
+        "pool_end_ip": str(station.get("pool_end_ip") or "").strip(),
+        "pool_name": str(station.get("pool_name") or f"POOL-3J-CLIENTS-V{station.get('vlan_id')}").strip(),
+        "dhcp_server_name": str(station.get("dhcp_server_name") or f"DHCP-3J-CLIENTS-V{station.get('vlan_id')}").strip(),
+        "dhcp_lease_time": str(station.get("dhcp_lease_time") or "1h").strip(),
+        "dns_servers": str(station.get("dns_servers") or "").strip(),
+        "local_interface_list": str(station.get("local_interface_list") or "LOCAL").strip(),
+        "routers": [
+            {
+                "router_id": str(item.get("router_id") or ""),
+                "bridge_name": str(item.get("bridge_name") or "").strip(),
+                "tagged_ports": station_dedupe_csv(item.get("tagged_ports")),
+            }
+            for item in sorted(routers, key=lambda row: int(row.get("sequence_order") or 0))
+        ],
+    }
+
+
+def station_config_signature_from_payload(payload: MikrotikStationCreate, station_code: str, network, gateway_ip, pool_start, pool_end, dns_servers: str, pool_name: str, dhcp_server_name: str, dhcp_lease_time: str, vlan_interface_name: str) -> dict:
+    return station_config_signature_from_values(
+        {
+            "station_code": station_code,
+            "vlan_id": payload.vlan_id,
+            "vlan_interface_name": vlan_interface_name,
+            "client_network_cidr": network.with_prefixlen,
+            "gateway_ip": str(gateway_ip),
+            "pool_start_ip": str(pool_start),
+            "pool_end_ip": str(pool_end),
+            "pool_name": pool_name,
+            "dhcp_server_name": dhcp_server_name,
+            "dhcp_lease_time": dhcp_lease_time,
+            "dns_servers": dns_servers,
+            "local_interface_list": (payload.local_interface_list or "LOCAL").strip() or "LOCAL",
+        },
+        [
+            {
+                "router_id": item.router_id,
+                "bridge_name": item.bridge_name,
+                "tagged_ports": item.tagged_ports,
+                "sequence_order": index,
+            }
+            for index, item in enumerate(payload.routers)
+        ],
+    )
+
+
 def save_mikrotik_ap_management_payload(payload: MikrotikApManagementConfigPayload, admin: dict) -> dict:
     normalized = normalize_ap_management_config_payload(payload)
     validate_ap_management_router_path(payload, normalized)
     existing = latest_mikrotik_ap_management_config_row()
+    pending_cleanup_plan = None
+    pending_cleanup_reason = None
+    if existing:
+        existing_routers = ap_management_router_rows(str(existing["id"]))
+        existing_signature = ap_management_config_signature_from_values(existing, existing_routers)
+        new_signature = ap_management_config_signature_from_payload(normalized, payload)
+        if existing_signature != new_signature:
+            pending_cleanup_plan = merge_cleanup_plans(
+                existing.get("pending_cleanup_plan_json"),
+                build_mikrotik_ap_management_remove_plan(existing, existing_routers),
+            )
+            pending_cleanup_reason = "AP management values changed. Old system-managed RouterOS objects must be removed before the updated AP management config is pushed."
+        else:
+            pending_cleanup_plan = existing.get("pending_cleanup_plan_json")
+            pending_cleanup_reason = existing.get("pending_cleanup_reason")
     with get_conn() as conn:
         with conn.cursor() as cur:
             if existing:
@@ -10020,6 +14613,10 @@ def save_mikrotik_ap_management_payload(payload: MikrotikApManagementConfigPaylo
                         dhcp_lease_time = %s,
                         dns_servers = %s,
                         local_interface_list = %s,
+                        pending_cleanup_plan_json = %s,
+                        pending_cleanup_reason = %s,
+                        pending_cleanup_created_at = CASE WHEN %s::jsonb IS NULL THEN pending_cleanup_created_at ELSE now() END,
+                        pending_cleanup_resolved_at = NULL,
                         status = 'READY_FOR_REVIEW',
                         updated_at = now()
                     WHERE id = %s
@@ -10038,6 +14635,9 @@ def save_mikrotik_ap_management_payload(payload: MikrotikApManagementConfigPaylo
                         normalized["dhcp_lease_time"],
                         normalized["dns_servers"],
                         normalized["local_interface_list"],
+                        Json(pending_cleanup_plan) if pending_cleanup_plan else None,
+                        pending_cleanup_reason,
+                        Json(pending_cleanup_plan) if pending_cleanup_plan else None,
                         existing["id"],
                     ),
                 )
@@ -10075,6 +14675,100 @@ def save_mikrotik_ap_management_payload(payload: MikrotikApManagementConfigPaylo
                 cur.execute(
                     """
                     INSERT INTO mikrotik_ap_management_routers(
+                        config_id, router_id, sequence_order, router_role, bridge_name, tagged_ports, untagged_ports, notes
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        config["id"],
+                        item.router_id,
+                        index,
+                        "ROOT_GATEWAY" if index == 0 else "TRUNK_HELPER",
+                        (item.bridge_name or "").strip(),
+                        (item.tagged_ports or "").strip(),
+                        None,
+                        (item.notes or "").strip() or None,
+                    ),
+                )
+    audit(admin["id"], "save_mikrotik_ap_management_config", "mikrotik_ap_management_configs", str(config["id"]), {"vlan_id": normalized["vlan_id"], "network_cidr": normalized["network"].with_prefixlen, "router_count": len(payload.routers)})
+    saved = fetch_one("SELECT * FROM mikrotik_ap_management_configs WHERE id = %s", (config["id"],))
+    return public_mikrotik_ap_management_config(saved)
+
+
+def save_mikrotik_office_ap_path_payload(payload: MikrotikOfficeApPathConfigPayload, admin: dict) -> dict:
+    normalized = normalize_office_ap_path_payload(payload)
+    validate_office_ap_path_router_path(payload, normalized)
+    existing = latest_mikrotik_office_ap_path_config_row()
+    pending_cleanup_plan = None
+    pending_cleanup_reason = None
+    if existing:
+        existing_routers = office_ap_path_router_rows(str(existing["id"]))
+        existing_signature = office_ap_path_config_signature_from_values(existing, existing_routers)
+        new_signature = office_ap_path_config_signature_from_payload(normalized, payload)
+        if existing_signature != new_signature:
+            pending_cleanup_plan = merge_cleanup_plans(
+                existing.get("pending_cleanup_plan_json"),
+                build_mikrotik_office_ap_path_remove_plan(existing, existing_routers),
+            )
+            pending_cleanup_reason = "Office AP path values changed. Old system-managed RouterOS objects must be removed before the updated office AP path is pushed."
+        else:
+            pending_cleanup_plan = existing.get("pending_cleanup_plan_json")
+            pending_cleanup_reason = existing.get("pending_cleanup_reason")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if existing:
+                cur.execute(
+                    """
+                    UPDATE mikrotik_office_ap_path_configs
+                    SET config_name = %s,
+                        office_bridge_name = %s,
+                        transport_vlan_id = %s,
+                        transport_vlan_interface_name = %s,
+                        pending_cleanup_plan_json = %s,
+                        pending_cleanup_reason = %s,
+                        pending_cleanup_created_at = CASE WHEN %s::jsonb IS NULL THEN pending_cleanup_created_at ELSE now() END,
+                        pending_cleanup_resolved_at = NULL,
+                        status = 'READY_FOR_REVIEW',
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (
+                        normalized["config_name"],
+                        normalized["office_bridge_name"],
+                        normalized["transport_vlan_id"],
+                        normalized["transport_vlan_interface_name"],
+                        Json(pending_cleanup_plan) if pending_cleanup_plan else None,
+                        pending_cleanup_reason,
+                        Json(pending_cleanup_plan) if pending_cleanup_plan else None,
+                        existing["id"],
+                    ),
+                )
+                config = cur.fetchone()
+                cur.execute("DELETE FROM mikrotik_office_ap_path_routers WHERE config_id = %s", (config["id"],))
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO mikrotik_office_ap_path_configs(
+                        config_name, office_bridge_name, transport_vlan_id,
+                        transport_vlan_interface_name, status, created_by_admin_id
+                    )
+                    VALUES (%s, %s, %s, %s, 'READY_FOR_REVIEW', %s)
+                    RETURNING *
+                    """,
+                    (
+                        normalized["config_name"],
+                        normalized["office_bridge_name"],
+                        normalized["transport_vlan_id"],
+                        normalized["transport_vlan_interface_name"],
+                        admin["id"],
+                    ),
+                )
+                config = cur.fetchone()
+            for index, item in enumerate(payload.routers):
+                cur.execute(
+                    """
+                    INSERT INTO mikrotik_office_ap_path_routers(
                         config_id, router_id, sequence_order, router_role, bridge_name, tagged_ports, notes
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -10089,9 +14783,9 @@ def save_mikrotik_ap_management_payload(payload: MikrotikApManagementConfigPaylo
                         (item.notes or "").strip() or None,
                     ),
                 )
-    audit(admin["id"], "save_mikrotik_ap_management_config", "mikrotik_ap_management_configs", str(config["id"]), {"vlan_id": normalized["vlan_id"], "network_cidr": normalized["network"].with_prefixlen, "router_count": len(payload.routers)})
-    saved = fetch_one("SELECT * FROM mikrotik_ap_management_configs WHERE id = %s", (config["id"],))
-    return public_mikrotik_ap_management_config(saved)
+    audit(admin["id"], "save_mikrotik_office_ap_path_config", "mikrotik_office_ap_path_configs", str(config["id"]), {"transport_vlan_id": normalized["transport_vlan_id"], "office_bridge_name": normalized["office_bridge_name"], "router_count": len(payload.routers)})
+    saved = fetch_one("SELECT * FROM mikrotik_office_ap_path_configs WHERE id = %s", (config["id"],))
+    return public_mikrotik_office_ap_path_config(saved)
 
 
 def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, station_id: Optional[str] = None) -> dict:
@@ -10115,16 +14809,67 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
     network, gateway_ip, pool_start, pool_end, dns_servers = validate_station_network(payload)
     ap_management = validate_station_ap_management_network(payload, network)
     station_code = station_code_from_text(payload.station_code or payload.station_name)
-    vlan_interface_name = (payload.vlan_interface_name or "").strip() or f"VLAN{payload.vlan_id}-3J-HOTSPOT"
-    pool_name = (payload.pool_name or "").strip() or f"POOL-3J-HOTSPOT-V{payload.vlan_id}"
-    dhcp_server_name = (payload.dhcp_server_name or "").strip() or f"DHCP-3J-HOTSPOT-V{payload.vlan_id}"
+    vlan_interface_name = (payload.vlan_interface_name or "").strip() or f"VLAN{payload.vlan_id}-3J-CLIENTS"
+    pool_name = (payload.pool_name or "").strip() or f"POOL-3J-CLIENTS-V{payload.vlan_id}"
+    dhcp_server_name = (payload.dhcp_server_name or "").strip() or f"DHCP-3J-CLIENTS-V{payload.vlan_id}"
     dhcp_lease_time = (payload.dhcp_lease_time or "1h").strip() or "1h"
-    hotspot_profile_name = (payload.hotspot_profile_name or "").strip() or f"PROFILE-3J-HOTSPOT-V{payload.vlan_id}"
+    hotspot_profile_name = (payload.hotspot_profile_name or "").strip() or None
     hotspot_html_directory = (payload.hotspot_html_directory or "hotspot").strip() or "hotspot"
-    hotspot_dns_name = (payload.hotspot_dns_name or "").strip() or default_hotspot_dns_name(station_code)
-    hotspot_server_name = (payload.hotspot_server_name or "").strip() or f"HS-3J-HOTSPOT-V{payload.vlan_id}"
+    hotspot_dns_name = (payload.hotspot_dns_name or "").strip() or None
+    hotspot_server_name = (payload.hotspot_server_name or "").strip() or None
+    new_station_signature = station_config_signature_from_payload(
+        payload,
+        station_code,
+        network,
+        gateway_ip,
+        pool_start,
+        pool_end,
+        dns_servers,
+        pool_name,
+        dhcp_server_name,
+        dhcp_lease_time,
+        vlan_interface_name,
+    )
+    # OCP-1: MikroTik Stations provide VLAN/DHCP/NAT transport only. Omada handles
+    # captive portal redirect/enforcement, so station saves intentionally disable
+    # MikroTik HotSpot creation even if older clients send legacy flags.
+    create_hotspot_profile = False
+    create_hotspot_server = False
+    create_walled_garden = False
     portal_url = (payload.portal_url or "").strip() or "http://192.168.50.70:8080/portal"
+    omada_site_id = (payload.omada_site_id or "").strip() or None
+    omada_site_name = (payload.omada_site_name or "").strip() or None
+    bound_site = find_site_deployment_by_omada(omada_site_id, omada_site_name)
+    if bound_site:
+        omada_site_id = bound_site.get("omada_site_id") or omada_site_id
+        omada_site_name = bound_site.get("site_name") or omada_site_name
+    omada_site_vlan_confirmed = bool(omada_site_id or omada_site_name) or site_vlan_matches_station(bound_site, payload.vlan_id)
     station_validate_router_path(payload, station_id, network, pool_start, pool_end, ap_management)
+    global_errors = mikrotik_global_resource_conflict_errors(
+        "Station customer",
+        int(payload.vlan_id),
+        network,
+        gateway_ip,
+        pool_start,
+        pool_end,
+        pool_name,
+        [f"3j station - vlan {int(payload.vlan_id)}", f"3j hotspot - vlan {int(payload.vlan_id)}"],
+    )
+    if global_errors:
+        raise HTTPException(status_code=400, detail=" ".join(global_errors))
+    if ap_management:
+        ap_global_errors = mikrotik_global_resource_conflict_errors(
+            "Station AP management",
+            int(ap_management["vlan_id"]),
+            ap_management["network"],
+            ap_management["gateway_ip"],
+            ap_management["pool_start"],
+            ap_management["pool_end"],
+            ap_management["pool_name"],
+            [f"3j ap management - vlan {int(ap_management['vlan_id'])}"],
+        )
+        if ap_global_errors:
+            raise HTTPException(status_code=400, detail=" ".join(ap_global_errors))
     duplicate_conditions = [
         ("station_code", "lower(btrim(station_code)) = lower(btrim(%s))", station_code, "Station code is already used by another active station."),
         ("vlan_id", "vlan_id = %s", payload.vlan_id, f"Customer VLAN {payload.vlan_id} is already used by another active station."),
@@ -10142,7 +14887,7 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
             FROM mikrotik_stations
             WHERE status <> 'ARCHIVED'
               AND {condition}
-              AND (%s IS NULL OR id <> %s)
+              AND (%s::uuid IS NULL OR id <> %s::uuid)
             LIMIT 1
             """,
             (value, station_id, station_id),
@@ -10177,6 +14922,17 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                 station = cur.fetchone()
             if station:
                 action = "update_mikrotik_station"
+                existing_station_routers = station_router_rows(str(station["id"]))
+                existing_signature = station_config_signature_from_values(station, existing_station_routers)
+                if existing_signature != new_station_signature:
+                    pending_cleanup_plan = merge_cleanup_plans(
+                        station.get("pending_cleanup_plan_json"),
+                        build_mikrotik_station_remove_plan(station, existing_station_routers),
+                    )
+                    pending_cleanup_reason = "Station values changed. Old system-managed RouterOS objects must be removed before the updated station config is pushed."
+                else:
+                    pending_cleanup_plan = station.get("pending_cleanup_plan_json")
+                    pending_cleanup_reason = station.get("pending_cleanup_reason")
                 cur.execute(
                     """
                     UPDATE mikrotik_stations
@@ -10214,6 +14970,15 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         ap_management_dhcp_server_name = %s,
                         ap_management_dhcp_lease_time = %s,
                         ap_management_dns_servers = %s,
+                        omada_site_id = %s,
+                        omada_site_name = %s,
+                        omada_site_vlan_confirmed = %s,
+                        omada_site_bound_at = CASE WHEN %s::text IS NULL AND %s::text IS NULL THEN NULL ELSE now() END,
+                        omada_site_bound_by_admin_id = CASE WHEN %s::text IS NULL AND %s::text IS NULL THEN NULL ELSE %s::uuid END,
+                        pending_cleanup_plan_json = %s,
+                        pending_cleanup_reason = %s,
+                        pending_cleanup_created_at = CASE WHEN %s::jsonb IS NULL THEN pending_cleanup_created_at ELSE now() END,
+                        pending_cleanup_resolved_at = NULL,
                         status = 'READY_FOR_REVIEW',
                         updated_at = now()
                     WHERE id = %s
@@ -10235,9 +15000,9 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         payload.create_dhcp_server,
                         dns_servers,
                         (payload.local_interface_list or "LOCAL").strip() or "LOCAL",
-                        payload.create_hotspot_profile,
-                        payload.create_hotspot_server,
-                        payload.create_walled_garden,
+                        create_hotspot_profile,
+                        create_hotspot_server,
+                        create_walled_garden,
                         hotspot_profile_name,
                         hotspot_html_directory,
                         hotspot_dns_name,
@@ -10254,6 +15019,17 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         ap_management["dhcp_server_name"] if ap_management else None,
                         ap_management["dhcp_lease_time"] if ap_management else None,
                         ap_management["dns_servers"] if ap_management else None,
+                        omada_site_id,
+                        omada_site_name,
+                        omada_site_vlan_confirmed,
+                        omada_site_id,
+                        omada_site_name,
+                        omada_site_id,
+                        omada_site_name,
+                        admin["id"],
+                        Json(pending_cleanup_plan) if pending_cleanup_plan else None,
+                        pending_cleanup_reason,
+                        Json(pending_cleanup_plan) if pending_cleanup_plan else None,
                         station["id"],
                     ),
                 )
@@ -10272,9 +15048,11 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         ap_management_network_cidr, ap_management_gateway_ip, ap_management_pool_start_ip,
                         ap_management_pool_end_ip, ap_management_pool_name, ap_management_dhcp_server_name,
                         ap_management_dhcp_lease_time, ap_management_dns_servers,
+                        omada_site_id, omada_site_name, omada_site_vlan_confirmed, omada_site_bound_at,
+                        omada_site_bound_by_admin_id,
                         status, created_by_admin_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'READY_FOR_REVIEW', %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'READY_FOR_REVIEW', %s)
                     RETURNING *
                     """,
                     (
@@ -10293,9 +15071,9 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         payload.create_dhcp_server,
                         dns_servers,
                         (payload.local_interface_list or "LOCAL").strip() or "LOCAL",
-                        payload.create_hotspot_profile,
-                        payload.create_hotspot_server,
-                        payload.create_walled_garden,
+                        create_hotspot_profile,
+                        create_hotspot_server,
+                        create_walled_garden,
                         hotspot_profile_name,
                         hotspot_html_directory,
                         hotspot_dns_name,
@@ -10312,6 +15090,11 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         ap_management["dhcp_server_name"] if ap_management else None,
                         ap_management["dhcp_lease_time"] if ap_management else None,
                         ap_management["dns_servers"] if ap_management else None,
+                        omada_site_id,
+                        omada_site_name,
+                        omada_site_vlan_confirmed,
+                        datetime.now(timezone.utc) if omada_site_id or omada_site_name else None,
+                        admin["id"] if omada_site_id or omada_site_name else None,
                         admin["id"],
                     ),
                 )
@@ -10334,6 +15117,7 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         item.notes,
                     ),
                 )
+            sync_site_vlan_from_station_row(cur, station, admin["id"])
     audit(
         admin["id"],
         action,
@@ -10347,6 +15131,9 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
             "ap_management_enabled": bool(ap_management),
             "ap_management_vlan_id": ap_management["vlan_id"] if ap_management else None,
             "ap_management_network_cidr": ap_management["network"].with_prefixlen if ap_management else None,
+            "omada_site_id": omada_site_id,
+            "omada_site_name": omada_site_name,
+            "omada_site_vlan_confirmed": omada_site_vlan_confirmed,
             "router_count": len(payload.routers),
         },
     )
@@ -10972,9 +15759,12 @@ def mikrotik_ap_management_config_for_id(config_id: str) -> tuple[dict, list[dic
 @app.get("/api/network/mikrotik/ap-management/{config_id}/managed-configuration-status")
 def mikrotik_ap_management_managed_configuration_status(config_id: str, quiet: bool = False, admin=Depends(current_admin)):
     config, routers, plan = mikrotik_ap_management_config_for_id(config_id)
+    remove_plan = build_mikrotik_ap_management_remove_plan(config, routers)
     total_steps = 0
     pushed_steps = 0
-    router_statuses = []
+    apply_router_statuses = []
+    remove_found = 0
+    remove_router_statuses = []
     for router_plan in plan.get("router_plans") or []:
         commands = router_plan.get("commands") or []
         total_steps += len(commands)
@@ -10997,30 +15787,64 @@ def mikrotik_ap_management_managed_configuration_status(config_id: str, quiet: b
             except Exception as exc:
                 status = {"status": "ERROR", "message": sanitize_routeros_text(str(exc)), "has_managed_config": False, "found_count": 0, "items": []}
         pushed_steps += int(status.get("found_count") or 0)
-        router_statuses.append({
+        apply_router_statuses.append({
             "router_id": router_plan["router_id"],
             "router_name": router_plan.get("router_name"),
             "host": router_plan.get("host"),
             **status,
         })
-    summary_status = "SUCCESS" if router_statuses and all(item.get("status") in ("SUCCESS", "NOT_READY") for item in router_statuses) else "ERROR" if any(item.get("status") == "ERROR" for item in router_statuses) else "SUCCESS"
+    for router_plan in remove_plan.get("router_plans") or []:
+        commands = router_plan.get("commands") or []
+        router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_plan["router_id"],))
+        if not router:
+            status = {"status": "ERROR", "message": "Router not found", "has_managed_config": False, "found_count": 0, "items": []}
+        elif not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+            status = {"status": "NOT_READY", "message": "Router host, username, and password are required before checking AP management config.", "has_managed_config": False, "found_count": 0, "items": []}
+        else:
+            try:
+                password = decrypt_secret(router.get("password_encrypted"))
+                status = routeros_detect_remove_targets(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    commands,
+                )
+            except Exception as exc:
+                status = {"status": "ERROR", "message": sanitize_routeros_text(str(exc)), "has_managed_config": False, "found_count": 0, "items": []}
+        remove_found += int(status.get("found_count") or 0)
+        remove_router_statuses.append({
+            "router_id": router_plan["router_id"],
+            "router_name": router_plan.get("router_name"),
+            "host": router_plan.get("host"),
+            **status,
+        })
+    combined_statuses = apply_router_statuses + remove_router_statuses
+    summary_status = "SUCCESS" if combined_statuses and all(item.get("status") in ("SUCCESS", "NOT_READY") for item in combined_statuses) else "ERROR" if any(item.get("status") == "ERROR" for item in combined_statuses) else "SUCCESS"
     result = {
         "status": summary_status,
         "config_id": config_id,
         "config_name": config["config_name"],
         "vlan_id": config["vlan_id"],
-        "has_managed_config": pushed_steps > 0,
-        "found_count": pushed_steps,
+        "has_managed_config": remove_found > 0 or pushed_steps > 0,
+        "has_removable_config": remove_found > 0,
+        "has_pushed_config": pushed_steps > 0,
+        "found_count": remove_found,
         "push_progress": {
             "pushed_steps": pushed_steps,
             "total_steps": total_steps,
-            "routers": router_statuses,
+            "routers": apply_router_statuses,
         },
-        "routers": router_statuses,
+        "remove_progress": {
+            "found_steps": remove_found,
+            "routers": remove_router_statuses,
+        },
+        "routers": remove_router_statuses,
     }
     if not quiet:
-        record_ap_management_command_log(config_id, None, "CHECK", None, {"label": "Check existing AP management config", "preview": "Detect 3J AP management RouterOS objects"}, summary_status, f"Found {pushed_steps} AP management step(s).", result, admin["id"])
-        audit(admin["id"], "check_mikrotik_ap_management_config", "mikrotik_ap_management_configs", config_id, {"found_count": pushed_steps, "status": summary_status})
+        record_ap_management_command_log(config_id, None, "CHECK", None, {"label": "Check existing AP management config", "preview": "Detect 3J AP management RouterOS objects"}, summary_status, f"Found {remove_found} removable AP management object(s); {pushed_steps}/{total_steps} push step(s) detected.", result, admin["id"])
+        audit(admin["id"], "check_mikrotik_ap_management_config", "mikrotik_ap_management_configs", config_id, {"found_count": remove_found, "pushed_steps": pushed_steps, "status": summary_status})
     return result
 
 
@@ -11034,7 +15858,8 @@ def implement_mikrotik_ap_management_command(config_id: str, payload: MikrotikSt
     if payload.command_index >= len(commands):
         raise HTTPException(status_code=404, detail="AP management command was not found")
     command = commands[payload.command_index]
-    if not command.get("path") or not command.get("params"):
+    is_cleanup_command = command.get("operation") == "REMOVE_OLD"
+    if not is_cleanup_command and (not command.get("path") or not command.get("params")):
         raise HTTPException(status_code=400, detail="This AP management command is preview-only and cannot be applied.")
     router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (payload.router_id,))
     if not router:
@@ -11045,25 +15870,54 @@ def implement_mikrotik_ap_management_command(config_id: str, payload: MikrotikSt
         password = decrypt_secret(router.get("password_encrypted"))
         if not password:
             raise RuntimeError("Saved MikroTik password could not be decrypted.")
-        result = routeros_execute_commands(
-            router["host"],
-            router["api_port"],
-            router.get("username"),
-            password,
-            router.get("use_tls"),
-            [command],
-        )
+        if is_cleanup_command:
+            if command.get("path") and command.get("params"):
+                result = routeros_execute_commands(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    [command],
+                )
+            else:
+                result = routeros_execute_remove_commands(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    [command],
+                )
+            log_action = "CLEANUP_OLD"
+        else:
+            result = routeros_execute_commands(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                password,
+                router.get("use_tls"),
+                [command],
+            )
+            log_action = "APPLY"
         command_result = (result.get("results") or [{}])[0]
         command_status = command_result.get("status") or result.get("status") or "SUCCESS"
-        all_commands = [
-            (item.get("router_id"), command_index)
-            for item in plan.get("router_plans") or []
-            for command_index, _ in enumerate(item.get("commands") or [])
-        ]
+        all_commands = mikrotik_plan_command_refs(plan)
         if all_commands and all_commands[-1] == (payload.router_id, payload.command_index) and command_status in ("SUCCESS", "SKIPPED"):
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("UPDATE mikrotik_ap_management_configs SET status = 'ACTIVE', updated_at = now() WHERE id = %s", (config_id,))
+                    cur.execute(
+                        """
+                        UPDATE mikrotik_ap_management_configs
+                        SET status = 'ACTIVE',
+                            pending_cleanup_plan_json = NULL,
+                            pending_cleanup_reason = NULL,
+                            pending_cleanup_resolved_at = now(),
+                            updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (config_id,),
+                    )
         log_captive_portal_test(
             "IMPLEMENT_MIKROTIK_AP_MANAGEMENT_COMMAND",
             command_status,
@@ -11073,7 +15927,7 @@ def implement_mikrotik_ap_management_command(config_id: str, payload: MikrotikSt
         record_ap_management_command_log(
             config_id,
             payload.router_id,
-            "APPLY",
+            log_action,
             payload.command_index,
             command,
             command_status,
@@ -11105,7 +15959,7 @@ def implement_mikrotik_ap_management_command(config_id: str, payload: MikrotikSt
         }
     except Exception as exc:
         message = sanitize_routeros_text(str(exc))
-        record_ap_management_command_log(config_id, payload.router_id, "APPLY", payload.command_index, command, "FAILED", message, {"error": message}, admin["id"])
+        record_ap_management_command_log(config_id, payload.router_id, "CLEANUP_OLD" if command.get("operation") == "REMOVE_OLD" else "APPLY", payload.command_index, command, "FAILED", message, {"error": message}, admin["id"])
         log_captive_portal_test(
             "IMPLEMENT_MIKROTIK_AP_MANAGEMENT_COMMAND",
             "FAILED",
@@ -11129,8 +15983,363 @@ def implement_mikrotik_ap_management_command(config_id: str, payload: MikrotikSt
         raise HTTPException(status_code=400, detail=message)
 
 
+@app.post("/api/network/mikrotik/ap-management/{config_id}/remove-command")
+def remove_mikrotik_ap_management_command(config_id: str, payload: MikrotikStationCommandApply, admin=Depends(current_admin)):
+    config, routers, _ = mikrotik_ap_management_config_for_id(config_id)
+    remove_plan = build_mikrotik_ap_management_remove_plan(config, routers)
+    router_plan = next((item for item in remove_plan.get("router_plans") or [] if item.get("router_id") == payload.router_id), None)
+    if not router_plan:
+        raise HTTPException(status_code=404, detail="Router is not part of this AP management remove plan")
+    commands = router_plan.get("commands") or []
+    if payload.command_index >= len(commands):
+        raise HTTPException(status_code=404, detail="AP management remove command was not found")
+    command = commands[payload.command_index]
+    router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (payload.router_id,))
+    if not router:
+        raise HTTPException(status_code=404, detail="MikroTik router not found")
+    if not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        raise HTTPException(status_code=400, detail="Router host, username, and password are required before removing AP management configuration.")
+    try:
+        password = decrypt_secret(router.get("password_encrypted"))
+        if not password:
+            raise RuntimeError("Saved MikroTik password could not be decrypted.")
+        if command.get("path") and command.get("params"):
+            result = routeros_execute_commands(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                password,
+                router.get("use_tls"),
+                [command],
+            )
+        else:
+            result = routeros_execute_remove_commands(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                password,
+                router.get("use_tls"),
+                [command],
+            )
+        command_result = (result.get("results") or [{}])[0]
+        command_status = command_result.get("status") or result.get("status") or "SUCCESS"
+        all_commands = mikrotik_plan_command_refs(remove_plan)
+        if all_commands and all_commands[-1] == (payload.router_id, payload.command_index) and command_status in ("SUCCESS", "SKIPPED"):
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE mikrotik_ap_management_configs SET status = 'READY_FOR_REVIEW', updated_at = now() WHERE id = %s", (config_id,))
+        record_ap_management_command_log(
+            config_id,
+            payload.router_id,
+            "REMOVE",
+            payload.command_index,
+            command,
+            command_status,
+            command_result.get("message") or result.get("message") or "AP management remove command completed.",
+            command_result,
+            admin["id"],
+        )
+        log_captive_portal_test(
+            "REMOVE_MIKROTIK_AP_MANAGEMENT_COMMAND",
+            command_status,
+            command_result.get("message") or result.get("message") or "AP management remove command completed.",
+            {"config_id": config_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command), "result": sanitize_summary(command_result)},
+        )
+        audit(
+            admin["id"],
+            "remove_mikrotik_ap_management_command",
+            "mikrotik_ap_management_configs",
+            config_id,
+            {
+                "router_id": payload.router_id,
+                "router_name": router_plan.get("router_name"),
+                "command_index": payload.command_index,
+                "label": command.get("label"),
+                "status": command_status,
+            },
+        )
+        return {
+            "status": command_status,
+            "message": command_result.get("message") or result.get("message") or "AP management remove command completed.",
+            "config_id": config_id,
+            "router_id": payload.router_id,
+            "command_index": payload.command_index,
+            "command": sanitize_summary(command),
+            "result": sanitize_summary(command_result),
+        }
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        record_ap_management_command_log(config_id, payload.router_id, "REMOVE", payload.command_index, command, "FAILED", message, {"error": message}, admin["id"])
+        log_captive_portal_test(
+            "REMOVE_MIKROTIK_AP_MANAGEMENT_COMMAND",
+            "FAILED",
+            message,
+            {"config_id": config_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command)},
+        )
+        audit(
+            admin["id"],
+            "remove_mikrotik_ap_management_command",
+            "mikrotik_ap_management_configs",
+            config_id,
+            {
+                "router_id": payload.router_id,
+                "router_name": router_plan.get("router_name"),
+                "command_index": payload.command_index,
+                "label": command.get("label"),
+                "status": "FAILED",
+                "error": message,
+            },
+        )
+        raise HTTPException(status_code=400, detail=message)
+
+
+@app.get("/api/network/mikrotik/office-ap-path")
+def get_mikrotik_office_ap_path_config(admin=Depends(current_admin)):
+    return public_mikrotik_office_ap_path_config(latest_mikrotik_office_ap_path_config_row())
+
+
+@app.put("/api/network/mikrotik/office-ap-path")
+def save_mikrotik_office_ap_path_config(payload: MikrotikOfficeApPathConfigPayload, admin=Depends(current_admin)):
+    return save_mikrotik_office_ap_path_payload(payload, admin)
+
+
+@app.get("/api/network/mikrotik/office-ap-path/{config_id}/command-logs")
+def list_mikrotik_office_ap_path_command_logs(config_id: str, admin=Depends(current_admin)):
+    config = fetch_one("SELECT id FROM mikrotik_office_ap_path_configs WHERE id = %s AND status <> 'ARCHIVED'", (config_id,))
+    if not config:
+        raise HTTPException(status_code=404, detail="Office AP path configuration not found")
+    return [
+        public_office_ap_path_command_log(row)
+        for row in fetch_all(
+            """
+            SELECT l.*, mr.router_name, mr.host
+            FROM mikrotik_office_ap_path_command_logs l
+            LEFT JOIN mikrotik_routers mr ON mr.id = l.router_id
+            WHERE l.config_id = %s
+            ORDER BY l.created_at DESC
+            LIMIT 100
+            """,
+            (config_id,),
+        )
+    ]
+
+
+def mikrotik_office_ap_path_config_for_id(config_id: str) -> tuple[dict, list[dict], dict]:
+    config = fetch_one("SELECT * FROM mikrotik_office_ap_path_configs WHERE id = %s AND status <> 'ARCHIVED'", (config_id,))
+    if not config:
+        raise HTTPException(status_code=404, detail="Office AP path configuration not found")
+    routers = office_ap_path_router_rows(config_id)
+    return config, routers, build_mikrotik_office_ap_path_plan(config, routers)
+
+
+@app.get("/api/network/mikrotik/office-ap-path/{config_id}/managed-configuration-status")
+def mikrotik_office_ap_path_managed_configuration_status(config_id: str, quiet: bool = False, admin=Depends(current_admin)):
+    config, routers, plan = mikrotik_office_ap_path_config_for_id(config_id)
+    remove_plan = build_mikrotik_office_ap_path_remove_plan(config, routers)
+    total_steps = 0
+    pushed_steps = 0
+    apply_router_statuses = []
+    remove_found = 0
+    remove_router_statuses = []
+    for router_plan in plan.get("router_plans") or []:
+        commands = router_plan.get("commands") or []
+        total_steps += len(commands)
+        router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_plan["router_id"],))
+        if not router:
+            status = {"status": "ERROR", "message": "Router not found", "has_managed_config": False, "found_count": 0, "items": []}
+        elif not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+            status = {"status": "NOT_READY", "message": "Router host, username, and password are required before checking office AP path config.", "has_managed_config": False, "found_count": 0, "items": []}
+        else:
+            try:
+                password = decrypt_secret(router.get("password_encrypted"))
+                status = routeros_detect_station_apply_targets(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    commands,
+                )
+            except Exception as exc:
+                status = {"status": "ERROR", "message": sanitize_routeros_text(str(exc)), "has_managed_config": False, "found_count": 0, "items": []}
+        pushed_steps += int(status.get("found_count") or 0)
+        apply_router_statuses.append({
+            "router_id": router_plan["router_id"],
+            "router_name": router_plan.get("router_name"),
+            "host": router_plan.get("host"),
+            **status,
+        })
+    for router_plan in remove_plan.get("router_plans") or []:
+        commands = router_plan.get("commands") or []
+        router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_plan["router_id"],))
+        if not router:
+            status = {"status": "ERROR", "message": "Router not found", "has_managed_config": False, "found_count": 0, "items": []}
+        elif not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+            status = {"status": "NOT_READY", "message": "Router host, username, and password are required before checking office AP path config.", "has_managed_config": False, "found_count": 0, "items": []}
+        else:
+            try:
+                password = decrypt_secret(router.get("password_encrypted"))
+                status = routeros_detect_remove_targets(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    commands,
+                )
+            except Exception as exc:
+                status = {"status": "ERROR", "message": sanitize_routeros_text(str(exc)), "has_managed_config": False, "found_count": 0, "items": []}
+        remove_found += int(status.get("found_count") or 0)
+        remove_router_statuses.append({
+            "router_id": router_plan["router_id"],
+            "router_name": router_plan.get("router_name"),
+            "host": router_plan.get("host"),
+            **status,
+        })
+    combined_statuses = apply_router_statuses + remove_router_statuses
+    summary_status = "SUCCESS" if combined_statuses and all(item.get("status") in ("SUCCESS", "NOT_READY") for item in combined_statuses) else "ERROR" if any(item.get("status") == "ERROR" for item in combined_statuses) else "SUCCESS"
+    result = {
+        "status": summary_status,
+        "config_id": config_id,
+        "config_name": config["config_name"],
+        "transport_vlan_id": config["transport_vlan_id"],
+        "office_bridge_name": config["office_bridge_name"],
+        "has_managed_config": remove_found > 0 or pushed_steps > 0,
+        "has_removable_config": remove_found > 0,
+        "has_pushed_config": pushed_steps > 0,
+        "found_count": remove_found,
+        "push_progress": {
+            "pushed_steps": pushed_steps,
+            "total_steps": total_steps,
+            "routers": apply_router_statuses,
+        },
+        "remove_progress": {
+            "found_steps": remove_found,
+            "routers": remove_router_statuses,
+        },
+        "routers": remove_router_statuses,
+    }
+    if not quiet:
+        record_office_ap_path_command_log(config_id, None, "CHECK", None, {"label": "Check existing office AP path config", "preview": "Detect 3J Office AP Path RouterOS objects"}, summary_status, f"Found {remove_found} removable office AP path object(s); {pushed_steps}/{total_steps} push step(s) detected.", result, admin["id"])
+        audit(admin["id"], "check_mikrotik_office_ap_path_config", "mikrotik_office_ap_path_configs", config_id, {"found_count": remove_found, "pushed_steps": pushed_steps, "status": summary_status})
+    return result
+
+
+@app.post("/api/network/mikrotik/office-ap-path/{config_id}/implement-command")
+def implement_mikrotik_office_ap_path_command(config_id: str, payload: MikrotikStationCommandApply, admin=Depends(current_admin)):
+    config, routers, plan = mikrotik_office_ap_path_config_for_id(config_id)
+    router_plan = next((item for item in plan.get("router_plans") or [] if item.get("router_id") == payload.router_id), None)
+    if not router_plan:
+        raise HTTPException(status_code=404, detail="Router is not part of this office AP path plan")
+    commands = router_plan.get("commands") or []
+    if payload.command_index >= len(commands):
+        raise HTTPException(status_code=404, detail="Office AP path command was not found")
+    command = commands[payload.command_index]
+    is_cleanup_command = command.get("operation") == "REMOVE_OLD"
+    if not is_cleanup_command and (not command.get("path") or not command.get("params")):
+        raise HTTPException(status_code=400, detail="This office AP path command is preview-only and cannot be applied.")
+    router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (payload.router_id,))
+    if not router:
+        raise HTTPException(status_code=404, detail="MikroTik router not found")
+    if not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        raise HTTPException(status_code=400, detail="Router host, username, and password are required before applying office AP path configuration.")
+    try:
+        password = decrypt_secret(router.get("password_encrypted"))
+        if not password:
+            raise RuntimeError("Saved MikroTik password could not be decrypted.")
+        if is_cleanup_command:
+            if command.get("path") and command.get("params"):
+                result = routeros_execute_commands(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), [command])
+            else:
+                result = routeros_execute_remove_commands(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), [command])
+            log_action = "CLEANUP_OLD"
+        else:
+            result = routeros_execute_commands(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), [command])
+            log_action = "APPLY"
+        command_result = (result.get("results") or [{}])[0]
+        command_status = command_result.get("status") or result.get("status") or "SUCCESS"
+        all_commands = mikrotik_plan_command_refs(plan)
+        if all_commands and all_commands[-1] == (payload.router_id, payload.command_index) and command_status in ("SUCCESS", "SKIPPED"):
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE mikrotik_office_ap_path_configs
+                        SET status = 'ACTIVE',
+                            pending_cleanup_plan_json = NULL,
+                            pending_cleanup_reason = NULL,
+                            pending_cleanup_resolved_at = now(),
+                            updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (config_id,),
+                    )
+        record_office_ap_path_command_log(config_id, payload.router_id, log_action, payload.command_index, command, command_status, command_result.get("message") or result.get("message") or "Office AP path command completed.", command_result, admin["id"])
+        log_captive_portal_test(
+            "IMPLEMENT_MIKROTIK_OFFICE_AP_PATH_COMMAND",
+            command_status,
+            command_result.get("message") or result.get("message") or "Office AP path command completed.",
+            {"config_id": config_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command), "result": sanitize_summary(command_result)},
+        )
+        audit(admin["id"], "implement_mikrotik_office_ap_path_command", "mikrotik_office_ap_path_configs", config_id, {"router_id": payload.router_id, "router_name": router_plan.get("router_name"), "command_index": payload.command_index, "label": command.get("label"), "status": command_status})
+        return {"status": command_status, "message": command_result.get("message") or result.get("message") or "Office AP path command completed.", "config_id": config_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command), "result": sanitize_summary(command_result)}
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        record_office_ap_path_command_log(config_id, payload.router_id, "CLEANUP_OLD" if command.get("operation") == "REMOVE_OLD" else "APPLY", payload.command_index, command, "FAILED", message, {"error": message}, admin["id"])
+        log_captive_portal_test("IMPLEMENT_MIKROTIK_OFFICE_AP_PATH_COMMAND", "FAILED", message, {"config_id": config_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command)})
+        audit(admin["id"], "implement_mikrotik_office_ap_path_command", "mikrotik_office_ap_path_configs", config_id, {"router_id": payload.router_id, "router_name": router_plan.get("router_name"), "command_index": payload.command_index, "label": command.get("label"), "status": "FAILED", "error": message})
+        raise HTTPException(status_code=400, detail=message)
+
+
+@app.post("/api/network/mikrotik/office-ap-path/{config_id}/remove-command")
+def remove_mikrotik_office_ap_path_command(config_id: str, payload: MikrotikStationCommandApply, admin=Depends(current_admin)):
+    config = fetch_one("SELECT * FROM mikrotik_office_ap_path_configs WHERE id = %s AND status <> 'ARCHIVED'", (config_id,))
+    if not config:
+        raise HTTPException(status_code=404, detail="Office AP path configuration not found")
+    routers = office_ap_path_router_rows(config_id)
+    remove_plan = build_mikrotik_office_ap_path_remove_plan(config, routers)
+    router_plan = next((item for item in remove_plan.get("router_plans") or [] if item.get("router_id") == payload.router_id), None)
+    if not router_plan:
+        raise HTTPException(status_code=404, detail="Router is not part of this office AP path remove plan")
+    commands = router_plan.get("commands") or []
+    if payload.command_index >= len(commands):
+        raise HTTPException(status_code=404, detail="Office AP path remove command was not found")
+    command = commands[payload.command_index]
+    router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (payload.router_id,))
+    if not router:
+        raise HTTPException(status_code=404, detail="MikroTik router not found")
+    if not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        raise HTTPException(status_code=400, detail="Router host, username, and password are required before removing office AP path configuration.")
+    try:
+        password = decrypt_secret(router.get("password_encrypted"))
+        if not password:
+            raise RuntimeError("Saved MikroTik password could not be decrypted.")
+        if command.get("path") and command.get("params"):
+            result = routeros_execute_commands(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), [command])
+        else:
+            result = routeros_execute_remove_commands(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), [command])
+        command_result = (result.get("results") or [{}])[0]
+        command_status = command_result.get("status") or result.get("status") or "SUCCESS"
+        all_commands = mikrotik_plan_command_refs(remove_plan)
+        if all_commands and all_commands[-1] == (payload.router_id, payload.command_index) and command_status in ("SUCCESS", "SKIPPED"):
+            with get_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE mikrotik_office_ap_path_configs SET status = 'READY_FOR_REVIEW', updated_at = now() WHERE id = %s", (config_id,))
+        record_office_ap_path_command_log(config_id, payload.router_id, "REMOVE", payload.command_index, command, command_status, command_result.get("message") or result.get("message") or "Office AP path remove command completed.", command_result, admin["id"])
+        log_captive_portal_test("REMOVE_MIKROTIK_OFFICE_AP_PATH_COMMAND", command_status, command_result.get("message") or result.get("message") or "Office AP path remove command completed.", {"config_id": config_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command), "result": sanitize_summary(command_result)})
+        audit(admin["id"], "remove_mikrotik_office_ap_path_command", "mikrotik_office_ap_path_configs", config_id, {"router_id": payload.router_id, "router_name": router_plan.get("router_name"), "command_index": payload.command_index, "label": command.get("label"), "status": command_status})
+        return {"status": command_status, "message": command_result.get("message") or result.get("message") or "Office AP path remove command completed.", "config_id": config_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command), "result": sanitize_summary(command_result)}
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        record_office_ap_path_command_log(config_id, payload.router_id, "REMOVE", payload.command_index, command, "FAILED", message, {"error": message}, admin["id"])
+        log_captive_portal_test("REMOVE_MIKROTIK_OFFICE_AP_PATH_COMMAND", "FAILED", message, {"config_id": config_id, "router_id": payload.router_id, "command_index": payload.command_index, "command": sanitize_summary(command)})
+        audit(admin["id"], "remove_mikrotik_office_ap_path_command", "mikrotik_office_ap_path_configs", config_id, {"router_id": payload.router_id, "router_name": router_plan.get("router_name"), "command_index": payload.command_index, "label": command.get("label"), "status": "FAILED", "error": message})
+        raise HTTPException(status_code=400, detail=message)
+
+
 @app.get("/api/network/mikrotik/stations/hotspot-login-sync-status")
 def mikrotik_hotspot_login_sync_status(remote: bool = False, admin=Depends(current_admin)):
+    raise_removed_feature("MikroTik HotSpot login.html sync")
     stations = fetch_all("SELECT * FROM mikrotik_stations WHERE status <> 'ARCHIVED' ORDER BY updated_at DESC, created_at DESC")
     statuses = [mikrotik_hotspot_login_sync_status_for_station(station, remote_check=remote) for station in stations]
     synced = sum(1 for item in statuses if item.get("status") == "SYNCED")
@@ -11149,6 +16358,7 @@ def mikrotik_hotspot_login_sync_status(remote: bool = False, admin=Depends(curre
 
 @app.post("/api/network/mikrotik/stations/sync-hotspot-login")
 def sync_all_mikrotik_hotspot_login(payload: Optional[MikrotikHotspotLoginSyncPayload] = None, admin=Depends(current_admin)):
+    raise_removed_feature("MikroTik HotSpot login.html sync")
     payload = payload or MikrotikHotspotLoginSyncPayload()
     params = []
     where = "status <> 'ARCHIVED'"
@@ -11168,6 +16378,7 @@ def sync_all_mikrotik_hotspot_login(payload: Optional[MikrotikHotspotLoginSyncPa
 
 @app.post("/api/network/mikrotik/stations/{station_id}/sync-hotspot-login")
 def sync_one_mikrotik_hotspot_login(station_id: str, admin=Depends(current_admin)):
+    raise_removed_feature("MikroTik HotSpot login.html sync")
     station = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
     if not station:
         raise HTTPException(status_code=404, detail="MikroTik station not found")
@@ -11187,8 +16398,35 @@ def get_mikrotik_station(station_id: str, admin=Depends(current_admin)):
     return public_mikrotik_station(row)
 
 
+@app.get("/api/network/mikrotik/stations/{station_id}/omada-portal-plan")
+def get_mikrotik_station_omada_portal_plan(station_id: str, admin=Depends(current_admin)):
+    row = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="MikroTik station not found")
+    result = station_omada_portal_plan(row, admin=admin)
+    audit(
+        admin["id"],
+        "view_station_omada_portal_plan",
+        "mikrotik_stations",
+        station_id,
+        {"status": result.get("status"), "vlan_id": row.get("vlan_id")},
+    )
+    return result
+
+
+@app.put("/api/network/mikrotik/stations/{station_id}/omada-site")
+def save_mikrotik_station_omada_site(station_id: str, payload: MikrotikStationOmadaBindingUpdate, admin=Depends(current_admin)):
+    return update_station_omada_binding(station_id, payload, admin)
+
+
+@app.post("/api/network/mikrotik/stations/{station_id}/omada-actions/{action_key}")
+def run_mikrotik_station_omada_action(station_id: str, action_key: str, admin=Depends(current_admin)):
+    return run_station_omada_action(station_id, action_key, admin)
+
+
 @app.get("/api/network/mikrotik/stations/{station_id}/hotspot-login.html")
 def download_mikrotik_station_hotspot_login(station_id: str, admin=Depends(current_admin)):
+    raise_removed_feature("MikroTik HotSpot login.html download")
     row = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
     if not row:
         raise HTTPException(status_code=404, detail="MikroTik station not found")
@@ -11201,6 +16439,7 @@ def download_mikrotik_station_hotspot_login(station_id: str, admin=Depends(curre
 
 @app.get("/api/network/mikrotik/stations/{station_id}/hotspot-diagnostics")
 def get_mikrotik_station_hotspot_diagnostics(station_id: str, client_ip: Optional[str] = None, admin=Depends(current_admin)):
+    raise_removed_feature("MikroTik HotSpot diagnostics")
     row = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
     if not row:
         raise HTTPException(status_code=404, detail="MikroTik station not found")
@@ -11289,7 +16528,7 @@ def mikrotik_station_managed_configuration_status(station_id: str, quiet: bool =
     apply_plan = build_mikrotik_station_plan(station, routers)
     router_statuses = []
     total_found = 0
-    total_steps = 1
+    total_steps = 0
     pushed_steps = 0
     apply_router_statuses = []
     for router_plan in apply_plan.get("router_plans") or []:
@@ -11320,9 +16559,6 @@ def mikrotik_station_managed_configuration_status(station_id: str, quiet: bool =
             "host": router_plan.get("host"),
             **status,
         })
-    login_status = mikrotik_hotspot_login_sync_status_for_station(station, remote_check=True)
-    if login_status.get("status") == "SYNCED":
-        pushed_steps += 1
     for router_plan in remove_plan.get("router_plans") or []:
         router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_plan["router_id"],))
         if not router:
@@ -11361,7 +16597,6 @@ def mikrotik_station_managed_configuration_status(station_id: str, quiet: bool =
         "push_progress": {
             "pushed_steps": pushed_steps,
             "total_steps": total_steps,
-            "login_html_status": login_status,
             "routers": apply_router_statuses,
         },
     }
@@ -11385,7 +16620,8 @@ def implement_mikrotik_station_command(station_id: str, payload: MikrotikStation
     if payload.command_index >= len(commands):
         raise HTTPException(status_code=404, detail="Station command was not found")
     command = commands[payload.command_index]
-    if not command.get("path") or not command.get("params"):
+    is_cleanup_command = command.get("operation") == "REMOVE_OLD"
+    if not is_cleanup_command and (not command.get("path") or not command.get("params")):
         raise HTTPException(status_code=400, detail="This station command is preview-only and cannot be applied.")
     router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (payload.router_id,))
     if not router:
@@ -11396,25 +16632,54 @@ def implement_mikrotik_station_command(station_id: str, payload: MikrotikStation
         password = decrypt_secret(router.get("password_encrypted"))
         if not password:
             raise RuntimeError("Saved MikroTik password could not be decrypted.")
-        result = routeros_execute_commands(
-            router["host"],
-            router["api_port"],
-            router.get("username"),
-            password,
-            router.get("use_tls"),
-            [command],
-        )
+        if is_cleanup_command:
+            if command.get("path") and command.get("params"):
+                result = routeros_execute_commands(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    [command],
+                )
+            else:
+                result = routeros_execute_remove_commands(
+                    router["host"],
+                    router["api_port"],
+                    router.get("username"),
+                    password,
+                    router.get("use_tls"),
+                    [command],
+                )
+            operation = "CLEANUP_OLD"
+        else:
+            result = routeros_execute_commands(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                password,
+                router.get("use_tls"),
+                [command],
+            )
+            operation = "APPLY"
         command_result = (result.get("results") or [{}])[0]
         command_status = command_result.get("status") or result.get("status") or "SUCCESS"
-        all_commands = [
-            (item.get("router_id"), command_index)
-            for item in plan.get("router_plans") or []
-            for command_index, _ in enumerate(item.get("commands") or [])
-        ]
+        all_commands = mikrotik_plan_command_refs(plan)
         if all_commands and all_commands[-1] == (payload.router_id, payload.command_index) and command_status in ("SUCCESS", "SKIPPED"):
             with get_conn() as conn:
                 with conn.cursor() as cur:
-                    cur.execute("UPDATE mikrotik_stations SET status = 'ACTIVE', updated_at = now() WHERE id = %s", (station_id,))
+                    cur.execute(
+                        """
+                        UPDATE mikrotik_stations
+                        SET status = 'ACTIVE',
+                            pending_cleanup_plan_json = NULL,
+                            pending_cleanup_reason = NULL,
+                            pending_cleanup_resolved_at = now(),
+                            updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (station_id,),
+                    )
         log_captive_portal_test(
             "IMPLEMENT_MIKROTIK_STATION_COMMAND",
             command_status,
@@ -11424,7 +16689,7 @@ def implement_mikrotik_station_command(station_id: str, payload: MikrotikStation
         record_station_command_log(
             station_id,
             payload.router_id,
-            "APPLY",
+            operation,
             payload.command_index,
             command,
             command_status,
@@ -11456,7 +16721,7 @@ def implement_mikrotik_station_command(station_id: str, payload: MikrotikStation
         }
     except Exception as exc:
         message = sanitize_routeros_text(str(exc))
-        record_station_command_log(station_id, payload.router_id, "APPLY", payload.command_index, command, "FAILED", message, {"error": message}, admin["id"])
+        record_station_command_log(station_id, payload.router_id, "CLEANUP_OLD" if command.get("operation") == "REMOVE_OLD" else "APPLY", payload.command_index, command, "FAILED", message, {"error": message}, admin["id"])
         log_captive_portal_test(
             "IMPLEMENT_MIKROTIK_STATION_COMMAND",
             "FAILED",
@@ -11588,6 +16853,7 @@ def create_mikrotik_router(payload: MikrotikRouterCreate, admin=Depends(current_
     privilege = (payload.account_privilege or "FULL").upper()
     if privilege not in ("FULL", "READ_ONLY"):
         raise HTTPException(status_code=400, detail="Invalid MikroTik account privilege")
+    validate_mikrotik_router_host_value(payload.host)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -11652,6 +16918,8 @@ def update_mikrotik_router(router_id: str, payload: MikrotikRouterUpdate, admin=
             raise HTTPException(status_code=400, detail="Invalid MikroTik account privilege")
     if "password" in updates:
         updates["password_encrypted"] = encrypt_secret(updates.pop("password"))
+    if "host" in updates:
+        validate_mikrotik_router_host_value(updates["host"], router_id)
     updates = {
         key: value
         for key, value in updates.items()
@@ -11768,8 +17036,14 @@ def mikrotik_routeros_options(router_id: str, admin=Depends(current_admin)):
                 return []
 
         interfaces = read_options("/interface/print", required=True)
+        bridges = read_options("/interface/bridge/print")
         bridge_ports = read_options("/interface/bridge/port/print")
         interface_lists = read_options("/interface/list/print")
+        bridge_names = {
+            sanitize_routeros_text(item.get("name"), max_length=200)
+            for item in bridges
+            if item.get("name")
+        }
         bridge_membership = {
             sanitize_routeros_text(item.get("interface"), max_length=200): sanitize_routeros_text(item.get("bridge"), max_length=200)
             for item in bridge_ports
@@ -11782,11 +17056,26 @@ def mikrotik_routeros_options(router_id: str, admin=Depends(current_admin)):
                 "running": item.get("running") == "true",
                 "disabled": item.get("disabled") == "true",
                 "bridge": bridge_membership.get(sanitize_routeros_text(item.get("name"), max_length=200)),
+                "is_bridge": sanitize_routeros_text(item.get("name"), max_length=200) in bridge_names or sanitize_routeros_text(item.get("type"), max_length=120).lower() == "bridge",
                 "comment": sanitize_routeros_text(item.get("comment"), max_length=500),
             }
             for item in interfaces
             if item.get("name")
         ]
+        existing_interface_names = {item["name"] for item in public_interfaces}
+        for bridge in bridges:
+            bridge_name = sanitize_routeros_text(bridge.get("name"), max_length=200)
+            if bridge_name and bridge_name not in existing_interface_names:
+                public_interfaces.append({
+                    "name": bridge_name,
+                    "type": "bridge",
+                    "running": bridge.get("running") == "true",
+                    "disabled": bridge.get("disabled") == "true",
+                    "bridge": None,
+                    "is_bridge": True,
+                    "comment": sanitize_routeros_text(bridge.get("comment"), max_length=500),
+                })
+                existing_interface_names.add(bridge_name)
         public_interface_lists = sorted([
             {
                 "name": sanitize_routeros_text(item.get("name"), max_length=200),
@@ -11798,8 +17087,18 @@ def mikrotik_routeros_options(router_id: str, admin=Depends(current_admin)):
             if item.get("name")
         ], key=lambda item: item["name"].lower())
         public_interfaces.sort(key=lambda item: (item["disabled"], item["name"].lower()))
-        audit(admin["id"], "load_mikrotik_routeros_options", "mikrotik_routers", router_id, {"interface_count": len(public_interfaces), "interface_list_count": len(public_interface_lists), "warning_count": len(option_warnings)})
-        return {"status": "SUCCESS", "interfaces": public_interfaces, "interface_lists": public_interface_lists, "warnings": option_warnings}
+        public_bridges = sorted([
+            {
+                "name": sanitize_routeros_text(item.get("name"), max_length=200),
+                "running": item.get("running") == "true",
+                "disabled": item.get("disabled") == "true",
+                "comment": sanitize_routeros_text(item.get("comment"), max_length=500),
+            }
+            for item in bridges
+            if item.get("name")
+        ], key=lambda item: item["name"].lower())
+        audit(admin["id"], "load_mikrotik_routeros_options", "mikrotik_routers", router_id, {"interface_count": len(public_interfaces), "bridge_count": len(public_bridges), "interface_list_count": len(public_interface_lists), "warning_count": len(option_warnings)})
+        return {"status": "SUCCESS", "interfaces": public_interfaces, "bridges": public_bridges, "interface_lists": public_interface_lists, "warnings": option_warnings}
     except Exception as exc:
         message = str(exc)
         audit(admin["id"], "load_mikrotik_routeros_options", "mikrotik_routers", router_id, {"status": "FAILED", "error": message})
@@ -13719,6 +19018,7 @@ def run_mikrotik_ai_smoke_test(admin=Depends(current_admin)):
 
 @app.get("/api/captive-portal/mikrotik/pilot-selection")
 def get_mikrotik_pilot_selection(admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     return {
         "pilot_selection": public_mikrotik_pilot_selection(active_mikrotik_pilot_selection()),
         "rules": [
@@ -13732,6 +19032,7 @@ def get_mikrotik_pilot_selection(admin=Depends(current_admin)):
 
 @app.put("/api/captive-portal/mikrotik/pilot-selection")
 def set_mikrotik_pilot_selection(payload: MikrotikPilotSelectionPayload, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     confidence = (payload.physical_recovery_confidence or "MODERATE").strip().upper()
     if confidence not in {"EASY_TO_RECOVER", "MODERATE", "HARD_REMOTE_SITE"}:
         raise HTTPException(status_code=400, detail="Physical recovery confidence must be EASY_TO_RECOVER, MODERATE, or HARD_REMOTE_SITE.")
@@ -13770,6 +19071,7 @@ def set_mikrotik_pilot_selection(payload: MikrotikPilotSelectionPayload, admin=D
 
 @app.delete("/api/captive-portal/mikrotik/pilot-selection")
 def clear_mikrotik_pilot_selection(admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     current = active_mikrotik_pilot_selection()
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -13890,6 +19192,7 @@ def send_mikrotik_ai_message(conversation_id: str, payload: MikrotikAiMessageCre
 
 @app.get("/api/captive-portal/mikrotik/{router_id}/deployment-questions")
 def get_mikrotik_deployment_questions(router_id: str, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         return []
@@ -13898,6 +19201,7 @@ def get_mikrotik_deployment_questions(router_id: str, admin=Depends(current_admi
 
 @app.put("/api/captive-portal/mikrotik/{router_id}/deployment-questions/{question_key}")
 def update_mikrotik_deployment_question(router_id: str, question_key: str, payload: MikrotikDeploymentQuestionUpdate, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         raise HTTPException(status_code=400, detail="Planning questions are currently enabled only for the selected pilot router.")
@@ -13932,6 +19236,7 @@ def update_mikrotik_deployment_question(router_id: str, question_key: str, paylo
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/deployment-questions/save-all")
 def save_all_mikrotik_deployment_questions(router_id: str, payload: MikrotikDeploymentQuestionsSaveAll, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         raise HTTPException(status_code=400, detail="Planning questions are currently enabled only for the selected pilot router.")
@@ -13979,11 +19284,13 @@ def save_all_mikrotik_deployment_questions(router_id: str, payload: MikrotikDepl
 
 @app.get("/api/captive-portal/mikrotik/{router_id}/mt4-readiness")
 def get_mikrotik_mt4_readiness(router_id: str, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     return build_mikrotik_mt4_readiness(router_id)
 
 
 @app.get("/api/captive-portal/mikrotik/{router_id}/planning-network-preview")
 def get_mikrotik_planning_network_preview(router_id: str, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     questions = [public_mikrotik_deployment_question(row) for row in ensure_mikrotik_deployment_questions(router_id)]
     answers = mikrotik_question_answer_map(questions)
     preview = derive_mikrotik_network_fields(answers.get("client_network_cidr"))
@@ -13997,6 +19304,7 @@ def get_mikrotik_planning_network_preview(router_id: str, admin=Depends(current_
 
 @app.get("/api/captive-portal/mikrotik/{router_id}/interface-candidates")
 def get_mikrotik_interface_candidates_endpoint(router_id: str, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     router = fetch_one("SELECT id FROM mikrotik_routers WHERE id = %s", (router_id,))
     if not router:
         raise HTTPException(status_code=404, detail="MikroTik router not found")
@@ -14005,6 +19313,7 @@ def get_mikrotik_interface_candidates_endpoint(router_id: str, admin=Depends(cur
 
 @app.get("/api/captive-portal/mikrotik/{router_id}/vlan-path-plan")
 def get_mikrotik_vlan_path_plan(router_id: str, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         return {"plan": public_mikrotik_vlan_path_plan(None, router_id), "validation": {"errors": ["VLAN path planning is currently enabled only for the selected pilot router."], "warnings": [], "complete": False}}
@@ -14019,6 +19328,7 @@ def get_mikrotik_vlan_path_plan(router_id: str, admin=Depends(current_admin)):
 
 @app.put("/api/captive-portal/mikrotik/{router_id}/vlan-path-plan")
 def save_mikrotik_vlan_path_plan(router_id: str, payload: MikrotikVlanPathPlanPayload, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         raise HTTPException(status_code=400, detail="VLAN path planning is currently enabled only for the selected pilot router.")
@@ -14107,6 +19417,7 @@ def save_mikrotik_vlan_path_plan(router_id: str, payload: MikrotikVlanPathPlanPa
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/deployment-questions/derive")
 def derive_mikrotik_deployment_questions(router_id: str, payload: MikrotikDeploymentQuestionsSaveAll, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         raise HTTPException(status_code=400, detail="Planning questions are currently enabled only for the selected pilot router.")
@@ -14129,6 +19440,7 @@ def derive_mikrotik_deployment_questions(router_id: str, payload: MikrotikDeploy
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/deployment-questions/validate")
 def validate_mikrotik_deployment_questions_endpoint(router_id: str, payload: Optional[MikrotikDeploymentQuestionsSaveAll] = None, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         raise HTTPException(status_code=400, detail="Planning questions are currently enabled only for the selected pilot router.")
@@ -14151,6 +19463,7 @@ def validate_mikrotik_deployment_questions_endpoint(router_id: str, payload: Opt
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/deployment-questions/approve")
 def approve_mikrotik_deployment_question(router_id: str, payload: MikrotikDeploymentQuestionAction, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         raise HTTPException(status_code=400, detail="Planning questions are currently enabled only for the selected pilot router.")
@@ -14188,6 +19501,7 @@ def approve_mikrotik_deployment_question(router_id: str, payload: MikrotikDeploy
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/deployment-questions/reject")
 def reject_mikrotik_deployment_question(router_id: str, payload: MikrotikDeploymentQuestionAction, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         raise HTTPException(status_code=400, detail="Planning questions are currently enabled only for the selected pilot router.")
@@ -14232,6 +19546,7 @@ def reject_mikrotik_deployment_question(router_id: str, payload: MikrotikDeploym
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/deployment-questions/lock")
 def lock_mikrotik_deployment_question(router_id: str, payload: MikrotikDeploymentQuestionAction, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         raise HTTPException(status_code=400, detail="Planning questions are currently enabled only for the selected pilot router.")
@@ -14269,6 +19584,7 @@ def lock_mikrotik_deployment_question(router_id: str, payload: MikrotikDeploymen
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/deployment-questions/apply-safe-suggestions")
 def apply_safe_mikrotik_suggestions(router_id: str, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     active_pilot = active_mikrotik_pilot_selection()
     if not active_pilot or str(active_pilot["router_id"]) != str(router_id):
         raise HTTPException(status_code=400, detail="Planning questions are currently enabled only for the selected pilot router.")
@@ -14492,6 +19808,7 @@ def generate_mikrotik_ai_draft_plan(router_id: str, payload: MikrotikDraftPlanGe
 
 @app.get("/api/captive-portal/mikrotik/{router_id}/draft-plans")
 def list_mikrotik_draft_plans(router_id: str, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     if not fetch_one("SELECT id FROM mikrotik_routers WHERE id = %s", (router_id,)):
         raise HTTPException(status_code=404, detail="MikroTik router not found")
     rows = fetch_all("SELECT * FROM mikrotik_draft_deployment_plans WHERE router_id = %s ORDER BY created_at DESC LIMIT 25", (router_id,))
@@ -14500,6 +19817,7 @@ def list_mikrotik_draft_plans(router_id: str, admin=Depends(current_admin)):
 
 @app.get("/api/captive-portal/mikrotik/{router_id}/draft-plans/{plan_id}")
 def get_mikrotik_draft_plan(router_id: str, plan_id: str, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     row = fetch_one("SELECT * FROM mikrotik_draft_deployment_plans WHERE id = %s AND router_id = %s", (plan_id, router_id))
     if not row:
         raise HTTPException(status_code=404, detail="Draft deployment plan not found")
@@ -14508,6 +19826,7 @@ def get_mikrotik_draft_plan(router_id: str, plan_id: str, admin=Depends(current_
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/draft-plans/{plan_id}/validate")
 def validate_mikrotik_draft_plan_endpoint(router_id: str, plan_id: str, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_id,))
     row = fetch_one("SELECT * FROM mikrotik_draft_deployment_plans WHERE id = %s AND router_id = %s", (plan_id, router_id))
     if not router or not row:
@@ -14533,6 +19852,7 @@ def validate_mikrotik_draft_plan_endpoint(router_id: str, plan_id: str, admin=De
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/draft-plans/{plan_id}/mark-ready")
 def mark_mikrotik_draft_plan_ready(router_id: str, plan_id: str, admin=Depends(current_admin)):
+    raise_ai_feature_removed()
     row = fetch_one("SELECT * FROM mikrotik_draft_deployment_plans WHERE id = %s AND router_id = %s", (plan_id, router_id))
     if not row:
         raise HTTPException(status_code=404, detail="Draft deployment plan not found")
@@ -14953,6 +20273,7 @@ def mikrotik_managed_configuration_status_endpoint(router_id: str, admin=Depends
 
 @app.get("/api/captive-portal/mikrotik/{router_id}/configuration-preview")
 def preview_mikrotik_configuration(router_id: str, admin=Depends(current_admin)):
+    raise_removed_feature("Legacy single-router MikroTik HotSpot configuration preview")
     row = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_id,))
     if not row:
         raise HTTPException(status_code=404, detail="MikroTik router not found")
@@ -14978,6 +20299,7 @@ def find_mikrotik_plan_step(plan: dict, step_key: str):
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/apply-configuration-step")
 def apply_mikrotik_configuration_step(router_id: str, payload: MikrotikConfigurationStepApply, admin=Depends(current_admin)):
+    raise_removed_feature("Legacy single-router MikroTik HotSpot configuration apply")
     row = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_id,))
     if not row:
         raise HTTPException(status_code=404, detail="MikroTik router not found")
@@ -15059,6 +20381,7 @@ def apply_mikrotik_configuration_step(router_id: str, payload: MikrotikConfigura
 @app.post("/api/captive-portal/mikrotik/{router_id}/remove-configuration")
 @app.post("/api/captive-portal/mikrotik/{router_id}/revert-configuration")
 def revert_mikrotik_configuration(router_id: str, admin=Depends(current_admin)):
+    raise_removed_feature("Legacy single-router MikroTik HotSpot configuration removal")
     row = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_id,))
     if not row:
         raise HTTPException(status_code=404, detail="MikroTik router not found")
@@ -15123,6 +20446,7 @@ def revert_mikrotik_configuration(router_id: str, admin=Depends(current_admin)):
 
 @app.post("/api/captive-portal/mikrotik/{router_id}/apply-configuration")
 def apply_mikrotik_configuration(router_id: str, admin=Depends(current_admin)):
+    raise_removed_feature("Legacy single-router MikroTik HotSpot full apply")
     row = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_id,))
     if not row:
         raise HTTPException(status_code=404, detail="MikroTik router not found")
@@ -15202,16 +20526,24 @@ def captive_portal_test_omada(admin=Depends(current_admin)):
 @app.post("/api/captive-portal/omada/create-open-ssid")
 def captive_portal_create_open_ssid(payload: OmadaPortalConfigureRequest = OmadaPortalConfigureRequest(), admin=Depends(current_admin)):
     settings = ensure_captive_portal_settings()
-    _, site_id, site_name = omada_selected_site(settings)
-    ssid_name = payload.ssid_name or captive_portal_ssid_from_ap_configuration()["primary_ssid"]
+    _, selected_site_id, selected_site_name = omada_selected_site(settings)
+    site_id = (payload.site_id or "").strip() or selected_site_id
+    site_name = (payload.site_name or "").strip() or selected_site_name
+    site_wifi_config, _ = captive_portal_ssid_config_for_omada_site(site_id, site_name)
+    ssid_names = [payload.ssid_name] if payload.ssid_name else captive_portal_ssid_names_from_ap_configuration(site_wifi_config)
+    ssid_name = " / ".join(ssid_names)
     if not site_id:
         message = "Select an Omada site before creating the open SSID."
         log_captive_portal_test("CREATE_OPEN_SSID", "FAILED", message, {"ssid": ssid_name})
         return {"status": "FAILED", "message": message, "manual_fallback": True}
     try:
         _, client = omada_api_client_from_settings()
-        result = client.create_open_ssid_if_supported(site_id, ssid_name)
-        log_captive_portal_test("CREATE_OPEN_SSID", "SUCCESS", "Open SSID created or already exists.", {"ssid": ssid_name, "site_id": site_id, "result": result})
+        result = {
+            "ssids": [client.create_open_ssid_if_supported(site_id, name, vlan_id=payload.vlan_id) for name in ssid_names],
+            "ssid_names": ssid_names,
+            "vlan_id": payload.vlan_id,
+        }
+        log_captive_portal_test("CREATE_OPEN_SSID", "SUCCESS", "Open SSID created or already exists.", {"ssid": ssid_name, "site_id": site_id, "vlan_id": payload.vlan_id, "result": result})
         audit(admin["id"], "create_captive_portal_open_ssid", "captive_portal_settings", str(settings["id"]), {"ssid": ssid_name, "site_id": site_id, "site_name": site_name})
         return {"status": "SUCCESS", "message": "Open SSID created or already exists.", "result": sanitize_summary(result)}
     except Exception as exc:
@@ -15223,25 +20555,33 @@ def captive_portal_create_open_ssid(payload: OmadaPortalConfigureRequest = Omada
 @app.post("/api/captive-portal/omada/configure-external-portal")
 def captive_portal_configure_external_portal(payload: OmadaPortalConfigureRequest = OmadaPortalConfigureRequest(), admin=Depends(current_admin)):
     settings = ensure_captive_portal_settings()
-    _, site_id, site_name = omada_selected_site(settings)
+    _, selected_site_id, selected_site_name = omada_selected_site(settings)
+    site_id = (payload.site_id or "").strip() or selected_site_id
+    site_name = (payload.site_name or "").strip() or selected_site_name
     portal_url = payload.portal_url or settings["portal_url_staging"]
-    ssid_name = payload.ssid_name or captive_portal_ssid_from_ap_configuration()["primary_ssid"]
+    site_wifi_config, _ = captive_portal_ssid_config_for_omada_site(site_id, site_name)
+    ssid_names = [payload.ssid_name] if payload.ssid_name else captive_portal_ssid_names_from_ap_configuration(site_wifi_config)
+    ssid_name = " / ".join(ssid_names)
     if not site_id:
         message = "Select an Omada site before configuring the external portal."
         log_captive_portal_test("CONFIGURE_EXTERNAL_PORTAL", "FAILED", message, {"portal_url": portal_url})
         return {"status": "FAILED", "message": message, "manual_fallback": True}
     omada_payload = {
         "name": "3JCentralPisowifi External Portal",
-        "type": "EXTERNAL",
         "portalUrl": portal_url,
         "externalPortalUrl": portal_url,
-        "ssidName": ssid_name,
-        "authType": "EXTERNAL_PORTAL",
-        "walledGarden": ["192.168.50.70", "192.168.50.70:8080"],
+        "ssidName": ssid_names[0] if ssid_names else ssid_name,
+        "ssidNames": ssid_names,
     }
     try:
         _, client = omada_api_client_from_settings()
+        controller_portal_url = client.ensure_controller_portal_url_manual_if_supported()
         result = client.configure_external_portal_if_supported(site_id, omada_payload)
+        result["controller_portal_url"] = controller_portal_url
+        try:
+            result["pre_auth_access"] = client.ensure_pre_auth_access_for_portal(site_id, portal_url)
+        except Exception as exc:
+            result["pre_auth_access"] = {"status": "WARNING", "message": sanitize_routeros_text(str(exc))}
         log_captive_portal_test("CONFIGURE_EXTERNAL_PORTAL", "SUCCESS", "External portal profile created or updated.", {"portal_url": portal_url, "site_id": site_id, "result": result})
         audit(admin["id"], "configure_captive_portal_external_portal", "captive_portal_settings", str(settings["id"]), {"portal_url": portal_url, "site_id": site_id, "site_name": site_name})
         return {"status": "SUCCESS", "message": "External portal profile created or updated.", "result": sanitize_summary(result)}
@@ -15252,9 +20592,11 @@ def captive_portal_configure_external_portal(payload: OmadaPortalConfigureReques
 
 
 @app.post("/api/captive-portal/omada/verify")
-def captive_portal_verify(admin=Depends(current_admin)):
+def captive_portal_verify(payload: OmadaPortalConfigureRequest = OmadaPortalConfigureRequest(), admin=Depends(current_admin)):
     settings = ensure_captive_portal_settings()
-    api_settings, site_id, site_name = omada_selected_site(settings)
+    api_settings, selected_site_id, selected_site_name = omada_selected_site(settings)
+    site_id = (payload.site_id or "").strip() or selected_site_id
+    site_name = (payload.site_name or "").strip() or selected_site_name
     result = {
         "portal_settings": public_captive_portal_settings(settings),
         "omada_api_configured": bool(api_settings.get("username") and api_settings.get("password_encrypted")),
@@ -15545,6 +20887,7 @@ def delete_voucher_if_unused(voucher_id: str, admin=Depends(current_admin)):
 
 @app.get("/api/sessions")
 def list_sessions(admin=Depends(current_admin)):
+    raise_removed_feature("Legacy RADIUS accounting sessions")
     grace = int(os.getenv("ACTIVE_SESSION_GRACE_SECONDS", "180"))
     return fetch_all(
         """
@@ -15564,6 +20907,7 @@ def list_sessions(admin=Depends(current_admin)):
 
 @app.get("/api/sessions/active")
 def active_sessions(admin=Depends(current_admin)):
+    raise_removed_feature("Legacy RADIUS accounting sessions")
     grace = int(os.getenv("ACTIVE_SESSION_GRACE_SECONDS", "180"))
     return fetch_all(
         """
@@ -15579,6 +20923,7 @@ def active_sessions(admin=Depends(current_admin)):
 
 @app.get("/api/sessions/{session_id}")
 def get_session(session_id: str, admin=Depends(current_admin)):
+    raise_removed_feature("Legacy RADIUS accounting session details")
     session = fetch_one("SELECT * FROM sessions WHERE id = %s", (session_id,))
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -15591,6 +20936,7 @@ def get_session(session_id: str, admin=Depends(current_admin)):
 
 @app.post("/api/sessions/{session_id}/mark-stale")
 def mark_session_stale(session_id: str, admin=Depends(current_admin)):
+    raise_removed_feature("Legacy RADIUS accounting session controls")
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("UPDATE sessions SET status = 'STALE', updated_at = now() WHERE id = %s RETURNING id", (session_id,))
@@ -15602,6 +20948,7 @@ def mark_session_stale(session_id: str, admin=Depends(current_admin)):
 
 @app.post("/api/sessions/{session_id}/force-stop-local")
 def force_stop_local(session_id: str, admin=Depends(current_admin)):
+    raise_removed_feature("Legacy RADIUS accounting session controls")
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -15674,6 +21021,7 @@ def wallet_accounting_summary(user_id: str, admin=Depends(current_admin)):
 
 @app.post("/api/radius/simulate-auth")
 def simulate_radius_auth(payload: RadiusSimulationRequest, admin=Depends(current_admin)):
+    raise_removed_feature("RADIUS authentication test")
     with get_conn() as conn:
         with conn.cursor() as cur:
             result, message, session_timeout, checks = evaluate_radius_auth(
@@ -15703,6 +21051,7 @@ def simulate_radius_auth(payload: RadiusSimulationRequest, admin=Depends(current
 
 @app.get("/api/radius/real-packet-defaults")
 def real_radius_packet_defaults(admin=Depends(current_admin)):
+    raise_removed_feature("RADIUS packet test")
     docker_subnet = os.getenv("RADIUS_DOCKER_CLIENT_SUBNET", "172.18.0.0/16")
     packet_nas_ip = os.getenv("RADIUS_INTERNAL_TEST_NAS_IP", "172.18.0.1")
     return {
@@ -15720,6 +21069,7 @@ def real_radius_packet_defaults(admin=Depends(current_admin)):
 
 @app.post("/api/radius/real-packet-test")
 def real_radius_packet_test(payload: RealRadiusTestRequest, admin=Depends(current_admin)):
+    raise_removed_feature("RADIUS packet test")
     try:
         result = send_radius_access_request(payload)
     except ValueError as exc:
@@ -15838,16 +21188,19 @@ def run_accounting_packet(payload: RealAccountingTestRequest, status_type: str, 
 
 @app.post("/api/radius-test/accounting/start")
 def accounting_start(payload: RealAccountingTestRequest, admin=Depends(current_admin)):
+    raise_removed_feature("RADIUS accounting packet test")
     return run_accounting_packet(payload, "Start", admin)
 
 
 @app.post("/api/radius-test/accounting/interim")
 def accounting_interim(payload: RealAccountingTestRequest, admin=Depends(current_admin)):
+    raise_removed_feature("RADIUS accounting packet test")
     return run_accounting_packet(payload, "Interim-Update", admin)
 
 
 @app.post("/api/radius-test/accounting/stop")
 def accounting_stop(payload: RealAccountingTestRequest, admin=Depends(current_admin)):
+    raise_removed_feature("RADIUS accounting packet test")
     return run_accounting_packet(payload, "Stop", admin)
 
 
@@ -15958,6 +21311,28 @@ def omada_install(admin=Depends(current_admin)):
     return {"status": "running", "log_id": log_id, "settings": public_omada_settings(ensure_omada_settings())}
 
 
+@app.post("/api/omada/uninstall")
+def omada_uninstall(payload: OmadaUninstallRequest, admin=Depends(current_admin)):
+    if (payload.confirmation or "").strip().lower() != "uninstall":
+        raise HTTPException(status_code=400, detail='Type "uninstall" to confirm Omada Controller removal.')
+    existing = fetch_one("SELECT id, action FROM omada_install_logs WHERE action IN ('INSTALL', 'UNINSTALL') AND status = 'RUNNING' ORDER BY created_at DESC LIMIT 1")
+    if existing:
+        return {"status": "running", "log_id": existing["id"], "settings": public_omada_settings(), "message": f"Omada {str(existing['action']).lower()} is already running."}
+    settings = ensure_omada_settings()
+    log_id = create_omada_log(admin["id"], "UNINSTALL")
+    update_omada_log(log_id, "Uninstall queued. Omada containers, compose file, and Docker volumes will be removed from the Omada server.", 2, "Queued")
+    audit(admin["id"], "omada_uninstall_started", "omada_controller", str(settings["id"]), {"log_id": str(log_id)})
+
+    def worker():
+        try:
+            run_omada_action("UNINSTALL", admin["id"], log_id=log_id)
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"status": "running", "log_id": log_id, "settings": public_omada_settings(ensure_omada_settings())}
+
+
 @app.post("/api/omada/start")
 def omada_start(admin=Depends(current_admin)):
     return run_omada_action("START", admin["id"])
@@ -15998,7 +21373,7 @@ def save_omada_api_settings(payload: OmadaApiSettingsUpdate, admin=Depends(curre
     current = ensure_omada_api_settings()
     updates = {
         key: value for key, value in payload.model_dump(exclude_none=True).items()
-        if key in {"controller_host", "https_port", "api_base_url", "verify_tls", "username", "controller_id"}
+        if key in {"controller_host", "https_port", "api_base_url", "verify_tls", "username"}
     }
     if updates.get("controller_host") and "api_base_url" not in updates:
         port = updates.get("https_port") or current["https_port"]
@@ -16027,19 +21402,18 @@ def test_omada_api_login(admin=Depends(current_admin)):
     try:
         _, client = omada_api_client_from_settings()
         result = client.test_login()
-        controller_id = result.get("controller_id")
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
                     UPDATE omada_api_settings
-                    SET controller_id = COALESCE(%s, controller_id),
+                    SET controller_id = NULL,
                         last_login_success_at = now(),
                         last_login_error = NULL,
                         updated_at = now()
                     WHERE id = %s
                     """,
-                    (controller_id, settings["id"]),
+                    (settings["id"],),
                 )
         log_omada_automation(admin["id"], "TEST_API_LOGIN", "SUCCESS", {"base_url": settings["api_base_url"], "username": settings["username"]}, result.get("response_summary"))
         audit(admin["id"], "test_omada_api_login", "omada_api_settings", str(settings["id"]))
@@ -16092,6 +21466,7 @@ def select_omada_site(payload: OmadaSiteSelect, admin=Depends(current_admin)):
 
 @app.get("/api/omada/radius-profile-builder")
 def get_radius_profile_builder(environment: str = "STAGING", admin=Depends(current_admin)):
+    raise_removed_feature("Omada RADIUS profile builder")
     env = normalize_environment(environment)
     latest = fetch_one("SELECT * FROM omada_radius_profiles WHERE environment = %s ORDER BY created_at DESC LIMIT 1", (env,))
     secret = decrypt_secret(latest["shared_secret_encrypted"]) if latest else None
@@ -16112,34 +21487,23 @@ def get_radius_profile_builder(environment: str = "STAGING", admin=Depends(curre
 
 
 def manual_fallback_payload(environment: str, shared_secret: Optional[str] = None):
-    defaults = radius_defaults(environment, shared_secret)
     return {
-        **defaults,
-        "create_radius_profile": {
-            "profile_name": defaults["profile_name"],
-            "authentication_server": defaults["radius_server_ip"],
-            "authentication_port": defaults["auth_port"],
-            "authentication_secret": defaults["shared_secret"],
-            "accounting": "Enabled",
-            "accounting_server": defaults["radius_server_ip"],
-            "accounting_port": defaults["accounting_port"],
-            "accounting_secret": defaults["shared_secret"],
-            "interim_update": defaults["interim_update_seconds"],
-        },
+        "environment": normalize_environment(environment),
+        "portal_url_staging": "http://192.168.50.70:8080/portal",
+        "portal_url_production": "http://192.168.50.70/portal",
         "create_ssid": {
-            "ssid": defaults["ssid_name"],
-            "security": "WPA2-Enterprise",
-            "radius_profile": defaults["profile_name"],
-            "vlan": "Disabled for Phase 1E",
-            "captive_portal": "Disabled for Phase 1E",
-            "guest_network": "Disabled for Phase 1E",
+            "security": "Open",
+            "source": "APs Deployment -> Sites -> Configurations",
+            "captive_portal": "Enable Omada Portal Authentication / External Portal",
+            "external_portal_url": "http://192.168.50.70:8080/portal",
         },
-        "note": "For Phase 1E, use staging first. Do not configure production WiFi until staging real-device testing passes.",
+        "note": "RADIUS/WPA2-Enterprise fallback was removed from the active workflow. Use Omada open SSID captive portal redirect to 3JCentralPisowifi /portal.",
     }
 
 
 @app.get("/api/omada/manual-fallback-settings")
 def manual_fallback_settings(environment: str = "STAGING", shared_secret: Optional[str] = None, admin=Depends(current_admin)):
+    raise_removed_feature("Omada RADIUS manual fallback")
     env = normalize_environment(environment)
     latest = fetch_one("SELECT shared_secret_encrypted FROM omada_radius_profiles WHERE environment = %s ORDER BY created_at DESC LIMIT 1", (env,))
     return manual_fallback_payload(env, shared_secret or (decrypt_secret(latest["shared_secret_encrypted"]) if latest else None))
@@ -16147,6 +21511,7 @@ def manual_fallback_settings(environment: str = "STAGING", shared_secret: Option
 
 @app.post("/api/omada/create-matching-nas")
 def create_omada_matching_nas(payload: OmadaMatchingNasRequest, admin=Depends(current_admin)):
+    raise_removed_feature("Omada RADIUS matching NAS automation")
     env = normalize_environment(payload.environment)
     defaults = radius_defaults(env, payload.shared_secret)
     name = payload.name or f"Omada Controller {'Staging' if env == 'STAGING' else 'Production'}"
@@ -16186,6 +21551,7 @@ def create_omada_matching_nas(payload: OmadaMatchingNasRequest, admin=Depends(cu
 
 @app.post("/api/omada/create-radius-profile")
 def create_omada_radius_profile(payload: OmadaRadiusProfileRequest, admin=Depends(current_admin)):
+    raise_removed_feature("Omada RADIUS profile automation")
     env = normalize_environment(payload.environment)
     defaults = radius_defaults(env, payload.shared_secret)
     secret = payload.shared_secret or defaults["shared_secret"]
@@ -16260,6 +21626,7 @@ def create_omada_radius_profile(payload: OmadaRadiusProfileRequest, admin=Depend
 
 @app.post("/api/omada/create-test-ssid")
 def create_omada_test_ssid(payload: OmadaTestSsidRequest, admin=Depends(current_admin)):
+    raise_removed_feature("Omada WPA2-Enterprise test SSID automation")
     env = normalize_environment(payload.environment)
     api_settings = ensure_omada_api_settings()
     site_id = api_settings.get("selected_site_id")
@@ -16353,6 +21720,7 @@ def omada_automation_logs(admin=Depends(current_admin)):
 
 @app.post("/api/omada/create-test-nas")
 def omada_create_test_nas(payload: OmadaNasCreate, admin=Depends(current_admin)):
+    raise_removed_feature("Omada RADIUS test NAS automation")
     nas_payload = NasCreate(
         name=payload.name,
         nas_ip=payload.ip_address,
@@ -16372,11 +21740,13 @@ def omada_create_test_nas(payload: OmadaNasCreate, admin=Depends(current_admin))
 
 @app.get("/api/nas-clients")
 def list_nas(admin=Depends(current_admin)):
+    raise_removed_feature("NAS/RADIUS client management")
     return fetch_all("SELECT id, name, nas_ip::text, shortname, secret, type, status, notes, created_at, updated_at FROM nas_clients ORDER BY created_at DESC")
 
 
 @app.post("/api/nas-clients")
 def create_nas(payload: NasCreate, admin=Depends(current_admin)):
+    raise_removed_feature("NAS/RADIUS client management")
     secret = payload.secret or os.getenv("RADIUS_DEFAULT_SECRET") or secrets.token_urlsafe(24)
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -16402,6 +21772,7 @@ def create_nas(payload: NasCreate, admin=Depends(current_admin)):
 
 @app.patch("/api/nas-clients/{nas_id}")
 def update_nas(nas_id: str, payload: NasUpdate, admin=Depends(current_admin)):
+    raise_removed_feature("NAS/RADIUS client management")
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT shortname FROM nas_clients WHERE id = %s", (nas_id,))
@@ -16447,6 +21818,7 @@ def update_nas(nas_id: str, payload: NasUpdate, admin=Depends(current_admin)):
 
 @app.post("/api/nas-clients/{nas_id}/rotate-secret")
 def rotate_secret(nas_id: str, admin=Depends(current_admin)):
+    raise_removed_feature("NAS/RADIUS client management")
     new_secret = secrets.token_urlsafe(24)
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -16461,6 +21833,7 @@ def rotate_secret(nas_id: str, admin=Depends(current_admin)):
 
 @app.get("/api/auth-logs")
 def auth_logs(admin=Depends(current_admin)):
+    raise_removed_feature("RADIUS authentication logs")
     return fetch_all("SELECT username, nas_ip::text, nas_identifier, calling_station_id, result, reply_message, diagnostic_reason, created_at FROM radius_auth_logs ORDER BY created_at DESC LIMIT 200")
 
 
@@ -16474,8 +21847,6 @@ def settings(admin=Depends(current_admin)):
     return {
         "environment": os.getenv("APP_ENV", "unknown").title(),
         "active_session_grace_seconds": int(os.getenv("ACTIVE_SESSION_GRACE_SECONDS", "180")),
-        "radius_auth_port": int(os.getenv("RADIUS_AUTH_PORT", "1812")),
-        "radius_accounting_port": int(os.getenv("RADIUS_ACCT_PORT", "1813")),
     }
 
 
@@ -16530,6 +21901,13 @@ def raise_ai_feature_removed():
     raise HTTPException(
         status_code=410,
         detail="AI/OpenAI features were removed from the active workflow. Use the MikroTik Preflight Scanner for read-only validation data and MikroTik Configuration for manual setup.",
+    )
+
+
+def raise_removed_feature(feature: str):
+    raise HTTPException(
+        status_code=410,
+        detail=f"{feature} has been removed from the active Omada Captive Portal + Voucher workflow.",
     )
 
 
@@ -16792,7 +22170,6 @@ def danger_action(payload: DangerAction, admin=Depends(current_admin)):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
 
     actions = {
-        "clear_auth_logs": ("CLEAR AUTH LOGS", "DELETE FROM radius_auth_logs"),
         "clear_sessions": ("CLEAR SESSIONS", "DELETE FROM sessions"),
     }
     if payload.action not in actions:

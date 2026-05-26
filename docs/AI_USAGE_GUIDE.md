@@ -8,7 +8,7 @@ AI features are no longer part of the active 3JCentralPisowifi operator workflow
 - Do not expose OpenAI settings in the admin UI.
 - Do not call OpenAI from the MikroTik preflight or captive portal workflow.
 - Keep MikroTik setup manual and deterministic under `Admin -> Network -> MikroTik -> Configuration`.
-- Keep MikroTik read-only preflight scan data because it provides validation input for manual operator fields such as VLAN IDs, subnets, pools, DHCP, HotSpot, PPPoE, OSPF, WireGuard, routing, and firewall risk indicators. The scan UI now lives inside `Admin -> Network -> MikroTik -> Configuration`.
+- Keep MikroTik read-only preflight scan data because it provides validation input for manual operator fields such as VLAN IDs, subnets, pools, DHCP, legacy HotSpot objects, PPPoE, OSPF, WireGuard, routing, and firewall risk indicators. The scan UI now lives inside `Admin -> Network -> MikroTik -> Configuration`.
 
 ## Safety Boundary
 
@@ -23,5 +23,6 @@ AI features are no longer part of the active 3JCentralPisowifi operator workflow
 - Preserve the production/staging deployment model.
 - Keep secrets in environment-specific `.env` files and never commit generated secrets.
 - Current product priority is Captive Portal + Voucher access.
-- MikroTik is the preferred gateway/enforcement layer; Omada remains for AP/SSID management.
-- Preserve voucher, portal, RADIUS/authentication/accounting/session, Omada, and MikroTik read-only scan features while changing the MikroTik setup workflow.
+- Omada is the captive portal enforcement layer; MikroTik remains for station VLAN/DHCP/NAT/AP-management transport.
+- Preserve voucher, portal, wallet, Omada Controller install/manage automation, Omada AP/SSID workflows, and MikroTik read-only scan/station transport features.
+- RADIUS/authentication/accounting/session lab tools, OpenAI settings, AI assistant, and MikroTik HotSpot enforcement are retired from the active product workflow.

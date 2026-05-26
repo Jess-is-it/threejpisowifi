@@ -1,23 +1,29 @@
 # Deployment Environments
 
-Production:
-- Branch: `master`
-- Install path: `/opt/3jcentralpisowifi-production`
-- `.env`: `/opt/3jcentralpisowifi-production/.env`
-- Compose project: `centralwifi_prod`
-- Database: `centralwifi_prod`
-- Volumes: `centralwifi_prod_postgres_data`, `centralwifi_prod_redis_data`
-- Web: `80/tcp`
-- RADIUS auth/accounting: `1812/udp`, `1813/udp`
+3JCentralPisowifi supports staging and production Docker Compose overlays.
 
-Staging:
-- Branch: `staging`
-- Install path: `/opt/3jcentralpisowifi-staging`
-- `.env`: `/opt/3jcentralpisowifi-staging/.env`
-- Compose project: `centralwifi_staging`
-- Database: `centralwifi_staging`
-- Volumes: `centralwifi_staging_postgres_data`, `centralwifi_staging_redis_data`
-- Web: `8080/tcp`
-- RADIUS auth/accounting: `11812/udp`, `11813/udp`
+## Production
 
-Production and staging can run on the same Ubuntu server because their project names, install paths, databases, volumes, and exposed ports are different.
+- Web/proxy: `80/tcp`
+- API: internal container network
+- PostgreSQL: internal container network
+- Redis: internal container network
+- Uploads: Docker volume
+
+## Staging
+
+- Web/proxy: `8080/tcp`
+- API: internal container network
+- PostgreSQL: internal container network
+- Redis: internal container network
+- Uploads: Docker volume
+
+## Removed Runtime
+
+FreeRADIUS is no longer started by the active compose files. RADIUS auth/accounting ports are not published in staging or production.
+
+## Current External Dependencies
+
+- Omada Controller: `192.168.50.71`
+- 3JCentralPisowifi portal: `192.168.50.70`
+- MikroTik RouterOS API on configured routers for reviewed station transport changes and read-only scans

@@ -1,51 +1,61 @@
 # Database Source Of Truth
 
-PostgreSQL is the source of truth for Phase 1.
+PostgreSQL remains the source of truth for 3JCentralPisowifi.
 
-The system stores admins, users, wallets, NAS/router/AP clients, transactions, RADIUS auth logs, sessions, and audit logs in PostgreSQL. FreeRADIUS reads and updates PostgreSQL through helper scripts and compatible SQL tables.
+## Active Source-Of-Truth Records
 
-Phase 1C accounting source-of-truth rules:
-- `sessions` records the current and historical online state for users.
-- `radius_accounting_logs` stores every Accounting Start, Interim-Update, and Stop diagnostic.
-- `wallets.time_remaining_seconds` is deducted only from accounting elapsed time.
-- `transactions` records ACCOUNTING DEBIT rows for wallet time deductions.
-- `radacct` may remain available for FreeRADIUS compatibility, but application session state is bridged into the custom `sessions` table.
+- `admins`: admin users.
+- `users`: portal/customer account records created for voucher access.
+- `wallets`: remaining time, valid-until, and unlimited access state.
+- `transactions`: wallet credits/debits, including voucher credits.
+- `vouchers`: voucher code inventory and status.
+- `voucher_redemptions`: successful and failed voucher redemption attempts.
+- `portal_sessions`: browser/device portal context.
+- `portal_events`: portal views, voucher submissions, successes, failures, and status checks.
+- `portal_mac_rebind_events`: random/private-MAC device token reauthorization events.
+- `omada_portal_authorizations`: Omada client authorization attempts.
+- `captive_portal_settings`: portal URLs, current Omada captive portal settings, Portal Notifs switches, message templates, and remaining-time trigger seconds.
+- `portal_design_templates`: customer portal HTML/CSS template.
+- `mikrotik_routers`: RouterOS API connection records for station transport planning.
+- `mikrotik_preflight_scans`: read-only scan snapshots used to validate VLANs/subnets/pools/DHCP/routing risks.
+- `mikrotik_stations` and related station tables: reviewed station VLAN/DHCP/NAT/trunk transport plans.
+- `ap_deployments` and AP deployment configuration tables: local AP/site/SSID configuration state.
+- `omada_controller_settings` and `omada_install_logs`: old Omada install/manage automation state.
+- `audit_logs`: operator/system audit trail.
 
-Network devices are RADIUS clients. They must not become the user database.
+## Voucher Rules
 
-## Phase 2A Voucher Source Rules
+Vouchers are a credit source, not the final access source of truth after redemption.
 
-Vouchers are a credit source, not the final source of truth after redemption.
+- `vouchers.status` tracks `UNUSED`, `USED`, `EXPIRED`, `DISABLED`, or `VOIDED`.
+- `voucher_redemptions.source = CLIENT_PORTAL` identifies customer portal redemption.
+- Successful voucher redemption writes a wallet transaction.
+- Wallet/access state remains the source of truth after voucher redemption.
 
-- `vouchers` stores prepaid codes and their status.
-- `voucher_redemptions` stores every successful or failed redemption attempt.
-- `transactions` records successful voucher credits with `source = VOUCHER`.
-- `wallets` remains the source of truth for remaining time, valid-until access, and unlimited access.
-- `sessions` remains the source of truth for active and historical online state.
+## Portal Session Rules
 
-After a voucher is redeemed, access decisions should use wallet/session state rather than trusting the voucher alone.
+Omada captive portal data is integration context, not the database of record.
 
-## Phase 2B Portal Sessions
+- `portal_sessions` stores Omada redirect values, raw query params, authorization status, and access timestamps.
+- `portal_sessions.device_token_hash` stores only a hashed browser device-session token used for random/private-MAC rebinds.
+- `portal_events` stores user-visible portal activity and troubleshooting context.
+- `omada_portal_authorizations` stores sanitized Omada API request/response summaries.
+- `portal_mac_rebind_events` records old/new MAC, remaining time, status, and sanitized authorization summary when a token-based MAC rebind is attempted.
 
-Client portal state is tracked in PostgreSQL:
+For Omada-sourced sessions, voucher redemption is committed only after Omada authorization succeeds.
 
-- `portal_sessions` stores the public browser/session ID, future captive portal query parameters, source, status, linked user, and linked voucher.
-- `portal_events` records portal views, voucher submissions, success/failure events, and status views.
-- `voucher_redemptions.source = CLIENT_PORTAL` identifies customer-facing portal redemption.
+## MikroTik Rules
 
-Portal sessions and events are integration context. Vouchers still credit wallets, and wallet/session records remain the source of truth after redemption.
+MikroTik is not the source of truth for vouchers or wallet access.
 
-## Phase 2C Omada Authorization Context
+MikroTik tables store:
+- Router API credentials/settings.
+- Read-only preflight scan data.
+- Station transport plans.
+- RouterOS command history for reviewed transport pushes/removals.
 
-Omada captive portal data is integration context, not source of truth.
+MikroTik HotSpot enforcement tables and legacy fields may remain historically, but they are not active in the current workflow.
 
-- `portal_sessions` stores normalized Omada redirect values, raw query parameters, access timestamps, and Omada authorization status.
-- `omada_portal_authorizations` stores each Omada authorization attempt and sanitized request/response summaries.
-- `captive_portal_settings` stores open SSID, portal URLs, selected Omada site, and one-AP test checklist progress.
-- `captive_portal_test_logs` stores setup and automation test results.
-- `mikrotik_routers` stores MikroTik gateway/API connection records for the MikroTik-first captive portal direction. Passwords are encrypted and router records are integration settings, not source-of-truth customer data.
-- `portal_design_templates` stores the editable customer portal HTML/CSS template.
+## Historical Tables
 
-For Omada-sourced sessions, voucher redemption is only committed after Omada authorization succeeds. Wallets and sessions remain the source of truth after that redemption.
-
-For the MikroTik direction, MikroTik will be the gateway/enforcement client. Vouchers, wallets, portal sessions, and accounting records remain the source of truth inside PostgreSQL.
+Some old RADIUS/FreeRADIUS/NAS/accounting tables may remain in existing databases or migrations for history and audit compatibility. They are retired from the active UI/API and should not be used for current customer access.
