@@ -3340,7 +3340,7 @@ function PortalApp() {
                     }}
                   >
                     {t('Show route')}
-                  </button>
+                    </button>
                 )}
               </div>
               {selectedAp && (
@@ -3832,19 +3832,19 @@ function PortalApp() {
                   <div className="portal-purchase-heading">
                     <div>
                       <div className="portal-purchase-title">{t('Buy WiFi / IPTV Pass')}</div>
-                      <div className="portal-purchase-subtitle">{t('Choose how many devices will use this pass first.')}</div>
                     </div>
-                    <span className="portal-purchase-step-pill">{t('Step 1')}</span>
                   </div>
                   <div className="portal-choice-grid">
                     <button className="portal-choice-card" type="button" onClick={() => selectPortalPassType('SINGLE_DEVICE')}>
+                      <span className="portal-choice-radio" aria-hidden="true" />
                       <span className="portal-choice-icon"><IconUser size={24} /></span>
                       <span>
                         <strong>{t('One Device Pass')}</strong>
                         <small>{t('Best for one phone or one laptop.')}</small>
                       </span>
-                    </button>
+                  </button>
                     <button className="portal-choice-card" type="button" onClick={() => selectPortalPassType('MULTI_DEVICE')}>
+                      <span className="portal-choice-radio" aria-hidden="true" />
                       <span className="portal-choice-icon"><IconUsers size={24} /></span>
                       <span>
                         <strong>{t('Multiple Device Pass')}</strong>
