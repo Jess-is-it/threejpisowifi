@@ -7023,6 +7023,54 @@ body.modal-open {
   width: 2.75rem;
 }
 
+.portal-bag-claim {
+  background: #fff;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 0.9rem;
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem;
+}
+
+.portal-bag-claim-title {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.portal-bag-claim-title > span {
+  align-items: center;
+  background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.11);
+  border-radius: 0.75rem;
+  color: var(--portal-brand-color, var(--tblr-primary, #066fd1));
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 2.25rem;
+  justify-content: center;
+  width: 2.25rem;
+}
+
+.portal-bag-claim-title strong {
+  color: #172033;
+  display: block;
+  font-weight: 850;
+  line-height: 1.1;
+}
+
+.portal-bag-claim-title small {
+  color: #6c7a91;
+  display: block;
+  margin-top: 0.15rem;
+}
+
+.portal-bag-claim-row {
+  align-items: center;
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: 1fr auto;
+}
+
 .portal-bag-auto-row {
   align-items: center;
   border: 1px solid rgba(98, 105, 118, 0.18);
@@ -7213,6 +7261,18 @@ body.modal-open {
   .portal-bag-auto-row {
     align-items: flex-start;
     padding: 0.8rem;
+  }
+
+  .portal-bag-claim {
+    padding: 0.8rem;
+  }
+
+  .portal-bag-claim-row {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-bag-claim-row .btn {
+    width: 100%;
   }
 
   .portal-bag-item {
@@ -7413,6 +7473,7 @@ body.modal-open {
 
 .portal-profile-modal-content.is-dark .portal-bag-summary,
 .portal-profile-modal-content.is-dark .portal-bag-auto-row,
+.portal-profile-modal-content.is-dark .portal-bag-claim,
 .portal-profile-modal-content.is-dark .portal-bag-item,
 .portal-profile-modal-content.is-dark .portal-profile-choice-card,
 .portal-profile-modal-content.is-dark .portal-profile-device-item {
@@ -7420,7 +7481,8 @@ body.modal-open {
   border-color: rgba(255, 255, 255, 0.12);
 }
 
-.portal-profile-modal-content.is-dark .portal-bag-summary-icon {
+.portal-profile-modal-content.is-dark .portal-bag-summary-icon,
+.portal-profile-modal-content.is-dark .portal-bag-claim-title > span {
   background: rgba(255, 255, 255, 0.1);
   color: #93c5fd;
 }
@@ -7451,6 +7513,7 @@ body.modal-open {
 .portal-profile-modal-content.is-dark .portal-bag-item-title,
 .portal-profile-modal-content.is-dark .portal-bag-section-title,
 .portal-profile-modal-content.is-dark .portal-bag-auto-row strong,
+.portal-profile-modal-content.is-dark .portal-bag-claim-title strong,
 .portal-profile-modal-content.is-dark .portal-bag-history-row span,
 .portal-profile-modal-content.is-dark .portal-profile-choice-card strong,
 .portal-profile-modal-content.is-dark .portal-profile-device-title {
@@ -7458,6 +7521,7 @@ body.modal-open {
 }
 
 .portal-profile-modal-content.is-dark .portal-bag-auto-row small,
+.portal-profile-modal-content.is-dark .portal-bag-claim-title small,
 .portal-profile-modal-content.is-dark .portal-bag-item-meta,
 .portal-profile-modal-content.is-dark .portal-bag-item-bottom-meta,
 .portal-profile-modal-content.is-dark .portal-bag-history-row small,

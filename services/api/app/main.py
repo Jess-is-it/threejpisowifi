@@ -523,6 +523,10 @@ class PortalBagActivateRequest(PortalSessionRequest):
     pass
 
 
+class PortalBagClaimVoucherRequest(PortalSessionRequest):
+    voucher_code: str = Field(min_length=1, max_length=64)
+
+
 class PortalProfileOtpRequest(PortalSessionRequest):
     contact_number: str = Field(min_length=6, max_length=32)
 
@@ -7463,6 +7467,96 @@ def create_customer_bag_item_from_payment(cur, order: dict, session: dict, user:
     return item
 
 
+def create_customer_bag_item_from_voucher(cur, voucher: dict, session: dict, user: dict, duration_seconds: int, request: Request = None) -> dict:
+    cur.execute(
+        """
+        SELECT *
+        FROM customer_bag_items
+        WHERE user_id = %s
+          AND voucher_id = %s
+          AND status IN ('QUEUED', 'ACTIVE')
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (user["id"], voucher["id"]),
+    )
+    existing = cur.fetchone()
+    if existing:
+        raise HTTPException(status_code=409, detail="This voucher is already in your WiFi bag.")
+    ensure_customer_bag_settings(cur, user["id"])
+    cur.execute(
+        """
+        SELECT COALESCE(MAX(priority), 0) + 100 AS next_priority
+        FROM customer_bag_items
+        WHERE user_id = %s AND status = 'QUEUED'
+        """,
+        (user["id"],),
+    )
+    priority = int((cur.fetchone() or {}).get("next_priority") or 100)
+    voucher_name = "Welcome Gift" if str(voucher.get("code") or "").upper().startswith("GIFT-") else "Voucher"
+    if voucher.get("note") and not str(voucher["code"]).upper().startswith("BAG-"):
+        voucher_name = str(voucher["note"]).strip()[:120] or voucher_name
+    cur.execute(
+        """
+        INSERT INTO customer_bag_items(
+            user_id, portal_session_id, voucher_id, product_category_id,
+            product_name, product_category_name, source, status, priority, duration_seconds, remaining_seconds,
+            device_scope, allowed_devices, access_scope, allowed_barangay, purchase_quantity, amount_centavos, currency, metadata_json
+        )
+        VALUES (%s, %s, %s, %s, %s, 'Voucher', 'VOUCHER', 'QUEUED', %s, %s, %s, 'SINGLE_DEVICE', 1, %s, %s, 1, 0, 'PHP', %s)
+        RETURNING *
+        """,
+        (
+            user["id"],
+            session["id"],
+            voucher["id"],
+            voucher.get("product_category_id"),
+            voucher_name,
+            priority,
+            int(duration_seconds or 0),
+            int(duration_seconds or 0),
+            normalize_product_access_scope(voucher.get("access_scope") or "ALL_LOCATIONS"),
+            voucher.get("allowed_barangay"),
+            Json(sanitize_summary({"voucher_code": voucher.get("code"), "voucher_type": voucher.get("voucher_type")})),
+        ),
+    )
+    item = cur.fetchone()
+    next_count = int(voucher.get("redemption_count") or 0) + 1
+    next_status = "USED" if next_count >= int(voucher.get("max_redemptions") or 1) else voucher.get("status")
+    cur.execute(
+        """
+        UPDATE vouchers
+        SET redemption_count = %s,
+            redeemed_by_user_id = %s,
+            redeemed_at = now(),
+            status = %s,
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (next_count, user["id"], next_status, voucher["id"]),
+    )
+    cur.execute(
+        """
+        INSERT INTO voucher_redemptions(voucher_id, user_id, username, device_identifier, source,
+                                        result, redeemed_time_seconds, redeemed_valid_until, redeemed_unlimited, ip_address, user_agent)
+        VALUES (%s, %s, %s, %s, 'CLIENT_PORTAL', 'SUCCESS', %s, %s, %s, NULLIF(%s, '')::inet, %s)
+        """,
+        (
+            voucher["id"],
+            user["id"],
+            user.get("username"),
+            session.get("omada_client_mac") or session.get("mikrotik_client_mac") or session.get("client_mac") or session.get("public_session_id"),
+            int(duration_seconds or 0) if voucher.get("voucher_type") == "TIME_BASED" else 0,
+            voucher.get("valid_until") if voucher.get("voucher_type") == "DATE_BASED" else (voucher.get("unlimited_expires_at") if voucher.get("voucher_type") == "UNLIMITED" else None),
+            bool(voucher.get("voucher_type") == "UNLIMITED"),
+            request.client.host if request and request.client else "",
+            request.headers.get("user-agent") if request else None,
+        ),
+    )
+    create_customer_bag_event(cur, user["id"], item["id"], session["id"], "VOUCHER_CLAIMED", "Voucher added to customer WiFi bag.", metadata={"voucher_code": voucher.get("code")})
+    return item
+
+
 def ensure_bag_item_voucher(cur, item: dict) -> dict:
     if item.get("voucher_id"):
         cur.execute("SELECT * FROM vouchers WHERE id = %s FOR UPDATE", (item["voucher_id"],))
@@ -10452,6 +10546,59 @@ def activate_portal_bag_item(item_id: str, payload: PortalBagActivateRequest, re
             return {"status": result.get("status"), "message": result.get("message"), "bag": customer_bag_payload(cur, user["id"])}
 
 
+@app.post("/api/portal/bag/claim-voucher")
+def claim_portal_bag_voucher(payload: PortalBagClaimVoucherRequest, request: Request):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            voucher, failure = validate_voucher_for_portal(cur, payload.voucher_code)
+            if failure:
+                create_portal_event(cur, session["id"], "VOUCHER_REDEEM_FAILED", request, failure, payload.voucher_code, {"phase": "bag_claim"})
+                raise HTTPException(status_code=400, detail=failure)
+            access_allowed, access_error, current_barangay = voucher_access_allowed_for_session(voucher, session, payload)
+            if not access_allowed:
+                create_portal_event(cur, session["id"], "VOUCHER_REDEEM_FAILED", request, access_error, payload.voucher_code, {"phase": "bag_claim_scope", "current_barangay": current_barangay})
+                raise HTTPException(status_code=400, detail=access_error or "This voucher is not allowed in the current Barangay.")
+            portal_settings_row = ensure_captive_portal_settings()
+            duration_seconds, _access_expires_at = voucher_authorization_duration(voucher, portal_settings_row)
+            if int(duration_seconds or 0) <= 0:
+                create_portal_event(cur, session["id"], "VOUCHER_REDEEM_FAILED", request, "Voucher has no remaining usable time.", payload.voucher_code, {"phase": "bag_claim_duration"})
+                raise HTTPException(status_code=400, detail="Voucher has no remaining usable time.")
+            item = create_customer_bag_item_from_voucher(cur, voucher, session, user, int(duration_seconds), request)
+            settings = ensure_customer_bag_settings(cur, user["id"])
+            activation = {"status": "QUEUED", "message": "Voucher added to My WiFi Bag."}
+            cur.execute(
+                """
+                SELECT 1
+                FROM customer_bag_items
+                WHERE user_id = %s
+                  AND status = 'ACTIVE'
+                  AND COALESCE(active_until, now()) > now()
+                LIMIT 1
+                """,
+                (user["id"],),
+            )
+            active_exists = bool(cur.fetchone())
+            if bool(settings.get("auto_activate")) and not active_exists:
+                activation = activate_customer_bag_item(cur, item, session, request, "VOUCHER_CLAIM")
+                if activation.get("status") == "SUCCESS":
+                    item = activation["item"]
+                elif activation.get("status") == "FAILED":
+                    raise HTTPException(status_code=400, detail=activation.get("error") or "Voucher was added but could not be activated.")
+            create_portal_event(cur, session["id"], "VOUCHER_REDEEM_SUCCESS", request, "Voucher added to My WiFi Bag.", payload.voucher_code, {"phase": "bag_claim", "activation": sanitize_summary(activation)})
+            device_token = ensure_portal_device_token(cur, session, payload.device_token)
+            return {
+                "status": "SUCCESS",
+                "message": activation.get("message") or "Voucher added to My WiFi Bag.",
+                "portal_session_id": session["public_session_id"],
+                "device_token": device_token,
+                "bag_item": bag_item_public(item),
+                "activation": sanitize_summary(activation),
+                "bag": customer_bag_payload(cur, user["id"]),
+            }
+
+
 def payment_checkout_method(store: dict, value: str) -> str:
     method = normalize_payment_text(value or "gcash", 40).lower()
     if method not in PAYMENT_METHOD_OPTIONS:
@@ -11337,7 +11484,9 @@ def voucher_summary():
                     COALESCE(sum(time_value_seconds) FILTER (WHERE voucher_type = 'TIME_BASED'), 0) AS total_time_issued,
                     COALESCE((SELECT sum(redeemed_time_seconds) FROM voucher_redemptions WHERE result = 'SUCCESS'), 0) AS total_time_redeemed
                 FROM vouchers
-                """
+                WHERE code NOT ILIKE %s
+                """,
+                ("BAG-%",),
             )
             return cur.fetchone()
 
@@ -12425,6 +12574,195 @@ def session_ssid_if_current(value: Optional[str], configured_ssids: Optional[set
     return ssid
 
 
+def omada_client_by_session_network(client_mac: Optional[str], client_ip: Optional[str], omada_client_by_mac: Optional[dict]) -> Optional[dict]:
+    clients = omada_client_by_mac or {}
+    mac = normalize_mac_if_valid(client_mac)
+    if mac and clients.get(mac):
+        return clients[mac]
+    ip = str(client_ip or "").strip()
+    if not ip:
+        return None
+    matches = [row for row in clients.values() if str(row.get("client_ip") or "").strip() == ip]
+    active_matches = [row for row in matches if row.get("active")]
+    if len(active_matches) == 1:
+        return active_matches[0]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def apply_current_network_to_access_row(row: dict, omada_client_by_mac: Optional[dict], configured_ssids: Optional[set[str]]) -> dict:
+    current_client = omada_client_by_session_network(row.get("client_mac"), row.get("client_ip"), omada_client_by_mac)
+    stale_session_ssid = row.get("ssid")
+    if current_client:
+        for field, source_field in [
+            ("client_mac", "client_mac"),
+            ("client_ip", "client_ip"),
+            ("ap_mac", "ap_mac"),
+            ("ap_name", "ap_name"),
+            ("ssid", "ssid"),
+            ("site", "site"),
+        ]:
+            if current_client.get(source_field):
+                row[field] = current_client[source_field]
+        row["network_source"] = "OMADA_CURRENT"
+        row["stale_session_ssid"] = None
+        return row
+    row["ssid"] = session_ssid_if_current(row.get("ssid"), configured_ssids)
+    row["network_source"] = "PORTAL_SESSION" if row.get("ssid") else "STALE_SESSION_HIDDEN"
+    if stale_session_ssid and not row.get("ssid"):
+        row["stale_session_ssid"] = stale_session_ssid
+    return row
+
+
+def customer_access_source_label(source: Optional[str], voucher_code: Optional[str] = None) -> str:
+    clean_source = str(source or "").strip().upper()
+    code = str(voucher_code or "").strip().upper()
+    if clean_source == "PAYMENT":
+        return "Product"
+    if clean_source == "WELCOME_GIFT" or code.startswith("GIFT-"):
+        return "Welcome Gift"
+    if clean_source == "VOUCHER":
+        return "Voucher"
+    return "Voucher" if code and not code.startswith("BAG-") else "Product"
+
+
+def active_access_rows(omada_client_by_mac: Optional[dict] = None) -> list[dict]:
+    if omada_client_by_mac is None:
+        omada_client_by_mac = fetch_omada_client_snapshot_map()
+    configured_ssids = current_configured_customer_ssid_names()
+    rows: list[dict] = []
+    bag_rows = fetch_all(
+        """
+        SELECT i.id AS bag_item_id,
+               i.user_id,
+               p.id AS customer_profile_id,
+               p.display_name AS customer_name,
+               p.email AS customer_email,
+               p.contact_number AS customer_contact_number,
+               i.portal_session_id,
+               s.public_session_id,
+               i.voucher_id,
+               v.code AS voucher_code,
+               i.product_name,
+               i.product_category_name,
+               i.source AS item_source,
+               i.status AS item_status,
+               i.device_scope,
+               i.allowed_devices,
+               i.activated_at,
+               i.active_until,
+               GREATEST(EXTRACT(EPOCH FROM (i.active_until - now()))::int, 0) AS remaining_time_seconds,
+               s.source AS portal_source,
+               s.status AS session_status,
+               COALESCE(s.omada_client_mac, s.mikrotik_client_mac, s.client_mac) AS client_mac,
+               host(s.client_ip) AS client_ip,
+               COALESCE(s.omada_ap_mac, s.ap_mac) AS ap_mac,
+               s.ssid,
+               COALESCE(s.omada_site_name, s.site) AS site,
+               s.user_agent,
+               s.omada_authorization_status,
+               s.mikrotik_authorization_status
+        FROM customer_bag_items i
+        LEFT JOIN portal_sessions s ON s.id = i.portal_session_id
+        LEFT JOIN vouchers v ON v.id = i.voucher_id
+        LEFT JOIN portal_customer_profiles p ON p.user_id = i.user_id
+        WHERE i.status = 'ACTIVE'
+          AND i.active_until IS NOT NULL
+          AND i.active_until > now()
+        ORDER BY i.active_until ASC, i.activated_at DESC NULLS LAST
+        LIMIT 500
+        """
+    )
+    for row in bag_rows:
+        row = dict(row)
+        row["access_id"] = f"bag:{row['bag_item_id']}"
+        row["access_kind"] = "BAG_ITEM"
+        row["access_source"] = customer_access_source_label(row.get("item_source"), row.get("voucher_code"))
+        row["display_voucher_code"] = row.get("voucher_code") if row["access_source"] != "Product" else None
+        apply_current_network_to_access_row(row, omada_client_by_mac, configured_ssids)
+        mac = normalize_mac_if_valid(row.get("client_mac"))
+        current_client = omada_client_by_session_network(row.get("client_mac"), row.get("client_ip"), omada_client_by_mac)
+        row["device_name"] = (
+            preferred_device_name((current_client or {}).get("device_name"))
+            or preferred_device_name(infer_device_name_from_user_agent(row.get("user_agent")))
+            or preferred_device_name(row.get("customer_name"))
+            or "Unknown device"
+        )
+        row["client_mac"] = mac or row.get("client_mac")
+        row["remaining_time_seconds"] = int(row.get("remaining_time_seconds") or 0)
+        rows.append(row)
+
+    manual_rows = fetch_all(
+        """
+        SELECT s.id AS portal_session_id,
+               s.public_session_id,
+               s.user_id,
+               p.id AS customer_profile_id,
+               p.display_name AS customer_name,
+               p.email AS customer_email,
+               p.contact_number AS customer_contact_number,
+               s.voucher_id,
+               v.code AS voucher_code,
+               COALESCE(v.note, 'Voucher access') AS product_name,
+               NULL::text AS product_category_name,
+               'VOUCHER' AS item_source,
+               s.status AS session_status,
+               COALESCE(s.omada_client_mac, s.mikrotik_client_mac, s.client_mac) AS client_mac,
+               host(s.client_ip) AS client_ip,
+               COALESCE(s.omada_ap_mac, s.ap_mac) AS ap_mac,
+               s.ssid,
+               COALESCE(s.omada_site_name, s.site) AS site,
+               s.user_agent,
+               s.source AS portal_source,
+               s.access_granted_at AS activated_at,
+               s.access_expires_at AS active_until,
+               GREATEST(EXTRACT(EPOCH FROM (s.access_expires_at - now()))::int, 0) AS remaining_time_seconds,
+               s.omada_authorization_status,
+               s.mikrotik_authorization_status
+        FROM portal_sessions s
+        JOIN vouchers v ON v.id = s.voucher_id
+        LEFT JOIN portal_customer_profiles p ON p.user_id = s.user_id
+        WHERE s.voucher_id IS NOT NULL
+          AND s.status IN ('VOUCHER_REDEEMED', 'ACCESS_GRANTED')
+          AND s.access_expires_at IS NOT NULL
+          AND s.access_expires_at > now()
+          AND v.code NOT ILIKE %s
+          AND NOT EXISTS (
+              SELECT 1
+              FROM customer_bag_items i
+              WHERE i.status = 'ACTIVE'
+                AND i.active_until IS NOT NULL
+                AND i.active_until > now()
+                AND (i.portal_session_id = s.id OR i.voucher_id = s.voucher_id)
+          )
+        ORDER BY s.access_expires_at ASC, s.updated_at DESC
+        LIMIT 500
+        """,
+        ("BAG-%",),
+    )
+    for row in manual_rows:
+        row = dict(row)
+        row["access_id"] = f"voucher:{row['portal_session_id']}"
+        row["access_kind"] = "VOUCHER_SESSION"
+        row["access_source"] = customer_access_source_label("VOUCHER", row.get("voucher_code"))
+        row["display_voucher_code"] = row.get("voucher_code")
+        apply_current_network_to_access_row(row, omada_client_by_mac, configured_ssids)
+        mac = normalize_mac_if_valid(row.get("client_mac"))
+        current_client = omada_client_by_session_network(row.get("client_mac"), row.get("client_ip"), omada_client_by_mac)
+        row["device_name"] = (
+            preferred_device_name((current_client or {}).get("device_name"))
+            or preferred_device_name(infer_device_name_from_user_agent(row.get("user_agent")))
+            or preferred_device_name(row.get("customer_name"))
+            or "Unknown device"
+        )
+        row["client_mac"] = mac or row.get("client_mac")
+        row["remaining_time_seconds"] = int(row.get("remaining_time_seconds") or 0)
+        rows.append(row)
+
+    return sorted(rows, key=lambda item: item.get("active_until") or datetime.max.replace(tzinfo=timezone.utc))
+
+
 def active_voucher_rows(omada_name_by_mac: Optional[dict] = None, omada_client_by_mac: Optional[dict] = None):
     if omada_client_by_mac is None:
         omada_client_by_mac = fetch_omada_client_snapshot_map()
@@ -12471,9 +12809,11 @@ def active_voucher_rows(omada_name_by_mac: Optional[dict] = None, omada_client_b
           AND s.status IN ('VOUCHER_REDEEMED', 'ACCESS_GRANTED')
           AND s.access_expires_at IS NOT NULL
           AND s.access_expires_at > now()
+          AND v.code NOT ILIKE %s
         ORDER BY s.id, s.access_expires_at DESC
         LIMIT 500
-        """
+        """,
+        ("BAG-%",),
     )
     for row in rows:
         row["client_mac"] = normalize_mac_if_valid(row.get("client_mac")) or row.get("client_mac")
@@ -13476,8 +13816,8 @@ def delete_product_item(item_id: str, admin=Depends(current_admin)):
 
 @app.get("/api/vouchers")
 def get_vouchers(status: Optional[str] = None, voucher_type: Optional[str] = None, search: Optional[str] = None, batch_id: Optional[str] = None, admin=Depends(current_admin)):
-    clauses = []
-    params = []
+    clauses = ["v.code NOT ILIKE %s"]
+    params = ["BAG-%"]
     if status:
         clauses.append("v.status = %s")
         params.append(status.upper())
@@ -13842,6 +14182,7 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
     active_rows = [row for row in rows if row.get("active")]
     inactive_rows = [row for row in rows if not row.get("active")]
     voucher_rows_active = active_voucher_rows(omada_name_by_mac=omada_name_by_mac, omada_client_by_mac=omada_client_by_mac)
+    access_rows_active = active_access_rows(omada_client_by_mac=omada_client_by_mac)
     grouped = customer_device_groups(rows)
     return {
         "summary": {
@@ -13849,6 +14190,7 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
             "active": len(active_rows),
             "inactive": len(inactive_rows),
             "with_vouchers": len(voucher_rows_active),
+            "active_access": len(access_rows_active),
             "customers": len(grouped["customers"]),
             "without_profiles": len(grouped["without_profiles"]),
             "profiled_devices": sum(int(customer.get("device_count") or 0) for customer in grouped["customers"]),
@@ -13860,6 +14202,7 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
         },
         "active": active_rows,
         "inactive": inactive_rows,
+        "active_access": access_rows_active,
         "with_vouchers": voucher_rows_active,
         "customers": grouped["customers"],
         "without_profiles": grouped["without_profiles"],

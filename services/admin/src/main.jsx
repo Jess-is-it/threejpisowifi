@@ -1474,6 +1474,9 @@ function PortalApp() {
   const [bagTab, setBagTab] = useState('LIST');
   const [bagSaving, setBagSaving] = useState(false);
   const [bagDraggingItemId, setBagDraggingItemId] = useState('');
+  const [bagVoucherCode, setBagVoucherCode] = useState('');
+  const [bagClaiming, setBagClaiming] = useState(false);
+  const [bagClaimMessage, setBagClaimMessage] = useState(null);
   const [pendingBagActivationItem, setPendingBagActivationItem] = useState(null);
   const [purchaseSuccessModal, setPurchaseSuccessModal] = useState(null);
   const [bagFlyAnimation, setBagFlyAnimation] = useState(null);
@@ -1907,6 +1910,33 @@ function PortalApp() {
     const data = await publicRequest(`/portal/bag?portal_session_id=${encodeURIComponent(id)}`);
     if (data.bag) setBag(data.bag);
     return data.bag;
+  }
+
+  async function claimVoucherToBag(event) {
+    event.preventDefault();
+    const code = bagVoucherCode.trim();
+    if (!code) {
+      setBagClaimMessage({ status: 'FAILED', message: 'Enter a voucher code.' });
+      return;
+    }
+    setBagClaiming(true);
+    setBagClaimMessage(null);
+    try {
+      const data = await publicApi('/portal/bag/claim-voucher', {
+        method: 'POST',
+        body: JSON.stringify(payload({ voucher_code: code }))
+      });
+      persistSession(data);
+      if (data.bag) setBag(data.bag);
+      setBagVoucherCode('');
+      setBagClaimMessage({ status: 'SUCCESS', message: data.message || 'Voucher added to My WiFi Bag.' });
+      await refreshStatus(data.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session'));
+      queueAvatarEventNote('PURCHASE_SUCCESS');
+    } catch (err) {
+      setBagClaimMessage({ status: 'FAILED', message: err.message || 'Could not claim this voucher.' });
+    } finally {
+      setBagClaiming(false);
+    }
   }
 
   async function saveBagAutoActivate(enabled) {
@@ -2625,6 +2655,35 @@ function PortalApp() {
               <div className="small text-muted">{autoActivate ? 'Saved items stay separate. Drag them to choose what activates first.' : 'Saved items stay separate until you activate one manually.'}</div>
             </div>
           </div>
+          <form className="portal-bag-claim" onSubmit={claimVoucherToBag}>
+            <div className="portal-bag-claim-title">
+              <span><IconKey size={18} /></span>
+              <div>
+                <strong>Claim voucher</strong>
+                <small>Add free, refund, or event vouchers to your bag.</small>
+              </div>
+            </div>
+            <div className="portal-bag-claim-row">
+              <input
+                className="form-control"
+                value={bagVoucherCode}
+                onChange={(event) => {
+                  setBagVoucherCode(event.target.value.toUpperCase());
+                  if (bagClaimMessage) setBagClaimMessage(null);
+                }}
+                placeholder="Voucher code"
+                autoComplete="one-time-code"
+              />
+              <button className="btn btn-primary" type="submit" disabled={bagClaiming}>
+                {bagClaiming ? 'Adding...' : 'Add to Bag'}
+              </button>
+            </div>
+            {bagClaimMessage && (
+              <div className={`alert ${bagClaimMessage.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'} py-2 mb-0`}>
+                {bagClaimMessage.message}
+              </div>
+            )}
+          </form>
           <ul className="nav nav-tabs portal-bag-tabs">
             <li className="nav-item">
               <button className={`nav-link ${bagTab === 'LIST' ? 'active' : ''}`} type="button" onClick={() => setBagTab('LIST')}>
@@ -4417,7 +4476,7 @@ function UsersPage({ refresh }) {
 }
 
 function CustomerDevicesPage() {
-  const [data, setData] = useState({ summary: {}, customers: [], without_profiles: [], active: [], inactive: [], with_vouchers: [] });
+  const [data, setData] = useState({ summary: {}, customers: [], without_profiles: [], active: [], inactive: [], active_access: [], with_vouchers: [] });
   const [tab, setTab] = useState('customers');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -4431,7 +4490,7 @@ function CustomerDevicesPage() {
     ['customers', 'Profiled Customers', data.summary?.customers || 0, 'green'],
     ['without_profiles', 'No Profile Yet', data.summary?.without_profiles || 0, 'yellow'],
     ['active', 'Active Devices', data.summary?.active || 0, 'blue'],
-    ['with_vouchers', 'w/ Vouchers', data.summary?.with_vouchers || 0, 'purple']
+    ['active_access', 'Active Access', data.summary?.active_access || 0, 'purple']
   ];
   async function load() {
     setLoading(true);
@@ -4698,7 +4757,7 @@ function CustomerDevicesPage() {
       <KpiCard icon={IconUsers} label="Profiled Customers" value={data.summary?.customers || 0} tone="green" />
       <KpiCard icon={IconUser} label="No Profile Yet" value={data.summary?.without_profiles || 0} tone="yellow" />
       <KpiCard icon={IconWifi} label="Active Devices" value={data.summary?.active || 0} tone="green" />
-      <KpiCard icon={IconKey} label="With Vouchers" value={data.summary?.with_vouchers || 0} tone="purple" />
+      <KpiCard icon={IconKey} label="Active Access" value={data.summary?.active_access || 0} tone="purple" />
       {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
       {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
       <div className="col-12">
@@ -4732,7 +4791,7 @@ function CustomerDevicesPage() {
           </div>
           {customerTabs.includes(tab) ? (
             <CustomerRows rows={filtered} profileRequired={tab === 'customers'} />
-          ) : tab === 'with_vouchers' ? (
+          ) : tab === 'active_access' ? (
           <div className="table-responsive">
             <table className="table card-table table-vcenter">
               <thead>
@@ -4741,7 +4800,8 @@ function CustomerDevicesPage() {
                   <th>Device</th>
                   <th>MAC</th>
                   <th>IP</th>
-                  <th>Voucher</th>
+                  <th>Access</th>
+                  <th>Source</th>
                   <th>SSID</th>
                   <th>Site</th>
                   <th>Remaining Time</th>
@@ -4750,7 +4810,7 @@ function CustomerDevicesPage() {
               </thead>
               <tbody>
                 {filtered.map((device, index) => (
-                  <tr key={`${device.portal_session_id || device.client_mac || index}-voucher`}>
+                  <tr key={`${device.access_id || device.portal_session_id || device.client_mac || index}-access`}>
                     <td>
                       <div className="fw-semibold">{device.customer_name || 'Profile not set'}</div>
                       <div className="text-muted small">{device.customer_contact_number || device.customer_email || 'No verified contact'}</div>
@@ -4761,7 +4821,11 @@ function CustomerDevicesPage() {
                     </td>
                     <td><code>{device.client_mac || 'n/a'}</code></td>
                     <td>{device.client_ip || 'n/a'}</td>
-                    <td><code>{device.voucher_code || 'n/a'}</code></td>
+                    <td>
+                      <div className="fw-semibold">{device.product_name || device.display_voucher_code || 'Active access'}</div>
+                      {device.display_voucher_code && <div className="text-muted small"><code>{device.display_voucher_code}</code></div>}
+                    </td>
+                    <td><span className={`badge ${device.access_source === 'Product' ? 'bg-green-lt text-green' : 'bg-purple-lt text-purple'}`}>{device.access_source || 'Access'}</span></td>
                     <td><SsidValue device={device} /></td>
                     <td>{device.site || 'n/a'}</td>
                     <td><span className="badge bg-green-lt text-green">{formatSeconds(device.remaining_time_seconds)}</span></td>
@@ -4774,7 +4838,7 @@ function CustomerDevicesPage() {
                     </td>
                   </tr>
                 ))}
-                {!filtered.length && <tr><td colSpan="9" className="text-muted p-4">No voucher devices detected yet.</td></tr>}
+                {!filtered.length && <tr><td colSpan="10" className="text-muted p-4">No active product or voucher access detected yet.</td></tr>}
               </tbody>
             </table>
           </div>
