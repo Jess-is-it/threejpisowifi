@@ -6288,6 +6288,7 @@ body.modal-open {
 }
 
 .portal-choice-card {
+  grid-template-columns: auto minmax(0, 1fr) auto;
   position: relative;
 }
 
@@ -6303,6 +6304,7 @@ body.modal-open {
   flex: 0 0 auto;
   height: 1.15rem;
   justify-content: center;
+  margin-left: auto;
   width: 1.15rem;
 }
 

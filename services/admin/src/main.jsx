@@ -3836,20 +3836,20 @@ function PortalApp() {
                   </div>
                   <div className="portal-choice-grid">
                     <button className="portal-choice-card" type="button" onClick={() => selectPortalPassType('SINGLE_DEVICE')}>
-                      <span className="portal-choice-radio" aria-hidden="true" />
                       <span className="portal-choice-icon"><IconUser size={24} /></span>
                       <span>
                         <strong>{t('One Device Pass')}</strong>
                         <small>{t('Best for one phone or one laptop.')}</small>
                       </span>
-                  </button>
-                    <button className="portal-choice-card" type="button" onClick={() => selectPortalPassType('MULTI_DEVICE')}>
                       <span className="portal-choice-radio" aria-hidden="true" />
+                    </button>
+                    <button className="portal-choice-card" type="button" onClick={() => selectPortalPassType('MULTI_DEVICE')}>
                       <span className="portal-choice-icon"><IconUsers size={24} /></span>
                       <span>
                         <strong>{t('Multiple Device Pass')}</strong>
                         <small>{t('Share one purchase with more than one device.')}</small>
                       </span>
+                      <span className="portal-choice-radio" aria-hidden="true" />
                     </button>
                   </div>
                 </>
@@ -3873,6 +3873,7 @@ function PortalApp() {
                         )) : <span className="portal-payment-logo">{t('Not configured')}</span>}
                       </span>
                     </span>
+                    <span className="portal-choice-radio" aria-hidden="true" />
                   </button>
                   <button className="portal-choice-card" type="button" onClick={() => selectPortalPurchaseChannel('STORE')}>
                     <span className="portal-choice-icon"><IconShoppingBag size={24} /></span>
@@ -3880,6 +3881,7 @@ function PortalApp() {
                       <strong>{t('Store Payment')}</strong>
                       <small>{t('Coming soon. Store-assisted payment details will be added next.')}</small>
                     </span>
+                    <span className="portal-choice-radio" aria-hidden="true" />
                   </button>
                 </div>
               ) : purchaseChannel === 'STORE' ? (
