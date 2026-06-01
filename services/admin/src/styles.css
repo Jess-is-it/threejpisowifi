@@ -6257,13 +6257,14 @@ body.modal-open {
 
 .portal-purchase-breadcrumbs button {
   align-items: center;
-  background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.1);
-  border: 1px solid rgba(var(--portal-brand-rgb, 6, 111, 209), 0.2);
+  background: #f3f6fb;
+  border: 1px solid rgba(98, 105, 118, 0.18);
   border-radius: 999px;
-  color: var(--portal-brand-color, var(--tblr-primary, #066fd1));
+  color: #344054;
   display: inline-flex;
   font-size: 0.76rem;
   font-weight: 850;
+  gap: 0.28rem;
   line-height: 1;
   padding: 0.42rem 0.62rem;
 }
@@ -6441,6 +6442,12 @@ body.modal-open {
 .portal-tabler-page.is-dark .portal-payment-method-pill {
   background: #1f2a3d;
   border-color: rgba(255, 255, 255, 0.12);
+  color: #dbe7f5;
+}
+
+.portal-tabler-page.is-dark .portal-purchase-breadcrumbs button {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
   color: #dbe7f5;
 }
 

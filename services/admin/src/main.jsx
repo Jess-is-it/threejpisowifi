@@ -3816,12 +3816,14 @@ function PortalApp() {
                 <div className="portal-purchase-breadcrumbs" aria-label="Purchase choices">
                   {purchasePassType && (
                     <button type="button" onClick={() => resetPortalPurchaseStep('pass')}>
+                      {purchasePassType === 'MULTI_DEVICE' ? <IconUsers size={14} /> : <IconUser size={14} />}
                       {selectedPassLabel}
                     </button>
                   )}
                   {purchasePassType && purchaseChannel && <IconChevronRight size={14} />}
                   {purchaseChannel && (
                     <button type="button" onClick={() => resetPortalPurchaseStep('channel')}>
+                      {purchaseChannel === 'ONLINE' ? <IconCash size={14} /> : <IconShoppingBag size={14} />}
                       {purchaseChannel === 'ONLINE' ? `${t('Online Payment')} · ${selectedPaymentLabel}` : t('Store Payment')}
                     </button>
                   )}
@@ -3894,7 +3896,7 @@ function PortalApp() {
                 </div>
               ) : (
                 <>
-                  {onlinePaymentMethods.length ? (
+                  {onlinePaymentMethods.length > 1 ? (
                     <div className="portal-payment-method-strip">
                       {onlinePaymentMethods.map((method) => (
                         <button
@@ -3908,7 +3910,7 @@ function PortalApp() {
                         </button>
                       ))}
                     </div>
-                  ) : <div className="alert alert-warning mb-0">{t('Online payment methods are not configured yet. Ask the operator for a voucher.')}</div>}
+                  ) : !onlinePaymentMethods.length ? <div className="alert alert-warning mb-0">{t('Online payment methods are not configured yet. Ask the operator for a voucher.')}</div> : null}
                   {onlinePaymentMethods.length && visibleProductCategoryGroups.length ? (
                     <div className="portal-product-category-list">
                       {visibleProductCategoryGroups.map((category, groupIndex) => (
