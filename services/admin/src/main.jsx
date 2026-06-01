@@ -170,7 +170,7 @@ const PORTAL_TRANSLATIONS = {
     'Redeem': 'I-redeem',
     'Set Profile': 'I-set Profile',
     'Hi {name}': 'Hi {name}',
-    'Current product': 'Kasalukuyang product',
+    'Active product': 'Kasalukuyang product',
     'No active product': 'Walang active product',
     'View Bag': 'Tingnan ang Bag',
     'More Info': 'Karagdagang Info',
@@ -202,6 +202,29 @@ const PORTAL_TRANSLATIONS = {
     'Checking...': 'Tinitingnan...',
     'Check': 'Tingnan',
     'Customer Profile': 'Customer Profile',
+    'Profile': 'Profile',
+    'My Devices': 'Mga Device Ko',
+    'Registered devices': 'Registered devices',
+    'Devices linked with this verified contact number.': 'Mga device na naka-link sa verified contact number na ito.',
+    'Add Device': 'Magdagdag ng Device',
+    'Loading devices...': 'Naglo-load ng devices...',
+    'Unknown device': 'Hindi kilalang device',
+    'Current': 'Kasalukuyan',
+    'No MAC yet': 'Wala pang MAC',
+    'No active time': 'Walang active time',
+    'Last seen': 'Huling nakita',
+    'No linked devices yet.': 'Wala pang naka-link na device.',
+    'I already have a profile': 'May profile na ako',
+    'Use the add-device code sent from your main phone.': 'Gamitin ang add-device code mula sa main phone mo.',
+    'Create new profile': 'Gumawa ng bagong profile',
+    'Verify this contact number and receive your welcome gift.': 'I-verify ang contact number na ito para makuha ang welcome gift.',
+    'Enter the 8-character code sent from your main device.': 'Ilagay ang 8-character code mula sa main device.',
+    'Add-device Code': 'Add-device Code',
+    'Link This Device': 'I-link ang Device na Ito',
+    'Connect your other device to your profile easily.': 'Madaling i-connect ang ibang device sa profile mo.',
+    'Tap Send Code on this main device.': 'I-tap ang Send Code sa main device na ito.',
+    'On the other phone, connect to 3J WiFi and tap Set Profile.': 'Sa ibang phone, kumonekta sa 3J WiFi at i-tap ang Set Profile.',
+    'Choose Existing Profile, then enter the 8-character code.': 'Piliin ang Existing Profile, pagkatapos ilagay ang 8-character code.',
     'Profile not set': 'Wala pang profile',
     'No verified contact number': 'Walang verified contact number',
     'Name': 'Pangalan',
@@ -216,7 +239,7 @@ const PORTAL_TRANSLATIONS = {
     'Email (optional)': 'Email (optional)',
     'Contact Number': 'Contact Number',
     'Sending...': 'Nagpapadala...',
-    'Send Code Again After ({seconds}s)': 'Magpadala ulit ng code pagkatapos ng ({seconds}s)',
+    'Send Again After ({seconds}s)': 'Magpadala ulit pagkatapos ng ({seconds}s)',
     'Send Code': 'Magpadala ng Code',
     '4-character Code': '4-character Code',
     'Cancel': 'Kanselahin',
@@ -1448,8 +1471,15 @@ function PortalApp() {
   const [portalBooting, setPortalBooting] = useState(true);
   const [bag, setBag] = useState(null);
   const [bagOpen, setBagOpen] = useState(false);
+  const [bagTab, setBagTab] = useState('LIST');
   const [bagSaving, setBagSaving] = useState(false);
   const [bagDraggingItemId, setBagDraggingItemId] = useState('');
+  const [pendingBagActivationItem, setPendingBagActivationItem] = useState(null);
+  const [purchaseSuccessModal, setPurchaseSuccessModal] = useState(null);
+  const [bagFlyAnimation, setBagFlyAnimation] = useState(null);
+  const [bagReceiving, setBagReceiving] = useState(false);
+  const bagTagRef = useRef(null);
+  const purchaseSuccessKeyRef = useRef('');
   const [outsidePurchaseConfirm, setOutsidePurchaseConfirm] = useState(null);
   const [portalScreen, setPortalScreen] = useState(() => (new URLSearchParams(window.location.search).get('payment_order_id') ? 'shop' : 'landing'));
   const [selectedProductCategory, setSelectedProductCategory] = useState(null);
@@ -1474,6 +1504,18 @@ function PortalApp() {
   const [themeClock, setThemeClock] = useState(() => Date.now());
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileViewOpen, setProfileViewOpen] = useState(false);
+  const [profileViewTab, setProfileViewTab] = useState('PROFILE');
+  const [profileChoice, setProfileChoice] = useState('CHOICE');
+  const [profileDevices, setProfileDevices] = useState([]);
+  const [profileDevicesLoading, setProfileDevicesLoading] = useState(false);
+  const [profileDevicesMessage, setProfileDevicesMessage] = useState('');
+  const [deviceLinkOpen, setDeviceLinkOpen] = useState(false);
+  const [deviceLinkSending, setDeviceLinkSending] = useState(false);
+  const [deviceLinkCooldown, setDeviceLinkCooldown] = useState(0);
+  const [deviceLinkMessage, setDeviceLinkMessage] = useState('');
+  const [existingProfileCode, setExistingProfileCode] = useState('');
+  const [existingProfileLinking, setExistingProfileLinking] = useState(false);
+  const [existingProfileMessage, setExistingProfileMessage] = useState('');
   const [profileForm, setProfileForm] = useState({ display_name: '', email: '', contact_number: '', verification_code: '', terms_accepted: false, marketing_sms_consent: false });
   const [profileSendingCode, setProfileSendingCode] = useState(false);
   const [profileCodeCooldown, setProfileCodeCooldown] = useState(0);
@@ -1501,6 +1543,7 @@ function PortalApp() {
   const avatarNoteRunRef = useRef(0);
   const avatarNoteIndexRef = useRef(-1);
   const mainPageIntroNoteShownRef = useRef(false);
+  const profileMessageTimerRef = useRef(null);
   const avatarEventNoteRef = useRef(null);
   const lowTimeNoteShownRef = useRef(false);
   const portalDiscountTabRefs = useRef({});
@@ -1541,6 +1584,10 @@ function PortalApp() {
     raw_query_params: rawQueryParams
   };
   const deviceDetected = Boolean(context.client_mac || context.mac || context.ip || context.ap_mac || context.gateway_mac || context.ssid || context.site || context.token || context.authToken);
+
+  function portalProfileConfigured(nextProfile = profile) {
+    return Boolean(nextProfile?.configured || nextProfile?.display_name || nextProfile?.contact_number);
+  }
 
   function localHandoffBridgeUrl(portalSettings) {
     const base = portalSettings?.local_portal_url || 'http://192.168.50.70:8080/portal';
@@ -1585,8 +1632,22 @@ function PortalApp() {
   }
 
   async function refreshStatus(id = sessionId || localStorage.getItem('centralwifi_portal_session')) {
-    if (!id) return null;
-    const nextStatus = await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(id)}`);
+    let statusSessionId = id;
+    if (!statusSessionId) {
+      const session = await publicApi('/portal/session', { method: 'POST', body: JSON.stringify(payload()) });
+      persistSession(session);
+      statusSessionId = session.portal_session_id;
+    }
+    if (!statusSessionId) return null;
+    let nextStatus;
+    try {
+      nextStatus = await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(statusSessionId)}`);
+    } catch (err) {
+      const session = await publicApi('/portal/session', { method: 'POST', body: JSON.stringify(payload({ portal_session_id: statusSessionId })) });
+      persistSession(session);
+      if (!session.portal_session_id || session.portal_session_id === statusSessionId) throw err;
+      nextStatus = await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(session.portal_session_id)}`);
+    }
     setStatus(nextStatus);
     if (nextStatus.profile) setProfile(nextStatus.profile);
     if (nextStatus.bag) setBag(nextStatus.bag);
@@ -1697,6 +1758,14 @@ function PortalApp() {
   }, [profileCodeCooldown > 0]);
 
   useEffect(() => {
+    if (!deviceLinkCooldown) return undefined;
+    const intervalId = window.setInterval(() => {
+      setDeviceLinkCooldown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [deviceLinkCooldown > 0]);
+
+  useEffect(() => {
     if (!missingTimeCodeCooldown) return undefined;
     const intervalId = window.setInterval(() => {
       setMissingTimeCodeCooldown((current) => Math.max(0, current - 1));
@@ -1704,16 +1773,30 @@ function PortalApp() {
     return () => window.clearInterval(intervalId);
   }, [missingTimeCodeCooldown > 0]);
 
+  useEffect(() => () => {
+    if (profileMessageTimerRef.current) window.clearTimeout(profileMessageTimerRef.current);
+  }, []);
+
   function normalizePortalContactInput(value) {
-    const cleaned = String(value || '').trim().replace(/[^\d+]/g, '');
-    if (cleaned.startsWith('+63')) return cleaned.slice(1);
-    if (cleaned.startsWith('09') && cleaned.length === 11) return `63${cleaned.slice(1)}`;
-    if (cleaned.startsWith('9') && cleaned.length === 10) return `63${cleaned}`;
-    return cleaned;
+    const digits = String(value || '').replace(/\D/g, '');
+    if (digits.startsWith('63') && digits.length >= 12 && digits[2] === '9') return `0${digits.slice(2, 12)}`;
+    if (digits.startsWith('9') && digits.length >= 10) return `0${digits.slice(0, 10)}`;
+    return digits.slice(0, 11);
   }
 
   function portalContactLooksValid(value) {
-    return /^\d{8,15}$/.test(normalizePortalContactInput(value));
+    return /^09\d{9}$/.test(normalizePortalContactInput(value));
+  }
+
+  function showProfileMessage(message, options = {}) {
+    if (profileMessageTimerRef.current) window.clearTimeout(profileMessageTimerRef.current);
+    setProfileMessage(message);
+    if (options.autoHide) {
+      profileMessageTimerRef.current = window.setTimeout(() => {
+        setProfileMessage('');
+        profileMessageTimerRef.current = null;
+      }, 6000);
+    }
   }
 
   async function redeem(e) {
@@ -1761,10 +1844,32 @@ function PortalApp() {
     setResult(null);
     setPaymentResult(null);
     const safeQuantity = Math.max(1, Math.min(Number(purchaseQuantity || 1), 365));
+    let currentStatus = status;
+    if (!currentStatus?.network_presence) {
+      try {
+        currentStatus = await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session')) || currentStatus;
+      } catch {
+        currentStatus = status;
+      }
+    }
+    const outside3jNetwork = currentStatus?.network_presence?.connected_to_3j_ap === false;
+    let currentProfile = profile;
+    if (outside3jNetwork && !portalProfileConfigured(currentProfile)) {
+      try {
+        const refreshedStatus = await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session'));
+        currentProfile = refreshedStatus?.profile || currentProfile;
+      } catch {
+        // Keep the local profile check; checkout will remain blocked if no profile is known.
+      }
+    }
+    if (outside3jNetwork && !portalProfileConfigured(currentProfile)) {
+      setOutsidePurchaseConfirm({ item, quantity: safeQuantity, profileRequired: true });
+      return;
+    }
     if (
       !confirmedOutside
       && status?.outside_network_warning?.enabled
-      && status?.network_presence?.connected_to_3j_ap === false
+      && outside3jNetwork
     ) {
       setOutsidePurchaseConfirm({ item, quantity: safeQuantity, confirmed: false });
       return;
@@ -1785,6 +1890,7 @@ function PortalApp() {
           payment_method: 'gcash',
           purchase_quantity: safeQuantity,
           selected_barangay: barangayOnly ? selectedBarangay : null,
+          outside_network_purchase: outside3jNetwork,
         }))
       });
       if (!data.checkout_url) throw new Error('PayMongo did not return a checkout link.');
@@ -1840,8 +1946,13 @@ function PortalApp() {
         body: JSON.stringify(payload())
       });
       if (data.bag) setBag(data.bag);
-      setResult({ status: data.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED', message: data.message || 'Bag updated.' });
+      const success = data.status === 'SUCCESS';
+      setResult({ status: success ? 'SUCCESS' : 'FAILED', message: data.message || 'Bag updated.' });
       await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session'));
+      if (success) {
+        setBagOpen(false);
+        setPendingBagActivationItem(null);
+      }
     } catch (err) {
       setResult({ status: 'FAILED', message: err.message });
     } finally {
@@ -1849,9 +1960,41 @@ function PortalApp() {
     }
   }
 
+  function requestBagItemActivation(item) {
+    if (activeBagItems.some((activeItem) => activeItem.id !== item.id)) {
+      setPendingBagActivationItem(item);
+      return;
+    }
+    activateBagItem(item.id);
+  }
+
+  async function confirmBagItemActivation() {
+    if (!pendingBagActivationItem?.id) return;
+    const itemId = pendingBagActivationItem.id;
+    setPendingBagActivationItem(null);
+    await activateBagItem(itemId);
+  }
+
+  function openBagModal() {
+    setBagOpen(true);
+    loadBag().catch(() => null);
+  }
+
+  function openBagFromKeyboard(event) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openBagModal();
+    }
+  }
+
   function openProfile() {
+    if (profileMessageTimerRef.current) window.clearTimeout(profileMessageTimerRef.current);
+    profileMessageTimerRef.current = null;
     setProfileMessage('');
     setTermsExpanded(false);
+    setProfileChoice(portalProfileConfigured() ? 'NEW' : 'CHOICE');
+    setExistingProfileCode('');
+    setExistingProfileMessage('');
     setProfileForm({
       display_name: profile?.display_name || '',
       email: profile?.email || '',
@@ -1863,24 +2006,102 @@ function PortalApp() {
     setProfileOpen(true);
   }
 
+  function openProfileView(tab = 'PROFILE') {
+    setProfileViewTab(tab);
+    setProfileViewOpen(true);
+    if (tab === 'DEVICES') loadProfileDevices().catch(() => null);
+  }
+
+  function formatPortalDeviceDate(value) {
+    if (!value) return '-';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '-';
+    return date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  }
+
+  async function loadProfileDevices() {
+    const id = sessionId || localStorage.getItem('centralwifi_portal_session');
+    if (!id) return [];
+    setProfileDevicesLoading(true);
+    setProfileDevicesMessage('');
+    try {
+      const data = await publicRequest(`/portal/profile/devices?portal_session_id=${encodeURIComponent(id)}`);
+      if (data.profile) setProfile(data.profile);
+      setProfileDevices(data.devices || []);
+      return data.devices || [];
+    } catch (err) {
+      setProfileDevicesMessage(err.message || 'Unable to load devices.');
+      return [];
+    } finally {
+      setProfileDevicesLoading(false);
+    }
+  }
+
+  async function sendDeviceLinkCode() {
+    setDeviceLinkMessage('');
+    setDeviceLinkSending(true);
+    setDeviceLinkCooldown(60);
+    try {
+      const data = await publicApi('/portal/profile/device-link/send-code', {
+        method: 'POST',
+        body: JSON.stringify(payload())
+      });
+      setDeviceLinkMessage(data.message || 'Add-device code sent to your verified contact number.');
+    } catch (err) {
+      setDeviceLinkMessage(err.message);
+    } finally {
+      setDeviceLinkSending(false);
+    }
+  }
+
+  async function confirmExistingProfileLink(e) {
+    e.preventDefault();
+    const linkCode = String(existingProfileCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    setExistingProfileCode(linkCode);
+    setExistingProfileMessage('');
+    if (linkCode.length !== 8) {
+      setExistingProfileMessage('Enter the 8-character add-device code.');
+      return;
+    }
+    setExistingProfileLinking(true);
+    try {
+      const data = await publicApi('/portal/profile/device-link/confirm', {
+        method: 'POST',
+        body: JSON.stringify(payload({ link_code: linkCode }))
+      });
+      persistSession(data);
+      setProfile(data.profile);
+      setProfileDevices(data.devices || []);
+      setExistingProfileMessage(data.message || 'This device is now linked to your customer profile.');
+      setProfileOpen(false);
+      setProfileViewOpen(true);
+      setProfileViewTab('DEVICES');
+      await refreshStatus(data.portal_session_id || sessionId);
+    } catch (err) {
+      setExistingProfileMessage(err.message);
+    } finally {
+      setExistingProfileLinking(false);
+    }
+  }
+
   async function sendProfileCode() {
-    setProfileMessage('');
-    const normalizedContact = normalizePortalContactInput(profileForm.contact_number);
-    if (!portalContactLooksValid(normalizedContact)) {
-      setProfileMessage(portalLanguage === 'tl' ? 'Maglagay ng valid mobile number, halimbawa 09066826415 o 639066826415.' : 'Enter a valid mobile number, for example 09066826415 or 639066826415.');
+    showProfileMessage('');
+    const localContact = normalizePortalContactInput(profileForm.contact_number);
+    if (!portalContactLooksValid(localContact)) {
+      showProfileMessage(portalLanguage === 'tl' ? 'Maglagay ng 11-digit mobile number na nagsisimula sa 09.' : 'Enter an 11-digit mobile number starting with 09.');
       return;
     }
     setProfileSendingCode(true);
     setProfileCodeCooldown(60);
-    setProfileForm((current) => ({ ...current, contact_number: normalizedContact }));
+    setProfileForm((current) => ({ ...current, contact_number: localContact }));
     try {
       const data = await publicApi('/portal/profile/send-code', {
         method: 'POST',
-        body: JSON.stringify(payload({ contact_number: normalizedContact }))
+        body: JSON.stringify(payload({ contact_number: localContact }))
       });
-      setProfileMessage(data.message || (portalLanguage === 'tl' ? 'Naipadala na ang verification code.' : 'Verification code sent.'));
+      showProfileMessage(data.message || (portalLanguage === 'tl' ? 'Naipadala na ang verification code.' : 'Verification code sent.'), { autoHide: true });
     } catch (err) {
-      setProfileMessage(err.message);
+      showProfileMessage(err.message);
     } finally {
       setProfileSendingCode(false);
     }
@@ -1888,15 +2109,15 @@ function PortalApp() {
 
   async function saveProfile(e) {
     e.preventDefault();
-    setProfileMessage('');
+    showProfileMessage('');
     setProfileSaving(true);
-    const normalizedContact = normalizePortalContactInput(profileForm.contact_number);
-    if (!portalContactLooksValid(normalizedContact)) {
-      setProfileMessage(portalLanguage === 'tl' ? 'Maglagay ng valid mobile number, halimbawa 09066826415 o 639066826415.' : 'Enter a valid mobile number, for example 09066826415 or 639066826415.');
+    const localContact = normalizePortalContactInput(profileForm.contact_number);
+    if (!portalContactLooksValid(localContact)) {
+      showProfileMessage(portalLanguage === 'tl' ? 'Maglagay ng 11-digit mobile number na nagsisimula sa 09.' : 'Enter an 11-digit mobile number starting with 09.');
       setProfileSaving(false);
       return;
     }
-    const nextProfileForm = { ...profileForm, contact_number: normalizedContact };
+    const nextProfileForm = { ...profileForm, contact_number: localContact };
     setProfileForm(nextProfileForm);
     try {
       const data = await publicApi('/portal/profile', {
@@ -1910,7 +2131,7 @@ function PortalApp() {
       setGiftUnwrapped(false);
       await refreshStatus(data.portal_session_id || sessionId);
     } catch (err) {
-      setProfileMessage(err.message);
+      showProfileMessage(err.message);
     } finally {
       setProfileSaving(false);
     }
@@ -1968,18 +2189,18 @@ function PortalApp() {
 
   async function sendMissingTimeCode() {
     setMissingTimeMessage('');
-    const normalizedContact = normalizePortalContactInput(missingTimeForm.contact_number);
-    if (!portalContactLooksValid(normalizedContact)) {
-      setMissingTimeMessage('Enter a valid mobile number, for example 09066826415 or 639066826415.');
+    const localContact = normalizePortalContactInput(missingTimeForm.contact_number);
+    if (!portalContactLooksValid(localContact)) {
+      setMissingTimeMessage('Enter an 11-digit mobile number starting with 09.');
       return;
     }
     setMissingTimeSending(true);
     setMissingTimeCodeCooldown(60);
-    setMissingTimeForm((current) => ({ ...current, contact_number: normalizedContact }));
+    setMissingTimeForm((current) => ({ ...current, contact_number: localContact }));
     try {
       const data = await publicApi('/portal/missing-time/send-code', {
         method: 'POST',
-        body: JSON.stringify(payload({ contact_number: normalizedContact }))
+        body: JSON.stringify(payload({ contact_number: localContact }))
       });
       setMissingTimeMessage(data.message || 'Verification code sent.');
     } catch (err) {
@@ -1992,8 +2213,8 @@ function PortalApp() {
   async function restoreMissingTime(e) {
     e.preventDefault();
     setMissingTimeRestoring(true);
-    const normalizedContact = normalizePortalContactInput(missingTimeForm.contact_number);
-    const nextMissingTimeForm = { ...missingTimeForm, contact_number: normalizedContact };
+    const localContact = normalizePortalContactInput(missingTimeForm.contact_number);
+    const nextMissingTimeForm = { ...missingTimeForm, contact_number: localContact };
     setMissingTimeForm(nextMissingTimeForm);
     try {
       const data = await publicApi('/portal/missing-time/restore', {
@@ -2016,6 +2237,7 @@ function PortalApp() {
   const productCategoryGroups = (productCategories || []).filter((category) => category?.id && (category.items || []).length);
   const payments = settings?.payments || {};
   const canCheckoutWithGcash = Boolean(payments.enabled && payments.ready_for_checkout && (payments.enabled_payment_methods || []).includes('gcash'));
+  const paymentSuccessReady = Boolean(paymentResult?.status === 'PAID' && paymentResult?.fulfillment_status === 'FULFILLED');
   const autoPortalDark = (() => {
     const hour = new Date(themeClock).getHours();
     return hour >= 18 || hour < 6;
@@ -2023,13 +2245,25 @@ function PortalApp() {
   const portalDark = portalDarkOverride === 'auto' ? autoPortalDark : portalDarkOverride === 'dark';
   const unlimited = result?.unlimited ?? status?.unlimited;
   const accessExpired = Boolean(result?.access_expired || status?.access_expired || status?.status === 'EXPIRED');
-  const connected = Boolean((result?.connected ?? status?.connected) && !accessExpired && (unlimited || timerRemaining > 0));
+  const hasRemainingAccess = Boolean(!accessExpired && (unlimited || timerRemaining > 0));
+  const connected = Boolean((result?.connected ?? status?.connected) && hasRemainingAccess);
   const remainingDisplay = unlimited ? 'Unlimited' : formatCountdown(timerRemaining);
   const networkPresence = status?.network_presence || {};
   const outsideNetwork = networkPresence.connected_to_3j_ap === false;
-  const activeBagItem = bag?.active_item || null;
+  const activeBagItems = Array.isArray(bag?.active_items) && bag.active_items.length
+    ? bag.active_items
+    : (bag?.active_item ? [bag.active_item] : []);
   const queuedBagItems = bag?.queued_items || [];
-  const bagItemCount = (activeBagItem ? 1 : 0) + queuedBagItems.length;
+  const bagItemCount = activeBagItems.length + queuedBagItems.length;
+  const activeRemainingCards = activeBagItems.length ? activeBagItems : [null];
+  const activeBagItemRemainingSeconds = (item) => {
+    if (!item) return timerRemaining;
+    if (item.active_until) {
+      const remainingMs = new Date(item.active_until).getTime() - Date.now();
+      return Math.max(0, Math.floor(remainingMs / 1000));
+    }
+    return Math.max(0, Number(item.remaining_seconds || 0));
+  };
   const customAvatarUrl = connected
     ? (settings?.no_internet_avatar_connected_url || settings?.company_logo_url || '')
     : (settings?.no_internet_avatar_disconnected_url || settings?.company_logo_url || '');
@@ -2053,10 +2287,75 @@ function PortalApp() {
     localStorage.setItem('centralwifi_portal_language', nextLanguage);
   }
 
+  function paymentSuccessCopy(payment) {
+    const queued = payment?.bag_item_status === 'QUEUED';
+    return {
+      queued,
+      title: queued ? t('Saved to My WiFi Bag') : t('Payment Complete'),
+      message: queued
+        ? t(status?.outside_network_warning?.purchase_success_message || 'Package saved to your bag. Connect to a 3J WiFi AP to use it.')
+        : t('Payment received. Internet access is active.'),
+      productName: payment?.product_name || payment?.bag_item?.product_name || t('WiFi package'),
+    };
+  }
+
+  function triggerBagFlyAnimation() {
+    const targetRect = bagTagRef.current?.getBoundingClientRect();
+    const endX = targetRect ? targetRect.left + (targetRect.width / 2) : window.innerWidth - 40;
+    const endY = targetRect ? targetRect.top + (targetRect.height / 2) : 32;
+    setBagReceiving(false);
+    setBagFlyAnimation({
+      id: Date.now(),
+      dx: endX - (window.innerWidth / 2),
+      dy: endY - (window.innerHeight / 2),
+    });
+    window.setTimeout(() => {
+      setBagFlyAnimation(null);
+      setBagReceiving(true);
+    }, 1040);
+    window.setTimeout(() => setBagReceiving(false), 1820);
+  }
+
+  function closePurchaseSuccessModal() {
+    const shouldAnimateToBag = Boolean(purchaseSuccessModal);
+    setPurchaseSuccessModal(null);
+    setPaymentResult(null);
+    if (shouldAnimateToBag) triggerBagFlyAnimation();
+  }
+
+  function paymentSuccessHandledKey(payment) {
+    const key = payment?.payment_order_id || payment?.checkout_url || `${payment?.status || ''}-${payment?.fulfilled_at || ''}`;
+    return key ? `centralwifi_payment_success_seen_${key}` : '';
+  }
+
+  function clearPaymentOrderFromUrl() {
+    if (!paymentOrderFromUrl || !window.history?.replaceState) return;
+    const url = new URL(window.location.href);
+    ['payment_order_id', 'payment_order', 'order', 'bridge_checked'].forEach((key) => url.searchParams.delete(key));
+    const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+    window.history.replaceState({}, document.title, nextUrl || '/portal');
+  }
+
   useEffect(() => {
     const intervalId = window.setInterval(() => setThemeClock(Date.now()), 60 * 1000);
     return () => window.clearInterval(intervalId);
   }, []);
+
+  useEffect(() => {
+    if (!paymentSuccessReady) return;
+    const successKey = paymentResult?.payment_order_id || paymentResult?.checkout_url || `${paymentResult?.status}-${paymentResult?.fulfilled_at || ''}`;
+    if (purchaseSuccessKeyRef.current === successKey) return;
+    purchaseSuccessKeyRef.current = successKey;
+    const handledKey = paymentSuccessHandledKey(paymentResult);
+    if (handledKey && localStorage.getItem(handledKey) === '1') {
+      clearPaymentOrderFromUrl();
+      setPaymentResult(null);
+      return;
+    }
+    if (handledKey) localStorage.setItem(handledKey, '1');
+    clearPaymentOrderFromUrl();
+    setPurchaseSuccessModal(paymentSuccessCopy(paymentResult));
+  }, [paymentSuccessReady, paymentResult?.payment_order_id, paymentResult?.fulfilled_at, paymentResult?.bag_item_status, status?.outside_network_warning?.purchase_success_message]);
 
   function queueAvatarEventNote(eventType) {
     const noteSettings = settings?.avatar_notes_json || {};
@@ -2214,109 +2513,202 @@ function PortalApp() {
     );
   }
 
-  function BagModal() {
-    if (!bagOpen) return null;
-    const queuedItems = bag?.queued_items || [];
-    const historyItems = bag?.history_items || [];
-    const autoActivate = bag?.settings?.auto_activate !== false;
-    const overlapSeconds = Number(bag?.settings?.overlap_seconds || settings?.bag_activation_overlap_seconds || 10);
-    const renderItem = (item, options = {}) => (
-      <div
-        className={`portal-bag-item ${options.draggable ? 'is-draggable' : ''}`}
-        key={item.id}
-        draggable={Boolean(options.draggable)}
-        onDragStart={() => {
-          if (options.draggable) setBagDraggingItemId(item.id);
-        }}
-        onDragOver={(event) => {
-          if (options.draggable) event.preventDefault();
-        }}
-        onDrop={(event) => {
-          if (!options.draggable) return;
-          event.preventDefault();
-          if (!bagDraggingItemId || bagDraggingItemId === item.id) return;
-          const currentItems = bag?.queued_items || [];
-          const fromIndex = currentItems.findIndex((entry) => entry.id === bagDraggingItemId);
-          const toIndex = currentItems.findIndex((entry) => entry.id === item.id);
-          if (fromIndex < 0 || toIndex < 0) return;
-          const nextItems = [...currentItems];
-          const [moved] = nextItems.splice(fromIndex, 1);
-          nextItems.splice(toIndex, 0, moved);
-          setBagDraggingItemId('');
-          reorderBagItems(nextItems);
-        }}
-        onDragEnd={() => setBagDraggingItemId('')}
-      >
-        {options.draggable && <span className="portal-bag-drag"><IconGripVertical size={18} /></span>}
-        <div className="portal-bag-item-main">
-          <div className="portal-bag-item-title">{item.product_name || 'WiFi package'}</div>
-          <div className="portal-bag-item-meta">
-            <span><IconClock size={14} /> {formatSeconds(item.remaining_seconds || item.duration_seconds || 0)}</span>
-            {item.product_category_name && <span>{item.product_category_name}</span>}
-            {item.device_scope === 'MULTI_DEVICE' ? <span>{item.allowed_devices || 1} devices</span> : <span>1 device</span>}
-          </div>
-        </div>
-        <span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : item.status === 'QUEUED' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
-          {item.status}
-        </span>
-        {options.canActivate && (
-          <button className="btn btn-sm btn-outline-primary" type="button" disabled={bagSaving} onClick={() => activateBagItem(item.id)}>
-            Activate
-          </button>
-        )}
-      </div>
-    );
+  function PurchaseSuccessModal() {
+    if (!purchaseSuccessModal) return null;
     return (
       <Modal
-        title={t('My WiFi Bag')}
-        onClose={() => setBagOpen(false)}
-        dialogClassName="portal-profile-modal-dialog portal-bag-modal-dialog"
-        bodyClassName="portal-profile-modal-body portal-bag-modal-body"
-        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        title={purchaseSuccessModal.title}
+        onClose={closePurchaseSuccessModal}
+        size="md"
+        dialogClassName="portal-profile-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content portal-purchase-success-modal ${portalDark ? 'is-dark' : ''}`}
         lockPageRefresh
       >
-        <div className="portal-bag-summary">
-          <span className="portal-bag-summary-icon"><IconWallet size={24} /></span>
+        <div className="portal-purchase-success">
+          <span className="portal-purchase-success-icon"><IconCircleCheck size={54} /></span>
           <div>
-            <div className="fw-semibold">{formatSeconds(bag?.summary?.remaining_seconds || 0)} total in bag</div>
-            <div className="small text-muted">Queued items stay separate. Drag them to choose what activates first.</div>
+            <div className="portal-purchase-success-title">{purchaseSuccessModal.title}</div>
+            <div className="portal-purchase-success-product">{purchaseSuccessModal.productName}</div>
+            <p className="text-muted mb-0">{purchaseSuccessModal.message}</p>
           </div>
-        </div>
-        <label className="portal-bag-auto-row">
-          <span>
-            <strong>Auto activate</strong>
-            <small>Activates the next item {overlapSeconds}s before the active item ends.</small>
-          </span>
-          <span className="form-check form-switch m-0">
-            <input className="form-check-input" type="checkbox" checked={autoActivate} disabled={bagSaving} onChange={(event) => saveBagAutoActivate(event.target.checked)} />
-          </span>
-        </label>
-        <div className="portal-bag-section">
-          <div className="portal-bag-section-title">Active now</div>
-          {bag?.active_item ? renderItem(bag.active_item) : <div className="text-muted small">No active bag item right now.</div>}
-        </div>
-        <div className="portal-bag-section">
-          <div className="portal-bag-section-title">Queued next</div>
-          {queuedItems.length ? queuedItems.map((item) => renderItem(item, { draggable: true, canActivate: true })) : <div className="text-muted small">No queued items. Bought packages will appear here.</div>}
-        </div>
-        <div className="portal-bag-section">
-          <div className="portal-bag-section-title">History</div>
-          {historyItems.length ? historyItems.map((item) => (
-            <div className="portal-bag-history-row" key={item.id}>
-              <span>{item.product_name}</span>
-              <small>{item.auto_activate_snapshot ? 'Auto activation was enabled' : 'Auto activation was disabled'}</small>
-              <span className="badge bg-secondary-lt text-secondary">{item.status}</span>
-            </div>
-          )) : <div className="text-muted small">No consumed items yet.</div>}
+          <button className="btn btn-primary w-100 mt-2" type="button" onClick={closePurchaseSuccessModal}>
+            Close
+          </button>
         </div>
       </Modal>
     );
   }
 
-  function ProfileTag() {
-    const hasProfile = Boolean(profile?.configured || profile?.display_name || profile?.contact_number);
+  function BagModal() {
+    if (!bagOpen) return null;
+    const queuedItems = bag?.queued_items || [];
+    const historyItems = bag?.history_items || [];
+    const autoActivate = bag?.settings?.auto_activate !== false;
+    const renderItem = (item, options = {}) => {
+      const deviceLabel = item.device_scope === 'MULTI_DEVICE' ? `${item.allowed_devices || 1} devices` : '1 device';
+      const showStatusBadge = Boolean(item.status) && (item.status !== 'QUEUED' || autoActivate);
+      return (
+        <div
+          className={`portal-bag-item ${options.draggable ? 'is-draggable' : ''}`}
+          key={item.id}
+          draggable={Boolean(options.draggable)}
+          onDragStart={() => {
+            if (options.draggable) setBagDraggingItemId(item.id);
+          }}
+          onDragOver={(event) => {
+            if (options.draggable) event.preventDefault();
+          }}
+          onDrop={(event) => {
+            if (!options.draggable) return;
+            event.preventDefault();
+            if (!bagDraggingItemId || bagDraggingItemId === item.id) return;
+            const currentItems = bag?.queued_items || [];
+            const fromIndex = currentItems.findIndex((entry) => entry.id === bagDraggingItemId);
+            const toIndex = currentItems.findIndex((entry) => entry.id === item.id);
+            if (fromIndex < 0 || toIndex < 0) return;
+            const nextItems = [...currentItems];
+            const [moved] = nextItems.splice(fromIndex, 1);
+            nextItems.splice(toIndex, 0, moved);
+            setBagDraggingItemId('');
+            reorderBagItems(nextItems);
+          }}
+          onDragEnd={() => setBagDraggingItemId('')}
+        >
+          {options.draggable && <span className="portal-bag-drag"><IconGripVertical size={18} /></span>}
+          <div className="portal-bag-item-main">
+            <div className="portal-bag-item-topline">
+              <div className="portal-bag-item-title">{item.product_name || 'WiFi package'}</div>
+              <div className="portal-bag-item-actions">
+                {showStatusBadge && (
+                  <span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : item.status === 'QUEUED' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
+                    {item.status}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="portal-bag-item-bottom-meta">
+              <span><IconClock size={14} /> {formatSeconds(item.remaining_seconds || item.duration_seconds || 0)}</span>
+              <span className="portal-bag-meta-separator">|</span>
+              <span>{deviceLabel}</span>
+            </div>
+            {item.product_category_name && (
+              <div className="portal-bag-item-meta">
+                <span>{item.product_category_name}</span>
+              </div>
+            )}
+            {options.canActivate && (
+              <div className="portal-bag-item-activate-row">
+                <button className="btn btn-sm btn-outline-primary" type="button" disabled={bagSaving} onClick={() => requestBagItemActivation(item)}>
+                  Activate
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
     return (
-      <button className="portal-profile-tag" type="button" onClick={() => hasProfile ? setProfileViewOpen(true) : openProfile()}>
+      <>
+        <Modal
+          title={t('My WiFi Bag')}
+          onClose={() => setBagOpen(false)}
+          dialogClassName="portal-profile-modal-dialog portal-bag-modal-dialog"
+          bodyClassName="portal-profile-modal-body portal-bag-modal-body"
+          contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+          lockPageRefresh
+        >
+          <div className="portal-bag-summary">
+            <span className="portal-bag-summary-icon"><IconWallet size={24} /></span>
+            <div>
+              <div className="fw-semibold">{formatSeconds(bag?.summary?.remaining_seconds || 0)} total in bag</div>
+              <div className="small text-muted">{autoActivate ? 'Saved items stay separate. Drag them to choose what activates first.' : 'Saved items stay separate until you activate one manually.'}</div>
+            </div>
+          </div>
+          <ul className="nav nav-tabs portal-bag-tabs">
+            <li className="nav-item">
+              <button className={`nav-link ${bagTab === 'LIST' ? 'active' : ''}`} type="button" onClick={() => setBagTab('LIST')}>
+                <IconListDetails size={16} /> List
+              </button>
+            </li>
+            <li className="nav-item">
+              <button className={`nav-link ${bagTab === 'HISTORY' ? 'active' : ''}`} type="button" onClick={() => setBagTab('HISTORY')}>
+                <IconHistory size={16} /> History
+              </button>
+            </li>
+          </ul>
+          {bagTab === 'LIST' ? (
+            <div className="portal-bag-tab-panel">
+              <label className="portal-bag-auto-row">
+                <span>
+                  <strong>Auto activate</strong>
+                </span>
+                <span className="form-check form-switch m-0">
+                  <input className="form-check-input" type="checkbox" checked={autoActivate} disabled={bagSaving} onChange={(event) => saveBagAutoActivate(event.target.checked)} />
+                </span>
+              </label>
+              <div className="portal-bag-section">
+                <div className="portal-bag-section-title">Active now</div>
+                {activeBagItems.length ? activeBagItems.map((item) => renderItem(item)) : <div className="text-muted small">No active bag item right now.</div>}
+              </div>
+              <div className="portal-bag-section">
+                {queuedItems.length ? queuedItems.map((item) => renderItem(item, { draggable: true, canActivate: true })) : <div className="text-muted small">No saved products. Bought packages will appear here.</div>}
+              </div>
+            </div>
+          ) : (
+            <div className="portal-bag-tab-panel">
+              <div className="portal-bag-section">
+                <div className="portal-bag-section-title">History</div>
+                {historyItems.length ? historyItems.map((item) => (
+                  <div className="portal-bag-history-row" key={item.id}>
+                    <span>{item.product_name}</span>
+                    <small>{item.auto_activate_snapshot ? 'Auto activation was enabled' : 'Auto activation was disabled'}</small>
+                    <span className="badge bg-secondary-lt text-secondary">{item.status}</span>
+                  </div>
+                )) : <div className="text-muted small">No consumed items yet.</div>}
+              </div>
+            </div>
+          )}
+        </Modal>
+        {pendingBagActivationItem && (
+          <Modal
+            title="Activate another package?"
+            onClose={() => setPendingBagActivationItem(null)}
+            size="md"
+            dialogClassName="portal-profile-modal-dialog"
+            bodyClassName="portal-profile-modal-body"
+            contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+            lockPageRefresh
+          >
+            <div className="portal-bag-warning">
+              <span className="portal-bag-warning-icon"><IconAlertTriangle size={34} /></span>
+              <div>
+                <div className="h3 mb-2">This will start consuming another package.</div>
+                <p className="mb-0">
+                  Once activated, the time will continuously run and it cannot be stopped or paused. Your current active package may be replaced by this selection.
+                </p>
+              </div>
+            </div>
+            <div className="portal-bag-warning-target">
+              <div className="fw-bold">{pendingBagActivationItem.product_name || 'WiFi package'}</div>
+              <div className="small text-muted">{formatSeconds(pendingBagActivationItem.remaining_seconds || pendingBagActivationItem.duration_seconds || 0)}</div>
+            </div>
+            <div className="d-flex justify-content-end gap-2 mt-3">
+              <button className="btn" type="button" onClick={() => setPendingBagActivationItem(null)}>Cancel</button>
+              <button className="btn btn-danger" type="button" disabled={bagSaving} onClick={confirmBagItemActivation}>
+                Activate and consume time
+              </button>
+            </div>
+          </Modal>
+        )}
+      </>
+    );
+  }
+
+  function ProfileTag() {
+    const hasProfile = portalProfileConfigured();
+    return (
+      <button className="portal-profile-tag" type="button" onClick={() => hasProfile ? openProfileView('PROFILE') : openProfile()}>
         <span className={`portal-profile-tag-icon ${hasProfile ? 'is-ready' : ''}`}>
           {!hasProfile && <span className="portal-profile-free-note">FREE</span>}
           {hasProfile ? <IconUser size={16} /> : <IconGift size={16} />}
@@ -2329,7 +2721,8 @@ function PortalApp() {
   function BagTag() {
     return (
       <button
-        className="portal-bag-tag"
+        ref={bagTagRef}
+        className={`portal-bag-tag ${bagReceiving ? 'is-receiving' : ''}`}
         type="button"
         onClick={() => { setBagOpen(true); loadBag().catch(() => null); }}
         title={t('My WiFi Bag')}
@@ -2444,6 +2837,18 @@ function PortalApp() {
       }
     }
     setSelectedProductCategory(category);
+  }
+
+  function closeProductCategoryModal() {
+    setSelectedProductCategory(null);
+    setSelectedCategoryProductId('');
+    setProductQuantities({});
+  }
+
+  function openProfileFromOutsidePurchase() {
+    setOutsidePurchaseConfirm(null);
+    closeProductCategoryModal();
+    window.setTimeout(() => openProfile(), 0);
   }
 
   function openCategoryMoreInfo(category) {
@@ -2850,7 +3255,7 @@ function PortalApp() {
     return (
       <Modal
         title=""
-        onClose={() => { setSelectedProductCategory(null); setSelectedCategoryProductId(''); setProductQuantities({}); }}
+        onClose={closeProductCategoryModal}
         dialogClassName="portal-profile-modal-dialog portal-category-modal-dialog"
         bodyClassName="portal-profile-modal-body portal-category-modal-body"
         contentClassName={`portal-profile-modal-content portal-category-modal-content ${portalDark ? 'is-dark' : ''}`}
@@ -3063,6 +3468,37 @@ function PortalApp() {
   function OutsidePurchaseModal() {
     if (!outsidePurchaseConfirm?.item) return null;
     const item = outsidePurchaseConfirm.item;
+    if (outsidePurchaseConfirm.profileRequired) {
+      return (
+        <Modal
+          title={t('Set profile before buying')}
+          onClose={() => setOutsidePurchaseConfirm(null)}
+          dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+          bodyClassName="portal-profile-modal-body"
+          contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        >
+          <div className="d-flex align-items-start gap-3">
+            <span className="avatar bg-yellow-lt text-yellow"><IconGift size={24} /></span>
+            <div>
+              <div className="fw-semibold mb-1">{item.name}</div>
+              <div className="text-muted small">
+                {t('Set up your profile first before buying outside 3J WiFi. Outside-network purchases are saved to your customer profile so your package can be recovered if this browser or device changes.')}
+              </div>
+            </div>
+          </div>
+          <div className="modal-footer px-0 pb-0">
+            <button className="btn" type="button" onClick={() => setOutsidePurchaseConfirm(null)}>{t('Cancel')}</button>
+            <button
+              className="btn btn-primary"
+              type="button"
+              onClick={openProfileFromOutsidePurchase}
+            >
+              {t('Set Profile')}
+            </button>
+          </div>
+        </Modal>
+      );
+    }
     return (
       <Modal
         title={status?.outside_network_warning?.purchase_title || t('You are outside 3J WiFi')}
@@ -3125,18 +3561,38 @@ function PortalApp() {
   }
 
   return (
-    <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'}`}>
+    <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'} ${portalScreen !== 'landing' ? 'has-portal-header' : ''}`}>
       {portalScreen !== 'landing' && (
-        <div className="portal-top-actions">
-          <ProfileTag />
-          <BagTag />
-        </div>
+        <header className="portal-sticky-header">
+          <div className="portal-sticky-header-inner">
+            <div className="portal-sticky-brand">
+              <span className="portal-sticky-brand-mark">3J</span>
+              <span className="portal-sticky-brand-text">WiFi</span>
+            </div>
+            <div className="portal-top-actions">
+              <ProfileTag />
+              <BagTag />
+            </div>
+          </div>
+        </header>
       )}
       <div className="portal-float-actions">
         <button className="btn btn-primary btn-icon portal-help-fab" type="button" onClick={() => { setHelpOpen(true); setHelpMode('menu'); loadSupportConversation(); }} title={t('Help')} aria-label={t('Help')}>
           <IconHelp size={26} />
         </button>
       </div>
+      <PurchaseSuccessModal />
+      {bagFlyAnimation && (
+        <div
+          className="portal-bag-fly-item"
+          style={{
+            '--portal-bag-fly-x': `${bagFlyAnimation.dx}px`,
+            '--portal-bag-fly-y': `${bagFlyAnimation.dy}px`,
+          }}
+        >
+          <IconShoppingBag size={28} />
+        </div>
+      )}
       <div className="client-portal-shell">
         {portalScreen === 'landing' ? (
           <>
@@ -3161,32 +3617,33 @@ function PortalApp() {
           <div className="portal-shop-avatar-outside text-center mb-3">
             <AvatarHero />
           </div>
-          <div className={`card portal-active-product-card ${activeBagItem ? 'has-active' : 'is-empty'} mb-3`}>
-            <div className="card-body py-3">
-              <div className="portal-active-product-panel">
-                <span className="portal-active-product-icon"><IconShoppingBag size={22} /></span>
-                <div className="portal-active-product-copy">
-                  <div className="portal-active-product-label">{t('Current product')}</div>
-                  <div className="portal-active-product-name">{activeBagItem?.product_name || t('No active product')}</div>
-                  {activeBagItem && (
-                    <div className="portal-active-product-meta">
-                      {formatSeconds(activeBagItem.remaining_seconds || activeBagItem.duration_seconds || 0)}
+          <div className="portal-remaining-card-stack mb-3">
+            {activeRemainingCards.map((item, index) => {
+              const cardHasAccess = item ? activeBagItemRemainingSeconds(item) > 0 : hasRemainingAccess;
+              const cardTime = item ? formatCountdown(activeBagItemRemainingSeconds(item)) : remainingDisplay;
+              return (
+                <div
+                  className={`card portal-remaining-card ${cardHasAccess ? 'is-connected' : 'is-disconnected'} is-clickable`}
+                  role="button"
+                  tabIndex={0}
+                  key={item?.id || `remaining-${index}`}
+                  onClick={openBagModal}
+                  onKeyDown={openBagFromKeyboard}
+                >
+                  <div className="card-body py-3">
+                    <div className="portal-remaining-panel">
+                      <span className="portal-remaining-icon"><IconClock size={22} /></span>
+                      <div className="portal-remaining-copy">
+                        <span className={`portal-remaining-time ${cardHasAccess ? 'is-connected' : 'is-disconnected'}`}>{cardTime}</span>
+                        {item?.product_name && (
+                          <div className="portal-remaining-product">{item.product_name}</div>
+                        )}
+                      </div>
                     </div>
-                  )}
+                  </div>
                 </div>
-                <button className="btn btn-sm btn-outline-primary portal-active-product-action" type="button" onClick={() => { setBagOpen(true); loadBag().catch(() => null); }}>
-                  {t('View Bag')}
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className={`card portal-remaining-card ${connected ? 'is-connected' : 'is-disconnected'} mb-3`}>
-            <div className="card-body py-3">
-              <div className="d-flex align-items-center gap-2">
-                <span className="portal-remaining-icon"><IconClock size={22} /></span>
-                <span className={`portal-remaining-time ${connected ? 'is-connected' : 'is-disconnected'}`}>{remainingDisplay}</span>
-              </div>
-            </div>
+              );
+            })}
           </div>
           <div className="portal-shop-direct">
             {outsideNetwork && status?.outside_network_warning?.enabled && (
@@ -3197,12 +3654,12 @@ function PortalApp() {
             )}
             <GiftPanel />
             {result && <div className={`alert ${result.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'}`}>{result.message}</div>}
-            {paymentResult && <div className={`alert ${paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'alert-success' : paymentResult.status === 'FAILED' ? 'alert-danger' : 'alert-info'}`}>
+            {paymentResult && !paymentSuccessReady && <div className={`alert ${paymentResult.status === 'FAILED' ? 'alert-danger' : 'alert-info'}`}>
               {paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
                 ? (paymentResult.bag_item_status === 'QUEUED' ? t(status?.outside_network_warning?.purchase_success_message || 'Payment received. Package saved to your bag.') : t('Payment received. Internet access is active.'))
                 : paymentResult.status === 'FAILED'
                   ? t(paymentResult.last_error || 'Payment was not completed.')
-                : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Waiting for PayMongo payment confirmation.')}
+                  : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Waiting for PayMongo payment confirmation.')}
               {paymentResult.payment_order_id && <button className="btn btn-sm btn-outline-secondary ms-2" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id)}>{paymentChecking ? t('Checking...') : t('Check')}</button>}
             </div>}
             {productCategoryGroups.length ? (
@@ -3253,7 +3710,8 @@ function PortalApp() {
           onClose={() => setProfileViewOpen(false)}
           dialogClassName="portal-profile-modal-dialog"
           bodyClassName="portal-profile-modal-body"
-          contentClassName="portal-profile-modal-content"
+          contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+          lockPageRefresh
         >
           <div className="d-flex align-items-center gap-3 mb-3">
             <span className="avatar avatar-lg bg-blue-lt text-blue"><IconUser size={26} /></span>
@@ -3262,29 +3720,86 @@ function PortalApp() {
               <div className="text-muted small">{profile?.contact_number || t('No verified contact number')}</div>
             </div>
           </div>
-          <div className="list-group list-group-flush mb-3">
-            <div className="list-group-item d-flex justify-content-between px-0">
-              <span className="text-muted">{t('Name')}</span>
-              <strong>{profile?.display_name || '-'}</strong>
+          <ul className="nav nav-tabs portal-profile-tabs mb-3">
+            <li className="nav-item">
+              <button className={`nav-link ${profileViewTab === 'PROFILE' ? 'active' : ''}`} type="button" onClick={() => setProfileViewTab('PROFILE')}>
+                <IconUser size={16} /> {t('Profile')}
+              </button>
+            </li>
+            <li className="nav-item">
+              <button className={`nav-link ${profileViewTab === 'DEVICES' ? 'active' : ''}`} type="button" onClick={() => { setProfileViewTab('DEVICES'); loadProfileDevices().catch(() => null); }}>
+                <IconWifi size={16} /> {t('My Devices')}
+              </button>
+            </li>
+          </ul>
+          {profileViewTab === 'PROFILE' ? (
+            <div className="list-group list-group-flush mb-3">
+              <div className="list-group-item d-flex justify-content-between px-0">
+                <span className="text-muted">{t('Name')}</span>
+                <strong>{profile?.display_name || '-'}</strong>
+              </div>
+              <div className="list-group-item d-flex justify-content-between px-0">
+                <span className="text-muted">{t('Contact')}</span>
+                <strong>{profile?.contact_number || '-'}</strong>
+              </div>
+              <div className="list-group-item d-flex justify-content-between px-0">
+                <span className="text-muted">{t('Email')}</span>
+                <strong>{profile?.email || '-'}</strong>
+              </div>
+              <div className="list-group-item d-flex justify-content-between px-0">
+                <span className="text-muted">{t('Promo SMS')}</span>
+                <strong>{profile?.marketing_sms_consent ? t('Allowed') : t('Not allowed')}</strong>
+              </div>
             </div>
-            <div className="list-group-item d-flex justify-content-between px-0">
-              <span className="text-muted">{t('Contact')}</span>
-              <strong>{profile?.contact_number || '-'}</strong>
+          ) : (
+            <div className="portal-profile-devices">
+              <div className="d-flex justify-content-between align-items-center gap-2 mb-3">
+                <div>
+                  <div className="fw-semibold">{t('Registered devices')}</div>
+                  <div className="small text-muted">{t('Devices linked with this verified contact number.')}</div>
+                </div>
+                <button className="btn btn-primary btn-sm" type="button" onClick={() => { setDeviceLinkOpen(true); setDeviceLinkMessage(''); }}>
+                  <IconPlus size={16} className="me-1" />{t('Add Device')}
+                </button>
+              </div>
+              {profileDevicesMessage && <div className="alert alert-info py-2">{profileDevicesMessage}</div>}
+              {profileDevicesLoading ? (
+                <div className="text-muted small">{t('Loading devices...')}</div>
+              ) : profileDevices.length ? (
+                <div className="portal-profile-device-list">
+                  {profileDevices.map((device) => (
+                    <div className="portal-profile-device-item" key={device.id}>
+                      <span className="portal-profile-device-icon"><IconWifi size={18} /></span>
+                      <div className="portal-profile-device-main">
+                        <div className="portal-profile-device-title">
+                          <span>{device.device_name || t('Unknown device')}</span>
+                          {device.current_device && <span className="badge bg-green-lt text-green">{t('Current')}</span>}
+                        </div>
+                        <div className="portal-profile-device-meta">
+                          <span>{device.client_mac || t('No MAC yet')}</span>
+                          {device.client_ip && <span>{device.client_ip}</span>}
+                          {device.ssid && <span>{device.ssid}</span>}
+                        </div>
+                        <div className="portal-profile-device-meta">
+                          <span>{device.has_time ? formatSeconds(device.remaining_time_seconds) : t('No active time')}</span>
+                          <span>{t('Last seen')}: {formatPortalDeviceDate(device.last_seen_at)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-muted small">{t('No linked devices yet.')}</div>
+              )}
             </div>
-            <div className="list-group-item d-flex justify-content-between px-0">
-              <span className="text-muted">{t('Email')}</span>
-              <strong>{profile?.email || '-'}</strong>
-            </div>
-            <div className="list-group-item d-flex justify-content-between px-0">
-              <span className="text-muted">{t('Promo SMS')}</span>
-              <strong>{profile?.marketing_sms_consent ? t('Allowed') : t('Not allowed')}</strong>
-            </div>
-          </div>
+          )}
           <div className="d-flex justify-content-end gap-2">
             <button className="btn btn-outline-secondary" type="button" onClick={() => setProfileViewOpen(false)}>{t('Close')}</button>
-            <button className="btn btn-primary" type="button" onClick={() => { setProfileViewOpen(false); openProfile(); }}>
-              <IconEdit size={18} className="me-2" />{t('Edit Profile')}
-            </button>
+            {profileViewTab === 'PROFILE' && (
+              <button className="btn btn-primary" type="button" onClick={() => { setProfileViewOpen(false); openProfile(); }}>
+                <IconEdit size={18} className="me-2" />{t('Edit Profile')}
+              </button>
+            )}
           </div>
         </Modal>
       )}
@@ -3296,61 +3811,141 @@ function PortalApp() {
           size="lg"
           dialogClassName="portal-profile-modal-dialog"
           bodyClassName="portal-profile-modal-body"
-          contentClassName="portal-profile-modal-content"
+          contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+          lockPageRefresh
         >
-          <form className="portal-profile-form" onSubmit={saveProfile}>
-            <div className="portal-profile-scroll">
-              {profileMessage && <div className="alert alert-info">{profileMessage}</div>}
+          {profileChoice === 'CHOICE' ? (
+            <div className="portal-profile-choice">
+              <div className="portal-profile-gift-note mb-3">
+                <span className="portal-profile-gift-badge"><IconGift size={18} /></span>
+                <span>{t('Set up your profile and receive a FREE Gift!')}</span>
+              </div>
               <div className="row g-3">
-                {!profile?.configured && (
-                  <div className="col-12">
-                    <div className="portal-profile-gift-note">
-                      <span className="portal-profile-gift-badge"><IconGift size={18} /></span>
-                      <span>{t('Set up your profile and receive a FREE Gift!')}</span>
-                    </div>
-                  </div>
-                )}
                 <div className="col-md-6">
-                  <label className="form-label">{t('Name')}</label>
-                  <input className="form-control" required value={profileForm.display_name} onChange={(e) => setProfileForm({ ...profileForm, display_name: e.target.value })} />
+                  <button className="portal-profile-choice-card" type="button" onClick={() => setProfileChoice('EXISTING')}>
+                    <span className="portal-profile-choice-icon"><IconUsers size={28} /></span>
+                    <strong>{t('I already have a profile')}</strong>
+                    <small>{t('Use the add-device code sent from your main phone.')}</small>
+                  </button>
                 </div>
                 <div className="col-md-6">
-                  <label className="form-label">{t('Email (optional)')}</label>
-                  <input className="form-control" type="email" value={profileForm.email} onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })} />
-                </div>
-                <div className="col-12">
-                  <label className="form-label">{t('Contact Number')}</label>
-                  <div className="input-group portal-contact-code-group">
-                    <input className="form-control" inputMode="tel" required value={profileForm.contact_number} onChange={(e) => setProfileForm({ ...profileForm, contact_number: e.target.value })} placeholder="09066826415" />
-                    <button className="btn btn-outline-primary" type="button" disabled={profileSendingCode || profileCodeCooldown > 0 || !profileForm.contact_number} onClick={sendProfileCode}>
-                      <IconSend size={18} className="me-2" />{profileSendingCode ? t('Sending...') : profileCodeCooldown > 0 ? t('Send Code Again After ({seconds}s)', { seconds: profileCodeCooldown }) : t('Send Code')}
-                    </button>
-                  </div>
-                </div>
-                <div className="col-md-6">
-                  <label className="form-label">{t('4-character Code')}</label>
-                  <input className="form-control text-uppercase" required value={profileForm.verification_code} onChange={(e) => setProfileForm({ ...profileForm, verification_code: e.target.value.toUpperCase() })} maxLength={12} />
-                </div>
-                <div className="col-12">
-                  <div className="form-check portal-profile-consent">
-                    <input
-                      className="form-check-input"
-                      type="checkbox"
-                      checked={profileForm.terms_accepted}
-                      onChange={(e) => setProfileForm({ ...profileForm, terms_accepted: e.target.checked, marketing_sms_consent: e.target.checked })}
-                    />
-                    <button className="form-check-label portal-profile-consent-text" type="button" onClick={() => setTermsExpanded(!termsExpanded)}>
-                      {expandableConsentText(combinedConsentText, termsExpanded)}
-                    </button>
-                  </div>
+                  <button className="portal-profile-choice-card" type="button" onClick={() => setProfileChoice('NEW')}>
+                    <span className="portal-profile-choice-icon"><IconUserPlus size={28} /></span>
+                    <strong>{t('Create new profile')}</strong>
+                    <small>{t('Verify this contact number and receive your welcome gift.')}</small>
+                  </button>
                 </div>
               </div>
             </div>
-            <div className="modal-footer portal-profile-footer">
-              <button className="btn" type="button" onClick={() => setProfileOpen(false)}>{t('Cancel')}</button>
-              <button className="btn btn-primary" disabled={profileSaving || !profileForm.terms_accepted}>{profileSaving ? t('Saving...') : t('Save Profile')}</button>
+          ) : profileChoice === 'EXISTING' ? (
+            <form className="portal-profile-form" onSubmit={confirmExistingProfileLink}>
+              {existingProfileMessage && <div className="alert alert-info">{existingProfileMessage}</div>}
+              <div className="portal-profile-gift-note mb-3">
+                <span className="portal-profile-gift-badge"><IconKey size={18} /></span>
+                <span>{t('Enter the 8-character code sent from your main device.')}</span>
+              </div>
+              <div className="mb-3">
+                <label className="form-label">{t('Add-device Code')}</label>
+                <input
+                  className="form-control form-control-lg text-uppercase text-center fw-bold"
+                  value={existingProfileCode}
+                  onChange={(e) => setExistingProfileCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
+                  maxLength={8}
+                  autoFocus
+                />
+              </div>
+              <div className="modal-footer portal-profile-footer">
+                <button className="btn" type="button" onClick={() => setProfileChoice('CHOICE')}>
+                  <IconChevronLeft size={18} className="me-1" />{t('Back')}
+                </button>
+                <button className="btn btn-primary" disabled={existingProfileLinking || existingProfileCode.length !== 8}>
+                  {existingProfileLinking ? t('Saving...') : t('Link This Device')}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <form className="portal-profile-form" onSubmit={saveProfile}>
+              <div className="portal-profile-scroll">
+                {profileMessage && <div className="alert alert-info">{profileMessage}</div>}
+                <div className="row g-3">
+                  {!profile?.configured && (
+                    <div className="col-12">
+                      <div className="portal-profile-gift-note">
+                        <span className="portal-profile-gift-badge"><IconGift size={18} /></span>
+                        <span>{t('Set up your profile and receive a FREE Gift!')}</span>
+                      </div>
+                    </div>
+                  )}
+                  <div className="col-md-6">
+                    <label className="form-label">{t('Name')}</label>
+                    <input className="form-control" required value={profileForm.display_name} onChange={(e) => setProfileForm({ ...profileForm, display_name: e.target.value })} />
+                  </div>
+                  <div className="col-md-6">
+                    <label className="form-label">{t('Email (optional)')}</label>
+                    <input className="form-control" type="email" value={profileForm.email} onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })} />
+                  </div>
+                  <div className="col-12">
+                    <label className="form-label">{t('Contact Number')}</label>
+                    <div className="input-group portal-contact-code-group">
+                      <input className="form-control" inputMode="numeric" required maxLength={11} value={profileForm.contact_number} onChange={(e) => setProfileForm({ ...profileForm, contact_number: normalizePortalContactInput(e.target.value) })} />
+                      <button className="btn btn-outline-primary" type="button" disabled={profileSendingCode || profileCodeCooldown > 0 || !profileForm.contact_number} onClick={sendProfileCode}>
+                        <IconSend size={18} className="me-2" />{profileSendingCode ? t('Sending...') : profileCodeCooldown > 0 ? t('Send Again After ({seconds}s)', { seconds: profileCodeCooldown }) : t('Send Code')}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="col-md-6">
+                    <label className="form-label">{t('4-character Code')}</label>
+                    <input className="form-control text-uppercase" required value={profileForm.verification_code} onChange={(e) => setProfileForm({ ...profileForm, verification_code: e.target.value.toUpperCase() })} maxLength={12} />
+                  </div>
+                  <div className="col-12">
+                    <div className="form-check portal-profile-consent">
+                      <input
+                        className="form-check-input"
+                        type="checkbox"
+                        checked={profileForm.terms_accepted}
+                        onChange={(e) => setProfileForm({ ...profileForm, terms_accepted: e.target.checked, marketing_sms_consent: e.target.checked })}
+                      />
+                      <button className="form-check-label portal-profile-consent-text" type="button" onClick={() => setTermsExpanded(!termsExpanded)}>
+                        {expandableConsentText(combinedConsentText, termsExpanded)}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="modal-footer portal-profile-footer">
+                {!profile?.configured && <button className="btn me-auto" type="button" onClick={() => setProfileChoice('CHOICE')}>{t('Back')}</button>}
+                <button className="btn" type="button" onClick={() => setProfileOpen(false)}>{t('Cancel')}</button>
+                <button className="btn btn-primary" disabled={profileSaving || !profileForm.terms_accepted}>{profileSaving ? t('Saving...') : t('Save Profile')}</button>
+              </div>
+            </form>
+          )}
+        </Modal>
+      )}
+
+      {deviceLinkOpen && (
+        <Modal
+          title={t('Add Device')}
+          onClose={() => setDeviceLinkOpen(false)}
+          dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+          bodyClassName="portal-profile-modal-body"
+          contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+          lockPageRefresh
+        >
+          <div className="portal-device-link-steps">
+            <div className="portal-profile-gift-note mb-3">
+              <span className="portal-profile-gift-badge"><IconWifi size={18} /></span>
+              <span>{t('Connect your other device to your profile easily.')}</span>
             </div>
-          </form>
+            <ol className="mb-3">
+              <li>{t('Tap Send Code on this main device.')}</li>
+              <li>{t('On the other phone, connect to 3J WiFi and tap Set Profile.')}</li>
+              <li>{t('Choose Existing Profile, then enter the 8-character code.')}</li>
+            </ol>
+            {deviceLinkMessage && <div className="alert alert-info py-2">{deviceLinkMessage}</div>}
+            <button className="btn btn-primary w-100" type="button" disabled={deviceLinkSending || deviceLinkCooldown > 0} onClick={sendDeviceLinkCode}>
+              <IconSend size={18} className="me-2" />{deviceLinkSending ? t('Sending...') : deviceLinkCooldown > 0 ? t('Send Again After ({seconds}s)', { seconds: deviceLinkCooldown }) : t('Send Code')}
+            </button>
+          </div>
         </Modal>
       )}
 
@@ -3436,9 +4031,9 @@ function PortalApp() {
                 <div className="col-12">
                   <label className="form-label">{t('Contact Number')}</label>
                   <div className="input-group portal-contact-code-group">
-                    <input className="form-control" inputMode="tel" required value={missingTimeForm.contact_number} onChange={(e) => setMissingTimeForm({ ...missingTimeForm, contact_number: e.target.value })} />
+                    <input className="form-control" inputMode="numeric" required maxLength={11} value={missingTimeForm.contact_number} onChange={(e) => setMissingTimeForm({ ...missingTimeForm, contact_number: normalizePortalContactInput(e.target.value) })} />
                     <button className="btn btn-outline-primary" type="button" onClick={sendMissingTimeCode} disabled={missingTimeSending || missingTimeCodeCooldown > 0 || !missingTimeForm.contact_number}>
-                      <IconSend size={18} className="me-2" />{missingTimeSending ? t('Sending...') : missingTimeCodeCooldown > 0 ? t('Send Code Again After ({seconds}s)', { seconds: missingTimeCodeCooldown }) : t('Send Code')}
+                      <IconSend size={18} className="me-2" />{missingTimeSending ? t('Sending...') : missingTimeCodeCooldown > 0 ? t('Send Again After ({seconds}s)', { seconds: missingTimeCodeCooldown }) : t('Send Code')}
                     </button>
                   </div>
                 </div>
@@ -3858,6 +4453,18 @@ function CustomerDevicesPage() {
   });
   const customerTabs = ['customers', 'without_profiles'];
   const deviceName = (device) => device?.device_name || device?.hostname || device?.username || device?.client_mac || device?.client_ip || 'Unknown device';
+  function SsidValue({ device }) {
+    if (device?.ssid) return <span>{device.ssid}</span>;
+    if (device?.stale_session_ssid) {
+      return <span className="badge bg-yellow-lt text-yellow" title={`Old session SSID hidden: ${device.stale_session_ssid}`}>Current SSID not detected</span>;
+    }
+    return <span className="text-muted">n/a</span>;
+  }
+  function deviceNetworkDetails(device = {}) {
+    const values = [device.client_ip, device.ssid, device.site].filter(Boolean);
+    if (!device.ssid && device.stale_session_ssid) values.splice(device.client_ip ? 1 : 0, 0, 'Current SSID not detected');
+    return values.join(' · ') || 'No network details yet';
+  }
   async function manageTime(e) {
     e.preventDefault();
     if (!timeTarget?.portal_session_id) return;
@@ -3912,7 +4519,7 @@ function CustomerDevicesPage() {
               <div>
                 <div className="fw-semibold">{deviceName(device)}</div>
                 <div className="text-muted small">
-                  {[device.client_ip, device.ssid, device.site].filter(Boolean).join(' · ') || 'No network details yet'}
+                  {deviceNetworkDetails(device)}
                 </div>
               </div>
               <div className="d-flex align-items-center gap-2 flex-wrap">
@@ -4155,7 +4762,7 @@ function CustomerDevicesPage() {
                     <td><code>{device.client_mac || 'n/a'}</code></td>
                     <td>{device.client_ip || 'n/a'}</td>
                     <td><code>{device.voucher_code || 'n/a'}</code></td>
-                    <td>{device.ssid || 'n/a'}</td>
+                    <td><SsidValue device={device} /></td>
                     <td>{device.site || 'n/a'}</td>
                     <td><span className="badge bg-green-lt text-green">{formatSeconds(device.remaining_time_seconds)}</span></td>
                     <td className="text-end text-nowrap">
@@ -4202,7 +4809,7 @@ function CustomerDevicesPage() {
                     <td><code>{device.client_mac || 'n/a'}</code></td>
                     <td>{device.client_ip || 'n/a'}</td>
                     <td>{device.ap_name || device.ap_ip || device.ap_mac || 'n/a'}</td>
-                    <td>{device.ssid || 'n/a'}</td>
+                    <td><SsidValue device={device} /></td>
                     <td>{device.site || 'n/a'}</td>
                     <td><span className="badge bg-blue-lt">{device.source || 'LOCAL'}</span></td>
                     <td>{fmt(device.last_seen || device.connected_since)}</td>
@@ -7385,6 +7992,27 @@ function LocationManagementPage() {
 }
 
 function Modal({ title, children, onClose, size = 'lg', dialogClassName = '', bodyClassName = '', contentClassName = '', lockPageRefresh = false }) {
+  const layerRef = useRef(null);
+  const bodyRef = useRef(null);
+  const [showScrollTop, setShowScrollTop] = useState(false);
+  const scrollTopDark = /\bis-dark\b/.test(contentClassName || '');
+
+  function modalScrollTop() {
+    const bodyTop = bodyRef.current?.scrollTop || 0;
+    const layerTop = layerRef.current?.scrollTop || 0;
+    return Math.max(bodyTop, layerTop);
+  }
+
+  function updateModalScrollTopVisibility() {
+    setShowScrollTop(modalScrollTop() > 96);
+  }
+
+  function scrollModalToTop() {
+    bodyRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    layerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+    window.setTimeout(updateModalScrollTopVisibility, 260);
+  }
+
   useEffect(() => {
     const scrollY = window.scrollY || window.pageYOffset || 0;
     const previousBodyStyle = {
@@ -7423,17 +8051,26 @@ function Modal({ title, children, onClose, size = 'lg', dialogClassName = '', bo
   return createPortal(
     <>
       <div className="modal-backdrop fade show app-modal-backdrop" onClick={onClose} />
-      <div className="modal modal-blur fade show d-block app-modal-layer" tabIndex="-1" role="dialog">
+      <div className="modal modal-blur fade show d-block app-modal-layer" tabIndex="-1" role="dialog" ref={layerRef} onScroll={updateModalScrollTopVisibility}>
         <div className={`modal-dialog modal-${size} modal-dialog-centered ${dialogClassName}`}>
           <div className={`modal-content ${contentClassName}`}>
             <div className="modal-header">
               <h5 className="modal-title">{title}</h5>
               <button type="button" className="btn-close" aria-label="Close" onClick={onClose} />
             </div>
-            <div className={`modal-body ${bodyClassName}`}>{children}</div>
+            <div className={`modal-body ${bodyClassName}`} ref={bodyRef} onScroll={updateModalScrollTopVisibility}>{children}</div>
           </div>
         </div>
       </div>
+      <button
+        className={`app-modal-scroll-top ${scrollTopDark ? 'is-dark' : ''} ${showScrollTop ? 'is-visible' : ''}`}
+        type="button"
+        aria-label="Scroll to top"
+        title="Scroll to top"
+        onClick={scrollModalToTop}
+      >
+        <IconChevronUp size={20} />
+      </button>
     </>,
     document.body
   );
@@ -9484,7 +10121,13 @@ function VouchersPage() {
                       <td><div className="fw-semibold">{row.device_name || row.username || 'Unknown device'}</div><div className="text-muted small">{row.site || row.portal_source || ''}</div></td>
                       <td><code>{row.client_mac || 'n/a'}</code></td>
                       <td>{row.client_ip || 'n/a'}</td>
-                      <td>{row.ssid || 'n/a'}</td>
+                      <td>
+                        {row.ssid
+                          ? row.ssid
+                          : row.stale_session_ssid
+                            ? <span className="badge bg-yellow-lt text-yellow" title={`Old session SSID hidden: ${row.stale_session_ssid}`}>Current SSID not detected</span>
+                            : 'n/a'}
+                      </td>
                       <td><span className="badge bg-green-lt text-green">{formatSeconds(row.remaining_time_seconds)}</span></td>
                       <td className="text-end text-nowrap">
                         <ActionBadgeGroup>

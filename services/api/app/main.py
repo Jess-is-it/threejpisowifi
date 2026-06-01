@@ -508,6 +508,7 @@ class PortalPaymentCheckoutRequest(PortalSessionRequest):
     payment_method: str = Field(default="gcash", max_length=40)
     purchase_quantity: int = Field(default=1, ge=1, le=365)
     selected_barangay: Optional[str] = Field(default=None, max_length=120)
+    outside_network_purchase: Optional[bool] = None
 
 
 class PortalBagSettingsRequest(PortalSessionRequest):
@@ -533,6 +534,14 @@ class PortalProfileSaveRequest(PortalSessionRequest):
     verification_code: str = Field(min_length=4, max_length=12)
     terms_accepted: bool = False
     marketing_sms_consent: bool = False
+
+
+class PortalDeviceLinkCodeRequest(PortalSessionRequest):
+    pass
+
+
+class PortalDeviceLinkConfirmRequest(PortalSessionRequest):
+    link_code: str = Field(min_length=8, max_length=16)
 
 
 class PortalWelcomeGiftRedeemRequest(PortalSessionRequest):
@@ -5726,16 +5735,16 @@ def preferred_device_name(*candidates: Optional[str]) -> Optional[str]:
     return None
 
 
-_omada_client_name_cache_lock = threading.Lock()
-_omada_client_name_cache = {"expires_at": 0.0, "data": {}}
+_omada_client_snapshot_cache_lock = threading.Lock()
+_omada_client_snapshot_cache = {"expires_at": 0.0, "data": {}}
 
 
-def fetch_omada_client_name_map(force: bool = False) -> dict:
+def fetch_omada_client_snapshot_map(force: bool = False) -> dict:
     now = time.time()
-    with _omada_client_name_cache_lock:
-        if not force and _omada_client_name_cache["expires_at"] > now:
-            return dict(_omada_client_name_cache["data"])
-    names: dict[str, str] = {}
+    with _omada_client_snapshot_cache_lock:
+        if not force and _omada_client_snapshot_cache["expires_at"] > now:
+            return {mac: dict(value) for mac, value in _omada_client_snapshot_cache["data"].items()}
+    clients_by_mac: dict[str, dict] = {}
     try:
         site_rows = fetch_all(
             """
@@ -5761,15 +5770,49 @@ def fetch_omada_client_name_map(force: bool = False) -> dict:
             result = client.get_clients_if_supported(site_id, site.get("site_name"))
             for item in result.get("clients", []):
                 mac = normalize_mac_if_valid(item.get("client_mac"))
-                name = preferred_device_name(item.get("hostname"))
-                if mac and name:
-                    names[mac] = name
+                if not mac:
+                    continue
+                snapshot = {
+                    "client_mac": mac,
+                    "client_ip": item.get("client_ip"),
+                    "device_name": preferred_device_name(item.get("hostname")),
+                    "hostname": preferred_device_name(item.get("hostname")),
+                    "ap_mac": item.get("ap_mac"),
+                    "ap_name": item.get("ap_name"),
+                    "ssid": item.get("ssid"),
+                    "site": site.get("site_name"),
+                    "site_id": site_id,
+                    "active": bool(item.get("active")),
+                    "last_seen": item.get("last_seen"),
+                    "source": "OMADA",
+                }
+                existing = clients_by_mac.get(mac, {})
+                if existing.get("active") and not snapshot.get("active"):
+                    for field, value in snapshot.items():
+                        if value not in (None, "") and field not in {"active", "ssid", "site", "client_ip", "ap_mac", "ap_name"}:
+                            existing[field] = value
+                    continue
+                merged = dict(existing)
+                for field, value in snapshot.items():
+                    if value not in (None, ""):
+                        merged[field] = value
+                merged["active"] = bool(existing.get("active") or snapshot.get("active"))
+                clients_by_mac[mac] = merged
     except Exception:
-        names = {}
-    with _omada_client_name_cache_lock:
-        _omada_client_name_cache["expires_at"] = time.time() + 20
-        _omada_client_name_cache["data"] = dict(names)
-    return names
+        clients_by_mac = {}
+    with _omada_client_snapshot_cache_lock:
+        _omada_client_snapshot_cache["expires_at"] = time.time() + 20
+        _omada_client_snapshot_cache["data"] = {mac: dict(value) for mac, value in clients_by_mac.items()}
+    return clients_by_mac
+
+
+def fetch_omada_client_name_map(force: bool = False) -> dict:
+    snapshots = fetch_omada_client_snapshot_map(force=force)
+    return {
+        mac: snapshot.get("device_name")
+        for mac, snapshot in snapshots.items()
+        if snapshot.get("device_name")
+    }
 
 
 def host_ip(value) -> Optional[str]:
@@ -6664,19 +6707,22 @@ def ensure_portal_user(cur, session):
 
 
 def normalize_portal_contact_number(value: str) -> tuple[str, str]:
-    original = normalize_a2p_text(value, 32)
-    digits = re.sub(r"\D", "", original)
+    display_contact = portal_contact_display_number(value)
+    digits = f"63{display_contact[1:]}"
+    return f"+{digits}", digits
+
+
+def portal_contact_display_number(value: str) -> str:
+    digits = re.sub(r"\D", "", normalize_a2p_text(value, 32))
     if digits.startswith("00"):
         digits = digits[2:]
-    if digits.startswith("09") and len(digits) == 11:
-        digits = f"63{digits[1:]}"
-    elif digits.startswith("9") and len(digits) == 10:
-        digits = f"63{digits}"
-    elif original.startswith("+"):
-        digits = re.sub(r"\D", "", original)
-    if not re.fullmatch(r"\d{8,15}", digits or ""):
-        raise HTTPException(status_code=400, detail="Enter a valid mobile number, for example 09171234567 or +639171234567.")
-    return f"+{digits}", digits
+    if digits.startswith("63") and len(digits) >= 12 and digits[2] == "9":
+        digits = f"0{digits[2:12]}"
+    elif digits.startswith("9") and len(digits) >= 10:
+        digits = f"0{digits[:10]}"
+    if not re.fullmatch(r"09\d{9}", digits or ""):
+        raise HTTPException(status_code=400, detail="Enter an 11-digit mobile number starting with 09.")
+    return digits
 
 
 def normalize_portal_email(value: Optional[str]) -> Optional[str]:
@@ -6698,8 +6744,19 @@ def generate_portal_otp() -> str:
     return "".join(secrets.choice("23456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(4))
 
 
+def generate_portal_device_link_code() -> str:
+    return "".join(secrets.choice("23456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(8))
+
+
+def portal_device_link_code_hash(code: str) -> str:
+    code_text = normalize_payment_text(code, 32).upper().replace(" ", "")
+    payload = f"DEVICE_LINK:{code_text}".encode("utf-8")
+    return hmac.new(portal_secret_seed().encode("utf-8"), payload, sha256).hexdigest()
+
+
 def create_portal_contact_verification(cur, session: dict, contact_number: str, purpose: str, request: Request) -> dict:
     normalized_contact, a2p_destination = normalize_portal_contact_number(contact_number)
+    display_contact = portal_contact_display_number(contact_number)
     cur.execute(
         """
         SELECT created_at
@@ -6716,7 +6773,7 @@ def create_portal_contact_verification(cur, session: dict, contact_number: str, 
     if recent:
         elapsed = int((datetime.now(timezone.utc) - aware_utc(recent["created_at"])).total_seconds())
         wait_seconds = max(1, 60 - elapsed)
-        raise HTTPException(status_code=429, detail=f"Send Code Again After ({wait_seconds}s).")
+        raise HTTPException(status_code=429, detail=f"Send again after ({wait_seconds}s).")
     code = generate_portal_otp()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
     cur.execute(
@@ -6737,7 +6794,7 @@ def create_portal_contact_verification(cur, session: dict, contact_number: str, 
             session.get("id"),
             session.get("user_id"),
             purpose,
-            normalized_contact,
+            display_contact,
             normalized_contact,
             portal_otp_hash(code, normalized_contact, purpose),
             expires_at,
@@ -6837,6 +6894,170 @@ def public_portal_profile(profile: Optional[dict]) -> dict:
         "welcome_gift_created_at": profile.get("welcome_gift_created_at"),
         "welcome_gift_redeemed_at": profile.get("welcome_gift_redeemed_at"),
     }
+
+
+def public_portal_profile_devices(cur, user_id, current_session_id=None) -> list[dict]:
+    if not user_id:
+        return []
+    omada_name_by_mac = fetch_omada_client_name_map()
+    cur.execute(
+        """
+        SELECT s.*,
+               GREATEST(EXTRACT(EPOCH FROM (s.access_expires_at - now()))::int, 0) AS remaining_time_seconds
+        FROM portal_sessions s
+        WHERE s.user_id = %s
+          AND COALESCE(
+                s.omada_client_mac,
+                s.mikrotik_client_mac,
+                s.client_mac,
+                s.client_ip::text,
+                s.device_token_hash,
+                s.user_agent
+              ) IS NOT NULL
+        ORDER BY s.updated_at DESC
+        LIMIT 100
+        """,
+        (user_id,),
+    )
+    rows = cur.fetchall()
+    devices_by_key: dict[str, dict] = {}
+    group_aliases: dict[str, str] = {}
+
+    def merge_device_groups(primary_key: str, secondary_key: str):
+        if primary_key == secondary_key or primary_key not in devices_by_key or secondary_key not in devices_by_key:
+            return
+        primary = devices_by_key[primary_key]
+        secondary = devices_by_key.pop(secondary_key)
+        primary["session_count"] = int(primary.get("session_count") or 0) + int(secondary.get("session_count") or 0)
+        primary["current_device"] = bool(primary.get("current_device") or secondary.get("current_device"))
+        primary["has_time"] = bool(primary.get("has_time") or secondary.get("has_time"))
+        if int(secondary.get("remaining_time_seconds") or 0) > int(primary.get("remaining_time_seconds") or 0):
+            primary["remaining_time_seconds"] = int(secondary.get("remaining_time_seconds") or 0)
+            primary["access_expires_at"] = secondary.get("access_expires_at")
+        for field in ("mac_addresses", "ssids", "sites"):
+            for value in secondary.get(field) or []:
+                if value and value not in primary[field]:
+                    primary[field].append(value)
+        primary_last_seen = aware_utc(primary.get("last_seen_at"))
+        secondary_last_seen = aware_utc(secondary.get("last_seen_at"))
+        if secondary_last_seen and (not primary_last_seen or secondary_last_seen >= primary_last_seen):
+            for field in ("id", "public_session_id", "client_mac", "client_ip", "ssid", "site", "source", "status", "last_seen_at"):
+                primary[field] = secondary.get(field) or primary.get(field)
+        for key, value in list(group_aliases.items()):
+            if value == secondary_key:
+                group_aliases[key] = primary_key
+
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        client_mac = normalize_mac_if_valid(row.get("omada_client_mac") or row.get("mikrotik_client_mac") or row.get("client_mac"))
+        omada_device_name = preferred_device_name(omada_name_by_mac.get(client_mac) if client_mac else None)
+        user_agent_device_name = preferred_device_name(infer_device_name_from_user_agent(row.get("user_agent")))
+        device_name = omada_device_name or user_agent_device_name or "Unknown device"
+        expires_at = aware_utc(row.get("access_expires_at"))
+        has_time = bool(expires_at and expires_at > now)
+        identity_keys = []
+        if client_mac:
+            identity_keys.append(f"mac:{client_mac}")
+        if user_agent_device_name:
+            identity_keys.append(f"ua:{customer_device_group_key(user_agent_device_name)}")
+        if omada_device_name:
+            identity_keys.append(f"name:{customer_device_group_key(omada_device_name)}")
+        if row.get("device_token_hash"):
+            identity_keys.append(f"token:{row['device_token_hash']}")
+        group_key = next((group_aliases[key] for key in identity_keys if key in group_aliases), None)
+        if not group_key:
+            group_key = identity_keys[0] if identity_keys else f"session:{row['id']}"
+        for key in identity_keys:
+            existing_group_key = group_aliases.get(key)
+            if existing_group_key and existing_group_key != group_key:
+                merge_device_groups(group_key, existing_group_key)
+            group_aliases[key] = group_key
+        current_device = str(row["id"]) == str(current_session_id) if current_session_id else False
+        remaining = int(row.get("remaining_time_seconds") or 0)
+        last_seen = aware_utc(row.get("updated_at"))
+        macs = portal_device_mac_values(
+            row.get("omada_client_mac"),
+            row.get("mikrotik_client_mac"),
+            row.get("client_mac"),
+            row.get("previous_client_macs") or [],
+        )
+        existing = devices_by_key.get(group_key)
+        if not existing:
+            existing = {
+                "id": str(row["id"]),
+                "public_session_id": row.get("public_session_id"),
+                "current_device": current_device,
+                "device_name": device_name,
+                "client_mac": client_mac,
+                "client_ip": str(row.get("client_ip") or ""),
+                "ssid": row.get("ssid") or "",
+                "ssids": [],
+                "site": row.get("omada_site_name") or row.get("site") or "",
+                "sites": [],
+                "source": row.get("source") or "",
+                "status": row.get("status") or "",
+                "has_time": has_time,
+                "remaining_time_seconds": remaining,
+                "access_expires_at": row.get("access_expires_at"),
+                "last_seen_at": row.get("updated_at"),
+                "linked_at": row.get("created_at"),
+                "mac_addresses": [],
+                "session_count": 0,
+            }
+            devices_by_key[group_key] = existing
+        existing["session_count"] = int(existing.get("session_count") or 0) + 1
+        existing["current_device"] = bool(existing.get("current_device") or current_device)
+        existing["has_time"] = bool(existing.get("has_time") or has_time)
+        if remaining > int(existing.get("remaining_time_seconds") or 0):
+            existing["remaining_time_seconds"] = remaining
+            existing["access_expires_at"] = row.get("access_expires_at")
+        for mac in macs:
+            if mac and mac not in existing["mac_addresses"]:
+                existing["mac_addresses"].append(mac)
+        ssid = row.get("ssid")
+        if ssid and ssid not in existing["ssids"]:
+            existing["ssids"].append(ssid)
+        site = row.get("omada_site_name") or row.get("site")
+        if site and site not in existing["sites"]:
+            existing["sites"].append(site)
+        existing_last_seen = aware_utc(existing.get("last_seen_at"))
+        if last_seen and (not existing_last_seen or last_seen >= existing_last_seen):
+            existing.update({
+                "id": str(row["id"]),
+                "public_session_id": row.get("public_session_id"),
+                "client_mac": client_mac or existing.get("client_mac"),
+                "client_ip": str(row.get("client_ip") or "") or existing.get("client_ip"),
+                "ssid": row.get("ssid") or existing.get("ssid"),
+                "site": site or existing.get("site"),
+                "source": row.get("source") or existing.get("source"),
+                "status": row.get("status") or existing.get("status"),
+                "last_seen_at": row.get("updated_at"),
+            })
+    devices = []
+    for device in devices_by_key.values():
+        if not device.get("client_mac") and device.get("mac_addresses"):
+            device["client_mac"] = device["mac_addresses"][0]
+        if not device.get("ssid") and device.get("ssids"):
+            device["ssid"] = device["ssids"][0]
+        if not device.get("site") and device.get("sites"):
+            device["site"] = device["sites"][0]
+        devices.append(device)
+    return sorted(
+        devices,
+        key=lambda item: (bool(item.get("current_device")), bool(item.get("has_time")), str(item.get("last_seen_at") or "")),
+        reverse=True,
+    )
+
+
+def portal_profile_is_configured(profile: Optional[dict]) -> bool:
+    return bool(
+        profile
+        and (
+            profile.get("display_name")
+            or profile.get("contact_number")
+            or profile.get("contact_verified_at")
+        )
+    )
 
 
 PORTAL_PROFILE_GIFT_DEFAULTS = {
@@ -7120,6 +7341,7 @@ def customer_bag_payload(cur, user_id) -> dict:
         return {
             "settings": {"auto_activate": False, "overlap_seconds": bag_overlap_seconds()},
             "active_item": None,
+            "active_items": [],
             "queued_items": [],
             "history_items": [],
             "summary": {"queued_count": 0, "history_count": 0, "remaining_seconds": 0},
@@ -7131,7 +7353,11 @@ def customer_bag_payload(cur, user_id) -> dict:
         SELECT *
         FROM customer_bag_items
         WHERE user_id = %s AND status IN ('ACTIVE', 'QUEUED')
-        ORDER BY CASE status WHEN 'ACTIVE' THEN 0 ELSE 1 END, priority ASC, created_at ASC
+        ORDER BY
+          CASE status WHEN 'ACTIVE' THEN 0 ELSE 1 END,
+          CASE WHEN status = 'ACTIVE' THEN active_until END ASC NULLS LAST,
+          priority ASC,
+          created_at ASC
         """,
         (user_id,),
     )
@@ -7147,18 +7373,21 @@ def customer_bag_payload(cur, user_id) -> dict:
         (user_id,),
     )
     history = cur.fetchall()
-    active_item = next((row for row in active_and_queued if row.get("status") == "ACTIVE"), None)
+    active_items = [row for row in active_and_queued if row.get("status") == "ACTIVE"]
+    active_item = active_items[0] if active_items else None
     queued = [row for row in active_and_queued if row.get("status") == "QUEUED"]
     active_public = bag_item_public(active_item)
+    active_public_items = [bag_item_public(row) for row in active_items]
     queued_public = [bag_item_public(row) for row in queued]
     history_public = [bag_item_public(row) for row in history]
-    remaining = int((active_public or {}).get("remaining_seconds") or 0) + sum(int(item.get("remaining_seconds") or 0) for item in queued_public)
+    remaining = sum(int(item.get("remaining_seconds") or 0) for item in active_public_items) + sum(int(item.get("remaining_seconds") or 0) for item in queued_public)
     return {
         "settings": {
             "auto_activate": bool(settings.get("auto_activate")),
             "overlap_seconds": overlap,
         },
         "active_item": active_public,
+        "active_items": active_public_items,
         "queued_items": queued_public,
         "history_items": history_public,
         "summary": {
@@ -7274,15 +7503,25 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
     portal_payload = payment_fulfillment_payload_from_session(session, voucher["code"])
     authorization = {"status": "NOT_REQUIRED"}
     if session["source"] == "OMADA":
-        authorization = attempt_omada_authorization(cur, session, voucher, {"id": item["user_id"]}, remaining_seconds, active_until, portal_payload)
+        if portal_session_has_current_gateway_access(session):
+            authorization = {
+                "status": "REUSED_EXISTING_OMADA_AUTHORIZATION",
+                "message": "Device already has a current Omada authorization; bag item activated locally.",
+            }
+        else:
+            authorization = attempt_omada_authorization(cur, session, voucher, {"id": item["user_id"]}, remaining_seconds, active_until, portal_payload)
     elif session["source"] == "MIKROTIK":
         authorization = attempt_mikrotik_authorization(cur, session, voucher, {"id": item["user_id"]}, remaining_seconds, active_until, portal_payload)
-    if authorization.get("status") not in {"SUCCESS", "NOT_REQUIRED"}:
+    if authorization.get("status") not in {"SUCCESS", "NOT_REQUIRED", "REUSED_EXISTING_OMADA_AUTHORIZATION"}:
         create_customer_bag_event(cur, item["user_id"], item["id"], session["id"], "ACTIVATION_FAILED", authorization.get("error") or "Gateway authorization failed.", metadata={"reason": reason, "authorization": sanitize_summary(authorization)})
         return {"status": "FAILED", "error": authorization.get("error") or "Gateway authorization failed.", "item": item, "authorization": sanitize_summary(authorization)}
 
     settings = ensure_customer_bag_settings(cur, item["user_id"])
     overlap = bag_overlap_seconds()
+    session_access_until = active_until
+    existing_access_until = aware_utc(session.get("access_expires_at"))
+    if existing_access_until and existing_access_until > session_access_until:
+        session_access_until = existing_access_until
     cur.execute(
         """
         UPDATE customer_bag_items
@@ -7318,7 +7557,7 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
         WHERE id = %s
         RETURNING *
         """,
-        (voucher["id"], item["user_id"], next_status, omada_status, mikrotik_status, active_until, session["id"]),
+        (voucher["id"], item["user_id"], next_status, omada_status, mikrotik_status, session_access_until, session["id"]),
     )
     session.update(cur.fetchone())
     create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "ITEM_ACTIVATED", "Product item activated.", bool(settings.get("auto_activate")), overlap, {"reason": reason, "authorization": sanitize_summary(authorization)})
@@ -7336,16 +7575,15 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
         SELECT *
         FROM customer_bag_items
         WHERE user_id = %s AND status = 'ACTIVE'
-        ORDER BY active_until DESC NULLS LAST, updated_at DESC
-        LIMIT 1
+        ORDER BY active_until ASC NULLS LAST, updated_at ASC
         FOR UPDATE
         """,
         (session["user_id"],),
     )
-    active = cur.fetchone()
+    active_rows = cur.fetchall()
     now = datetime.now(timezone.utc)
-    active_remaining = 0
-    if active:
+    current_active = []
+    for active in active_rows:
         active_until = aware_utc(active.get("active_until"))
         active_remaining = max(int((active_until - now).total_seconds()), 0) if active_until else int(active.get("remaining_seconds") or 0)
         cur.execute("UPDATE customer_bag_items SET remaining_seconds = %s, updated_at = now() WHERE id = %s", (active_remaining, active["id"]))
@@ -7364,10 +7602,12 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
             )
             consumed = cur.fetchone()
             create_customer_bag_event(cur, session["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item fully consumed.", bool(settings.get("auto_activate")), overlap)
-            active = None
+        else:
+            active["remaining_seconds"] = active_remaining
+            current_active.append(active)
 
     should_activate_next = bool(settings.get("auto_activate")) and session.get("source") in {"OMADA", "MIKROTIK"}
-    if should_activate_next and (not active or active_remaining <= overlap):
+    if should_activate_next and not current_active:
         cur.execute(
             """
             SELECT *
@@ -7381,23 +7621,7 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
         )
         next_item = cur.fetchone()
         if next_item:
-            activation = activate_customer_bag_item(cur, next_item, session, request, "AUTO_OVERLAP" if active else "AUTO")
-            if activation.get("status") == "SUCCESS" and active:
-                cur.execute(
-                    """
-                    UPDATE customer_bag_items
-                    SET status = 'CONSUMED',
-                        remaining_seconds = 0,
-                        consumed_at = COALESCE(consumed_at, now()),
-                        updated_at = now()
-                    WHERE id = %s
-                    RETURNING *
-                    """,
-                    (active["id"],),
-                )
-                consumed = cur.fetchone()
-                create_customer_bag_event(cur, session["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item consumed during seamless auto-activation overlap.", True, overlap, {"next_item_id": str(next_item["id"])})
-                active = activation.get("item")
+            activation = activate_customer_bag_item(cur, next_item, session, request, "AUTO")
             cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
             session = cur.fetchone()
     return {"session": session, "bag": customer_bag_payload(cur, session.get("user_id")), "activation": activation}
@@ -7414,11 +7638,10 @@ def process_customer_bag_auto_activation_once():
                 WHERE i.status = 'ACTIVE'
                   AND s.auto_activate = true
                   AND i.active_until IS NOT NULL
-                  AND i.active_until <= now() + make_interval(secs => %s)
+                  AND i.active_until <= now()
                 ORDER BY i.active_until ASC
                 LIMIT 25
                 """,
-                (bag_overlap_seconds(),),
             )
             due_items = cur.fetchall()
             for due in due_items:
@@ -7458,6 +7681,21 @@ def process_customer_bag_auto_activation_once():
                     consumed = cur.fetchone()
                     create_customer_bag_event(cur, active["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item fully consumed by auto activation worker.", True, overlap)
                     active = None
+                else:
+                    continue
+                cur.execute(
+                    """
+                    SELECT 1
+                    FROM customer_bag_items
+                    WHERE user_id = %s
+                      AND status = 'ACTIVE'
+                      AND COALESCE(active_until, now()) > now()
+                    LIMIT 1
+                    """,
+                    (session["user_id"],),
+                )
+                if cur.fetchone():
+                    continue
                 cur.execute(
                     """
                     SELECT *
@@ -7472,22 +7710,9 @@ def process_customer_bag_auto_activation_once():
                 next_item = cur.fetchone()
                 if not next_item:
                     continue
-                activation = activate_customer_bag_item(cur, next_item, session, None, "AUTO_BACKGROUND_OVERLAP" if active else "AUTO_BACKGROUND")
-                if activation.get("status") == "SUCCESS" and active:
-                    cur.execute(
-                        """
-                        UPDATE customer_bag_items
-                        SET status = 'CONSUMED',
-                            remaining_seconds = 0,
-                            consumed_at = COALESCE(consumed_at, now()),
-                            updated_at = now()
-                        WHERE id = %s
-                        RETURNING *
-                        """,
-                        (active["id"],),
-                    )
-                    consumed = cur.fetchone()
-                    create_customer_bag_event(cur, active["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item consumed during background seamless auto-activation overlap.", True, overlap, {"next_item_id": str(next_item["id"])})
+                activation = activate_customer_bag_item(cur, next_item, session, None, "AUTO_BACKGROUND")
+                if activation.get("status") == "SUCCESS":
+                    create_customer_bag_event(cur, session["user_id"], activation["item"]["id"], session["id"], "AUTO_ITEM_ACTIVATED", "Product item auto-activated after no active bag time remained.", True, overlap)
 
 
 def start_customer_bag_auto_activation_worker():
@@ -9078,6 +9303,7 @@ def save_portal_profile(payload: PortalProfileSaveRequest, request: Request, res
         raise HTTPException(status_code=400, detail="Name is required.")
     email = normalize_portal_email(payload.email)
     normalized_contact, _ = normalize_portal_contact_number(payload.contact_number)
+    display_contact = portal_contact_display_number(payload.contact_number)
     with get_conn() as conn:
         with conn.cursor() as cur:
             session = ensure_portal_session(cur, payload, request)
@@ -9134,7 +9360,7 @@ def save_portal_profile(payload: PortalProfileSaveRequest, request: Request, res
                     updated_at = now()
                 RETURNING *
                 """,
-                (user["id"], display_name, email, normalized_contact, normalized_contact, bool(payload.marketing_sms_consent), voucher["id"] if voucher else None, gift_status, gift_created_at),
+                (user["id"], display_name, email, display_contact, normalized_contact, bool(payload.marketing_sms_consent), voucher["id"] if voucher else None, gift_status, gift_created_at),
             )
             profile = cur.fetchone()
             cur.execute(
@@ -9164,6 +9390,179 @@ def save_portal_profile(payload: PortalProfileSaveRequest, request: Request, res
         "portal_session_id": session["public_session_id"],
         "device_token": device_token,
         "profile": public_portal_profile(profile),
+    }
+
+
+@app.get("/api/portal/profile/devices")
+def portal_profile_devices(request: Request, portal_session_id: Optional[str] = None, device_token: Optional[str] = None):
+    payload = PortalSessionRequest(
+        portal_session_id=portal_session_id or request.cookies.get(PORTAL_SESSION_COOKIE),
+        device_token=device_token or request.cookies.get(PORTAL_DEVICE_TOKEN_COOKIE),
+    )
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            profile = portal_profile_for_user(cur, session.get("user_id"))
+            if not profile:
+                return {"profile": public_portal_profile(None), "devices": []}
+            devices = public_portal_profile_devices(cur, profile["user_id"], session.get("id"))
+    return {"profile": public_portal_profile(profile), "devices": devices}
+
+
+@app.post("/api/portal/profile/device-link/send-code")
+def portal_profile_device_link_send_code(payload: PortalDeviceLinkCodeRequest, request: Request):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            profile = portal_profile_for_user(cur, session.get("user_id"))
+            if not profile or not profile.get("contact_number") or not profile.get("contact_verified_at"):
+                raise HTTPException(status_code=400, detail="Set and verify your customer profile before adding another device.")
+            cur.execute(
+                """
+                SELECT created_at
+                FROM portal_device_link_codes
+                WHERE owner_user_id = %s
+                  AND created_at > now() - interval '60 seconds'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (profile["user_id"],),
+            )
+            recent = cur.fetchone()
+            if recent:
+                elapsed = int((datetime.now(timezone.utc) - aware_utc(recent["created_at"])).total_seconds())
+                wait_seconds = max(1, 60 - elapsed)
+                raise HTTPException(status_code=429, detail=f"Send again after ({wait_seconds}s).")
+            code = generate_portal_device_link_code()
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+            cur.execute(
+                """
+                UPDATE portal_device_link_codes
+                SET status = 'EXPIRED', updated_at = now()
+                WHERE owner_user_id = %s AND status = 'PENDING'
+                """,
+                (profile["user_id"],),
+            )
+            cur.execute(
+                """
+                INSERT INTO portal_device_link_codes(
+                    owner_user_id, owner_profile_id, owner_portal_session_id, code_hash, expires_at
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    profile["user_id"],
+                    profile["id"],
+                    session["id"],
+                    portal_device_link_code_hash(code),
+                    expires_at,
+                ),
+            )
+            link_code = cur.fetchone()
+            _, a2p_destination = normalize_portal_contact_number(profile["contact_number"])
+            sms_settings = public_portal_sms_confirmation_settings()
+            sms_message = f"Your 3J WiFi add-device code is {code}. Enter it on the other phone within 10 minutes."
+            sms_result = send_a2p_sms_message(a2p_destination, sms_message, source=sms_settings.get("sender_id"))
+            create_portal_event(
+                cur,
+                session["id"],
+                "DEVICE_LINK_CODE_SENT",
+                request,
+                f"Device link code sent to {mask_a2p_destination(a2p_destination)}.",
+                raw_context={"link_code_id": str(link_code["id"]), "sender_id": sms_settings.get("sender_id"), "sms": sanitize_summary(sms_result)},
+            )
+    return {
+        "status": "SENT",
+        "message": "Add-device code sent.",
+        "expires_at": expires_at,
+        "contact_hint": mask_a2p_destination(a2p_destination),
+    }
+
+
+@app.post("/api/portal/profile/device-link/confirm")
+def portal_profile_device_link_confirm(payload: PortalDeviceLinkConfirmRequest, request: Request, response: Response):
+    code_text = normalize_payment_text(payload.link_code, 32).upper().replace(" ", "").replace("-", "")
+    if not re.fullmatch(r"[A-Z0-9]{8}", code_text or ""):
+        raise HTTPException(status_code=400, detail="Enter the 8-character add-device code.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            target_session = ensure_portal_session(cur, payload, request)
+            code_hash = portal_device_link_code_hash(code_text)
+            cur.execute(
+                """
+                SELECT *
+                FROM portal_device_link_codes
+                WHERE code_hash = %s AND status = 'PENDING'
+                ORDER BY created_at DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (code_hash,),
+            )
+            link_code = cur.fetchone()
+            if not link_code:
+                create_portal_event(cur, target_session["id"], "DEVICE_LINK_FAILED", request, "Invalid add-device code.")
+                raise HTTPException(status_code=400, detail="Add-device code is invalid or already used.")
+            if aware_utc(link_code["expires_at"]) <= datetime.now(timezone.utc):
+                cur.execute("UPDATE portal_device_link_codes SET status = 'EXPIRED', updated_at = now() WHERE id = %s", (link_code["id"],))
+                create_portal_event(cur, target_session["id"], "DEVICE_LINK_FAILED", request, "Expired add-device code.")
+                raise HTTPException(status_code=400, detail="Add-device code expired. Send a new code from your main device.")
+            attempts = int(link_code.get("attempts") or 0) + 1
+            if attempts > 5:
+                cur.execute("UPDATE portal_device_link_codes SET status = 'FAILED', attempts = %s, updated_at = now() WHERE id = %s", (attempts, link_code["id"]))
+                create_portal_event(cur, target_session["id"], "DEVICE_LINK_FAILED", request, "Too many add-device attempts.")
+                raise HTTPException(status_code=400, detail="Too many incorrect attempts. Send a new code from your main device.")
+            cur.execute("SELECT * FROM portal_customer_profiles WHERE user_id = %s", (link_code["owner_user_id"],))
+            owner_profile = cur.fetchone()
+            if not owner_profile:
+                cur.execute("UPDATE portal_device_link_codes SET status = 'FAILED', attempts = %s, updated_at = now() WHERE id = %s", (attempts, link_code["id"]))
+                raise HTTPException(status_code=404, detail="The owner profile for this add-device code was not found.")
+            if target_session.get("user_id") and str(target_session["user_id"]) != str(owner_profile["user_id"]):
+                current_profile = portal_profile_for_user(cur, target_session.get("user_id"))
+                if current_profile:
+                    raise HTTPException(status_code=400, detail="This device already has a different verified profile.")
+            cur.execute(
+                """
+                UPDATE portal_device_link_codes
+                SET status = 'USED',
+                    attempts = %s,
+                    target_portal_session_id = %s,
+                    used_at = now(),
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (attempts, target_session["id"], link_code["id"]),
+            )
+            cur.execute(
+                """
+                UPDATE portal_sessions
+                SET user_id = %s,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (owner_profile["user_id"], target_session["id"]),
+            )
+            target_session = cur.fetchone()
+            create_portal_event(
+                cur,
+                target_session["id"],
+                "DEVICE_LINK_SUCCESS",
+                request,
+                "Device linked to an existing customer profile.",
+                raw_context={"owner_profile_id": str(owner_profile["id"]), "link_code_id": str(link_code["id"])},
+            )
+            device_token = ensure_portal_device_token(cur, target_session, payload.device_token)
+            devices = public_portal_profile_devices(cur, owner_profile["user_id"], target_session["id"])
+    set_portal_session_cookies(response, target_session["public_session_id"], device_token)
+    return {
+        "status": "SUCCESS",
+        "message": "This device is now linked to your customer profile.",
+        "portal_session_id": target_session["public_session_id"],
+        "device_token": device_token,
+        "profile": public_portal_profile(owner_profile),
+        "devices": devices,
     }
 
 
@@ -10050,18 +10449,6 @@ def activate_portal_bag_item(item_id: str, payload: PortalBagActivateRequest, re
             result = activate_customer_bag_item(cur, item, session, request, "MANUAL")
             if result.get("status") == "FAILED":
                 raise HTTPException(status_code=400, detail=result.get("error") or "Could not activate this bag item.")
-            if result.get("status") == "SUCCESS":
-                cur.execute(
-                    """
-                    UPDATE customer_bag_items
-                    SET status = 'CONSUMED',
-                        remaining_seconds = 0,
-                        consumed_at = COALESCE(consumed_at, now()),
-                        updated_at = now()
-                    WHERE user_id = %s AND status = 'ACTIVE' AND id <> %s
-                    """,
-                    (user["id"], clean_item_id),
-                )
             return {"status": result.get("status"), "message": result.get("message"), "bag": customer_bag_payload(cur, user["id"])}
 
 
@@ -10093,6 +10480,16 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
             session = ensure_portal_session(cur, payload, request)
             user = ensure_portal_user(cur, session)
             profile = portal_profile_for_user(cur, user["id"])
+            network_presence = portal_network_presence(session, request, payload)
+            outside_network_purchase = bool(payload.outside_network_purchase) or network_presence.get("connected_to_3j_ap") is False
+            if outside_network_purchase and not portal_profile_is_configured(profile):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Set up your customer profile before buying outside 3J WiFi. "
+                        "Outside-network purchases are saved to your profile so your package can be recovered."
+                    ),
+                )
             customer_name = normalize_payment_text((profile or {}).get("display_name") or user.get("full_name"), 120) or None
             customer_email = normalize_portal_email((profile or {}).get("email") or user.get("email")) or None
             customer_contact = normalize_payment_text((profile or {}).get("contact_number") or user.get("phone_number"), 32) or None
@@ -11980,9 +12377,64 @@ def clear_sales(payload: SalesClearRequest, admin=Depends(current_admin)):
     return {"status": "CLEARED", "deleted_count": deleted_count}
 
 
-def active_voucher_rows(omada_name_by_mac: Optional[dict] = None):
+def current_configured_customer_ssid_names() -> set[str]:
+    names: set[str] = set()
+
+    def add_from_wifi_config(row: Optional[dict]):
+        if not row:
+            return
+        if row.get("use_same_ssid"):
+            value = str(row.get("same_ssid_name") or "").strip()
+            if value:
+                names.add(value)
+            return
+        for field in ("ssid_2g", "ssid_5g"):
+            value = str(row.get(field) or "").strip()
+            if value:
+                names.add(value)
+
+    try:
+        config = fetch_one("SELECT * FROM ap_deployment_configuration WHERE id = 1")
+        if config and (config.get("ssid_scope") or "GLOBAL") == "PER_SITE":
+            site_rows = fetch_all(
+                """
+                SELECT sw.*
+                FROM ap_site_wifi_configuration sw
+                JOIN site_deployments sd ON sd.id = sw.site_id
+                WHERE sd.deployment_status <> 'INACTIVE'
+                """
+            )
+            for row in site_rows:
+                add_from_wifi_config(row)
+            if not names:
+                add_from_wifi_config(config)
+        else:
+            add_from_wifi_config(config)
+    except Exception:
+        return set()
+    return names
+
+
+def session_ssid_if_current(value: Optional[str], configured_ssids: Optional[set[str]] = None) -> Optional[str]:
+    ssid = str(value or "").strip()
+    if not ssid:
+        return None
+    configured = {str(item or "").strip().lower() for item in (configured_ssids or set()) if str(item or "").strip()}
+    if configured and ssid.lower() not in configured:
+        return None
+    return ssid
+
+
+def active_voucher_rows(omada_name_by_mac: Optional[dict] = None, omada_client_by_mac: Optional[dict] = None):
+    if omada_client_by_mac is None:
+        omada_client_by_mac = fetch_omada_client_snapshot_map()
     if omada_name_by_mac is None:
-        omada_name_by_mac = fetch_omada_client_name_map()
+        omada_name_by_mac = {
+            mac: snapshot.get("device_name")
+            for mac, snapshot in (omada_client_by_mac or {}).items()
+            if snapshot.get("device_name")
+        } or fetch_omada_client_name_map()
+    configured_ssids = current_configured_customer_ssid_names()
     rows = fetch_all(
         """
         SELECT DISTINCT ON (s.id)
@@ -12026,8 +12478,27 @@ def active_voucher_rows(omada_name_by_mac: Optional[dict] = None):
     for row in rows:
         row["client_mac"] = normalize_mac_if_valid(row.get("client_mac")) or row.get("client_mac")
         mac = normalize_mac_if_valid(row.get("client_mac"))
+        current_client = (omada_client_by_mac or {}).get(mac) if mac else None
+        stale_session_ssid = row.get("ssid")
+        if current_client:
+            for field, source_field in [
+                ("client_ip", "client_ip"),
+                ("ap_mac", "ap_mac"),
+                ("ssid", "ssid"),
+                ("site", "site"),
+            ]:
+                if current_client.get(source_field):
+                    row[field] = current_client[source_field]
+            if current_client.get("ssid"):
+                row["ssid_source"] = "OMADA_CURRENT"
+        if row.get("ssid_source") != "OMADA_CURRENT":
+            row["ssid"] = session_ssid_if_current(row.get("ssid"), configured_ssids)
+            row["ssid_source"] = "PORTAL_SESSION" if row.get("ssid") else "UNKNOWN"
+        if stale_session_ssid and not row.get("ssid"):
+            row["stale_session_ssid"] = stale_session_ssid
         row["device_name"] = (
-            preferred_device_name(omada_name_by_mac.get(mac) if mac else None)
+            preferred_device_name((current_client or {}).get("device_name"))
+            or preferred_device_name(omada_name_by_mac.get(mac) if mac else None)
             or preferred_device_name(infer_device_name_from_user_agent(row.get("user_agent")))
             or preferred_device_name(row.get("username"))
             or "Unknown device"
@@ -13127,6 +13598,8 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
     devices = {}
     omada_error = None
     omada_name_by_mac = {}
+    omada_client_by_mac = {}
+    configured_ssids = current_configured_customer_ssid_names()
 
     def is_lab_device(device):
         if device.get("customer_profile_id"):
@@ -13142,9 +13615,29 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
         if not include_test and not device.get("active") and is_lab_device(device):
             return
         mac = normalize_mac(device.get("client_mac"))
+        current_omada_client = omada_client_by_mac.get(normalize_mac_if_valid(mac)) if mac else None
+        if device.get("source") == "PORTAL_SESSION":
+            if current_omada_client:
+                for field in ("client_ip", "ap_mac", "ap_name", "ssid", "site"):
+                    if current_omada_client.get(field):
+                        device[field] = current_omada_client[field]
+                if current_omada_client.get("device_name") and not device.get("device_name"):
+                    device["device_name"] = current_omada_client["device_name"]
+                device["network_source"] = "OMADA_CURRENT"
+            else:
+                session_ssid = device.get("ssid")
+                device["ssid"] = session_ssid_if_current(session_ssid, configured_ssids)
+                if session_ssid and not device.get("ssid"):
+                    device["stale_session_ssid"] = session_ssid
+                    device["network_source"] = "STALE_SESSION_HIDDEN"
         key = mac or device.get("id") or f"{device.get('source')}:{len(devices)}"
         existing = devices.get(key, {})
         merged = {**existing, **{k: v for k, v in device.items() if v not in (None, "")}}
+        if existing.get("source") == "OMADA" and device.get("source") == "PORTAL_SESSION":
+            for field in ("client_ip", "ap_name", "ap_mac", "ssid", "site"):
+                if existing.get(field):
+                    merged[field] = existing[field]
+            merged["network_source"] = "OMADA_CURRENT"
         merged["client_mac"] = mac or device.get("client_mac")
         best_name = (
             preferred_device_name(device.get("device_name"), existing.get("device_name"))
@@ -13216,6 +13709,20 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
                         device_name = preferred_device_name(item.get("hostname"))
                         if client_mac and device_name:
                             omada_name_by_mac[client_mac] = device_name
+                        if client_mac:
+                            omada_client_by_mac[client_mac] = {
+                                "client_mac": client_mac,
+                                "client_ip": item.get("client_ip"),
+                                "device_name": device_name,
+                                "hostname": device_name or item.get("hostname"),
+                                "ap_mac": item.get("ap_mac"),
+                                "ap_name": item.get("ap_name"),
+                                "ssid": item.get("ssid"),
+                                "site": current_site_name,
+                                "active": bool(item.get("active")),
+                                "last_seen": item.get("last_seen"),
+                                "source": "OMADA",
+                            }
                         upsert_device({
                             "source": "OMADA",
                             "client_mac": item.get("client_mac"),
@@ -13334,7 +13841,7 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
     rows = sorted(devices.values(), key=lambda item: (bool(item.get("active")), str(item.get("last_seen") or "")), reverse=True)
     active_rows = [row for row in rows if row.get("active")]
     inactive_rows = [row for row in rows if not row.get("active")]
-    voucher_rows_active = active_voucher_rows(omada_name_by_mac=omada_name_by_mac)
+    voucher_rows_active = active_voucher_rows(omada_name_by_mac=omada_name_by_mac, omada_client_by_mac=omada_client_by_mac)
     grouped = customer_device_groups(rows)
     return {
         "summary": {
