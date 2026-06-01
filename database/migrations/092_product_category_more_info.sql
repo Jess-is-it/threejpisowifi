@@ -1,0 +1,3 @@
+ALTER TABLE product_categories
+  ADD COLUMN IF NOT EXISTS more_info_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS more_info_text TEXT;

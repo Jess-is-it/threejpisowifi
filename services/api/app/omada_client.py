@@ -1,4 +1,6 @@
 import re
+import ipaddress
+import socket
 from dataclasses import dataclass
 from typing import Any, Optional
 from urllib.parse import quote, urlparse
@@ -52,6 +54,26 @@ def omada_site_scenario_name(site: dict) -> Optional[str]:
     if site.get("type") == 0:
         return "Office"
     return None
+
+
+def resolve_ipv4_hosts(host: Optional[str]) -> list[str]:
+    clean_host = str(host or "").strip()
+    if not clean_host:
+        return []
+    try:
+        ipaddress.ip_address(clean_host)
+        return [clean_host] if "." in clean_host else []
+    except ValueError:
+        pass
+    results = []
+    try:
+        for item in socket.getaddrinfo(clean_host, None, socket.AF_INET, socket.SOCK_STREAM):
+            address = item[4][0]
+            if address and address not in results:
+                results.append(address)
+    except OSError:
+        return []
+    return results[:8]
 
 
 def omada_mac_variants(mac: Optional[str]) -> list[str]:
@@ -1361,7 +1383,7 @@ class OmadaApiClient:
             "ssidList": ssid_ids,
             "networkList": [],
             "authType": 4,
-            "httpsRedirectEnable": bool(payload.get("httpsRedirectEnable", False)),
+            "httpsRedirectEnable": False,
             "landingPage": 1,
             "pageType": 1,
             "externalPortal": {
@@ -1468,7 +1490,7 @@ class OmadaApiClient:
             "portal_summary": portals_summary,
         }
 
-    def ensure_controller_portal_url_manual_if_supported(self) -> dict:
+    def ensure_controller_portal_url_manual_if_supported(self, portal_url: Optional[str] = None) -> dict:
         self.login()
         if not self.controller_id:
             self.discover_controller_id()
@@ -1532,11 +1554,28 @@ class OmadaApiClient:
         if not portal_host:
             raise OmadaApiError("Portal host could not be detected for Omada Pre-Auth Access.")
         controller_host = urlparse(self.base_url).hostname
-        required_hosts = []
+        required_ip_hosts = []
+        required_url_hosts = []
         for host in (portal_host, controller_host):
             clean_host = str(host or "").strip()
-            if clean_host and clean_host not in required_hosts:
-                required_hosts.append(clean_host)
+            if not clean_host:
+                continue
+            try:
+                ipaddress.ip_address(clean_host)
+                if clean_host not in required_ip_hosts:
+                    required_ip_hosts.append(clean_host)
+            except ValueError:
+                if clean_host not in required_url_hosts:
+                    required_url_hosts.append(clean_host)
+        for host in ("checkout.paymongo.com", "api.paymongo.com", "paymongo.com"):
+            if host not in required_url_hosts:
+                required_url_hosts.append(host)
+        resolved_portal_ips = []
+        for host in [portal_host]:
+            for address in resolve_ipv4_hosts(host):
+                if address not in required_ip_hosts:
+                    required_ip_hosts.append(address)
+                    resolved_portal_ips.append(address)
 
         access_path = f"/{self.controller_id}/api/v2/sites/{site_id}/setting/accessControl"
         current_body, read_summary = self._get_json_candidates([access_path], timeout=20)
@@ -1551,12 +1590,26 @@ class OmadaApiClient:
             and int(item.get("type") or 0) == 1
             and str(item.get("subnetMask") or "") in {"32", "255.255.255.255"}
         }
+        existing_urls = {
+            str(item.get("url") or "").strip().lower()
+            for item in policies
+            if isinstance(item, dict)
+            and int(item.get("type") or 0) == 2
+            and str(item.get("url") or "").strip()
+        }
         added_hosts = []
-        for host in required_hosts:
+        for host in required_ip_hosts:
             if host in existing_hosts:
                 continue
             policies.append({"type": 1, "ip": host, "subnetMask": "32"})
             existing_hosts.add(host)
+            added_hosts.append(host)
+        for host in required_url_hosts:
+            normalized_host = host.lower()
+            if normalized_host in existing_urls:
+                continue
+            policies.append({"type": 2, "url": host})
+            existing_urls.add(normalized_host)
             added_hosts.append(host)
         payload = {
             "preAuthAccessEnable": True,
@@ -1569,7 +1622,10 @@ class OmadaApiClient:
         return {
             "portal_host": portal_host,
             "controller_host": controller_host,
-            "required_hosts": required_hosts,
+            "required_hosts": required_ip_hosts + required_url_hosts,
+            "required_ip_hosts": required_ip_hosts,
+            "required_url_hosts": required_url_hosts,
+            "resolved_portal_ips": resolved_portal_ips,
             "added_hosts": added_hosts,
             "added": bool(added_hosts),
             "pre_auth_access_enable": True,
@@ -1621,6 +1677,136 @@ class OmadaApiClient:
         data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
         return {"response_summary": summary, "result": data.get("result") if isinstance(data, dict) else data}
 
+    def _extract_hotspot_authorized_clients(self, payload: Any) -> list[dict]:
+        data = payload
+        if isinstance(payload, dict):
+            data = payload.get("result", payload.get("data", payload))
+        if isinstance(data, dict):
+            data = data.get("data", data.get("clients", data.get("list", data.get("rows", []))))
+        if not isinstance(data, list):
+            return []
+        return [item for item in data if isinstance(item, dict)]
+
+    def get_hotspot_authorized_clients(self, site_id: str) -> dict:
+        self.login()
+        if not self.controller_id:
+            self.discover_controller_id()
+        paths = []
+        if self.controller_id:
+            paths.extend([
+                f"/{self.controller_id}/api/v2/hotspot/sites/{site_id}/clients?currentPage=1&currentPageSize=1000",
+                f"/{self.controller_id}/api/v2/hotspot/sites/{site_id}/clients",
+            ])
+        paths.extend([
+            f"/api/v2/hotspot/sites/{site_id}/clients?currentPage=1&currentPageSize=1000",
+            f"/api/v2/hotspot/sites/{site_id}/clients",
+        ])
+        payload, summary = self._get_json_candidates(paths, timeout=20)
+        return {
+            "clients": self._extract_hotspot_authorized_clients(payload),
+            "response_summary": summary,
+        }
+
+    def disconnect_hotspot_authorized_client(self, site_id: str, client_id: str) -> dict:
+        self.login()
+        if not self.controller_id:
+            self.discover_controller_id()
+        paths = []
+        if self.controller_id:
+            paths.append(f"/{self.controller_id}/api/v2/hotspot/sites/{site_id}/cmd/clients/{client_id}/disconnect")
+        paths.append(f"/api/v2/hotspot/sites/{site_id}/cmd/clients/{client_id}/disconnect")
+        response, summary = self._post_json_candidates(paths, {}, timeout=90)
+        data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        return {
+            "client_id": client_id,
+            "response_summary": summary,
+            "result": data.get("result") if isinstance(data, dict) else data,
+        }
+
+    def delete_hotspot_authorized_client(self, site_id: str, client_id: str) -> dict:
+        self.login()
+        if not self.controller_id:
+            self.discover_controller_id()
+        paths = []
+        if self.controller_id:
+            paths.append(f"/{self.controller_id}/api/v2/hotspot/sites/{site_id}/clients/{client_id}")
+        paths.append(f"/api/v2/hotspot/sites/{site_id}/clients/{client_id}")
+        last_summary = {}
+        first_api_rejection = None
+        for path in paths:
+            try:
+                response = self.session.delete(f"{self.base_url}{path}", timeout=30)
+            except requests.RequestException as exc:
+                last_summary = {"url": f"{self.base_url}{path}", "error": str(exc)}
+                continue
+            last_summary = summarize_response(response)
+            if response.status_code < 400:
+                try:
+                    body = response.json()
+                    if isinstance(body, dict) and body.get("errorCode") not in (None, 0):
+                        if body.get("errorCode") != -1600 and first_api_rejection is None:
+                            first_api_rejection = last_summary
+                        continue
+                except Exception:
+                    body = {}
+                return {
+                    "client_id": client_id,
+                    "response_summary": last_summary,
+                    "result": body.get("result") if isinstance(body, dict) else body,
+                }
+        raise OmadaApiError("Omada API rejected all known authorized-client delete paths.", first_api_rejection or last_summary)
+
+    def disconnect_hotspot_authorized_clients(self, site_id: str, client_macs: Optional[list[str]] = None, ssids: Optional[list[str]] = None) -> dict:
+        mac_set = {
+            re.sub(r"[^A-Fa-f0-9]", "", variant).upper()
+            for mac in (client_macs or [])
+            for variant in omada_mac_variants(mac)
+        }
+        mac_set.discard("")
+        ssid_set = {str(value or "").strip() for value in (ssids or []) if str(value or "").strip()}
+        authorized = self.get_hotspot_authorized_clients(site_id)
+        matches = []
+        disconnected = []
+        errors = []
+        for row in authorized.get("clients", []):
+            row_mac = re.sub(r"[^A-Fa-f0-9]", "", str(row.get("mac") or "")).upper()
+            if mac_set and row_mac not in mac_set:
+                continue
+            if ssid_set and row.get("ssid") and str(row.get("ssid")).strip() not in ssid_set:
+                continue
+            if row.get("valid") is False:
+                continue
+            client_id = row.get("id")
+            matches.append({
+                "id": client_id,
+                "mac": row.get("mac"),
+                "ip": row.get("ip"),
+                "ssid": row.get("ssid"),
+                "valid": row.get("valid"),
+            })
+            if not client_id:
+                continue
+            try:
+                result = self.disconnect_hotspot_authorized_client(site_id, str(client_id))
+                delete_result = None
+                try:
+                    delete_result = self.delete_hotspot_authorized_client(site_id, str(client_id))
+                except OmadaApiError as delete_exc:
+                    delete_result = {"error": str(delete_exc), "response_summary": delete_exc.response_summary}
+                disconnected.append({**matches[-1], "result": result.get("response_summary"), "delete_result": delete_result})
+            except OmadaApiError as exc:
+                errors.append({**matches[-1], "error": str(exc), "response_summary": exc.response_summary})
+        return {
+            "site_id": site_id,
+            "matched_count": len(matches),
+            "disconnected_count": len(disconnected),
+            "error_count": len(errors),
+            "matches": matches,
+            "disconnected": disconnected,
+            "errors": errors,
+            "list_response_summary": authorized.get("response_summary"),
+        }
+
     def get_client_status_if_supported(self, site_id: str, client_mac: str) -> dict:
         self.login()
         if not self.controller_id:
@@ -1671,57 +1857,108 @@ class OmadaApiClient:
                 f"/api/v2/sites/{encoded_site_name}/clients",
                 f"/api/v2/sites/{encoded_site_name}/insight/clients?currentPage=1&currentPageSize=1000",
             ])
-        payload, summary = self._get_json_candidates(paths, timeout=20)
+
+        clients_by_key = {}
+        summaries = []
+        last_summary = {}
+        for path in paths:
+            try:
+                response = self.session.get(f"{self.base_url}{path}", timeout=20)
+            except requests.RequestException as exc:
+                last_summary = {"url": f"{self.base_url}{path}", "error": str(exc)}
+                continue
+            last_summary = summarize_response(response)
+            if response.status_code >= 400:
+                continue
+            try:
+                payload = response.json()
+            except Exception:
+                continue
+            if isinstance(payload, dict) and payload.get("errorCode") not in (None, 0):
+                continue
+            parsed_clients = self._parse_client_payload(payload)
+            if parsed_clients is None:
+                continue
+            summaries.append(last_summary)
+            for row in parsed_clients:
+                key = omada_mac_variants(row.get("client_mac"))[-1] if row.get("client_mac") and omada_mac_variants(row.get("client_mac")) else row.get("client_ip") or f"{path}:{len(clients_by_key)}"
+                existing = clients_by_key.get(key, {})
+                merged = dict(existing)
+                for field, value in row.items():
+                    if value in (None, ""):
+                        continue
+                    if field == "active" and existing.get("active") and not value:
+                        continue
+                    merged[field] = value
+                if existing.get("active"):
+                    merged["active"] = True
+                clients_by_key[key] = merged
+        return {
+            "clients": list(clients_by_key.values()),
+            "response_summary": summaries[-1] if summaries else last_summary,
+            "endpoint_count": len(summaries),
+        }
+
+    def _parse_client_payload(self, payload: Any) -> Optional[list[dict]]:
         data = payload
         if isinstance(payload, dict):
             data = payload.get("result", payload.get("data", payload))
         if isinstance(data, dict):
-            data = data.get("data", data.get("clients", data.get("list", data.get("rows", []))))
+            data = data.get("data", data.get("clients", data.get("list", data.get("rows", data.get("items", [])))))
+        if not isinstance(data, list):
+            return None
         clients = []
-        if isinstance(data, list):
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                mac = item.get("mac") or item.get("clientMac") or item.get("client_mac")
-                ip = item.get("ip") or item.get("ipAddress") or item.get("clientIp")
-                hostname = item.get("hostname") or item.get("hostName") or item.get("name") or item.get("clientName")
-                ap_mac = item.get("apMac") or item.get("ap_mac") or item.get("uplinkDeviceMac") or item.get("apMAC")
-                ap_name = item.get("apName") or item.get("deviceName") or item.get("uplinkDeviceName") or item.get("apOrPort")
-                ssid = item.get("ssid") or item.get("ssidName") or item.get("wlanName") or item.get("ssidOrNetwork")
-                status_value = item.get("status") or item.get("state") or item.get("connectStatus") or item.get("authStatus")
-                active = bool(
-                    item.get("active")
-                    or item.get("online")
-                    or item.get("connected")
-                    or item.get("authStatus") in (0, 2, 3)
-                    or str(status_value or "").lower() in {"connected", "online", "active", "1", "true"}
-                )
-                clients.append({
-                    "client_mac": mac,
-                    "client_ip": ip,
-                    "hostname": hostname,
-                    "device_type": item.get("deviceType") or item.get("deviceCategory"),
-                    "ap_mac": ap_mac,
-                    "ap_name": ap_name,
-                    "ssid": ssid,
-                    "active": active,
-                    "last_seen": item.get("lastSeen") or item.get("lastSeenTime") or item.get("last_seen"),
-                    "uptime_seconds": item.get("uptime") or item.get("duration") or item.get("upTime"),
-                    "radio_id": item.get("radioId"),
-                    "band": item.get("band"),
-                    "channel": item.get("channel"),
-                    "rssi": item.get("rssi"),
-                    "snr": item.get("snr"),
-                    "rx_rate": item.get("rxRate"),
-                    "tx_rate": item.get("txRate"),
-                    "activity": item.get("activity"),
-                    "traffic_down": item.get("trafficDown") or item.get("download"),
-                    "traffic_up": item.get("trafficUp") or item.get("upload"),
-                    "vid": item.get("vid"),
-                    "guest": item.get("guest"),
-                    "raw_status": status_value,
-                })
-        return {"clients": clients, "response_summary": summary}
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            mac = item.get("mac") or item.get("clientMac") or item.get("client_mac")
+            ip = item.get("ip") or item.get("ipAddress") or item.get("clientIp")
+            hostname = (
+                item.get("hostname")
+                or item.get("hostName")
+                or item.get("clientName")
+                or item.get("customName")
+                or item.get("displayName")
+                or item.get("systemName")
+                or item.get("name")
+            )
+            ap_mac = item.get("apMac") or item.get("ap_mac") or item.get("uplinkDeviceMac") or item.get("apMAC")
+            ap_name = item.get("apName") or item.get("deviceName") or item.get("uplinkDeviceName") or item.get("apOrPort")
+            ssid = item.get("ssid") or item.get("ssidName") or item.get("wlanName") or item.get("ssidOrNetwork")
+            status_value = item.get("status") or item.get("state") or item.get("connectStatus") or item.get("authStatus")
+            active = bool(
+                item.get("active")
+                or item.get("online")
+                or item.get("connected")
+                or item.get("authStatus") in (0, 1, 2, 3)
+                or str(status_value or "").lower() in {"connected", "online", "active", "1", "true"}
+            )
+            clients.append({
+                "client_mac": mac,
+                "client_ip": ip,
+                "hostname": hostname,
+                "device_type": item.get("deviceType") or item.get("deviceCategory"),
+                "ap_mac": ap_mac,
+                "ap_name": ap_name,
+                "ssid": ssid,
+                "active": active,
+                "last_seen": item.get("lastSeen") or item.get("lastSeenTime") or item.get("last_seen"),
+                "uptime_seconds": item.get("uptime") or item.get("duration") or item.get("upTime"),
+                "radio_id": item.get("radioId"),
+                "band": item.get("band"),
+                "channel": item.get("channel"),
+                "rssi": item.get("rssi"),
+                "snr": item.get("snr"),
+                "rx_rate": item.get("rxRate"),
+                "tx_rate": item.get("txRate"),
+                "activity": item.get("activity"),
+                "traffic_down": item.get("trafficDown") or item.get("download"),
+                "traffic_up": item.get("trafficUp") or item.get("upload"),
+                "vid": item.get("vid"),
+                "guest": item.get("guest"),
+                "raw_status": status_value,
+            })
+        return clients
 
     def create_radius_profile(self, site_id: str, payload: dict) -> dict:
         self.login()

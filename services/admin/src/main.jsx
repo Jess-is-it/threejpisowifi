@@ -2,11 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import '@tabler/core/dist/css/tabler.min.css';
+import ApexCharts from 'apexcharts';
 import {
   IconActivity,
   IconAlertTriangle,
   IconBan,
   IconBell,
+  IconCalendarStats,
+  IconChevronRight,
   IconBrandOpenai,
   IconCash,
   IconChevronDown,
@@ -15,11 +18,15 @@ import {
   IconCircleCheck,
   IconClock,
   IconCloudUpload,
+  IconCopy,
   IconCpu,
   IconDashboard,
   IconDatabase,
   IconDeviceFloppy,
   IconEdit,
+  IconGift,
+  IconGripVertical,
+  IconHelp,
   IconHistory,
   IconId,
   IconInfoCircle,
@@ -28,19 +35,29 @@ import {
   IconLock,
   IconLogout,
   IconMapPin,
+  IconMinus,
   IconArchive,
+  IconMail,
+  IconMessageCircle,
+  IconMoon,
   IconExternalLink,
   IconEye,
+  IconPhone,
+  IconPhoto,
   IconPlayerPlay,
   IconPlayerStop,
+  IconPlus,
+  IconSend,
   IconRefresh,
   IconRouter,
   IconRobot,
   IconSearch,
   IconSettings,
+  IconShoppingBag,
   IconShieldLock,
   IconServer,
   IconSparkles,
+  IconSun,
   IconUser,
   IconUserCog,
   IconUserPlus,
@@ -53,6 +70,195 @@ import {
 import './styles.css';
 
 const API = '/api';
+
+function svgDataUrl(svg) {
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function cssHexToRgb(value, fallback = '6,111,209') {
+  const text = String(value || '').trim();
+  const match = text.match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (!match) return fallback;
+  const hex = match[1].length === 3
+    ? match[1].split('').map((char) => `${char}${char}`).join('')
+    : match[1];
+  const number = Number.parseInt(hex, 16);
+  if (!Number.isFinite(number)) return fallback;
+  return `${(number >> 16) & 255},${(number >> 8) & 255},${number & 255}`;
+}
+
+const DEFAULT_PORTAL_AVATARS = {
+  disconnected: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><rect width="240" height="240" rx="120" fill="#fff1f2"/><circle cx="120" cy="120" r="92" fill="#fee2e2"/><path d="M68 104c30-26 74-26 104 0" fill="none" stroke="#dc2626" stroke-width="13" stroke-linecap="round"/><path d="M91 130c17-14 41-14 58 0" fill="none" stroke="#dc2626" stroke-width="13" stroke-linecap="round"/><circle cx="120" cy="158" r="10" fill="#dc2626"/><path d="M78 171 162 69" stroke="#991b1b" stroke-width="14" stroke-linecap="round"/></svg>`),
+  connected: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><rect width="240" height="240" rx="120" fill="#ecfdf5"/><circle cx="120" cy="120" r="92" fill="#dcfce7"/><path d="M68 101c30-25 74-25 104 0" fill="none" stroke="#16a34a" stroke-width="13" stroke-linecap="round"/><path d="M91 127c17-14 41-14 58 0" fill="none" stroke="#16a34a" stroke-width="13" stroke-linecap="round"/><circle cx="120" cy="155" r="10" fill="#16a34a"/><path d="m78 169 24 24 61-72" fill="none" stroke="#15803d" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/></svg>`)
+};
+
+const DEFAULT_PROFILE_GIFT = {
+  enabled: true,
+  duration_seconds: 86400,
+  title: 'FREE 1Day Welcome Gift',
+  available_message: 'Welcome gift waiting',
+  description: 'Redeem this once on your verified contact number. It will be hidden after redemption.',
+  profile_saved_message: 'Profile saved. You have a FREE 1D welcome gift waiting below your avatar.',
+  redeemed_message: 'FREE 1D welcome gift redeemed. You may now use the internet.'
+};
+
+const DEFAULT_PORTAL_AVATAR_NOTES = [
+  { id: 'default-disconnected-1', text: 'Internet is just one tap away.', state: 'DISCONNECTED', enabled: true },
+  { id: 'default-disconnected-2', text: 'Need WiFi? Pick a package and you are good to go.', state: 'DISCONNECTED', enabled: true },
+  { id: 'default-disconnected-3', text: 'No load yet. Your next scroll starts here.', state: 'DISCONNECTED', enabled: true },
+  { id: 'default-disconnected-4', text: 'Connect first, binge later.', state: 'DISCONNECTED', enabled: true },
+  { id: 'default-disconnected-5', text: 'Voucher or GCash, both roads lead to WiFi.', state: 'DISCONNECTED', enabled: true },
+  { id: 'default-connected-1', text: 'You are online. Make the minutes count.', state: 'CONNECTED', enabled: true },
+  { id: 'default-connected-2', text: 'WiFi is active. Enjoy the ride.', state: 'CONNECTED', enabled: true },
+  { id: 'default-connected-3', text: 'Connected and ready.', state: 'CONNECTED', enabled: true },
+  { id: 'default-connected-4', text: 'Your internet time is running.', state: 'CONNECTED', enabled: true },
+  { id: 'default-connected-5', text: 'Signal good, time ticking.', state: 'CONNECTED', enabled: true },
+];
+
+const DEFAULT_PORTAL_MAIN_PAGE_NOTES = [
+  { id: 'main-disconnected-1', text: 'Hi there <USER>! Load up and let the fun begin.', state: 'DISCONNECTED', enabled: true },
+  { id: 'main-disconnected-2', text: '<USER>, your next scroll is waiting. Pick a package and jump in.', state: 'DISCONNECTED', enabled: true },
+  { id: 'main-disconnected-3', text: 'No time yet, <USER>. Let us fix that in one tap.', state: 'DISCONNECTED', enabled: true },
+  { id: 'main-connected-1', text: 'Hi <USER>! You are online. Make the minutes count.', state: 'CONNECTED', enabled: true },
+  { id: 'main-connected-2', text: '<USER>, WiFi is ready. Enjoy the ride.', state: 'CONNECTED', enabled: true },
+  { id: 'main-connected-3', text: 'Connected and ready, <USER>. Have fun out there.', state: 'CONNECTED', enabled: true },
+];
+
+const DEFAULT_PORTAL_PURCHASE_SUCCESS_NOTES = [
+  { id: 'purchase-success-1', text: 'Boom, <USER>! Your WiFi time is loaded and ready.', state: 'BOTH', enabled: true },
+  { id: 'purchase-success-2', text: 'Nice pick, <USER>. Internet time added. Enjoy the ride!', state: 'BOTH', enabled: true },
+  { id: 'purchase-success-3', text: 'You are topped up, <USER>. Scroll responsibly!', state: 'BOTH', enabled: true },
+];
+
+const DEFAULT_PORTAL_LOW_TIME_NOTES = [
+  { id: 'low-time-1', text: 'Heads up, <USER>! Less than <TIME> left before WiFi takes a break.', state: 'CONNECTED', enabled: true },
+  { id: 'low-time-2', text: '<USER>, your time is almost done. Top up now to stay online.', state: 'CONNECTED', enabled: true },
+  { id: 'low-time-3', text: 'Last call, <USER>! Your WiFi clock is running low.', state: 'CONNECTED', enabled: true },
+];
+
+const DEFAULT_PORTAL_AVATAR_NOTES_SETTINGS = {
+  enabled: true,
+  initial_delay_seconds: 3,
+  next_note_delay_seconds: 8,
+  note_pause_seconds: 5,
+  random_order: false,
+  word_delay_ms: 180,
+  notes: DEFAULT_PORTAL_AVATAR_NOTES,
+  main_page_notes: DEFAULT_PORTAL_MAIN_PAGE_NOTES,
+  event_notes: {
+    low_time_threshold_minutes: 60,
+    purchase_success_notes: DEFAULT_PORTAL_PURCHASE_SUCCESS_NOTES,
+    low_time_notes: DEFAULT_PORTAL_LOW_TIME_NOTES,
+  },
+};
+
+const PORTAL_TRANSLATIONS = {
+  tl: {
+    'English': 'English',
+    'Tagalog': 'Tagalog',
+    'Powered by 3JCentralPisowifi': 'Pinapagana ng 3JCentralPisowifi',
+    'Loading portal...': 'Naglo-load ang portal...',
+    'No Internet Detected': 'Walang Internet',
+    'Connect with a voucher or buy a WiFi package.': 'Kumonekta gamit ang voucher o bumili ng WiFi package.',
+    'Buy Now': 'Bumili Ngayon',
+    'Log In': 'Mag-log In',
+    'Help': 'Tulong',
+    'Welcome gift waiting': 'May naghihintay na welcome gift',
+    'FREE 1Day Welcome Gift': 'LIBRE 1 Araw na Welcome Gift',
+    'Redeem this once on your verified contact number. It will be hidden after redemption.': 'I-redeem ito nang isang beses gamit ang verified contact number mo. Mawawala ito pagkatapos ma-redeem.',
+    'Redeeming...': 'Nire-redeem...',
+    'Redeem': 'I-redeem',
+    'Set Profile': 'I-set Profile',
+    'Hi {name}': 'Hi {name}',
+    'Current product': 'Kasalukuyang product',
+    'No active product': 'Walang active product',
+    'View Bag': 'Tingnan ang Bag',
+    'More Info': 'Karagdagang Info',
+    'Package Info': 'Impormasyon ng Package',
+    'No additional information is available for this category yet.': 'Wala pang karagdagang impormasyon para sa category na ito.',
+    'BUY': 'BUMILI',
+    'WiFi Packages': 'Mga WiFi Package',
+    'Barangay only': 'Barangay lang',
+    'All Locations': 'Lahat ng Lokasyon',
+    'Back to packages': 'Bumalik sa packages',
+    'Select': 'Piliin',
+    'No packages are available in this category yet.': 'Wala pang available na package sa category na ito.',
+    'Choose a Barangay before buying this package.': 'Pumili muna ng Barangay bago bilhin ang package na ito.',
+    'Barangay': 'Barangay',
+    'Barangay:': 'Barangay:',
+    'Choose Barangay': 'Pumili ng Barangay',
+    'Enter Barangay': 'Ilagay ang Barangay',
+    'Preselected from the AP or site where you are connected. You can change it before buying.': 'Awtomatikong napili base sa AP o site na konektado ka. Maaari mo itong palitan bago bumili.',
+    'Base': 'Base',
+    'Selected total': 'Kabuuang napili',
+    'Saved {amount}': 'Nakatipid {amount}',
+    'Opening...': 'Binubuksan...',
+    'Available Packages': 'Available Packages',
+    'No packages are available yet. Ask the operator for a voucher.': 'Wala pang available na package. Humingi ng voucher sa operator.',
+    'Payment received. Internet access is active.': 'Natanggap ang bayad. Aktibo na ang internet access.',
+    'Payment was not completed.': 'Hindi natapos ang bayad.',
+    'Checking PayMongo payment confirmation...': 'Tinitingnan ang kumpirmasyon ng PayMongo payment...',
+    'Waiting for PayMongo payment confirmation.': 'Naghihintay ng kumpirmasyon ng PayMongo payment.',
+    'Checking...': 'Tinitingnan...',
+    'Check': 'Tingnan',
+    'Customer Profile': 'Customer Profile',
+    'Profile not set': 'Wala pang profile',
+    'No verified contact number': 'Walang verified contact number',
+    'Name': 'Pangalan',
+    'Contact': 'Contact',
+    'Email': 'Email',
+    'Promo SMS': 'Promo SMS',
+    'Allowed': 'Pinapayagan',
+    'Not allowed': 'Hindi pinapayagan',
+    'Close': 'Isara',
+    'Edit Profile': 'I-edit Profile',
+    'Set up your profile and receive a FREE Gift!': 'I-set ang profile at makatanggap ng LIBRENG Gift!',
+    'Email (optional)': 'Email (optional)',
+    'Contact Number': 'Contact Number',
+    'Sending...': 'Nagpapadala...',
+    'Send Code Again After ({seconds}s)': 'Magpadala ulit ng code pagkatapos ng ({seconds}s)',
+    'Send Code': 'Magpadala ng Code',
+    '4-character Code': '4-character Code',
+    'Cancel': 'Kanselahin',
+    'Saving...': 'Sine-save...',
+    'Save Profile': 'I-save Profile',
+    'Profile Saved': 'Na-save ang Profile',
+    'Close this message, then tap the gift below your avatar when you are ready to redeem.': 'Isara ang mensaheng ito, pagkatapos i-tap ang gift sa ilalim ng avatar kapag handa ka nang mag-redeem.',
+    'Message Admin': 'Mag-message sa Admin',
+    'Report Missing Time': 'I-report ang Nawawalang Oras',
+    'AP Areas': 'AP Areas',
+    'Send a support message and receive replies inside this portal.': 'Magpadala ng support message at tumanggap ng reply sa portal na ito.',
+    'Verify your contact number so the system can move remaining time to this device.': 'I-verify ang contact number para mailipat ng system ang natitirang oras sa device na ito.',
+    'View nearby sites and mapped AP locations.': 'Tingnan ang malalapit na site at mapped AP locations.',
+    'No messages yet.': 'Wala pang mensahe.',
+    'Admin': 'Admin',
+    'You': 'Ikaw',
+    'Type your message...': 'I-type ang mensahe...',
+    'Back': 'Bumalik',
+    'Use the same verified contact number from your profile. We will send a 4-character code before moving remaining time to this device.': 'Gamitin ang parehong verified contact number sa profile mo. Magpapadala kami ng 4-character code bago ilipat ang natitirang oras sa device na ito.',
+    'Restoring...': 'Ibinabalik...',
+    'Restore Remaining Time': 'Ibalik ang Natitirang Oras',
+    'Loading coverage map...': 'Naglo-load ang coverage map...',
+    '3J WiFi Coverage': '3J WiFi Coverage',
+    'Use my location': 'Gamitin ang lokasyon ko',
+    'Show route': 'Ipakita ang ruta',
+    'No mapped AP locations are available yet.': 'Wala pang mapped AP locations.',
+    'Allow location access to find the nearest AP.': 'Payagan ang location access para makita ang pinakamalapit na AP.',
+    'Mapped AP areas are not available yet.': 'Wala pang mapped AP areas.',
+    'Mapped AP': 'Mapped AP',
+    'Tap route to draw a line from your approximate location to the nearest mapped AP.': 'I-tap ang route para gumuhit ng linya mula sa iyong approximate location papunta sa pinakamalapit na mapped AP.',
+  },
+};
+
+function portalTranslate(language, text, values = {}) {
+  const source = String(text ?? '');
+  const dictionary = PORTAL_TRANSLATIONS[language] || {};
+  let translated = dictionary[source] || source;
+  Object.entries(values).forEach(([key, value]) => {
+    translated = translated.replaceAll(`{${key}}`, String(value ?? ''));
+  });
+  return translated;
+}
 
 const MAP_TILE_SIZE = 256;
 const DEFAULT_MAP_CENTER = { latitude: 17.5259771, longitude: 121.6882655 };
@@ -151,6 +357,27 @@ function fmt(value) {
   return String(value);
 }
 
+function compactDateTime(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return fmt(value);
+  let hours = date.getHours();
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12 || 12;
+  return `${hours}:${minutes}${suffix},${date.getMonth() + 1}/${date.getDate()}/${String(date.getFullYear()).slice(-2)}`;
+}
+
+function formatCentavos(value, currency = 'PHP') {
+  const amount = Number(value || 0) / 100;
+  return `${currency} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function deviceLimitLabel(value) {
+  const count = Math.max(1, Number(value || 1));
+  return `${count} device${count === 1 ? '' : 's'}`;
+}
+
 function truncateWithEllipsis(value, maxLength = 10) {
   const text = fmt(value);
   if (!text || text.length <= maxLength) return text || 'n/a';
@@ -196,9 +423,10 @@ const routePages = {
   '': 'Dashboard',
   dashboard: 'Dashboard',
   'ap-client-map': 'AP & Client Map',
-  users: 'Connected Devices',
-  'customers-accounts': 'Connected Devices',
-  'connected-devices': 'Connected Devices',
+  users: 'Customer Devices',
+  'customers-accounts': 'Customer Devices',
+  'connected-devices': 'Customer Devices',
+  'customer-devices': 'Customer Devices',
   'sites-deployments': 'Sites',
   'aps-deployment': 'Sites',
   'aps-deployment/sites': 'Sites',
@@ -208,9 +436,12 @@ const routePages = {
   'long-lat': 'Long Lat',
   'location-management': 'Location Management',
   vouchers: 'Vouchers',
+  'product-items': 'Product Items',
+  sales: 'Sales',
   'wallet-manual-top-up': 'Wallet / Manual Top-Up',
   'captive-portal': 'Captive Portal',
   'captive-portal/editor': 'Portal Editor',
+  'support-inbox': 'Support Inbox',
   network: 'Network',
   'network/mikrotik/scan-result': 'MikroTik Scan Result',
   'nas-router-ap-clients': 'Network',
@@ -220,7 +451,7 @@ const routePages = {
   logs: 'Logs',
   'view-profile': 'View Profile',
   'change-password': 'Change Password',
-  'user-detail': 'Connected Devices'
+  'user-detail': 'Customer Devices'
 };
 
 function pageFromLocation() {
@@ -234,7 +465,7 @@ function routeForPage(page) {
   if (page === 'AP & Client Map') return '/admin/ap-client-map';
   if (page === 'Portal Editor') return '/admin/captive-portal/editor';
   if (page === 'MikroTik Scan Result') return '/admin/network/mikrotik/scan-result';
-  if (page === 'Connected Devices') return '/admin/users';
+  if (page === 'Customer Devices') return '/admin/customer-devices';
   if (page === 'Sites' || page === 'Sites Deployments') return '/admin/aps-deployment/sites';
   if (page === 'List of APs') return '/admin/aps-deployment/list-of-aps';
   if (page === 'Long Lat') return '/admin/aps-deployment/long-lat';
@@ -326,6 +557,22 @@ function formatSeconds(seconds) {
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+}
+
+function profileGiftDurationParts(seconds) {
+  const total = Math.max(1, Number(seconds || DEFAULT_PROFILE_GIFT.duration_seconds));
+  if (total % 86400 === 0) return { value: total / 86400, unit: 'days' };
+  if (total % 3600 === 0) return { value: total / 3600, unit: 'hours' };
+  if (total % 60 === 0) return { value: total / 60, unit: 'minutes' };
+  return { value: total, unit: 'seconds' };
+}
+
+function profileGiftDurationSeconds(value, unit) {
+  const amount = Math.max(1, Number(value || 1));
+  if (unit === 'days') return Math.round(amount * 86400);
+  if (unit === 'hours') return Math.round(amount * 3600);
+  if (unit === 'minutes') return Math.round(amount * 60);
+  return Math.round(amount);
 }
 
 function formatCountdown(seconds) {
@@ -452,21 +699,80 @@ function worldPixelToLatLng(x, y, zoom) {
   };
 }
 
+function metersToMapPixels(meters, latitude, zoom) {
+  const numericLatitude = Number(latitude);
+  const numericMeters = Number(meters);
+  if (!Number.isFinite(numericLatitude) || !Number.isFinite(numericMeters) || numericMeters <= 0) return 0;
+  const earthCircumferenceMeters = 40075016.686;
+  const metersPerPixel = (Math.cos((clamp(numericLatitude, -85.05112878, 85.05112878) * Math.PI) / 180) * earthCircumferenceMeters) / (MAP_TILE_SIZE * 2 ** zoom);
+  return metersPerPixel > 0 ? numericMeters / metersPerPixel : 0;
+}
+
+function distanceMetersBetween(a, b) {
+  const lat1 = Number(a?.latitude);
+  const lon1 = Number(a?.longitude);
+  const lat2 = Number(b?.latitude ?? b?.map_latitude);
+  const lon2 = Number(b?.longitude ?? b?.map_longitude);
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return null;
+  const radius = 6371000;
+  const toRad = (value) => (value * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const h = Math.sin(dLat / 2) ** 2
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * radius * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function formatDistanceMeters(meters) {
+  const value = Number(meters);
+  if (!Number.isFinite(value)) return 'unknown distance';
+  if (value >= 1000) {
+    const km = value / 1000;
+    return `${km >= 10 ? km.toFixed(0) : km.toFixed(1)}km`;
+  }
+  return `${Math.max(1, Math.round(value))}m`;
+}
+
+function midpointLocation(a, b) {
+  const lat1 = Number(a?.latitude);
+  const lon1 = Number(a?.longitude);
+  const lat2 = Number(b?.latitude ?? b?.map_latitude);
+  const lon2 = Number(b?.longitude ?? b?.map_longitude);
+  if (![lat1, lon1, lat2, lon2].every(Number.isFinite)) return null;
+  return { latitude: (lat1 + lat2) / 2, longitude: (lon1 + lon2) / 2 };
+}
+
 function formatCoordinate(value) {
   if (value === null || value === undefined || value === '') return 'n/a';
   return Number(value).toFixed(6);
 }
 
+function apMapClientCount(ap) {
+  return Math.max(Number(ap?.active_client_count || 0), Number(ap?.client_count || 0));
+}
+
+function apMapIsUp(ap) {
+  const status = String(ap?.status || ap?.deployment_status || ap?.state || '').trim().toUpperCase();
+  if (['CONNECTED', 'UP', 'ONLINE', 'ADOPTED', 'READY'].includes(status)) return true;
+  if (status.includes('CONNECTED') || status.includes('ONLINE')) return true;
+  return false;
+}
+
 function apMapTone(ap) {
   if (ap?.map_health === 'ERROR' || ap?.map_error) return 'red';
-  if (Number(ap?.client_count || 0) > 0) return 'green';
-  return 'gray';
+  const status = String(ap?.status || ap?.deployment_status || ap?.state || '').trim().toUpperCase();
+  if (status) return apMapIsUp(ap) ? 'green' : 'red';
+  if (apMapClientCount(ap) > 0) return 'green';
+  return 'red';
 }
 
 function apMapStatusText(ap) {
+  const clientCount = apMapClientCount(ap);
   if (ap?.map_error) return ap.map_error;
-  if (Number(ap?.client_count || 0) > 0) return `${ap.client_count} connected client${Number(ap.client_count) === 1 ? '' : 's'}`;
-  return 'No connected clients';
+  const status = String(ap?.status || ap?.deployment_status || ap?.state || '').trim();
+  if (status) return apMapIsUp(ap) ? 'AP is UP' : `AP is ${status}`;
+  if (clientCount > 0) return `${clientCount} connected client${clientCount === 1 ? '' : 's'}`;
+  return 'AP status unknown';
 }
 
 function streetViewEmbedUrl(ap) {
@@ -493,7 +799,133 @@ function renderPortalTemplate(template, slots) {
   });
 }
 
-function PortalApp() {
+function normalizePortalAvatarNotesSettings(settings = {}) {
+  const incoming = settings?.avatar_notes_json || settings || {};
+  const notes = Array.isArray(incoming.notes) && incoming.notes.length
+    ? incoming.notes
+    : DEFAULT_PORTAL_AVATAR_NOTES;
+  const mainPageNotes = Array.isArray(incoming.main_page_notes) && incoming.main_page_notes.length
+    ? incoming.main_page_notes
+    : DEFAULT_PORTAL_MAIN_PAGE_NOTES;
+  const incomingEventNotes = incoming.event_notes || {};
+  const eventNotes = {
+    low_time_threshold_minutes: Number(incomingEventNotes.low_time_threshold_minutes ?? DEFAULT_PORTAL_AVATAR_NOTES_SETTINGS.event_notes.low_time_threshold_minutes),
+    purchase_success_notes: Array.isArray(incomingEventNotes.purchase_success_notes) && incomingEventNotes.purchase_success_notes.length
+      ? incomingEventNotes.purchase_success_notes
+      : DEFAULT_PORTAL_PURCHASE_SUCCESS_NOTES,
+    low_time_notes: Array.isArray(incomingEventNotes.low_time_notes) && incomingEventNotes.low_time_notes.length
+      ? incomingEventNotes.low_time_notes
+      : DEFAULT_PORTAL_LOW_TIME_NOTES,
+  };
+  const normalizeNotes = (items, prefix) => items.map((note, index) => ({
+    id: note.id || `${prefix}-${index}-${Date.now()}`,
+    text: String(note.text || '').trim(),
+    state: ['CONNECTED', 'DISCONNECTED', 'BOTH'].includes(note.state) ? note.state : 'BOTH',
+    enabled: note.enabled !== false,
+  }));
+  return {
+    ...DEFAULT_PORTAL_AVATAR_NOTES_SETTINGS,
+    ...incoming,
+    notes: normalizeNotes(notes, 'avatar-note'),
+    main_page_notes: normalizeNotes(mainPageNotes, 'main-page-note'),
+    event_notes: {
+      low_time_threshold_minutes: Number.isFinite(eventNotes.low_time_threshold_minutes) ? eventNotes.low_time_threshold_minutes : 60,
+      purchase_success_notes: normalizeNotes(eventNotes.purchase_success_notes, 'purchase-success-note'),
+      low_time_notes: normalizeNotes(eventNotes.low_time_notes, 'low-time-note'),
+    },
+  };
+}
+
+function portalAvatarNoteChoices(settings, connected) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  if (!config.enabled) return [];
+  const state = connected ? 'CONNECTED' : 'DISCONNECTED';
+  return (config.notes || []).filter((note) => note.enabled && note.text && (note.state === 'BOTH' || note.state === state));
+}
+
+function portalAvatarMainPageNoteChoices(settings, connected) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  if (!config.enabled) return [];
+  const state = connected ? 'CONNECTED' : 'DISCONNECTED';
+  return (config.main_page_notes || []).filter((note) => note.enabled && note.text && (note.state === 'BOTH' || note.state === state));
+}
+
+function portalAvatarMainPageNote(settings, connected) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  const choices = portalAvatarMainPageNoteChoices(config, connected);
+  if (!choices.length) return null;
+  if (config.random_order) return choices[Math.floor(Math.random() * choices.length)] || choices[0];
+  return choices[0];
+}
+
+function portalAvatarEventNoteChoices(settings, connected, eventType) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  if (!config.enabled) return [];
+  const state = connected ? 'CONNECTED' : 'DISCONNECTED';
+  const source = eventType === 'LOW_TIME'
+    ? config.event_notes.low_time_notes
+    : config.event_notes.purchase_success_notes;
+  return (source || []).filter((note) => note.enabled && note.text && (note.state === 'BOTH' || note.state === state));
+}
+
+function portalAvatarEventNote(settings, connected, eventType) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  const choices = portalAvatarEventNoteChoices(config, connected, eventType);
+  if (!choices.length) return null;
+  if (config.random_order) return choices[Math.floor(Math.random() * choices.length)] || choices[0];
+  return choices[0];
+}
+
+function nextPortalAvatarNote(settings, connected, currentIndex = -1) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  const choices = portalAvatarNoteChoices(config, connected);
+  if (!choices.length) return { text: '', index: -1 };
+  if (config.random_order) {
+    const pool = choices.length > 1 ? choices.filter((_, index) => index !== currentIndex) : choices;
+    const selected = pool[Math.floor(Math.random() * pool.length)] || choices[0];
+    return { text: selected.text, index: choices.findIndex((note) => note.id === selected.id) };
+  }
+  const index = (Number(currentIndex || 0) + 1) % choices.length;
+  return { text: choices[index]?.text || '', index };
+}
+
+function formatPortalAvatarNoteText(text, profileName = 'User') {
+  const name = String(profileName || 'User').trim() || 'User';
+  return String(text || '').replace(/<USER>|\bUSER\b/gi, name);
+}
+
+function formatPortalEventNoteText(text, profileName = 'User', values = {}) {
+  return formatPortalAvatarNoteText(text, profileName)
+    .replace(/<TIME>/gi, values.time || '1 hour')
+    .replace(/<REMAINING>/gi, values.remaining || values.time || '1 hour');
+}
+
+function portalAvatarNoteInitialDelayMs(settings) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  return Math.max(0, Number(config.initial_delay_seconds ?? 3)) * 1000;
+}
+
+function portalAvatarNextDelayMs(settings) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  return Math.max(1, Number(config.next_note_delay_seconds ?? 8)) * 1000;
+}
+
+function portalAvatarNotePauseMs(settings) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  return Math.max(0, Number(config.note_pause_seconds ?? 5)) * 1000;
+}
+
+function portalAvatarLowTimeThresholdSeconds(settings) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  return Math.max(1, Number(config.event_notes?.low_time_threshold_minutes ?? 60)) * 60;
+}
+
+function portalAvatarWordDelayMs(settings) {
+  const config = normalizePortalAvatarNotesSettings(settings);
+  return Math.max(40, Number(config.word_delay_ms ?? 180));
+}
+
+function PortalAppLegacy() {
   const [settings, setSettings] = useState(null);
   const [sessionId, setSessionId] = useState(() => localStorage.getItem('centralwifi_portal_session') || '');
   const [deviceToken, setDeviceToken] = useState(() => localStorage.getItem('centralwifi_portal_device_token') || '');
@@ -504,13 +936,22 @@ function PortalApp() {
   const [timerRemaining, setTimerRemaining] = useState(0);
   const [localTimerExpired, setLocalTimerExpired] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState('');
+  const [paymentChecking, setPaymentChecking] = useState(false);
+  const [paymentResult, setPaymentResult] = useState(null);
   const remainingNoticeSentRef = useRef('');
   const expiredNoticeSentRef = useRef('');
   const params = new URLSearchParams(window.location.search);
+  const paymentOrderFromUrl = params.get('payment_order_id') || params.get('payment_order') || params.get('order');
+  const handoffBridge = params.get('handoff_bridge') === '1';
+  const bridgeChecked = params.get('bridge_checked') === '1';
   const rawQueryParams = Object.fromEntries(params.entries());
+  const title = settings?.portal_title || '3J WiFi';
+  const subtitle = settings?.portal_subtitle || 'Enter your voucher to connect';
   const context = {
     portal_session_id: sessionId || null,
     device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || null,
+    handoff: params.get('handoff') || null,
     mac: params.get('mac') || null,
     ip: params.get('ip') || null,
     client_mac: params.get('client_mac') || params.get('clientMac') || params.get('cid') || null,
@@ -540,6 +981,30 @@ function PortalApp() {
     raw_query_params: rawQueryParams
   };
   const deviceDetected = Boolean(context.client_mac || context.mac || context.ip || context.ap_mac || context.gateway_mac || context.ssid || context.site || context.token || context.authToken || context.link_login_only || context.server_name);
+
+  function isAndroidCaptiveWebView() {
+    const ua = navigator.userAgent || '';
+    return /Android/i.test(ua) && (/\bwv\b/i.test(ua) || /Version\/\d+\.\d+ Chrome/i.test(ua));
+  }
+
+  function localHandoffBridgeUrl(portalSettings) {
+    const base = portalSettings?.local_portal_url || 'http://192.168.50.70:8080/portal';
+    const target = new URL(base, window.location.href);
+    const returnUrl = new URL(window.location.href);
+    returnUrl.searchParams.set('bridge_checked', '1');
+    target.searchParams.set('handoff_bridge', '1');
+    target.searchParams.set('return_url', returnUrl.toString());
+    return target.toString();
+  }
+
+  function shouldTryLocalHandoffBridge(portalSettings, session, nextStatus) {
+    if (handoffBridge || bridgeChecked || context.handoff || deviceDetected) return false;
+    if (window.location.protocol !== 'https:') return false;
+    if (!portalSettings?.local_portal_url) return false;
+    const activeExpiry = nextStatus?.access_expires_at && !nextStatus?.access_expired && new Date(nextStatus.access_expires_at).getTime() > Date.now();
+    if (nextStatus?.connected || Number(nextStatus?.remaining_time_seconds || 0) > 0 || activeExpiry) return false;
+    return true;
+  }
 
   async function emitPortalNotification(portalSettings, type, template, values = {}) {
     const notificationSettings = portalSettings?.portal_notifications || {};
@@ -577,6 +1042,18 @@ function PortalApp() {
     }
     const nextStatus = await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(session.portal_session_id)}`);
     setStatus(nextStatus);
+    if (handoffBridge) {
+      if (session.portal_handoff_url) {
+        window.location.replace(session.portal_handoff_url);
+        return;
+      }
+      setResult({ status: 'FAILED', message: 'No active WiFi session was found from this local network path.' });
+      return;
+    }
+    if (shouldTryLocalHandoffBridge(portalSettings, session, nextStatus)) {
+      window.location.replace(localHandoffBridgeUrl(portalSettings));
+      return;
+    }
     if (session.mac_rebind_status === 'SUCCESS' && portalSettings?.portal_notifications?.reconnect_enabled) {
       emitPortalNotification(portalSettings, 'RECONNECTED', portalSettings.portal_notifications.reconnect_message, {
         remaining_time_seconds: nextStatus?.remaining_time_seconds || 0,
@@ -584,9 +1061,18 @@ function PortalApp() {
       });
     }
   }
+  useEffect(() => {
+    if (!paymentOrderFromUrl || !context.handoff || !isAndroidCaptiveWebView()) return;
+    const handoffKey = `centralwifi_initial_payment_handoff_${paymentOrderFromUrl}`;
+    if (sessionStorage.getItem(handoffKey)) return;
+    sessionStorage.setItem(handoffKey, '1');
+    window.setTimeout(() => openPortalStatusUrl(window.location.href), 0);
+  }, []);
   useEffect(() => { loadPortal().catch((err) => setResult({ status: 'FAILED', message: err.message })); }, []);
   useEffect(() => {
-    if (settings?.accent_color) document.documentElement.style.setProperty('--tblr-primary', settings.accent_color);
+    const brandColor = settings?.accent_color || '#066fd1';
+    document.documentElement.style.setProperty('--tblr-primary', brandColor);
+    document.documentElement.style.setProperty('--portal-brand-color', brandColor);
   }, [settings]);
 
   async function redeem(e) {
@@ -634,19 +1120,112 @@ function PortalApp() {
     }
   }
 
-  const title = settings?.portal_title || '3J WiFi';
-  const subtitle = settings?.portal_subtitle || 'Enter your voucher to connect';
+  function openPortalStatusUrl(url) {
+    if (!url) return;
+    try {
+      const target = new URL(url, window.location.origin);
+      if (isAndroidCaptiveWebView()) {
+        const fallback = encodeURIComponent(target.toString());
+        window.location.href = `intent://${target.host}${target.pathname}${target.search}${target.hash}#Intent;scheme=${target.protocol.replace(':', '')};package=com.android.chrome;S.browser_fallback_url=${fallback};end`;
+        return;
+      }
+      window.location.href = target.toString();
+    } catch {
+      window.location.href = url;
+    }
+  }
+
+  async function checkPaymentStatus(orderId = paymentOrderFromUrl) {
+    if (!orderId) return;
+    setPaymentChecking(true);
+    try {
+      const data = await publicRequest(`/portal/payments/${encodeURIComponent(orderId)}/status`);
+      setPaymentResult(data);
+      if (data.device_token) {
+        localStorage.setItem('centralwifi_portal_device_token', data.device_token);
+        setDeviceToken(data.device_token);
+      }
+      if (data.portal_session_id) {
+        localStorage.setItem('centralwifi_portal_session', data.portal_session_id);
+        setSessionId(data.portal_session_id);
+      }
+      if (data.status === 'PAID' && data.fulfillment_status === 'FULFILLED' && data.portal_handoff_url && paymentOrderFromUrl && orderId === paymentOrderFromUrl) {
+        const handoffKey = `centralwifi_payment_handoff_${orderId}`;
+        if (!sessionStorage.getItem(handoffKey)) {
+          sessionStorage.setItem(handoffKey, '1');
+          window.setTimeout(() => openPortalStatusUrl(data.portal_handoff_url), 0);
+        }
+      }
+      if (data.status === 'PAID' && data.fulfillment_status === 'FULFILLED') {
+        const id = data.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session');
+        if (id) setStatus(await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(id)}`));
+      }
+      return data;
+    } catch (err) {
+      const failedResult = { status: 'FAILED', last_error: err.message };
+      setPaymentResult(failedResult);
+      return failedResult;
+    } finally {
+      setPaymentChecking(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!paymentOrderFromUrl) return undefined;
+    let stopped = false;
+    let timerId;
+    let attempts = 0;
+    const poll = async () => {
+      attempts += 1;
+      const data = await checkPaymentStatus(paymentOrderFromUrl);
+      const terminal = data?.status === 'FAILED' || (data?.status === 'PAID' && ['FULFILLED', 'FAILED'].includes(data?.fulfillment_status));
+      if (!stopped && !terminal && attempts < 20) timerId = window.setTimeout(poll, 3000);
+    };
+    poll();
+    return () => {
+      stopped = true;
+      if (timerId) window.clearTimeout(timerId);
+    };
+  }, []);
+
+  async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false) {
+    setPaymentLoading(item.id);
+    setResult(null);
+    setPaymentResult(null);
+    const safeQuantity = Math.max(1, Math.min(Number(purchaseQuantity || 1), 365));
+    try {
+      const data = await publicApi('/portal/payments/checkout', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...context,
+          portal_session_id: sessionId || localStorage.getItem('centralwifi_portal_session') || null,
+          device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || null,
+          product_item_id: item.id,
+          payment_method: 'gcash',
+          purchase_quantity: safeQuantity
+        })
+      });
+      if (!data.checkout_url) throw new Error('PayMongo did not return a checkout link.');
+      window.location.href = data.checkout_url;
+    } catch (err) {
+      setPaymentResult({ status: 'FAILED', last_error: err.message });
+      setPaymentLoading('');
+    }
+  }
+
   const sourceRemaining = Math.max(0, Number(result?.remaining_time_seconds ?? status?.remaining_time_seconds ?? 0) || 0);
   const validUntil = result?.valid_until ?? status?.valid_until;
   const unlimited = result?.unlimited ?? status?.unlimited;
   const authorizationStatus = result?.authorization_status || status?.mikrotik_authorization_status || status?.omada_authorization_status;
   const accessExpiresAt = result?.access_expires_at ?? status?.access_expires_at;
   const backendExpired = Boolean(result?.access_expired || status?.access_expired || status?.status === 'EXPIRED');
-  const hasAccessWindow = Boolean(unlimited || accessExpiresAt || validUntil || sourceRemaining > 0 || localTimerExpired || backendExpired);
+  const hasAccessWindow = true;
   const countdownActive = hasAccessWindow && !unlimited && !localTimerExpired && !backendExpired && timerRemaining > 0;
   const timerExpired = Boolean(!unlimited && (localTimerExpired || backendExpired));
   const connected = Boolean((result?.connected ?? status?.connected ?? authorizationStatus === 'AUTHORIZED') && !timerExpired);
   const continueUrl = result?.redirect_url || status?.redirect_url;
+  const hasTime = Boolean(unlimited || timerRemaining > 0 || accessExpiresAt || validUntil);
+  const remainingDisplay = unlimited ? 'Unlimited' : timerRemaining > 0 ? formatCountdown(timerRemaining) : '00h:00m:00s';
 
   useEffect(() => {
     setTimerRemaining(sourceRemaining);
@@ -712,6 +1291,63 @@ function PortalApp() {
       <p>{subtitle}</p>
     </div>
   );
+  const productItems = settings?.product_items || [];
+  const productCategories = settings?.product_categories || [];
+  const productCategoryGroups = (productCategories || []).filter((category) => category?.id && (category.items || []).length);
+  const payments = settings?.payments || {};
+  const canCheckoutWithGcash = Boolean(payments.enabled && payments.ready_for_checkout && (payments.enabled_payment_methods || []).includes('gcash'));
+  const remainingTimeSlot = (
+    <div className={`client-portal-remaining-overview ${timerExpired ? 'is-expired' : connected ? 'is-connected' : hasTime ? 'is-loaded' : 'is-empty'}`}>
+      <div className="client-portal-remaining-row">
+        <span className="client-portal-remaining-icon"><IconClock size={24} /></span>
+        <span className="client-portal-remaining-value">{remainingDisplay}</span>
+      </div>
+    </div>
+  );
+  const productItemsSlot = (
+    <div className="client-portal-products">
+      {remainingTimeSlot}
+      {productCategoryGroups.length ? (
+        <div className="client-portal-category-list">
+          {productCategoryGroups.map((category, groupIndex) => (
+            <div className="client-portal-product-category" key={category.id || `category-${groupIndex}`}>
+              {category.image_url && <img className="client-portal-category-image" src={category.image_url} alt="" loading="lazy" />}
+              <div className="client-portal-category-header">
+                <div>
+                  <div className="client-portal-category-title">{category.name || 'Available WiFi Packages'}</div>
+                  {category.description && <div className="client-portal-category-desc">{category.description}</div>}
+                </div>
+                {category.access_scope === 'BARANGAY_ONLY' && <span className="client-portal-category-badge">Barangay only</span>}
+              </div>
+              <div className="client-portal-product-grid">
+                {(category.items || []).map((item) => (
+                  <div className="client-portal-product" key={item.id}>
+                    <div>
+                      <div className="client-portal-product-name">{item.name}</div>
+                      <div className="client-portal-product-badges">
+                        <span className="client-portal-price-badge"><span className="client-portal-price-icon">PHP</span>{Number(item.price || 0).toFixed(2)}</span>
+                        <span className="client-portal-duration-badge">{item.duration_label}</span>
+                        <span className="client-portal-duration-badge">{item.device_scope_label || productPassLabel(item)}</span>
+                        {productPassType(item) === 'MULTI_DEVICE' && <span className="client-portal-duration-badge">{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
+                      </div>
+                      {item.description && <div className="client-portal-product-desc">{item.description}</div>}
+                    </div>
+                    <div className="client-portal-product-meta">
+                      <button className="client-portal-buy-button" type="button" disabled={!canCheckoutWithGcash || paymentLoading === item.id} onClick={() => startProductCheckout(item)}>
+                        {paymentLoading === item.id ? 'Opening...' : 'BUY'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="client-portal-product-empty">Ask the operator for available voucher packages.</div>
+      )}
+    </div>
+  );
   const voucherFormSlot = (
     <form className="client-portal-card" onSubmit={redeem}>
       <div className="mb-3">
@@ -721,6 +1357,19 @@ function PortalApp() {
       <label className="form-label">Voucher Code</label>
       <input className="form-control form-control-lg text-center voucher-input" autoComplete="one-time-code" value={voucherCode} onChange={(e) => setVoucherCode(e.target.value.toUpperCase())} placeholder="3J-ABCD-2345" required />
       <button className="btn btn-primary btn-lg w-100 mt-3" disabled={loading}>{loading ? 'Checking...' : 'Redeem / Connect'}</button>
+      {paymentResult && <div className={`alert mt-3 mb-0 ${paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'alert-success' : paymentResult.status === 'FAILED' ? 'alert-danger' : 'alert-info'}`}>
+        {paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
+          ? 'Payment received. Internet access is active.'
+          : paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FAILED'
+            ? `Payment received, but access activation failed: ${paymentResult.last_error || 'Please ask the operator.'}`
+            : paymentResult.status === 'PAID'
+            ? 'Payment received. Waiting for access activation.'
+            : paymentResult.status === 'CHECKOUT_CREATED' || paymentResult.status === 'PENDING'
+              ? paymentChecking ? 'Checking PayMongo payment confirmation...' : 'Waiting for PayMongo payment confirmation.'
+              : paymentResult.last_error || 'Payment was not completed.'}
+        {paymentResult.portal_handoff_url && <button className="btn btn-sm btn-outline-primary ms-2" type="button" onClick={() => openPortalStatusUrl(paymentResult.portal_handoff_url)}>Open Status</button>}
+        {paymentResult.payment_order_id && <button className="btn btn-sm btn-outline-secondary ms-2" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id)}>{paymentChecking ? 'Checking...' : 'Check'}</button>}
+      </div>}
       {result && !(timerExpired && result.status === 'SUCCESS') && <div className={`alert mt-3 mb-0 ${result.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'}`}>{result.message}</div>}
       {portalNotice && <div className="alert alert-info py-2 mt-3 mb-0">
         <div className="d-flex align-items-start gap-2">
@@ -734,7 +1383,7 @@ function PortalApp() {
       {result?.authorization_status === 'FAILED' && <button className="btn btn-outline-primary w-100 mt-3" type="button" onClick={() => setResult(null)}>Try Again</button>}
       {result?.status === 'SUCCESS' && continueUrl && !timerExpired && <a className="btn btn-success w-100 mt-3" href={continueUrl}>Continue to Internet</a>}
       <button className="btn btn-outline-secondary w-100 mt-2" type="button" onClick={checkStatus} disabled={loading}>Check Status</button>
-      {hasAccessWindow && <div className={`client-portal-status client-portal-timer-card mt-3 ${timerExpired ? 'is-expired' : connected ? 'is-connected' : 'is-loaded'}`}>
+      {false && hasAccessWindow && <div className={`client-portal-status client-portal-timer-card mt-3 ${timerExpired ? 'is-expired' : connected ? 'is-connected' : 'is-loaded'}`}>
         <div className="client-portal-timer-icon"><IconClock size={34} /></div>
         <div className="client-portal-timer-copy">
           <div className="client-portal-timer-label">{unlimited ? 'Access Status' : 'Remaining Time'}</div>
@@ -758,14 +1407,2054 @@ function PortalApp() {
   );
   const template = settings?.custom_html;
 
+  if (!settings) {
+    return (
+      <div className="client-portal-page">
+        <div className="client-portal-shell">
+          <div className="client-portal-loading">
+            <div className="spinner-border text-primary" role="status" aria-hidden="true" />
+            <div className="mt-3 text-muted">{t('Loading portal...')}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="client-portal-page">
       {settings?.custom_css && <style>{settings.custom_css}</style>}
       <div className="client-portal-shell">
         {template
-          ? renderPortalTemplate(template, { brand: brandSlot, voucher_form: voucherFormSlot, help: helpSlot })
-          : <>{brandSlot}{voucherFormSlot}{helpSlot}</>}
+          ? <>{renderPortalTemplate(template, { brand: brandSlot, product_items: productItemsSlot, voucher_form: voucherFormSlot, help: helpSlot })}{!template.includes('{{product_items}}') && productItemsSlot}</>
+          : <>{brandSlot}{productItemsSlot}{voucherFormSlot}{helpSlot}</>}
       </div>
+    </div>
+  );
+}
+
+function PortalApp() {
+  const [settings, setSettings] = useState(null);
+  const [sessionId, setSessionId] = useState(() => localStorage.getItem('centralwifi_portal_session') || '');
+  const [deviceToken, setDeviceToken] = useState(() => localStorage.getItem('centralwifi_portal_device_token') || '');
+  const [profile, setProfile] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [result, setResult] = useState(null);
+  const [voucherCode, setVoucherCode] = useState('');
+  const [timerRemaining, setTimerRemaining] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [paymentLoading, setPaymentLoading] = useState('');
+  const [paymentChecking, setPaymentChecking] = useState(false);
+  const [paymentResult, setPaymentResult] = useState(null);
+  const [portalBooting, setPortalBooting] = useState(true);
+  const [bag, setBag] = useState(null);
+  const [bagOpen, setBagOpen] = useState(false);
+  const [bagSaving, setBagSaving] = useState(false);
+  const [bagDraggingItemId, setBagDraggingItemId] = useState('');
+  const [outsidePurchaseConfirm, setOutsidePurchaseConfirm] = useState(null);
+  const [portalScreen, setPortalScreen] = useState(() => (new URLSearchParams(window.location.search).get('payment_order_id') ? 'shop' : 'landing'));
+  const [selectedProductCategory, setSelectedProductCategory] = useState(null);
+  const [moreInfoCategory, setMoreInfoCategory] = useState(null);
+  const [selectedCategoryProductId, setSelectedCategoryProductId] = useState('');
+  const [productQuantities, setProductQuantities] = useState({});
+  const [selectedCategoryBarangays, setSelectedCategoryBarangays] = useState({});
+  const [portalCoverage, setPortalCoverage] = useState(null);
+  const [portalCoverageOpen, setPortalCoverageOpen] = useState(false);
+  const [portalCoverageLoading, setPortalCoverageLoading] = useState(false);
+  const [portalCoverageError, setPortalCoverageError] = useState('');
+  const [portalCustomerLocation, setPortalCustomerLocation] = useState(null);
+  const [portalCoverageCenter, setPortalCoverageCenter] = useState({ latitude: 14.5995, longitude: 120.9842 });
+  const [portalCoverageZoom, setPortalCoverageZoom] = useState(15);
+  const [portalRouteApId, setPortalRouteApId] = useState('');
+  const [portalSelectedCoverageApId, setPortalSelectedCoverageApId] = useState('');
+  const [portalDarkOverride, setPortalDarkOverride] = useState(() => {
+    const stored = localStorage.getItem('centralwifi_portal_theme_mode');
+    return ['auto', 'light', 'dark'].includes(stored) ? stored : 'auto';
+  });
+  const [portalLanguage, setPortalLanguage] = useState(() => localStorage.getItem('centralwifi_portal_language') || 'en');
+  const [themeClock, setThemeClock] = useState(() => Date.now());
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileViewOpen, setProfileViewOpen] = useState(false);
+  const [profileForm, setProfileForm] = useState({ display_name: '', email: '', contact_number: '', verification_code: '', terms_accepted: false, marketing_sms_consent: false });
+  const [profileSendingCode, setProfileSendingCode] = useState(false);
+  const [profileCodeCooldown, setProfileCodeCooldown] = useState(0);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMessage, setProfileMessage] = useState('');
+  const [profileSuccess, setProfileSuccess] = useState(null);
+  const [termsExpanded, setTermsExpanded] = useState(false);
+  const [giftUnwrapped, setGiftUnwrapped] = useState(false);
+  const [giftRedeeming, setGiftRedeeming] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpMode, setHelpMode] = useState('menu');
+  const [supportConversation, setSupportConversation] = useState(null);
+  const [supportMessage, setSupportMessage] = useState('');
+  const [supportLoading, setSupportLoading] = useState(false);
+  const [missingTimeForm, setMissingTimeForm] = useState({ contact_number: '', verification_code: '' });
+  const [missingTimeSending, setMissingTimeSending] = useState(false);
+  const [missingTimeCodeCooldown, setMissingTimeCodeCooldown] = useState(0);
+  const [missingTimeRestoring, setMissingTimeRestoring] = useState(false);
+  const [missingTimeMessage, setMissingTimeMessage] = useState('');
+  const [avatarNote, setAvatarNote] = useState('');
+  const [avatarNoteWords, setAvatarNoteWords] = useState([]);
+  const [avatarNoteVisible, setAvatarNoteVisible] = useState(false);
+  const [avatarNoteSequence, setAvatarNoteSequence] = useState(0);
+  const avatarNoteTimerRef = useRef(null);
+  const avatarNoteRunRef = useRef(0);
+  const avatarNoteIndexRef = useRef(-1);
+  const mainPageIntroNoteShownRef = useRef(false);
+  const avatarEventNoteRef = useRef(null);
+  const lowTimeNoteShownRef = useRef(false);
+  const portalDiscountTabRefs = useRef({});
+  const [avatarEventNoteSignal, setAvatarEventNoteSignal] = useState(0);
+  const params = new URLSearchParams(window.location.search);
+  const paymentOrderFromUrl = params.get('payment_order_id') || params.get('payment_order') || params.get('order');
+  const handoffBridge = params.get('handoff_bridge') === '1';
+  const bridgeChecked = params.get('bridge_checked') === '1';
+  const rawQueryParams = Object.fromEntries(params.entries());
+  const t = (text, values = {}) => portalTranslate(portalLanguage, text, values);
+  const title = settings?.portal_title || '3J WiFi';
+  const profileName = profile?.display_name || 'User';
+  const profileTermsText = 'I agree that 3J may store my name, contact number, device/session details, and payment reference to provide WiFi access, prevent abuse, recover missing time, send service notices, and support my account. I understand I should only use the service legally and responsibly.';
+  const contactText = settings?.marketing_sms_consent_text || 'I agree to receive Threej Internet & CCTV promos, service updates, and important account messages by SMS. I can ask the operator to stop promotional messages anytime.';
+  const combinedConsentText = `${profileTermsText} ${contactText}`;
+  const context = {
+    portal_session_id: sessionId || null,
+    device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || null,
+    handoff: params.get('handoff') || null,
+    mac: params.get('mac') || null,
+    ip: params.get('ip') || null,
+    client_mac: params.get('client_mac') || params.get('clientMac') || params.get('cid') || null,
+    clientMac: params.get('clientMac') || params.get('cid') || null,
+    client_ip: params.get('client_ip') || params.get('clientIp') || null,
+    ap_mac: params.get('ap_mac') || params.get('apMac') || params.get('ap') || null,
+    apMac: params.get('apMac') || params.get('ap') || null,
+    gateway_mac: params.get('gateway_mac') || params.get('gatewayMac') || null,
+    gatewayMac: params.get('gatewayMac') || null,
+    vlan_id: params.get('vlan_id') || params.get('vid') || null,
+    vid: params.get('vid') || null,
+    ssid: params.get('ssid') || null,
+    site: params.get('site') || null,
+    redirect_url: params.get('redirect_url') || params.get('redirectUrl') || params.get('u') || null,
+    redirectUrl: params.get('redirectUrl') || params.get('u') || null,
+    radioId: params.get('radioId') || params.get('rid') || null,
+    token: params.get('token') || params.get('t') || null,
+    authToken: params.get('authToken') || null,
+    raw_query_params: rawQueryParams
+  };
+  const deviceDetected = Boolean(context.client_mac || context.mac || context.ip || context.ap_mac || context.gateway_mac || context.ssid || context.site || context.token || context.authToken);
+
+  function localHandoffBridgeUrl(portalSettings) {
+    const base = portalSettings?.local_portal_url || 'http://192.168.50.70:8080/portal';
+    const target = new URL(base, window.location.href);
+    const returnUrl = new URL(window.location.href);
+    returnUrl.searchParams.delete('handoff_bridge');
+    returnUrl.searchParams.delete('return_url');
+    returnUrl.searchParams.set('bridge_checked', '1');
+    target.searchParams.set('handoff_bridge', '1');
+    target.searchParams.set('return_url', returnUrl.toString());
+    return target.toString();
+  }
+
+  function shouldTryLocalHandoffBridge(portalSettings, session, nextStatus) {
+    if (handoffBridge || bridgeChecked || context.handoff || deviceDetected) return false;
+    if (window.location.protocol !== 'https:') return false;
+    if (!portalSettings?.local_portal_url) return false;
+    const activeExpiry = nextStatus?.access_expires_at && !nextStatus?.access_expired && new Date(nextStatus.access_expires_at).getTime() > Date.now();
+    if (nextStatus?.connected || Number(nextStatus?.remaining_time_seconds || 0) > 0 || activeExpiry) return false;
+    return Boolean(session?.portal_session_id);
+  }
+
+  function persistSession(data) {
+    if (data?.portal_session_id) {
+      setSessionId(data.portal_session_id);
+      localStorage.setItem('centralwifi_portal_session', data.portal_session_id);
+    }
+    if (data?.device_token) {
+      setDeviceToken(data.device_token);
+      localStorage.setItem('centralwifi_portal_device_token', data.device_token);
+    }
+    if (data?.profile) setProfile(data.profile);
+  }
+
+  function payload(extra = {}) {
+    return {
+      ...context,
+      portal_session_id: sessionId || localStorage.getItem('centralwifi_portal_session') || context.portal_session_id,
+      device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || context.device_token,
+      ...extra,
+    };
+  }
+
+  async function refreshStatus(id = sessionId || localStorage.getItem('centralwifi_portal_session')) {
+    if (!id) return null;
+    const nextStatus = await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(id)}`);
+    setStatus(nextStatus);
+    if (nextStatus.profile) setProfile(nextStatus.profile);
+    if (nextStatus.bag) setBag(nextStatus.bag);
+    return nextStatus;
+  }
+
+  async function loadPortal() {
+    const portalSettings = await publicRequest('/portal/settings');
+    setSettings(portalSettings);
+    const session = await publicApi('/portal/session', { method: 'POST', body: JSON.stringify(payload()) });
+    persistSession(session);
+    if (session.mac_rebind_status === 'SUCCESS') {
+      setResult({ status: 'SUCCESS', message: session.mac_rebind_message || 'Reconnected with remaining time.' });
+    } else if (session.mac_rebind_status === 'FAILED') {
+      setResult({ status: 'FAILED', message: session.mac_rebind_message || 'We found your old session, but could not reconnect this device automatically.' });
+    }
+    const nextStatus = await refreshStatus(session.portal_session_id);
+    if (handoffBridge) {
+      if (session.portal_handoff_url) {
+        window.location.replace(session.portal_handoff_url);
+        return;
+      }
+      const returnUrl = params.get('return_url');
+      if (returnUrl) {
+        const target = new URL(returnUrl, window.location.href);
+        target.searchParams.set('bridge_checked', '1');
+        window.location.replace(target.toString());
+        return;
+      }
+      setResult({ status: 'FAILED', message: 'No active WiFi session was found from this local network path.' });
+      return;
+    }
+    if (shouldTryLocalHandoffBridge(portalSettings, session, nextStatus)) {
+      window.location.replace(localHandoffBridgeUrl(portalSettings));
+      return;
+    }
+    if (paymentOrderFromUrl || Number(nextStatus?.remaining_time_seconds || 0) > 0) setPortalScreen('shop');
+  }
+
+  useEffect(() => {
+    loadPortal()
+      .catch((err) => setResult({ status: 'FAILED', message: err.message }))
+      .finally(() => setPortalBooting(false));
+  }, []);
+  useEffect(() => {
+    const brandColor = settings?.accent_color || '#066fd1';
+    document.documentElement.style.setProperty('--tblr-primary', brandColor);
+    document.documentElement.style.setProperty('--portal-brand-color', brandColor);
+    document.documentElement.style.setProperty('--portal-brand-rgb', cssHexToRgb(brandColor));
+  }, [settings]);
+
+  useEffect(() => {
+    const sourceRemaining = Math.max(0, Number(result?.remaining_time_seconds ?? status?.remaining_time_seconds ?? 0) || 0);
+    setTimerRemaining(sourceRemaining);
+  }, [result?.remaining_time_seconds, status?.remaining_time_seconds, result?.access_expires_at, status?.access_expires_at]);
+
+  useEffect(() => {
+    if (!timerRemaining) return undefined;
+    const intervalId = window.setInterval(() => {
+      setTimerRemaining((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [timerRemaining > 0]);
+
+  useEffect(() => {
+    if (!paymentOrderFromUrl) return undefined;
+    let stopped = false;
+    let timerId;
+    let attempts = 0;
+    const poll = async () => {
+      attempts += 1;
+      const data = await checkPaymentStatus(paymentOrderFromUrl);
+      const terminal = data?.status === 'FAILED' || (data?.status === 'PAID' && ['FULFILLED', 'FAILED'].includes(data?.fulfillment_status));
+      if (!stopped && !terminal && attempts < 24) timerId = window.setTimeout(poll, 3000);
+    };
+    poll();
+    return () => {
+      stopped = true;
+      if (timerId) window.clearTimeout(timerId);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedProductCategory || !selectedCategoryProductId) return;
+    const categoryItems = selectedProductCategory.items || [];
+    const item = categoryItems.find((entry) => entry.id === selectedCategoryProductId);
+    if (!item) return;
+    const activeDiscount = productApplicableDiscount(item, productQuantity(item));
+    const tabKey = activeDiscount ? productDiscountTabKey(activeDiscount) : 'base';
+    const tabNode = portalDiscountTabRefs.current[tabKey];
+    if (!tabNode) return;
+    const scrollActiveTab = () => {
+      try {
+        tabNode.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      } catch {
+        tabNode.scrollIntoView?.();
+      }
+    };
+    window.requestAnimationFrame(scrollActiveTab);
+  }, [selectedProductCategory?.id, selectedCategoryProductId, productQuantities]);
+
+  useEffect(() => {
+    if (!profileCodeCooldown) return undefined;
+    const intervalId = window.setInterval(() => {
+      setProfileCodeCooldown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [profileCodeCooldown > 0]);
+
+  useEffect(() => {
+    if (!missingTimeCodeCooldown) return undefined;
+    const intervalId = window.setInterval(() => {
+      setMissingTimeCodeCooldown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [missingTimeCodeCooldown > 0]);
+
+  function normalizePortalContactInput(value) {
+    const cleaned = String(value || '').trim().replace(/[^\d+]/g, '');
+    if (cleaned.startsWith('+63')) return cleaned.slice(1);
+    if (cleaned.startsWith('09') && cleaned.length === 11) return `63${cleaned.slice(1)}`;
+    if (cleaned.startsWith('9') && cleaned.length === 10) return `63${cleaned}`;
+    return cleaned;
+  }
+
+  function portalContactLooksValid(value) {
+    return /^\d{8,15}$/.test(normalizePortalContactInput(value));
+  }
+
+  async function redeem(e) {
+    e.preventDefault();
+    setLoading(true);
+    setResult(null);
+    try {
+      const data = await publicApi('/portal/redeem', {
+        method: 'POST',
+        body: JSON.stringify(payload({ voucher_code: voucherCode }))
+      });
+      persistSession(data);
+      setResult(data);
+      if (data.status === 'SUCCESS' || Number(data.remaining_time_seconds || 0) > 0) queueAvatarEventNote('PURCHASE_SUCCESS');
+      await refreshStatus(data.portal_session_id || sessionId);
+    } catch (_err) {
+      setResult({ status: 'FAILED', message: 'Something went wrong. Please try again or contact the operator.' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function checkPaymentStatus(orderId = paymentOrderFromUrl) {
+    if (!orderId) return null;
+    setPaymentChecking(true);
+    try {
+      const data = await publicRequest(`/portal/payments/${encodeURIComponent(orderId)}/status`);
+      setPaymentResult(data);
+      persistSession(data);
+      if (data.status === 'PAID' && data.fulfillment_status === 'FULFILLED') {
+        queueAvatarEventNote('PURCHASE_SUCCESS');
+        await refreshStatus(data.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session'));
+      }
+      return data;
+    } catch (err) {
+      const failedResult = { status: 'FAILED', last_error: err.message };
+      setPaymentResult(failedResult);
+      return failedResult;
+    } finally {
+      setPaymentChecking(false);
+    }
+  }
+
+  async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false) {
+    setResult(null);
+    setPaymentResult(null);
+    const safeQuantity = Math.max(1, Math.min(Number(purchaseQuantity || 1), 365));
+    if (
+      !confirmedOutside
+      && status?.outside_network_warning?.enabled
+      && status?.network_presence?.connected_to_3j_ap === false
+    ) {
+      setOutsidePurchaseConfirm({ item, quantity: safeQuantity, confirmed: false });
+      return;
+    }
+    setOutsidePurchaseConfirm(null);
+    const barangayOnly = isBarangayOnlyProduct(selectedProductCategory || item) || isBarangayOnlyProduct(item);
+    const selectedBarangay = barangayOnly ? selectedBarangayForCategory(selectedProductCategory || item) : '';
+    if (barangayOnly && !selectedBarangay) {
+      setPaymentResult({ status: 'FAILED', last_error: t('Choose a Barangay before buying this package.') });
+      return;
+    }
+    setPaymentLoading(item.id);
+    try {
+      const data = await publicApi('/portal/payments/checkout', {
+        method: 'POST',
+        body: JSON.stringify(payload({
+          product_item_id: item.id,
+          payment_method: 'gcash',
+          purchase_quantity: safeQuantity,
+          selected_barangay: barangayOnly ? selectedBarangay : null,
+        }))
+      });
+      if (!data.checkout_url) throw new Error('PayMongo did not return a checkout link.');
+      window.location.href = data.checkout_url;
+    } catch (err) {
+      setPaymentResult({ status: 'FAILED', last_error: err.message });
+      setPaymentLoading('');
+    }
+  }
+
+  async function loadBag() {
+    const id = sessionId || localStorage.getItem('centralwifi_portal_session');
+    if (!id) return null;
+    const data = await publicRequest(`/portal/bag?portal_session_id=${encodeURIComponent(id)}`);
+    if (data.bag) setBag(data.bag);
+    return data.bag;
+  }
+
+  async function saveBagAutoActivate(enabled) {
+    setBagSaving(true);
+    try {
+      const data = await publicApi('/portal/bag/settings', {
+        method: 'PATCH',
+        body: JSON.stringify(payload({ auto_activate: Boolean(enabled) }))
+      });
+      if (data.bag) setBag(data.bag);
+    } catch (err) {
+      setResult({ status: 'FAILED', message: err.message });
+    } finally {
+      setBagSaving(false);
+    }
+  }
+
+  async function reorderBagItems(nextItems) {
+    setBag((current) => current ? { ...current, queued_items: nextItems } : current);
+    try {
+      const data = await publicApi('/portal/bag/reorder', {
+        method: 'POST',
+        body: JSON.stringify(payload({ item_ids: nextItems.map((item) => item.id) }))
+      });
+      if (data.bag) setBag(data.bag);
+    } catch (err) {
+      setResult({ status: 'FAILED', message: err.message });
+      loadBag().catch(() => null);
+    }
+  }
+
+  async function activateBagItem(itemId) {
+    setBagSaving(true);
+    try {
+      const data = await publicApi(`/portal/bag/items/${encodeURIComponent(itemId)}/activate`, {
+        method: 'POST',
+        body: JSON.stringify(payload())
+      });
+      if (data.bag) setBag(data.bag);
+      setResult({ status: data.status === 'SUCCESS' ? 'SUCCESS' : 'FAILED', message: data.message || 'Bag updated.' });
+      await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session'));
+    } catch (err) {
+      setResult({ status: 'FAILED', message: err.message });
+    } finally {
+      setBagSaving(false);
+    }
+  }
+
+  function openProfile() {
+    setProfileMessage('');
+    setTermsExpanded(false);
+    setProfileForm({
+      display_name: profile?.display_name || '',
+      email: profile?.email || '',
+      contact_number: profile?.contact_number || '',
+      verification_code: '',
+      terms_accepted: Boolean(profile?.configured),
+      marketing_sms_consent: Boolean(profile?.configured || profile?.marketing_sms_consent),
+    });
+    setProfileOpen(true);
+  }
+
+  async function sendProfileCode() {
+    setProfileMessage('');
+    const normalizedContact = normalizePortalContactInput(profileForm.contact_number);
+    if (!portalContactLooksValid(normalizedContact)) {
+      setProfileMessage(portalLanguage === 'tl' ? 'Maglagay ng valid mobile number, halimbawa 09066826415 o 639066826415.' : 'Enter a valid mobile number, for example 09066826415 or 639066826415.');
+      return;
+    }
+    setProfileSendingCode(true);
+    setProfileCodeCooldown(60);
+    setProfileForm((current) => ({ ...current, contact_number: normalizedContact }));
+    try {
+      const data = await publicApi('/portal/profile/send-code', {
+        method: 'POST',
+        body: JSON.stringify(payload({ contact_number: normalizedContact }))
+      });
+      setProfileMessage(data.message || (portalLanguage === 'tl' ? 'Naipadala na ang verification code.' : 'Verification code sent.'));
+    } catch (err) {
+      setProfileMessage(err.message);
+    } finally {
+      setProfileSendingCode(false);
+    }
+  }
+
+  async function saveProfile(e) {
+    e.preventDefault();
+    setProfileMessage('');
+    setProfileSaving(true);
+    const normalizedContact = normalizePortalContactInput(profileForm.contact_number);
+    if (!portalContactLooksValid(normalizedContact)) {
+      setProfileMessage(portalLanguage === 'tl' ? 'Maglagay ng valid mobile number, halimbawa 09066826415 o 639066826415.' : 'Enter a valid mobile number, for example 09066826415 or 639066826415.');
+      setProfileSaving(false);
+      return;
+    }
+    const nextProfileForm = { ...profileForm, contact_number: normalizedContact };
+    setProfileForm(nextProfileForm);
+    try {
+      const data = await publicApi('/portal/profile', {
+        method: 'POST',
+        body: JSON.stringify(payload(nextProfileForm))
+      });
+      persistSession(data);
+      setProfile(data.profile);
+      setProfileOpen(false);
+      setProfileSuccess(data.message || settings?.profile_gift_profile_saved_message || (portalLanguage === 'tl' ? 'Na-save ang profile. May LIBRE kang welcome gift.' : 'Profile saved. You have a FREE welcome gift.'));
+      setGiftUnwrapped(false);
+      await refreshStatus(data.portal_session_id || sessionId);
+    } catch (err) {
+      setProfileMessage(err.message);
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  async function redeemWelcomeGift() {
+    setGiftRedeeming(true);
+    setResult(null);
+    try {
+      const data = await publicApi('/portal/welcome-gift/redeem', {
+        method: 'POST',
+        body: JSON.stringify(payload())
+      });
+      persistSession(data);
+      setResult(data);
+      if (data.status === 'SUCCESS' || Number(data.remaining_time_seconds || 0) > 0) queueAvatarEventNote('PURCHASE_SUCCESS');
+      setGiftUnwrapped(false);
+      await refreshStatus(data.portal_session_id || sessionId);
+    } catch (err) {
+      setResult({ status: 'FAILED', message: err.message });
+    } finally {
+      setGiftRedeeming(false);
+    }
+  }
+
+  async function loadSupportConversation() {
+    const publicId = localStorage.getItem('centralwifi_support_conversation');
+    if (!publicId) return;
+    try {
+      setSupportConversation(await publicRequest(`/portal/support/conversations/${encodeURIComponent(publicId)}`));
+    } catch (_err) {
+      localStorage.removeItem('centralwifi_support_conversation');
+      setSupportConversation(null);
+    }
+  }
+
+  async function sendSupportMessage(e) {
+    e.preventDefault();
+    if (!supportMessage.trim()) return;
+    setSupportLoading(true);
+    try {
+      const body = JSON.stringify(payload({ message_text: supportMessage }));
+      const data = supportConversation?.public_conversation_id
+        ? await publicApi(`/portal/support/conversations/${encodeURIComponent(supportConversation.public_conversation_id)}/messages`, { method: 'POST', body })
+        : await publicApi('/portal/support/conversations', { method: 'POST', body });
+      setSupportConversation(data);
+      localStorage.setItem('centralwifi_support_conversation', data.public_conversation_id);
+      setSupportMessage('');
+    } catch (err) {
+      setSupportConversation((current) => ({ ...(current || {}), error: err.message, messages: current?.messages || [] }));
+    } finally {
+      setSupportLoading(false);
+    }
+  }
+
+  async function sendMissingTimeCode() {
+    setMissingTimeMessage('');
+    const normalizedContact = normalizePortalContactInput(missingTimeForm.contact_number);
+    if (!portalContactLooksValid(normalizedContact)) {
+      setMissingTimeMessage('Enter a valid mobile number, for example 09066826415 or 639066826415.');
+      return;
+    }
+    setMissingTimeSending(true);
+    setMissingTimeCodeCooldown(60);
+    setMissingTimeForm((current) => ({ ...current, contact_number: normalizedContact }));
+    try {
+      const data = await publicApi('/portal/missing-time/send-code', {
+        method: 'POST',
+        body: JSON.stringify(payload({ contact_number: normalizedContact }))
+      });
+      setMissingTimeMessage(data.message || 'Verification code sent.');
+    } catch (err) {
+      setMissingTimeMessage(err.message);
+    } finally {
+      setMissingTimeSending(false);
+    }
+  }
+
+  async function restoreMissingTime(e) {
+    e.preventDefault();
+    setMissingTimeRestoring(true);
+    const normalizedContact = normalizePortalContactInput(missingTimeForm.contact_number);
+    const nextMissingTimeForm = { ...missingTimeForm, contact_number: normalizedContact };
+    setMissingTimeForm(nextMissingTimeForm);
+    try {
+      const data = await publicApi('/portal/missing-time/restore', {
+        method: 'POST',
+        body: JSON.stringify(payload(nextMissingTimeForm))
+      });
+      persistSession(data);
+      setResult(data);
+      setMissingTimeMessage(data.message || (portalLanguage === 'tl' ? 'Naibalik ang natitirang oras.' : 'Remaining time restored.'));
+      await refreshStatus(data.portal_session_id || sessionId);
+    } catch (err) {
+      setMissingTimeMessage(err.message);
+    } finally {
+      setMissingTimeRestoring(false);
+    }
+  }
+
+  const productItems = settings?.product_items || [];
+  const productCategories = settings?.product_categories || [];
+  const productCategoryGroups = (productCategories || []).filter((category) => category?.id && (category.items || []).length);
+  const payments = settings?.payments || {};
+  const canCheckoutWithGcash = Boolean(payments.enabled && payments.ready_for_checkout && (payments.enabled_payment_methods || []).includes('gcash'));
+  const autoPortalDark = (() => {
+    const hour = new Date(themeClock).getHours();
+    return hour >= 18 || hour < 6;
+  })();
+  const portalDark = portalDarkOverride === 'auto' ? autoPortalDark : portalDarkOverride === 'dark';
+  const unlimited = result?.unlimited ?? status?.unlimited;
+  const accessExpired = Boolean(result?.access_expired || status?.access_expired || status?.status === 'EXPIRED');
+  const connected = Boolean((result?.connected ?? status?.connected) && !accessExpired && (unlimited || timerRemaining > 0));
+  const remainingDisplay = unlimited ? 'Unlimited' : formatCountdown(timerRemaining);
+  const networkPresence = status?.network_presence || {};
+  const outsideNetwork = networkPresence.connected_to_3j_ap === false;
+  const activeBagItem = bag?.active_item || null;
+  const queuedBagItems = bag?.queued_items || [];
+  const bagItemCount = (activeBagItem ? 1 : 0) + queuedBagItems.length;
+  const customAvatarUrl = connected
+    ? (settings?.no_internet_avatar_connected_url || settings?.company_logo_url || '')
+    : (settings?.no_internet_avatar_disconnected_url || settings?.company_logo_url || '');
+  const profileGiftEnabled = settings?.profile_gift_enabled !== false;
+  const giftTitle = settings?.profile_gift_title || DEFAULT_PROFILE_GIFT.title;
+  const giftAvailableMessage = settings?.profile_gift_available_message || DEFAULT_PROFILE_GIFT.available_message;
+  const giftDescription = settings?.profile_gift_description || DEFAULT_PROFILE_GIFT.description;
+  const giftDurationLabel = formatSeconds(settings?.profile_gift_duration_seconds || DEFAULT_PROFILE_GIFT.duration_seconds);
+  const giftAvailable = profileGiftEnabled && profile?.welcome_gift_status === 'AVAILABLE';
+  const avatarNotesSettingsKey = JSON.stringify(settings?.avatar_notes_json || {});
+
+  function togglePortalDarkMode() {
+    const nextMode = portalDark ? 'light' : 'dark';
+    setPortalDarkOverride(nextMode);
+    localStorage.setItem('centralwifi_portal_theme_mode', nextMode);
+  }
+
+  function setPortalLanguageMode(language) {
+    const nextLanguage = language === 'tl' ? 'tl' : 'en';
+    setPortalLanguage(nextLanguage);
+    localStorage.setItem('centralwifi_portal_language', nextLanguage);
+  }
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => setThemeClock(Date.now()), 60 * 1000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+
+  function queueAvatarEventNote(eventType) {
+    const noteSettings = settings?.avatar_notes_json || {};
+    const note = portalAvatarEventNote(noteSettings, connected, eventType);
+    if (!note) return;
+    avatarEventNoteRef.current = {
+      eventType,
+      text: formatPortalEventNoteText(note.text, profileName, {
+        time: formatCountdown(portalAvatarLowTimeThresholdSeconds(noteSettings)),
+        remaining: formatCountdown(timerRemaining),
+      }),
+    };
+    setAvatarEventNoteSignal((value) => value + 1);
+  }
+
+  useEffect(() => {
+    if (!settings) return undefined;
+    avatarNoteRunRef.current += 1;
+    const runId = avatarNoteRunRef.current;
+    const clearNoteTimer = () => {
+      if (avatarNoteTimerRef.current) {
+        window.clearTimeout(avatarNoteTimerRef.current);
+        avatarNoteTimerRef.current = null;
+      }
+    };
+    clearNoteTimer();
+    setAvatarNoteVisible(false);
+    setAvatarNote('');
+    setAvatarNoteWords([]);
+    const schedule = (callback, delay) => {
+      clearNoteTimer();
+      avatarNoteTimerRef.current = window.setTimeout(() => {
+        if (avatarNoteRunRef.current !== runId) return;
+        callback();
+      }, delay);
+    };
+    const closeThenRotate = () => {
+      if (avatarNoteRunRef.current !== runId) return;
+      setAvatarNoteVisible(false);
+      schedule(() => {
+        if (avatarNoteRunRef.current !== runId) return;
+        setAvatarNote('');
+        setAvatarNoteWords([]);
+        schedule(rotateNote, portalAvatarNotePauseMs(settings?.avatar_notes_json || {}));
+      }, 260);
+    };
+    const revealWordAt = (words, index) => {
+      if (avatarNoteRunRef.current !== runId) return;
+      setAvatarNoteWords(words.slice(0, index + 1));
+      if (index + 1 < words.length) {
+        schedule(() => revealWordAt(words, index + 1), portalAvatarWordDelayMs(settings?.avatar_notes_json || {}));
+        return;
+      }
+      schedule(closeThenRotate, portalAvatarNextDelayMs(settings?.avatar_notes_json || {}));
+    };
+    const rotateNote = () => {
+      if (avatarNoteRunRef.current !== runId) return;
+      const noteSettings = settings?.avatar_notes_json || {};
+      let next = null;
+      if (avatarEventNoteRef.current) {
+        next = { text: avatarEventNoteRef.current.text, index: -1 };
+        avatarEventNoteRef.current = null;
+      } else if (portalScreen !== 'landing' && !mainPageIntroNoteShownRef.current) {
+        const introNote = portalAvatarMainPageNote(noteSettings, connected);
+        if (introNote) {
+          next = { text: formatPortalAvatarNoteText(introNote.text, profileName), index: -1 };
+          mainPageIntroNoteShownRef.current = true;
+        }
+      }
+      if (!next) {
+        next = nextPortalAvatarNote(noteSettings, connected, avatarNoteIndexRef.current);
+        avatarNoteIndexRef.current = next.index;
+        next = { ...next, text: formatPortalAvatarNoteText(next.text, profileName) };
+      }
+      const words = String(next.text || '').split(/\s+/).filter(Boolean);
+      setAvatarNote(next.text);
+      setAvatarNoteWords(words.length ? [words[0]] : []);
+      setAvatarNoteSequence((value) => value + 1);
+      window.requestAnimationFrame(() => {
+        if (avatarNoteRunRef.current !== runId) return;
+        setAvatarNoteVisible(Boolean(next.text));
+        if (words.length > 1) {
+          schedule(() => revealWordAt(words, 1), portalAvatarWordDelayMs(noteSettings));
+        } else if (words.length) {
+          schedule(closeThenRotate, portalAvatarNextDelayMs(noteSettings));
+        } else {
+          schedule(closeThenRotate, portalAvatarNextDelayMs(noteSettings));
+        }
+      });
+    };
+    schedule(rotateNote, portalAvatarNoteInitialDelayMs(settings?.avatar_notes_json || {}));
+    return () => {
+      if (avatarNoteRunRef.current === runId) avatarNoteRunRef.current += 1;
+      clearNoteTimer();
+    };
+  }, [settings?.id, avatarNotesSettingsKey, connected, portalScreen, profileName, avatarEventNoteSignal]);
+
+  useEffect(() => {
+    if (!settings || portalScreen === 'landing') return;
+    const thresholdSeconds = portalAvatarLowTimeThresholdSeconds(settings?.avatar_notes_json || {});
+    if (!connected || timerRemaining <= 0) {
+      lowTimeNoteShownRef.current = false;
+      return;
+    }
+    if (timerRemaining > thresholdSeconds) {
+      lowTimeNoteShownRef.current = false;
+      return;
+    }
+    if (!lowTimeNoteShownRef.current) {
+      lowTimeNoteShownRef.current = true;
+      queueAvatarEventNote('LOW_TIME');
+    }
+  }, [settings?.id, avatarNotesSettingsKey, connected, portalScreen, timerRemaining, profileName]);
+
+  function PortalAvatar({ compact = false }) {
+    const [imageFailed, setImageFailed] = useState(false);
+    const className = `${compact ? 'portal-shop-avatar' : 'portal-avatar-ring'} ${connected ? 'is-connected' : 'is-disconnected'}`;
+    return (
+      <div className={className}>
+        {customAvatarUrl && !imageFailed ? (
+          <img src={customAvatarUrl} alt="" onError={() => setImageFailed(true)} />
+        ) : (
+          <div className={`portal-default-avatar ${connected ? 'is-connected' : 'is-disconnected'}`}>
+            <IconWifi size={compact ? 48 : 70} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function GiftPanel() {
+    if (!giftAvailable) return null;
+    return (
+      <div className="portal-gift-panel">
+        {!giftUnwrapped ? (
+          <button className="portal-gift-button" type="button" onClick={() => setGiftUnwrapped(true)}>
+            <span className="portal-gift-image"><IconGift size={42} /></span>
+            <span className="portal-gift-button-copy">
+              <span className="portal-gift-kicker">{giftAvailableMessage}</span>
+              <strong>{giftTitle}</strong>
+              <span>{giftDurationLabel}</span>
+            </span>
+          </button>
+        ) : (
+          <div className="portal-gift-opened">
+            <div className="d-flex align-items-center gap-2 mb-2"><IconGift size={24} className="text-yellow" /><strong>{giftTitle}</strong></div>
+            <div className="small text-muted mb-1">{giftDescription}</div>
+            <div className="badge bg-yellow-lt text-yellow mb-3">{giftDurationLabel}</div>
+            <button className="btn btn-success w-100" type="button" onClick={redeemWelcomeGift} disabled={giftRedeeming}>
+              {giftRedeeming ? t('Redeeming...') : t('Redeem')}
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  function BagModal() {
+    if (!bagOpen) return null;
+    const queuedItems = bag?.queued_items || [];
+    const historyItems = bag?.history_items || [];
+    const autoActivate = bag?.settings?.auto_activate !== false;
+    const overlapSeconds = Number(bag?.settings?.overlap_seconds || settings?.bag_activation_overlap_seconds || 10);
+    const renderItem = (item, options = {}) => (
+      <div
+        className={`portal-bag-item ${options.draggable ? 'is-draggable' : ''}`}
+        key={item.id}
+        draggable={Boolean(options.draggable)}
+        onDragStart={() => {
+          if (options.draggable) setBagDraggingItemId(item.id);
+        }}
+        onDragOver={(event) => {
+          if (options.draggable) event.preventDefault();
+        }}
+        onDrop={(event) => {
+          if (!options.draggable) return;
+          event.preventDefault();
+          if (!bagDraggingItemId || bagDraggingItemId === item.id) return;
+          const currentItems = bag?.queued_items || [];
+          const fromIndex = currentItems.findIndex((entry) => entry.id === bagDraggingItemId);
+          const toIndex = currentItems.findIndex((entry) => entry.id === item.id);
+          if (fromIndex < 0 || toIndex < 0) return;
+          const nextItems = [...currentItems];
+          const [moved] = nextItems.splice(fromIndex, 1);
+          nextItems.splice(toIndex, 0, moved);
+          setBagDraggingItemId('');
+          reorderBagItems(nextItems);
+        }}
+        onDragEnd={() => setBagDraggingItemId('')}
+      >
+        {options.draggable && <span className="portal-bag-drag"><IconGripVertical size={18} /></span>}
+        <div className="portal-bag-item-main">
+          <div className="portal-bag-item-title">{item.product_name || 'WiFi package'}</div>
+          <div className="portal-bag-item-meta">
+            <span><IconClock size={14} /> {formatSeconds(item.remaining_seconds || item.duration_seconds || 0)}</span>
+            {item.product_category_name && <span>{item.product_category_name}</span>}
+            {item.device_scope === 'MULTI_DEVICE' ? <span>{item.allowed_devices || 1} devices</span> : <span>1 device</span>}
+          </div>
+        </div>
+        <span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : item.status === 'QUEUED' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
+          {item.status}
+        </span>
+        {options.canActivate && (
+          <button className="btn btn-sm btn-outline-primary" type="button" disabled={bagSaving} onClick={() => activateBagItem(item.id)}>
+            Activate
+          </button>
+        )}
+      </div>
+    );
+    return (
+      <Modal
+        title={t('My WiFi Bag')}
+        onClose={() => setBagOpen(false)}
+        dialogClassName="portal-profile-modal-dialog portal-bag-modal-dialog"
+        bodyClassName="portal-profile-modal-body portal-bag-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className="portal-bag-summary">
+          <span className="portal-bag-summary-icon"><IconWallet size={24} /></span>
+          <div>
+            <div className="fw-semibold">{formatSeconds(bag?.summary?.remaining_seconds || 0)} total in bag</div>
+            <div className="small text-muted">Queued items stay separate. Drag them to choose what activates first.</div>
+          </div>
+        </div>
+        <label className="portal-bag-auto-row">
+          <span>
+            <strong>Auto activate</strong>
+            <small>Activates the next item {overlapSeconds}s before the active item ends.</small>
+          </span>
+          <span className="form-check form-switch m-0">
+            <input className="form-check-input" type="checkbox" checked={autoActivate} disabled={bagSaving} onChange={(event) => saveBagAutoActivate(event.target.checked)} />
+          </span>
+        </label>
+        <div className="portal-bag-section">
+          <div className="portal-bag-section-title">Active now</div>
+          {bag?.active_item ? renderItem(bag.active_item) : <div className="text-muted small">No active bag item right now.</div>}
+        </div>
+        <div className="portal-bag-section">
+          <div className="portal-bag-section-title">Queued next</div>
+          {queuedItems.length ? queuedItems.map((item) => renderItem(item, { draggable: true, canActivate: true })) : <div className="text-muted small">No queued items. Bought packages will appear here.</div>}
+        </div>
+        <div className="portal-bag-section">
+          <div className="portal-bag-section-title">History</div>
+          {historyItems.length ? historyItems.map((item) => (
+            <div className="portal-bag-history-row" key={item.id}>
+              <span>{item.product_name}</span>
+              <small>{item.auto_activate_snapshot ? 'Auto activation was enabled' : 'Auto activation was disabled'}</small>
+              <span className="badge bg-secondary-lt text-secondary">{item.status}</span>
+            </div>
+          )) : <div className="text-muted small">No consumed items yet.</div>}
+        </div>
+      </Modal>
+    );
+  }
+
+  function ProfileTag() {
+    const hasProfile = Boolean(profile?.configured || profile?.display_name || profile?.contact_number);
+    return (
+      <button className="portal-profile-tag" type="button" onClick={() => hasProfile ? setProfileViewOpen(true) : openProfile()}>
+        <span className={`portal-profile-tag-icon ${hasProfile ? 'is-ready' : ''}`}>
+          {!hasProfile && <span className="portal-profile-free-note">FREE</span>}
+          {hasProfile ? <IconUser size={16} /> : <IconGift size={16} />}
+        </span>
+        <span className="portal-profile-tag-text">{hasProfile ? t('Hi {name}', { name: profileName }) : t('Set Profile')}</span>
+      </button>
+    );
+  }
+
+  function BagTag() {
+    return (
+      <button
+        className="portal-bag-tag"
+        type="button"
+        onClick={() => { setBagOpen(true); loadBag().catch(() => null); }}
+        title={t('My WiFi Bag')}
+        aria-label={t('My WiFi Bag')}
+      >
+        <span className="portal-bag-tag-icon">
+          <IconShoppingBag size={18} />
+          {bagItemCount > 0 && <span className="portal-bag-count">{bagItemCount}</span>}
+        </span>
+      </button>
+    );
+  }
+
+  function expandableConsentText(text, expanded) {
+    if (expanded || String(text || '').length <= 100) return String(text || '');
+    return (
+      <>
+        {String(text || '').slice(0, 100)}
+        <span className="portal-consent-ellipsis">...</span>
+      </>
+    );
+  }
+
+  function AvatarHero({ compact = false }) {
+    const noteText = avatarNote;
+    return (
+      <div className={`portal-avatar-hero ${compact ? 'is-compact' : ''}`}>
+        <div className={`portal-avatar-note ${avatarNoteVisible && noteText ? 'is-visible' : 'is-hidden'}`} aria-live="polite">
+          <span>
+            {avatarNoteWords.map((word, index) => (
+              <span className="portal-avatar-note-word" key={`${avatarNoteSequence}-${index}-${word}`}>
+                {word}
+              </span>
+            ))}
+          </span>
+        </div>
+        <PortalAvatar compact={compact} />
+      </div>
+    );
+  }
+
+  function PortalFooter() {
+    return (
+      <div className="portal-footer-bar">
+        <div className="portal-footer-meta">
+          {settings?.show_powered_by !== false && <span>{t('Powered by 3JCentralPisowifi')}</span>}
+          <button className="portal-theme-toggle" type="button" onClick={togglePortalDarkMode} aria-label={portalDark ? 'Switch to light mode' : 'Switch to dark mode'} title={portalDark ? 'Light mode' : 'Dark mode'}>
+            {portalDark ? <IconSun size={15} /> : <IconMoon size={15} />}
+          </button>
+        </div>
+        <div className="portal-language-toggle" aria-label="Portal language">
+          <button className={portalLanguage === 'en' ? 'active' : ''} type="button" onClick={() => setPortalLanguageMode('en')}>{t('English')}</button>
+          <span aria-hidden="true">|</span>
+          <button className={portalLanguage === 'tl' ? 'active' : ''} type="button" onClick={() => setPortalLanguageMode('tl')}>{t('Tagalog')}</button>
+        </div>
+      </div>
+    );
+  }
+
+  function isBarangayOnlyProduct(entry = {}) {
+    return (entry?.access_scope || entry?.category_access_scope || '').toUpperCase() === 'BARANGAY_ONLY';
+  }
+
+  function normalizePortalBarangayName(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function currentPortalBarangay() {
+    return normalizePortalBarangayName(status?.current_barangay || result?.current_barangay || '');
+  }
+
+  function portalBarangayOptions() {
+    const values = [
+      ...(settings?.portal_barangays || []),
+      ...(settings?.ap_coverage_summary?.area_labels || []),
+      currentPortalBarangay(),
+    ]
+      .map(normalizePortalBarangayName)
+      .filter(Boolean);
+    const byKey = new Map();
+    values.forEach((value) => {
+      const key = value.toLowerCase();
+      if (!byKey.has(key)) byKey.set(key, value);
+    });
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b));
+  }
+
+  function selectedBarangayForCategory(category = selectedProductCategory) {
+    const categoryId = category?.id || category?.category_id || '';
+    return normalizePortalBarangayName(
+      (categoryId && selectedCategoryBarangays[categoryId])
+      || currentPortalBarangay()
+      || category?.allowed_barangay
+      || category?.category_allowed_barangay
+      || ''
+    );
+  }
+
+  function updateSelectedCategoryBarangay(category, value) {
+    const categoryId = category?.id || category?.category_id;
+    if (!categoryId) return;
+    setSelectedCategoryBarangays((current) => ({ ...current, [categoryId]: normalizePortalBarangayName(value) }));
+  }
+
+  function openProductCategory(category) {
+    setProductQuantities({});
+    setSelectedCategoryProductId('');
+    if (isBarangayOnlyProduct(category)) {
+      const defaultBarangay = selectedBarangayForCategory(category) || portalBarangayOptions()[0] || '';
+      if (defaultBarangay) {
+        setSelectedCategoryBarangays((current) => current[category.id] ? current : { ...current, [category.id]: defaultBarangay });
+      }
+    }
+    setSelectedProductCategory(category);
+  }
+
+  function openCategoryMoreInfo(category) {
+    setMoreInfoCategory(category);
+  }
+
+  function portalCoverageSummary() {
+    return portalCoverage?.summary || settings?.ap_coverage_summary || {};
+  }
+
+  function portalCoverageAreaLabel() {
+    const count = Number(portalCoverageSummary().areas_count || 0);
+    if (!count) return 'AP Areas: 0';
+    return `AP Areas: ${count}`;
+  }
+
+  function nearestPortalCoverageAp(location = portalCustomerLocation, aps = portalCoverage?.aps || []) {
+    if (!location || !aps.length) return null;
+    return aps
+      .map((ap) => ({ ap, distance: distanceMetersBetween(location, ap) }))
+      .filter((item) => Number.isFinite(item.distance))
+      .sort((a, b) => a.distance - b.distance)[0] || null;
+  }
+
+  function updatePortalCoverageMapCenter(data = portalCoverage, location = portalCustomerLocation, routeAp = null) {
+    const aps = data?.aps || [];
+    const nearest = location ? nearestPortalCoverageAp(location, aps) : null;
+    const targetAp = routeAp || nearest?.ap || aps[0];
+    if (location && targetAp) {
+      const mid = midpointLocation(location, targetAp);
+      if (mid) {
+        setPortalCoverageCenter(mid);
+        setPortalCoverageZoom(nearest?.distance && nearest.distance > 1500 ? 13 : 15);
+        return;
+      }
+    }
+    if (location) {
+      setPortalCoverageCenter(location);
+      setPortalCoverageZoom(16);
+      return;
+    }
+    if (targetAp) {
+      setPortalCoverageCenter({ latitude: Number(targetAp.map_latitude), longitude: Number(targetAp.map_longitude) });
+      setPortalCoverageZoom(16);
+    }
+  }
+
+  async function loadPortalCoverage() {
+    if (portalCoverage?.aps) return portalCoverage;
+    setPortalCoverageLoading(true);
+    setPortalCoverageError('');
+    try {
+      const data = await publicRequest('/portal/ap-coverage');
+      setPortalCoverage(data);
+      updatePortalCoverageMapCenter(data, portalCustomerLocation);
+      return data;
+    } catch (error) {
+      setPortalCoverageError(error.message || 'Coverage map could not be loaded.');
+      return null;
+    } finally {
+      setPortalCoverageLoading(false);
+    }
+  }
+
+  function requestPortalCustomerLocation(data = portalCoverage) {
+    if (!navigator.geolocation) {
+      setPortalCoverageError('Your browser did not allow location detection. You can still view mapped AP areas.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const location = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        };
+        setPortalCustomerLocation(location);
+        setPortalRouteApId('');
+        updatePortalCoverageMapCenter(data || portalCoverage, location);
+      },
+      () => {
+        setPortalCoverageError('Location permission was not granted. Showing mapped AP areas only.');
+        updatePortalCoverageMapCenter(data || portalCoverage, null);
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
+    );
+  }
+
+  function selectPortalCoverageAp(ap) {
+    setPortalSelectedCoverageApId(ap.id);
+    setPortalRouteApId(ap.id);
+    if (portalCustomerLocation) {
+      updatePortalCoverageMapCenter(portalCoverage, portalCustomerLocation, ap);
+      return;
+    }
+    setPortalCoverageCenter({ latitude: Number(ap.map_latitude), longitude: Number(ap.map_longitude) });
+    setPortalCoverageZoom(17);
+    setPortalCoverageError('Tap Use my location to draw a route line from your phone to this AP.');
+  }
+
+  async function openPortalCoverageMap() {
+    setPortalCoverageOpen(true);
+    const data = await loadPortalCoverage();
+    requestPortalCustomerLocation(data);
+  }
+
+  function openPortalCoverageExternal() {
+    const url = new URL('/portal/ap-coverage', window.location.origin);
+    window.location.assign(url.toString());
+  }
+
+  function productQuantity(item) {
+    return Math.max(0, Math.min(Number(productQuantities[item.id] || 0), 365));
+  }
+
+  function updateProductQuantity(item, nextQuantity) {
+    const quantity = Math.max(0, Math.min(Number(nextQuantity || 0), 365));
+    setProductQuantities(quantity > 0 ? { [item.id]: quantity } : {});
+  }
+
+  function scrollPortalQuantityInputIntoView(target) {
+    if (!target) return;
+    const card = target.closest?.('.portal-product-card') || target;
+    const modalLayer = target.closest?.('.app-modal-layer');
+    const scroll = () => {
+      try {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      } catch {
+        card.scrollIntoView?.();
+      }
+      if (modalLayer && window.visualViewport) {
+        const rect = card.getBoundingClientRect();
+        const keyboardTop = window.visualViewport.height;
+        if (rect.bottom > keyboardTop - 24) {
+          modalLayer.scrollBy({ top: rect.bottom - keyboardTop + 96, behavior: 'smooth' });
+        }
+      }
+    };
+    window.requestAnimationFrame(scroll);
+    window.setTimeout(scroll, 260);
+    window.setTimeout(scroll, 640);
+  }
+
+  function productDurationSecondsForQuantity(item, quantity) {
+    const value = Number(item.duration_value || 0) * Math.max(1, Number(quantity || 1));
+    const unit = item.duration_unit || 'hours';
+    if (unit === 'days') return value * 86400;
+    if (unit === 'minutes') return value * 60;
+    return value * 3600;
+  }
+
+  function productUnitDurationSeconds(item) {
+    return productDurationSecondsForQuantity(item, 1);
+  }
+
+  function productItemDiscounts(item) {
+    if (!item) return [];
+    return (item.discounts || item.product_discounts || [])
+      .filter((discount) => discount?.enabled && Number(discount.discount_value || 0) > 0 && Number(discount.threshold_seconds || 0) > 0)
+      .sort((a, b) => Number(a.threshold_seconds || 0) - Number(b.threshold_seconds || 0));
+  }
+
+  function formatCompactPesoCentavos(value) {
+    const amount = Number(value || 0) / 100;
+    const hasCents = Math.round(amount * 100) % 100 !== 0;
+    return `₱${amount.toLocaleString(undefined, { minimumFractionDigits: hasCents ? 2 : 0, maximumFractionDigits: hasCents ? 2 : 0 })}`;
+  }
+
+  function productDiscountSavingsLabel(item, discount) {
+    const savings = discountSavingsCentavosForTier(item, discount);
+    if (!savings) return '';
+    return `${formatCompactPesoCentavos(savings)} OFF`;
+  }
+
+  function productDiscountTierLabel(discount) {
+    if (discount?.display_label) return discount.display_label;
+    const threshold = Number(discount?.threshold_seconds || 0);
+    if (threshold === 7 * 86400) return '1 week';
+    if (threshold === 15 * 86400) return '15 days';
+    if (threshold === 30 * 86400) return '1 month';
+    if (threshold && threshold % 86400 === 0) return `${threshold / 86400} days`;
+    if (threshold && threshold % 3600 === 0) return `${threshold / 3600} hours`;
+    return 'Discount tier';
+  }
+
+  function productDiscountTabKey(discount) {
+    if (!discount) return 'base';
+    return `discount-${discount.id || `${discount.threshold_seconds}-${discount.discount_type}-${discount.discount_value}-${discount.display_label || discount.label || ''}`}`;
+  }
+
+  function productDiscountQuantityForTier(item, discount) {
+    const unitSeconds = productUnitDurationSeconds(item);
+    const thresholdSeconds = Number(discount?.threshold_seconds || 0);
+    if (!unitSeconds || !thresholdSeconds) return 1;
+    return Math.max(1, Math.min(365, Math.ceil(thresholdSeconds / unitSeconds)));
+  }
+
+  function productApplicableDiscount(item, quantity) {
+    const totalDurationSeconds = productDurationSecondsForQuantity(item, quantity);
+    const eligible = productItemDiscounts(item).filter((discount) => totalDurationSeconds >= Number(discount.threshold_seconds || 0));
+    if (!eligible.length) return null;
+    return eligible[eligible.length - 1];
+  }
+
+  function productDiscountOptionIndex(item, quantity) {
+    const activeDiscount = productApplicableDiscount(item, quantity);
+    if (!activeDiscount) return 0;
+    const discountIndex = productItemDiscounts(item).findIndex((discount) => discount.id === activeDiscount.id);
+    return discountIndex >= 0 ? discountIndex + 1 : 0;
+  }
+
+  function productLineAmount(item, quantity) {
+    const safeQuantity = Math.max(0, Math.min(Number(quantity || 0), 365));
+    if (!safeQuantity) return { base: 0, discount: 0, total: 0, discountApplied: false };
+    const unitCentavos = Math.round(Number(item.price || 0) * 100);
+    const base = unitCentavos * safeQuantity;
+    let discount = 0;
+    const selectedDiscount = productApplicableDiscount(item, safeQuantity);
+    const discountValue = Number(selectedDiscount?.discount_value || 0);
+    const discountApplied = Boolean(selectedDiscount?.discount_type && discountValue > 0);
+    if (discountApplied) {
+      discount = selectedDiscount.discount_type === 'PERCENT'
+        ? Math.round(base * (discountValue / 100))
+        : Math.round(discountValue * 100);
+      discount = Math.max(0, Math.min(discount, base));
+    }
+    return { base, discount, total: Math.max(0, base - discount), discountApplied, selectedDiscount };
+  }
+
+  function discountSavingsCentavosForTier(item, discount) {
+    const thresholdQuantity = productDiscountQuantityForTier(item, discount);
+    const base = Math.round(Number(item.price || 0) * 100) * thresholdQuantity;
+    const discountValue = Number(discount?.discount_value || 0);
+    if (!base || !discountValue) return 0;
+    const savings = discount.discount_type === 'PERCENT'
+      ? Math.round(base * (discountValue / 100))
+      : Math.round(discountValue * 100);
+    return Math.max(0, Math.min(savings, base));
+  }
+
+  function compactDurationLabel(seconds) {
+    const safeSeconds = Math.max(0, Number(seconds || 0));
+    if (safeSeconds >= 86400 && safeSeconds % 86400 === 0) {
+      const days = safeSeconds / 86400;
+      return `${days} day${days === 1 ? '' : 's'}`;
+    }
+    if (safeSeconds >= 3600 && safeSeconds % 3600 === 0) {
+      const hours = safeSeconds / 3600;
+      return `${hours} hour${hours === 1 ? '' : 's'}`;
+    }
+    if (safeSeconds >= 60) {
+      const minutes = Math.ceil(safeSeconds / 60);
+      return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+    }
+    return `${Math.ceil(safeSeconds)} second${Math.ceil(safeSeconds) === 1 ? '' : 's'}`;
+  }
+
+  function productNextDiscountNudge(item, quantity) {
+    const safeQuantity = Math.max(0, Number(quantity || 0));
+    if (!safeQuantity) return null;
+    const totalSeconds = productDurationSecondsForQuantity(item, safeQuantity);
+    const nextDiscount = productItemDiscounts(item).find((discount) => Number(discount.threshold_seconds || 0) > totalSeconds);
+    if (!nextDiscount) return null;
+    const remainingSeconds = Number(nextDiscount.threshold_seconds || 0) - totalSeconds;
+    if (remainingSeconds <= 0 || remainingSeconds > 2 * 86400) return null;
+    const savings = discountSavingsCentavosForTier(item, nextDiscount);
+    if (!savings) return null;
+    return {
+      duration: compactDurationLabel(remainingSeconds),
+      savings: formatCompactPesoCentavos(savings),
+      label: productDiscountTierLabel(nextDiscount),
+    };
+  }
+
+  function PortalCoverageModal() {
+    if (!portalCoverageOpen) return null;
+    const aps = portalCoverage?.aps || [];
+    const nearest = nearestPortalCoverageAp();
+    const routeAp = portalRouteApId ? aps.find((ap) => ap.id === portalRouteApId) : null;
+    const selectedAp = portalSelectedCoverageApId ? aps.find((ap) => ap.id === portalSelectedCoverageApId) : null;
+    const areaCount = Number(portalCoverageSummary().areas_count || 0);
+    const nearestText = nearest
+      ? `Shortest AP is ${formatDistanceMeters(nearest.distance)} away.`
+      : t('Allow location access to find the nearest AP.');
+    return (
+      <Modal
+        title=""
+        onClose={() => setPortalCoverageOpen(false)}
+        dialogClassName="portal-coverage-modal-dialog"
+        bodyClassName="portal-coverage-modal-body"
+        contentClassName={`portal-coverage-modal-content ${portalDark ? 'is-dark' : ''}`}
+      >
+        {portalCoverageLoading ? (
+          <div className="portal-coverage-loading">{t('Loading coverage map...')}</div>
+        ) : aps.length ? (
+          <div className="portal-coverage-map-shell">
+            <LongLatMap
+              aps={aps}
+              center={portalCoverageCenter}
+              zoom={portalCoverageZoom}
+              setCenter={setPortalCoverageCenter}
+              setZoom={setPortalCoverageZoom}
+              selectedApId={portalSelectedCoverageApId}
+              onSelectAp={selectPortalCoverageAp}
+              editable={false}
+              coverageMeters={200}
+              showClientBadges={false}
+              showLegend={false}
+              customerLocation={portalCustomerLocation}
+              routeAp={routeAp}
+            />
+            <div className="portal-coverage-floating-panel portal-coverage-floating-header">
+              <div>
+                <div className="portal-coverage-title"><IconMapPin size={20} />{t('3J WiFi Coverage')}</div>
+                <div className="text-muted small">{areaCount ? (portalLanguage === 'tl' ? `Available sa ${areaCount} area na may mapped APs.` : `Available in ${areaCount} area${areaCount === 1 ? '' : 's'} with mapped APs.`) : t('Mapped AP areas are not available yet.')}</div>
+              </div>
+              <button className="btn btn-sm btn-primary" type="button" onClick={() => requestPortalCustomerLocation(portalCoverage)}>
+                <IconMapPin size={16} className="me-1" />{t('Use my location')}
+              </button>
+            </div>
+            <div className="portal-coverage-floating-panel portal-coverage-floating-status">
+              {portalCoverageError && <div className="alert alert-warning py-2 mb-2">{portalCoverageError}</div>}
+              <div className="portal-coverage-status-main">
+                <div>
+                  <div className="fw-semibold">{nearestText}</div>
+                  <div className="text-muted small">
+                    {nearest?.distance <= 200
+                      ? (portalLanguage === 'tl' ? `Mukhang malapit ka sa ${nearest.ap.display_name || nearest.ap.site_name || 'mapped AP'}.` : `You appear to be near ${nearest.ap.display_name || nearest.ap.site_name || 'a mapped AP'}.`)
+                      : t('Tap route to draw a line from your approximate location to the nearest mapped AP.')}
+                  </div>
+                </div>
+                {nearest && (
+                  <button
+                    className="btn btn-sm btn-primary"
+                    type="button"
+                    onClick={() => {
+                      setPortalRouteApId(nearest.ap.id);
+                      setPortalSelectedCoverageApId(nearest.ap.id);
+                      updatePortalCoverageMapCenter(portalCoverage, portalCustomerLocation, nearest.ap);
+                    }}
+                  >
+                    {t('Show route')}
+                  </button>
+                )}
+              </div>
+              {selectedAp && (
+                <div className="portal-coverage-ap-card">
+                <span className="portal-coverage-ap-icon"><IconWifi size={18} /></span>
+                <div>
+                  <div className="fw-semibold">{selectedAp.display_name || selectedAp.name || '3J WiFi AP'}</div>
+                  <div className="text-muted small">{[selectedAp.area_label, selectedAp.site_name].filter(Boolean).join(' · ') || t('Mapped AP')}</div>
+                </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="portal-coverage-loading">{t('No mapped AP locations are available yet.')}</div>
+        )}
+      </Modal>
+    );
+  }
+
+  function CategoryMoreInfoModal() {
+    if (!moreInfoCategory) return null;
+    return (
+      <Modal
+        title={t('More Info')}
+        onClose={() => setMoreInfoCategory(null)}
+        dialogClassName="portal-profile-modal-dialog portal-category-info-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content portal-category-info-modal-content ${portalDark ? 'is-dark' : ''}`}
+      >
+        <div className="portal-category-info">
+          {moreInfoCategory.image_url && <img className="portal-category-info-image" src={moreInfoCategory.image_url} alt="" loading="lazy" />}
+          <div>
+            <div className="portal-category-info-title">{moreInfoCategory.name || t('Package Info')}</div>
+            {moreInfoCategory.description && <div className="text-muted small mt-1">{moreInfoCategory.description}</div>}
+          </div>
+          <div className="portal-category-info-text">{moreInfoCategory.more_info_text || t('No additional information is available for this category yet.')}</div>
+          <button className="btn btn-primary w-100" type="button" onClick={() => { const category = moreInfoCategory; setMoreInfoCategory(null); openProductCategory(category); }}>
+            {t('BUY')}
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
+  function CategoryProductsModal() {
+    if (!selectedProductCategory) return null;
+    const categoryItems = selectedProductCategory.items || [];
+    const selectedItem = selectedCategoryProductId ? categoryItems.find((item) => item.id === selectedCategoryProductId) : null;
+    const selectedQuantity = selectedItem ? productQuantity(selectedItem) : 0;
+    const selectedAmount = selectedItem ? productLineAmount(selectedItem, selectedQuantity) : { total: 0 };
+    const selectedDurationLabel = selectedItem && selectedQuantity
+      ? compactDurationLabel(productDurationSecondsForQuantity(selectedItem, selectedQuantity))
+      : '0 days';
+    const discountTabs = selectedItem ? productItemDiscounts(selectedItem) : [];
+    const activeDiscountTab = selectedItem ? productApplicableDiscount(selectedItem, selectedQuantity) : null;
+    const selectCategoryProduct = (item) => {
+      setSelectedCategoryProductId(item.id);
+      updateProductQuantity(item, productQuantity(item) || 1);
+    };
+    return (
+      <Modal
+        title=""
+        onClose={() => { setSelectedProductCategory(null); setSelectedCategoryProductId(''); setProductQuantities({}); }}
+        dialogClassName="portal-profile-modal-dialog portal-category-modal-dialog"
+        bodyClassName="portal-profile-modal-body portal-category-modal-body"
+        contentClassName={`portal-profile-modal-content portal-category-modal-content ${portalDark ? 'is-dark' : ''}`}
+      >
+        <div className="portal-category-modal-header">
+          {selectedProductCategory.image_url ? (
+            <img className="portal-category-modal-image" src={selectedProductCategory.image_url} alt="" loading="lazy" />
+          ) : (
+            <span className="portal-category-modal-image portal-category-modal-image-empty"><IconPhoto size={42} /></span>
+          )}
+          <div className="portal-category-modal-title-stack">
+            <div className="portal-category-modal-title">{selectedProductCategory.name || t('WiFi Packages')}</div>
+            <div className="portal-category-modal-scope">
+              <IconCircleCheck size={14} />
+              {selectedProductCategory.access_scope === 'BARANGAY_ONLY' ? t('Barangay only') : t('All Locations')}
+            </div>
+          </div>
+          {selectedItem && (
+            <button className="portal-category-image-back" type="button" onClick={() => { setSelectedCategoryProductId(''); setProductQuantities({}); }}>
+              <IconChevronLeft size={16} />
+              <span>{t('Back to packages')}</span>
+            </button>
+          )}
+          {selectedProductCategory.description && <div className="text-muted small mt-2">{selectedProductCategory.description}</div>}
+        </div>
+        {!selectedItem ? (
+          <div className="portal-category-product-picker">
+            {categoryItems.length ? categoryItems.map((item) => (
+              <div
+                className="portal-product-select-card"
+                key={item.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => selectCategoryProduct(item)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    selectCategoryProduct(item);
+                  }
+                }}
+              >
+                <div className="portal-product-select-main">
+                  <div>
+                    <div className="portal-product-select-title">{item.name}</div>
+                    {item.description && <div className="small text-muted mt-1">{item.description}</div>}
+                  </div>
+                  <div className="portal-product-select-price">PHP {Number(item.price || 0).toFixed(2)}</div>
+                </div>
+                <div className="portal-product-meta-tags">
+                  <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
+                  <span className={`badge ${productPassType(item) === 'MULTI_DEVICE' ? 'bg-purple-lt text-purple' : 'bg-azure-lt text-azure'}`}>{item.device_scope_label || productPassLabel(item)}</span>
+                  {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple"><IconUsers size={16} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
+                  {productPassType(item) !== 'MULTI_DEVICE' && <span className="badge bg-azure-lt text-azure"><IconUser size={16} className="me-1" />1 device</span>}
+                </div>
+                <span className="btn btn-primary w-100 mt-3">
+                  {t('Select')}
+                </span>
+              </div>
+            )) : (
+              <div className="alert alert-info mb-0">{t('No packages are available in this category yet.')}</div>
+            )}
+          </div>
+        ) : (
+          <>
+            {isBarangayOnlyProduct(selectedProductCategory) && (
+              <div className="portal-category-barangay-picker">
+                <div className="portal-category-barangay-heading">
+                  <span><IconMapPin size={17} /> {t('Barangay:')} <strong>{selectedBarangayForCategory(selectedProductCategory) || t('Choose Barangay')}</strong></span>
+                </div>
+                {portalBarangayOptions().length ? (
+                  <select
+                    className="form-select"
+                    value={selectedBarangayForCategory(selectedProductCategory)}
+                    onChange={(event) => updateSelectedCategoryBarangay(selectedProductCategory, event.target.value)}
+                  >
+                    <option value="">{t('Choose Barangay')}</option>
+                    {portalBarangayOptions().map((barangay) => (
+                      <option key={barangay} value={barangay}>{barangay}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="form-control"
+                    value={selectedBarangayForCategory(selectedProductCategory)}
+                    onChange={(event) => updateSelectedCategoryBarangay(selectedProductCategory, event.target.value)}
+                    placeholder={t('Enter Barangay')}
+                  />
+                )}
+                <div className="small text-muted">{t('Preselected from the AP or site where you are connected. You can change it before buying.')}</div>
+              </div>
+            )}
+            {discountTabs.length ? (
+              <ul className="nav nav-tabs portal-category-discount-tabs" role="tablist" aria-label={`${selectedItem.name || 'Product'} discount options`}>
+                <li className="nav-item" role="presentation">
+                  <button
+                    className={`nav-link ${!activeDiscountTab ? 'active' : ''}`}
+                    type="button"
+                    role="tab"
+                    ref={(node) => { portalDiscountTabRefs.current.base = node; }}
+                    onClick={() => updateProductQuantity(selectedItem, 1)}
+                  >
+                    {t('Base')}
+                  </button>
+                </li>
+                {discountTabs.map((discount) => {
+                  const tabKey = productDiscountTabKey(discount);
+                  return (
+                    <li className="nav-item" role="presentation" key={tabKey}>
+                      <button
+                        className={`nav-link ${activeDiscountTab && productDiscountTabKey(activeDiscountTab) === tabKey ? 'active' : ''}`}
+                        type="button"
+                        role="tab"
+                        ref={(node) => { portalDiscountTabRefs.current[tabKey] = node; }}
+                        onClick={() => updateProductQuantity(selectedItem, productDiscountQuantityForTier(selectedItem, discount))}
+                      >
+                        {productDiscountTierLabel(discount)}
+                        <span className="portal-discount-free-note">{productDiscountSavingsLabel(selectedItem, discount)}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+            <div className="portal-category-product-list">
+              {(() => {
+                const item = selectedItem;
+                const quantity = productQuantity(item);
+                const discountNudge = productNextDiscountNudge(item, quantity);
+                return (
+                  <div
+                    className={`card portal-product-card ${quantity > 0 ? 'is-selected' : ''}`}
+                    key={item.id}
+                  >
+                    <div className="card-body">
+                      <div className="portal-product-card-top">
+                        <div>
+                          <div className="fw-bold">{item.name}</div>
+                          {item.description && <div className="small text-muted mt-1">{item.description}</div>}
+                        </div>
+                        <div className="portal-product-quantity-row">
+                          <button className="portal-qty-button" type="button" onClick={() => updateProductQuantity(item, quantity - 1)} aria-label={`Decrease ${item.name}`}>
+                            <IconMinus size={15} />
+                          </button>
+                          <input
+                            className="portal-qty-input"
+                            type="number"
+                            min="0"
+                            max="365"
+                            value={quantity}
+                            onChange={(e) => updateProductQuantity(item, e.target.value)}
+                            onFocus={(e) => scrollPortalQuantityInputIntoView(e.currentTarget)}
+                            onClick={(e) => scrollPortalQuantityInputIntoView(e.currentTarget)}
+                            inputMode="numeric"
+                            aria-label={`${item.name} quantity`}
+                          />
+                          <button className="portal-qty-button" type="button" onClick={() => updateProductQuantity(item, quantity + 1)} aria-label={`Increase ${item.name}`}>
+                            <IconPlus size={15} />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="portal-product-meta-tags">
+                        <span className="badge bg-green-lt text-green"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
+                        <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
+                        <span className={`badge ${productPassType(item) === 'MULTI_DEVICE' ? 'bg-purple-lt text-purple' : 'bg-azure-lt text-azure'}`}>{item.device_scope_label || productPassLabel(item)}</span>
+                        {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple"><IconUsers size={16} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
+                      </div>
+                      {discountNudge && (
+                        <div className="portal-discount-nudge">
+                          Add {discountNudge.duration} more to unlock {discountNudge.savings} savings on {discountNudge.label}.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </>
+        )}
+        {selectedItem ? (
+          <div className="portal-category-modal-footer">
+            <div className="portal-selected-total">
+              <span className="portal-selected-total-icon"><IconCash size={20} /></span>
+              <span className="portal-selected-total-copy">
+              <div className="small text-muted">{t('Selected total')}</div>
+              {selectedAmount.discountApplied ? (
+                <span className="portal-selected-price-stack">
+                  <span className="portal-selected-total-original">{formatCentavos(selectedAmount.base)}</span>
+                </span>
+              ) : null}
+              </span>
+              <span className="portal-selected-total-final-wrap">
+                {selectedAmount.discountApplied ? <span className="portal-selected-total-savings">{t('Saved {amount}', { amount: formatCompactPesoCentavos(selectedAmount.discount) })}</span> : null}
+                <strong className="portal-selected-total-final">{formatCentavos(selectedAmount.total)}</strong>
+              </span>
+            </div>
+            <button className="btn btn-primary" type="button" disabled={!canCheckoutWithGcash || !selectedItem || !selectedQuantity || paymentLoading === selectedItem?.id} onClick={() => startProductCheckout(selectedItem, selectedQuantity)}>
+              {paymentLoading === selectedItem?.id ? t('Opening...') : (
+                <>
+                  <span>{t('BUY')}</span>
+                  {selectedItem && selectedQuantity ? <span className="portal-buy-duration"><IconClock size={15} />{selectedDurationLabel}</span> : null}
+                </>
+              )}
+            </button>
+          </div>
+        ) : null}
+      </Modal>
+    );
+  }
+
+  function OutsidePurchaseModal() {
+    if (!outsidePurchaseConfirm?.item) return null;
+    const item = outsidePurchaseConfirm.item;
+    return (
+      <Modal
+        title={status?.outside_network_warning?.purchase_title || t('You are outside 3J WiFi')}
+        onClose={() => setOutsidePurchaseConfirm(null)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+      >
+        <div className="d-flex align-items-start gap-3">
+          <span className="avatar bg-yellow-lt text-yellow"><IconAlertTriangle size={24} /></span>
+          <div>
+            <div className="fw-semibold mb-1">{item.name}</div>
+            <div className="text-muted small">
+              {status?.outside_network_warning?.purchase_message || t('You can still buy this package, but it will be saved to your bag and will only activate when you connect to a 3J WiFi AP.')}
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer px-0 pb-0">
+          <button className="btn" type="button" onClick={() => setOutsidePurchaseConfirm(null)}>{t('Cancel')}</button>
+          <button className="btn btn-primary" type="button" onClick={() => startProductCheckout(item, outsidePurchaseConfirm.quantity || 1, true)}>
+            {t('Continue')}
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
+  function PortalBootSkeleton() {
+    return (
+      <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'}`}>
+        <div className="client-portal-shell">
+          <div className="portal-boot-skeleton card">
+            <div className="portal-skeleton-avatar portal-skeleton-shimmer" />
+            <div className="portal-skeleton-line is-title portal-skeleton-shimmer" />
+            <div className="portal-skeleton-line is-short portal-skeleton-shimmer" />
+            <div className="portal-skeleton-panel">
+              <div className="portal-skeleton-icon portal-skeleton-shimmer" />
+              <div className="portal-skeleton-stack">
+                <div className="portal-skeleton-line portal-skeleton-shimmer" />
+                <div className="portal-skeleton-line is-wide portal-skeleton-shimmer" />
+              </div>
+            </div>
+            <div className="portal-skeleton-panel">
+              <div className="portal-skeleton-icon portal-skeleton-shimmer" />
+              <div className="portal-skeleton-stack">
+                <div className="portal-skeleton-line portal-skeleton-shimmer" />
+                <div className="portal-skeleton-line is-wide portal-skeleton-shimmer" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!settings || portalBooting) {
+    return (
+      <PortalBootSkeleton />
+    );
+  }
+
+  return (
+    <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'}`}>
+      {portalScreen !== 'landing' && (
+        <div className="portal-top-actions">
+          <ProfileTag />
+          <BagTag />
+        </div>
+      )}
+      <div className="portal-float-actions">
+        <button className="btn btn-primary btn-icon portal-help-fab" type="button" onClick={() => { setHelpOpen(true); setHelpMode('menu'); loadSupportConversation(); }} title={t('Help')} aria-label={t('Help')}>
+          <IconHelp size={26} />
+        </button>
+      </div>
+      <div className="client-portal-shell">
+        {portalScreen === 'landing' ? (
+          <>
+            <div className="portal-landing-card card">
+              <div className="card-body text-center">
+                <AvatarHero />
+                <h1 className="mt-4 mb-2">{t(settings.no_internet_headline || 'No Internet Detected')}</h1>
+                <div className="text-muted mb-3">{t(settings.no_internet_subtitle || 'Connect with a voucher or buy a WiFi package.')}</div>
+                <GiftPanel />
+                <div className="d-grid gap-2 mt-4">
+                  <button className="btn btn-primary btn-lg" type="button" onClick={() => setPortalScreen('shop')}>
+                    {t('Buy Now')} <IconChevronRight size={20} className="ms-2" />
+                  </button>
+                  <button className="btn btn-outline-secondary btn-lg" type="button" disabled>{t('Log In')}</button>
+                </div>
+              </div>
+            </div>
+            <PortalFooter />
+          </>
+        ) : (
+          <>
+          <div className="portal-shop-avatar-outside text-center mb-3">
+            <AvatarHero />
+          </div>
+          <div className={`card portal-active-product-card ${activeBagItem ? 'has-active' : 'is-empty'} mb-3`}>
+            <div className="card-body py-3">
+              <div className="portal-active-product-panel">
+                <span className="portal-active-product-icon"><IconShoppingBag size={22} /></span>
+                <div className="portal-active-product-copy">
+                  <div className="portal-active-product-label">{t('Current product')}</div>
+                  <div className="portal-active-product-name">{activeBagItem?.product_name || t('No active product')}</div>
+                  {activeBagItem && (
+                    <div className="portal-active-product-meta">
+                      {formatSeconds(activeBagItem.remaining_seconds || activeBagItem.duration_seconds || 0)}
+                    </div>
+                  )}
+                </div>
+                <button className="btn btn-sm btn-outline-primary portal-active-product-action" type="button" onClick={() => { setBagOpen(true); loadBag().catch(() => null); }}>
+                  {t('View Bag')}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className={`card portal-remaining-card ${connected ? 'is-connected' : 'is-disconnected'} mb-3`}>
+            <div className="card-body py-3">
+              <div className="d-flex align-items-center gap-2">
+                <span className="portal-remaining-icon"><IconClock size={22} /></span>
+                <span className={`portal-remaining-time ${connected ? 'is-connected' : 'is-disconnected'}`}>{remainingDisplay}</span>
+              </div>
+            </div>
+          </div>
+          <div className="portal-shop-direct">
+            {outsideNetwork && status?.outside_network_warning?.enabled && (
+              <div className="alert alert-warning d-flex align-items-start gap-2">
+                <IconAlertTriangle size={20} className="mt-1" />
+                <span>{status?.outside_network_warning?.message || t('You are not currently connected to a 3J WiFi AP. Bought items will be saved to your bag.')}</span>
+              </div>
+            )}
+            <GiftPanel />
+            {result && <div className={`alert ${result.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'}`}>{result.message}</div>}
+            {paymentResult && <div className={`alert ${paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'alert-success' : paymentResult.status === 'FAILED' ? 'alert-danger' : 'alert-info'}`}>
+              {paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
+                ? (paymentResult.bag_item_status === 'QUEUED' ? t(status?.outside_network_warning?.purchase_success_message || 'Payment received. Package saved to your bag.') : t('Payment received. Internet access is active.'))
+                : paymentResult.status === 'FAILED'
+                  ? t(paymentResult.last_error || 'Payment was not completed.')
+                : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Waiting for PayMongo payment confirmation.')}
+              {paymentResult.payment_order_id && <button className="btn btn-sm btn-outline-secondary ms-2" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id)}>{paymentChecking ? t('Checking...') : t('Check')}</button>}
+            </div>}
+            {productCategoryGroups.length ? (
+              <div className="portal-product-category-list">
+                {productCategoryGroups.map((category, groupIndex) => (
+                  <div className="portal-product-category-block" key={category.id || `category-${groupIndex}`}>
+                    <button className="portal-category-image-button" type="button" onClick={() => openProductCategory(category)}>
+                      {category.image_url ? (
+                        <img className="portal-product-category-image" src={category.image_url} alt="" loading="lazy" />
+                      ) : (
+                        <span className="portal-product-category-image portal-category-image-empty"><IconPhoto size={30} /></span>
+                      )}
+                      <span className="portal-category-card-overlay">
+                        <span className="portal-category-card-title">{category.name || t('Available Packages')}</span>
+                        <span className="portal-category-card-scope">
+                          <IconCircleCheck size={14} />
+                          {category.access_scope === 'BARANGAY_ONLY' ? t('Barangay only') : t('All Locations')}
+                        </span>
+                      </span>
+                    </button>
+                    {category.description && <div className="small text-muted mb-2">{category.description}</div>}
+                    {category.more_info_enabled && category.more_info_text ? (
+                      <div className="portal-category-action-row">
+                        <button className="btn btn-primary portal-category-buy-action" type="button" onClick={() => openProductCategory(category)}>{t('BUY')}</button>
+                        <button className="btn btn-outline-secondary portal-category-more-info-action" type="button" onClick={() => openCategoryMoreInfo(category)}>{t('More Info')}</button>
+                      </div>
+                    ) : (
+                      <button className="btn btn-primary w-100" type="button" onClick={() => openProductCategory(category)}>{t('BUY')}</button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : <div className="alert alert-info mb-0">{t('No packages are available yet. Ask the operator for a voucher.')}</div>}
+          </div>
+          <PortalFooter />
+          </>
+        )}
+      </div>
+      <CategoryMoreInfoModal />
+      <CategoryProductsModal />
+      <BagModal />
+      <OutsidePurchaseModal />
+      <PortalCoverageModal />
+
+      {profileViewOpen && (
+        <Modal
+          title={t('Customer Profile')}
+          onClose={() => setProfileViewOpen(false)}
+          dialogClassName="portal-profile-modal-dialog"
+          bodyClassName="portal-profile-modal-body"
+          contentClassName="portal-profile-modal-content"
+        >
+          <div className="d-flex align-items-center gap-3 mb-3">
+            <span className="avatar avatar-lg bg-blue-lt text-blue"><IconUser size={26} /></span>
+            <div>
+              <div className="h3 mb-1">{profile?.display_name || t('Profile not set')}</div>
+              <div className="text-muted small">{profile?.contact_number || t('No verified contact number')}</div>
+            </div>
+          </div>
+          <div className="list-group list-group-flush mb-3">
+            <div className="list-group-item d-flex justify-content-between px-0">
+              <span className="text-muted">{t('Name')}</span>
+              <strong>{profile?.display_name || '-'}</strong>
+            </div>
+            <div className="list-group-item d-flex justify-content-between px-0">
+              <span className="text-muted">{t('Contact')}</span>
+              <strong>{profile?.contact_number || '-'}</strong>
+            </div>
+            <div className="list-group-item d-flex justify-content-between px-0">
+              <span className="text-muted">{t('Email')}</span>
+              <strong>{profile?.email || '-'}</strong>
+            </div>
+            <div className="list-group-item d-flex justify-content-between px-0">
+              <span className="text-muted">{t('Promo SMS')}</span>
+              <strong>{profile?.marketing_sms_consent ? t('Allowed') : t('Not allowed')}</strong>
+            </div>
+          </div>
+          <div className="d-flex justify-content-end gap-2">
+            <button className="btn btn-outline-secondary" type="button" onClick={() => setProfileViewOpen(false)}>{t('Close')}</button>
+            <button className="btn btn-primary" type="button" onClick={() => { setProfileViewOpen(false); openProfile(); }}>
+              <IconEdit size={18} className="me-2" />{t('Edit Profile')}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {profileOpen && (
+        <Modal
+          title={t('Customer Profile')}
+          onClose={() => setProfileOpen(false)}
+          size="lg"
+          dialogClassName="portal-profile-modal-dialog"
+          bodyClassName="portal-profile-modal-body"
+          contentClassName="portal-profile-modal-content"
+        >
+          <form className="portal-profile-form" onSubmit={saveProfile}>
+            <div className="portal-profile-scroll">
+              {profileMessage && <div className="alert alert-info">{profileMessage}</div>}
+              <div className="row g-3">
+                {!profile?.configured && (
+                  <div className="col-12">
+                    <div className="portal-profile-gift-note">
+                      <span className="portal-profile-gift-badge"><IconGift size={18} /></span>
+                      <span>{t('Set up your profile and receive a FREE Gift!')}</span>
+                    </div>
+                  </div>
+                )}
+                <div className="col-md-6">
+                  <label className="form-label">{t('Name')}</label>
+                  <input className="form-control" required value={profileForm.display_name} onChange={(e) => setProfileForm({ ...profileForm, display_name: e.target.value })} />
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label">{t('Email (optional)')}</label>
+                  <input className="form-control" type="email" value={profileForm.email} onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })} />
+                </div>
+                <div className="col-12">
+                  <label className="form-label">{t('Contact Number')}</label>
+                  <div className="input-group portal-contact-code-group">
+                    <input className="form-control" inputMode="tel" required value={profileForm.contact_number} onChange={(e) => setProfileForm({ ...profileForm, contact_number: e.target.value })} placeholder="09066826415" />
+                    <button className="btn btn-outline-primary" type="button" disabled={profileSendingCode || profileCodeCooldown > 0 || !profileForm.contact_number} onClick={sendProfileCode}>
+                      <IconSend size={18} className="me-2" />{profileSendingCode ? t('Sending...') : profileCodeCooldown > 0 ? t('Send Code Again After ({seconds}s)', { seconds: profileCodeCooldown }) : t('Send Code')}
+                    </button>
+                  </div>
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label">{t('4-character Code')}</label>
+                  <input className="form-control text-uppercase" required value={profileForm.verification_code} onChange={(e) => setProfileForm({ ...profileForm, verification_code: e.target.value.toUpperCase() })} maxLength={12} />
+                </div>
+                <div className="col-12">
+                  <div className="form-check portal-profile-consent">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      checked={profileForm.terms_accepted}
+                      onChange={(e) => setProfileForm({ ...profileForm, terms_accepted: e.target.checked, marketing_sms_consent: e.target.checked })}
+                    />
+                    <button className="form-check-label portal-profile-consent-text" type="button" onClick={() => setTermsExpanded(!termsExpanded)}>
+                      {expandableConsentText(combinedConsentText, termsExpanded)}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer portal-profile-footer">
+              <button className="btn" type="button" onClick={() => setProfileOpen(false)}>{t('Cancel')}</button>
+              <button className="btn btn-primary" disabled={profileSaving || !profileForm.terms_accepted}>{profileSaving ? t('Saving...') : t('Save Profile')}</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {profileSuccess && (
+        <Modal
+          title={t('Profile Saved')}
+          onClose={() => setProfileSuccess(null)}
+          dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+          bodyClassName="portal-profile-modal-body"
+          contentClassName="portal-profile-modal-content"
+        >
+          <div className="text-center portal-profile-success">
+            <div className="portal-success-to-gift"><IconCircleCheck size={44} /><IconGift size={44} /></div>
+            <h3>{profileSuccess}</h3>
+            <p className="text-muted">{t('Close this message, then tap the gift below your avatar when you are ready to redeem.')}</p>
+            <button className="btn btn-primary w-100" type="button" onClick={() => setProfileSuccess(null)}>{t('Close')}</button>
+          </div>
+        </Modal>
+      )}
+
+      {helpOpen && (
+        <Modal
+          title={helpMode === 'chat' ? t('Message Admin') : helpMode === 'missing-time' ? t('Report Missing Time') : t('Help')}
+          onClose={() => setHelpOpen(false)}
+          dialogClassName="portal-profile-modal-dialog"
+          bodyClassName="portal-profile-modal-body"
+          contentClassName="portal-profile-modal-content"
+        >
+          {helpMode === 'menu' && (
+            <div className="row g-3">
+              <div className="col-md-6">
+                <button className="card card-link w-100 text-start" type="button" onClick={() => { setHelpMode('chat'); loadSupportConversation(); }}>
+                  <div className="card-body">
+                    <IconMessageCircle size={26} className="text-blue mb-2" />
+                    <div className="fw-bold">{t('Message Admin')}</div>
+                    <div className="small text-muted">{t('Send a support message and receive replies inside this portal.')}</div>
+                  </div>
+                </button>
+              </div>
+              <div className="col-md-6">
+                <button className="card card-link w-100 text-start" type="button" onClick={() => setHelpMode('missing-time')}>
+                  <div className="card-body">
+                    <IconClock size={26} className="text-yellow mb-2" />
+                    <div className="fw-bold">{t('Report Missing Time')}</div>
+                    <div className="small text-muted">{t('Verify your contact number so the system can move remaining time to this device.')}</div>
+                  </div>
+                </button>
+              </div>
+              <div className="col-md-6">
+                <button className="card card-link w-100 text-start" type="button" onClick={openPortalCoverageExternal}>
+                  <div className="card-body">
+                    <IconMapPin size={26} className="text-green mb-2" />
+                    <div className="fw-bold">{t('AP Areas')}</div>
+                    <div className="small text-muted">{portalCoverageAreaLabel()} · {t('View nearby sites and mapped AP locations.')}</div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
+          {helpMode === 'chat' && (
+            <div>
+              <div className="portal-chat-thread mb-3">
+                {(supportConversation?.messages || []).length ? supportConversation.messages.map((message) => (
+                  <div key={message.id} className={`portal-chat-bubble ${message.sender_type === 'ADMIN' ? 'is-admin' : 'is-customer'}`}>
+                    <div>{message.message_text}</div>
+                    <div className="small opacity-75 mt-1">{message.sender_type === 'ADMIN' ? t('Admin') : t('You')} · {formatPortalDateTime(message.created_at)}</div>
+                  </div>
+                )) : <div className="text-muted text-center py-4">{t('No messages yet.')}</div>}
+              </div>
+              {supportConversation?.error && <div className="alert alert-danger">{supportConversation.error}</div>}
+              <form className="d-flex gap-2" onSubmit={sendSupportMessage}>
+                <input className="form-control" value={supportMessage} onChange={(e) => setSupportMessage(e.target.value)} placeholder={t('Type your message...')} />
+                <button className="btn btn-primary" disabled={supportLoading || !supportMessage.trim()}><IconSend size={18} /></button>
+              </form>
+              <button className="btn btn-link mt-2 px-0" type="button" onClick={() => setHelpMode('menu')}>{t('Back')}</button>
+            </div>
+          )}
+          {helpMode === 'missing-time' && (
+            <form onSubmit={restoreMissingTime}>
+              <div className="alert alert-info">{t('Use the same verified contact number from your profile. We will send a 4-character code before moving remaining time to this device.')}</div>
+              {missingTimeMessage && <div className="alert alert-secondary">{missingTimeMessage}</div>}
+              <div className="row g-3">
+                <div className="col-12">
+                  <label className="form-label">{t('Contact Number')}</label>
+                  <div className="input-group portal-contact-code-group">
+                    <input className="form-control" inputMode="tel" required value={missingTimeForm.contact_number} onChange={(e) => setMissingTimeForm({ ...missingTimeForm, contact_number: e.target.value })} />
+                    <button className="btn btn-outline-primary" type="button" onClick={sendMissingTimeCode} disabled={missingTimeSending || missingTimeCodeCooldown > 0 || !missingTimeForm.contact_number}>
+                      <IconSend size={18} className="me-2" />{missingTimeSending ? t('Sending...') : missingTimeCodeCooldown > 0 ? t('Send Code Again After ({seconds}s)', { seconds: missingTimeCodeCooldown }) : t('Send Code')}
+                    </button>
+                  </div>
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label">{t('4-character Code')}</label>
+                  <input className="form-control text-uppercase" required value={missingTimeForm.verification_code} onChange={(e) => setMissingTimeForm({ ...missingTimeForm, verification_code: e.target.value.toUpperCase() })} />
+                </div>
+              </div>
+              <div className="modal-footer px-0 pb-0">
+                <button className="btn" type="button" onClick={() => setHelpMode('menu')}>{t('Back')}</button>
+                <button className="btn btn-primary" disabled={missingTimeRestoring}>{missingTimeRestoring ? t('Restoring...') : t('Restore Remaining Time')}</button>
+              </div>
+            </form>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }
@@ -844,6 +3533,29 @@ function CardHeaderContent({ children }) {
   return children;
 }
 
+function ActionBadgeGroup({ children, className = '' }) {
+  return (
+    <div className={`action-badge-list ${className}`} aria-label="Row actions">
+      {children}
+    </div>
+  );
+}
+
+function ActionBadgeButton({ icon: Icon, label, tone = 'secondary', onClick, disabled = false, className = '', type = 'button', children }) {
+  return (
+    <button
+      className={`badge bg-${tone}-lt text-${tone} action-icon-badge border-0 ${className}`.trim()}
+      type={type}
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      {Icon ? <Icon size={22} /> : children}
+    </button>
+  );
+}
+
 function AutoDismissAlert({ message, tone = 'success', onDismiss, timeoutMs = 6000 }) {
   useEffect(() => {
     if (!message || !onDismiss) return undefined;
@@ -909,7 +3621,7 @@ function Dashboard({ data }) {
       </div>
       <KpiCard icon={IconDatabase} label="System Status" value={health.database ? 'Online' : 'Offline'} tone="green" />
       <KpiCard icon={IconActivity} label="Active Portal Access" value={stats.active_sessions || 0} tone="red" />
-      <KpiCard icon={IconWifi} label="Connected Devices" value={stats.active_sessions || 0} tone="purple" />
+      <KpiCard icon={IconWifi} label="Customer Devices" value={stats.active_sessions || 0} tone="purple" />
       <KpiCard icon={IconKey} label="Vouchers" value={stats.vouchers || 0} tone="yellow" />
       <KpiCard icon={IconWallet} label="Wallet Credits" value="Tracked" tone="green" />
       <KpiCard icon={IconWifi} label="Portal Sessions 24h" value={stats.portal_sessions_24h || 0} tone="blue" />
@@ -1047,7 +3759,11 @@ function UsersPage({ refresh }) {
                         <td className="user-col-valid"><span className="users-cell-truncate" title={user.valid_until || ''}>{user.valid_until || 'n/a'}</span></td>
                         <td className="user-col-access">{user.is_unlimited ? <span className="badge bg-blue-lt">Unlimited</span> : needsBalance(user) ? <span className="badge bg-yellow-lt">Needs Balance</span> : <span className="badge bg-green-lt">Limited</span>}</td>
                         <td className="user-col-created"><span className="users-cell-truncate" title={user.created_at || ''}>{user.created_at || ''}</span></td>
-                        <td className="text-end user-col-actions"><button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openManage(user)}>Manage</button></td>
+                        <td className="text-end user-col-actions">
+                          <ActionBadgeGroup>
+                            <ActionBadgeButton icon={IconUserCog} label="Manage account" tone="blue" onClick={() => openManage(user)} />
+                          </ActionBadgeGroup>
+                        </td>
                       </tr>
                     ))}
                     {!visibleRows.length && (
@@ -1105,57 +3821,285 @@ function UsersPage({ refresh }) {
   );
 }
 
-function ConnectedDevicesPage() {
-  const [data, setData] = useState({ summary: {}, active: [], inactive: [] });
-  const [tab, setTab] = useState('active');
+function CustomerDevicesPage() {
+  const [data, setData] = useState({ summary: {}, customers: [], without_profiles: [], active: [], inactive: [], with_vouchers: [] });
+  const [tab, setTab] = useState('customers');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [timeTarget, setTimeTarget] = useState(null);
+  const [timeForm, setTimeForm] = useState({ mode: 'add', minutes: 5, note: '' });
+  const [resetTarget, setResetTarget] = useState(null);
+  const [deviceDetailsTarget, setDeviceDetailsTarget] = useState(null);
   const tabs = [
-    ['active', 'Active', data.summary?.active || 0, 'green'],
-    ['inactive', 'Inactive', data.summary?.inactive || 0, 'secondary']
+    ['customers', 'Profiled Customers', data.summary?.customers || 0, 'green'],
+    ['without_profiles', 'No Profile Yet', data.summary?.without_profiles || 0, 'yellow'],
+    ['active', 'Active Devices', data.summary?.active || 0, 'blue'],
+    ['with_vouchers', 'w/ Vouchers', data.summary?.with_vouchers || 0, 'purple']
   ];
   async function load() {
     setLoading(true);
+    setError('');
+    setMessage('');
     try {
-      setData(await request('/connected-devices'));
+      setData(await request('/customer-devices'));
+    } catch (err) {
+      setError(err.message || 'Could not load customer devices.');
     } finally {
       setLoading(false);
     }
   }
   useEffect(() => { load(); }, []);
   const rows = data[tab] || [];
-  const filtered = rows.filter((device) => {
-    const text = [
-      device.hostname,
-      device.username,
-      device.client_mac,
-      device.client_mac_masked,
-      device.client_ip,
-      device.ap_name,
-      device.ap_ip,
-      device.ssid,
-      device.site,
-      device.source,
-      device.raw_status
-    ].join(' ').toLowerCase();
+  const filtered = rows.filter((row) => {
+    const text = JSON.stringify(row || {}).toLowerCase();
     return !query.trim() || text.includes(query.trim().toLowerCase());
   });
+  const customerTabs = ['customers', 'without_profiles'];
+  const deviceName = (device) => device?.device_name || device?.hostname || device?.username || device?.client_mac || device?.client_ip || 'Unknown device';
+  async function manageTime(e) {
+    e.preventDefault();
+    if (!timeTarget?.portal_session_id) return;
+    const amount = Math.max(0, Number(timeForm.minutes) || 0) * 60 * (timeForm.mode === 'deduct' ? -1 : 1);
+    await request(`/connected-devices/${timeTarget.portal_session_id}/time-adjust`, { method: 'POST', body: JSON.stringify({ amount_seconds: amount, note: timeForm.note || null }) });
+    setTimeTarget(null);
+    setMessage('Device time updated.');
+    await load();
+  }
+  async function deleteDevice(row) {
+    if (!window.confirm(`Remove access for ${row.device_name || row.hostname || row.client_mac || row.client_ip || 'this device'}?`)) return;
+    await request(`/connected-devices/${row.portal_session_id || row.id}`, { method: 'DELETE' });
+    setMessage('Device access removed.');
+    await load();
+  }
+  async function blockDevice(row) {
+    if (!window.confirm(`Block ${row.device_name || row.hostname || row.client_mac || row.client_ip || 'this device'} and remove current access?`)) return;
+    await request(`/connected-devices/${row.portal_session_id || row.id}/block`, { method: 'POST', body: JSON.stringify({ reason: 'Blocked from Customer Devices page' }) });
+    setMessage('Device blocked.');
+    await load();
+  }
+  async function resetProfile() {
+    if (!resetTarget?.user_id) return;
+    await request(`/customer-devices/customers/${resetTarget.user_id}/profile`, { method: 'DELETE' });
+    setResetTarget(null);
+    setMessage('Customer profile reset. The customer must verify their profile again in the portal.');
+    await load();
+  }
+  function customerDeviceStats(customer = {}) {
+    const devices = customer.devices || [];
+    const macs = new Set();
+    let sessionCount = 0;
+    let activeDevices = 0;
+    devices.forEach((device) => {
+      if (device.active) activeDevices += 1;
+      (device.mac_addresses || []).forEach((mac) => macs.add(mac));
+      sessionCount += (device.sessions || []).length;
+    });
+    return {
+      devices: Number(customer.device_count ?? devices.length) || devices.length,
+      macs: Number(customer.mac_count ?? macs.size) || macs.size,
+      activeDevices,
+      sessions: sessionCount,
+    };
+  }
+  function DeviceStack({ devices = [], showSessions = false }) {
+    return (
+      <div className="customer-device-stack">
+        {devices.map((device) => (
+          <div className="customer-device-item" key={device.device_key || device.portal_session_id || device.device_name}>
+            <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+              <div>
+                <div className="fw-semibold">{deviceName(device)}</div>
+                <div className="text-muted small">
+                  {[device.client_ip, device.ssid, device.site].filter(Boolean).join(' · ') || 'No network details yet'}
+                </div>
+              </div>
+              <div className="d-flex align-items-center gap-2 flex-wrap">
+                <span className={`badge ${device.active ? 'bg-green-lt text-green' : 'bg-secondary-lt'}`}>{device.active ? 'ACTIVE' : 'INACTIVE'}</span>
+                {device.remaining_time_seconds > 0 && <span className="badge bg-purple-lt text-purple">{formatSeconds(device.remaining_time_seconds)}</span>}
+              </div>
+            </div>
+            <div className="customer-mac-list">
+              {(device.mac_addresses || []).map((mac) => <span className="badge bg-blue-lt text-blue" key={mac}><IconWifi size={13} /> {mac}</span>)}
+              {!(device.mac_addresses || []).length && <span className="badge bg-secondary-lt">No MAC captured</span>}
+            </div>
+            {showSessions && (device.sessions || []).length > 0 && (
+              <div className="customer-session-list">
+                {(device.sessions || []).map((session, index) => (
+                  <div className="customer-session-item" key={`${session.portal_session_id || session.client_mac || index}-session`}>
+                    <div className="d-flex flex-wrap align-items-center gap-2">
+                      <span className={`badge ${session.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt'}`}>{session.status || 'UNKNOWN'}</span>
+                      {session.voucher_code && <span className="badge bg-purple-lt text-purple">{session.voucher_code}</span>}
+                    </div>
+                    <div className="text-muted small">
+                      {[session.client_mac, session.client_ip, fmt(session.last_seen)].filter(Boolean).join(' · ') || 'No session details'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+  function CustomerDeviceSummary({ customer }) {
+    const stats = customerDeviceStats(customer);
+    return (
+      <div className="customer-device-summary">
+        <button className="customer-device-count-badge bg-blue-lt text-blue" type="button" onClick={() => setDeviceDetailsTarget(customer)}>
+          <IconRouter size={15} /> {stats.devices} device{stats.devices === 1 ? '' : 's'}
+        </button>
+        <button className="customer-device-count-badge bg-cyan-lt text-cyan" type="button" onClick={() => setDeviceDetailsTarget(customer)}>
+          <IconWifi size={15} /> {stats.macs} MAC{stats.macs === 1 ? '' : 's'}
+        </button>
+        {stats.activeDevices > 0 && (
+          <button className="customer-device-count-badge bg-green-lt text-green" type="button" onClick={() => setDeviceDetailsTarget(customer)}>
+            <IconActivity size={15} /> {stats.activeDevices} active
+          </button>
+        )}
+      </div>
+    );
+  }
+  function CustomerDeviceDetailsPanel({ customer }) {
+    if (!customer) return null;
+    const stats = customerDeviceStats(customer);
+    const title = customer.name || 'Profile not set';
+    return createPortal(
+      <>
+        <button className="customer-devices-drawer-backdrop" type="button" aria-label="Close device details" onClick={() => setDeviceDetailsTarget(null)} />
+        <aside className="customer-devices-drawer" aria-label="Customer device and MAC history">
+          <div className="customer-devices-drawer-header">
+            <div className="d-flex align-items-center gap-2 min-w-0">
+              <span className={`avatar avatar-sm ${customer.has_profile ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}><IconUser size={17} /></span>
+              <div className="min-w-0">
+                <div className="h3 mb-1 text-truncate">{title}</div>
+                <div className="text-muted small text-truncate">{customer.contact_number || customer.email || 'No verified contact'}</div>
+              </div>
+            </div>
+            <button className="btn btn-icon btn-outline-secondary" type="button" aria-label="Close" onClick={() => setDeviceDetailsTarget(null)}>
+              <IconX size={18} />
+            </button>
+          </div>
+          <div className="customer-devices-drawer-body">
+            <div className="customer-device-detail-kpis">
+              <div className="customer-device-detail-kpi">
+                <div className="customer-device-detail-kpi-label"><span><IconRouter size={18} /></span><small>Devices</small></div>
+                <strong>{stats.devices}</strong>
+              </div>
+              <div className="customer-device-detail-kpi">
+                <div className="customer-device-detail-kpi-label"><span><IconWifi size={18} /></span><small>MACs</small></div>
+                <strong>{stats.macs}</strong>
+              </div>
+              <div className="customer-device-detail-kpi">
+                <div className="customer-device-detail-kpi-label"><span><IconActivity size={18} /></span><small>Active</small></div>
+                <strong>{stats.activeDevices}</strong>
+              </div>
+              <div className="customer-device-detail-kpi">
+                <div className="customer-device-detail-kpi-label"><span><IconHistory size={18} /></span><small>Sessions</small></div>
+                <strong>{stats.sessions}</strong>
+              </div>
+            </div>
+            <div className="card mt-3">
+              <div className="card-header">
+                <div>
+                  <h3 className="card-title mb-1">Devices and MAC History</h3>
+                  <div className="text-muted small">All known devices and MAC addresses grouped under this customer row.</div>
+                </div>
+              </div>
+              <div className="card-body">
+                <DeviceStack devices={customer.devices || []} showSessions />
+              </div>
+            </div>
+          </div>
+        </aside>
+      </>,
+      document.body
+    );
+  }
+  function CustomerRows({ rows: customerRows = [], profileRequired = true }) {
+    return (
+      <div className="table-responsive">
+        <table className="table card-table table-vcenter customer-devices-table">
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Contact #</th>
+              <th>Email</th>
+              <th>Devices / MAC history</th>
+              <th>Remaining</th>
+              <th>Last Seen</th>
+              <th className="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {customerRows.map((customer) => (
+              <tr
+                key={customer.customer_key}
+                className="customer-clickable-row"
+                role="button"
+                tabIndex={0}
+                onClick={() => setDeviceDetailsTarget(customer)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    setDeviceDetailsTarget(customer);
+                  }
+                }}
+              >
+                <td>
+                  <div className="d-flex align-items-center gap-2">
+                    <span className={`avatar avatar-sm ${profileRequired ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}><IconUser size={17} /></span>
+                    <div>
+                      <div className="fw-semibold">{customer.name || 'Profile not set'}</div>
+                    </div>
+                  </div>
+                </td>
+                <td>{customer.contact_number || <span className="text-muted">Not verified</span>}</td>
+                <td>{customer.email || <span className="text-muted">No email</span>}</td>
+                <td><CustomerDeviceSummary customer={customer} /></td>
+                <td>{customer.remaining_time_seconds > 0 ? <span className="badge bg-green-lt text-green">{formatSeconds(customer.remaining_time_seconds)}</span> : <span className="text-muted">No active time</span>}</td>
+                <td>{fmt(customer.latest_seen)}</td>
+                <td className="text-end text-nowrap">
+                  {profileRequired ? (
+                    <ActionBadgeGroup className="justify-content-end">
+                      <ActionBadgeButton icon={IconEye} label="View devices and MAC history" tone="blue" onClick={(event) => { event.stopPropagation(); setDeviceDetailsTarget(customer); }} />
+                      <ActionBadgeButton icon={IconUserCog} label="Reset customer profile" tone="red" onClick={(event) => { event.stopPropagation(); setResetTarget(customer); }} />
+                    </ActionBadgeGroup>
+                  ) : (
+                    <ActionBadgeGroup className="justify-content-end">
+                      <ActionBadgeButton icon={IconEye} label="View devices and MAC history" tone="blue" onClick={(event) => { event.stopPropagation(); setDeviceDetailsTarget(customer); }} />
+                    </ActionBadgeGroup>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {!customerRows.length && <tr><td colSpan="7" className="text-muted p-4">No customer devices found.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
   return (
     <div className="row row-cards">
       <div className="col-12">
         <div className="alert alert-info">
-          Connected Devices shows devices detected from Omada/AP client data and portal session records. Voucher management is now the main customer workflow; account management is parked for later.
+          Customer Devices groups portal and Omada client records by customer profile. Devices without a saved profile are separated so the operator can see who still needs verification.
         </div>
       </div>
+      <KpiCard icon={IconUsers} label="Profiled Customers" value={data.summary?.customers || 0} tone="green" />
+      <KpiCard icon={IconUser} label="No Profile Yet" value={data.summary?.without_profiles || 0} tone="yellow" />
       <KpiCard icon={IconWifi} label="Active Devices" value={data.summary?.active || 0} tone="green" />
-      <KpiCard icon={IconClock} label="Inactive Devices" value={data.summary?.inactive || 0} tone="secondary" />
-      <KpiCard icon={IconRouter} label="Omada Site" value={data.summary?.omada_site_name || data.summary?.omada_site_id || 'Not selected'} tone="blue" />
+      <KpiCard icon={IconKey} label="With Vouchers" value={data.summary?.with_vouchers || 0} tone="purple" />
+      {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
+      {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
       <div className="col-12">
         <div className="card">
           <div className="card-header">
             <div>
-              <h3 className="card-title mb-1">Connected Devices</h3>
-              <div className="text-muted small">Active means the device is currently detected as connected. Inactive means it was detected before but is no longer currently active.</div>
+              <h3 className="card-title mb-1">Customer Devices</h3>
+              <div className="text-muted small">Customer rows show verified contact details first, then every device and MAC address detected under that customer.</div>
             </div>
             <div className="card-actions">
               <button className="btn btn-outline-primary" type="button" onClick={load} disabled={loading}><IconRefresh size={18} className="me-2" />Refresh</button>
@@ -1173,16 +4117,66 @@ function ConnectedDevicesPage() {
                   </li>
                 ))}
               </ul>
-              <div className="input-icon connected-devices-search">
-                <input className="form-control form-control-sm" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search devices" />
+              <div className="input-icon customer-devices-search">
+                <input className="form-control form-control-sm" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search customers, devices, MAC, contact" />
                 <span className="input-icon-addon"><IconSearch size={16} /></span>
               </div>
             </div>
           </div>
+          {customerTabs.includes(tab) ? (
+            <CustomerRows rows={filtered} profileRequired={tab === 'customers'} />
+          ) : tab === 'with_vouchers' ? (
+          <div className="table-responsive">
+            <table className="table card-table table-vcenter">
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Device</th>
+                  <th>MAC</th>
+                  <th>IP</th>
+                  <th>Voucher</th>
+                  <th>SSID</th>
+                  <th>Site</th>
+                  <th>Remaining Time</th>
+                  <th className="text-end">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((device, index) => (
+                  <tr key={`${device.portal_session_id || device.client_mac || index}-voucher`}>
+                    <td>
+                      <div className="fw-semibold">{device.customer_name || 'Profile not set'}</div>
+                      <div className="text-muted small">{device.customer_contact_number || device.customer_email || 'No verified contact'}</div>
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{device.device_name || device.username || 'Unknown device'}</div>
+                      <div className="text-muted small">{device.public_session_id || device.portal_source}</div>
+                    </td>
+                    <td><code>{device.client_mac || 'n/a'}</code></td>
+                    <td>{device.client_ip || 'n/a'}</td>
+                    <td><code>{device.voucher_code || 'n/a'}</code></td>
+                    <td>{device.ssid || 'n/a'}</td>
+                    <td>{device.site || 'n/a'}</td>
+                    <td><span className="badge bg-green-lt text-green">{formatSeconds(device.remaining_time_seconds)}</span></td>
+                    <td className="text-end text-nowrap">
+                      <ActionBadgeGroup>
+                        <ActionBadgeButton icon={IconClock} label="Manage time" tone="blue" onClick={() => { setTimeTarget(device); setTimeForm({ mode: 'add', minutes: 5, note: '' }); }} />
+                        <ActionBadgeButton icon={IconBan} label="Block device" tone="orange" onClick={() => blockDevice(device)} />
+                        <ActionBadgeButton icon={IconTrash} label="Delete device" tone="red" onClick={() => deleteDevice(device)} />
+                      </ActionBadgeGroup>
+                    </td>
+                  </tr>
+                ))}
+                {!filtered.length && <tr><td colSpan="9" className="text-muted p-4">No voucher devices detected yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          ) : (
           <div className="table-responsive">
             <table className="table card-table table-vcenter text-nowrap">
               <thead>
                 <tr>
+                  <th>Customer</th>
                   <th>Device</th>
                   <th>MAC</th>
                   <th>IP</th>
@@ -1198,10 +4192,14 @@ function ConnectedDevicesPage() {
                 {filtered.map((device, index) => (
                   <tr key={`${device.client_mac || device.id || index}-${device.source || ''}`}>
                     <td>
-                      <div className="fw-semibold">{device.hostname || device.username || 'Unknown device'}</div>
+                      <div className="fw-semibold">{device.customer_name || 'Profile not set'}</div>
+                      <div className="text-muted small">{device.customer_contact_number || device.customer_email || 'No verified contact'}</div>
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{device.device_name || device.hostname || device.username || 'Unknown device'}</div>
                       {device.session_id && <div className="text-muted small">{device.session_id}</div>}
                     </td>
-                    <td><code>{device.client_mac_masked || device.client_mac || 'n/a'}</code></td>
+                    <td><code>{device.client_mac || 'n/a'}</code></td>
                     <td>{device.client_ip || 'n/a'}</td>
                     <td>{device.ap_name || device.ap_ip || device.ap_mac || 'n/a'}</td>
                     <td>{device.ssid || 'n/a'}</td>
@@ -1211,12 +4209,53 @@ function ConnectedDevicesPage() {
                     <td><span className={`badge ${device.active ? 'bg-green-lt' : 'bg-secondary-lt'}`}>{device.status || (device.active ? 'ACTIVE' : 'INACTIVE')}</span></td>
                   </tr>
                 ))}
-                {!filtered.length && <tr><td colSpan="9" className="text-muted p-4">No {tab} devices detected yet.</td></tr>}
+                {!filtered.length && <tr><td colSpan="10" className="text-muted p-4">No {tab} devices detected yet.</td></tr>}
               </tbody>
             </table>
           </div>
+          )}
         </div>
       </div>
+      {timeTarget && (
+        <Modal title={`Manage Time: ${timeTarget.device_name || timeTarget.client_mac || 'Device'}`} onClose={() => setTimeTarget(null)}>
+          <form onSubmit={manageTime}>
+            <div className="row g-3">
+              <div className="col-md-6">
+                <label className="form-label">Action</label>
+                <select className="form-select" value={timeForm.mode} onChange={(e) => setTimeForm({ ...timeForm, mode: e.target.value })}>
+                  <option value="add">Add time</option>
+                  <option value="deduct">Deduct time</option>
+                </select>
+              </div>
+              <div className="col-md-6"><label className="form-label">Minutes</label><input className="form-control" type="number" min="1" value={timeForm.minutes} onChange={(e) => setTimeForm({ ...timeForm, minutes: e.target.value })} /></div>
+              <div className="col-12"><label className="form-label">Note</label><input className="form-control" value={timeForm.note} onChange={(e) => setTimeForm({ ...timeForm, note: e.target.value })} /></div>
+            </div>
+            <div className="modal-footer px-0 pb-0"><button className="btn" type="button" onClick={() => setTimeTarget(null)}>Cancel</button><button className="btn btn-primary">Save Time</button></div>
+          </form>
+        </Modal>
+      )}
+      {resetTarget && (
+        <Modal title="Reset Customer Profile" onClose={() => setResetTarget(null)}>
+          <div className="alert alert-danger">
+            This removes the saved profile for this customer. Their devices and voucher history remain, but the portal will require customer verification again before profile details are available.
+          </div>
+          <div className="card mb-3">
+            <div className="card-body">
+              <dl className="row mb-0">
+                <dt className="col-4">Name</dt><dd className="col-8">{resetTarget.name || 'n/a'}</dd>
+                <dt className="col-4">Contact #</dt><dd className="col-8">{resetTarget.contact_number || 'n/a'}</dd>
+                <dt className="col-4">Email</dt><dd className="col-8">{resetTarget.email || 'n/a'}</dd>
+                <dt className="col-4">Devices</dt><dd className="col-8">{resetTarget.device_count || 0} device(s), {resetTarget.mac_count || 0} MAC address(es)</dd>
+              </dl>
+            </div>
+          </div>
+          <div className="modal-footer px-0 pb-0">
+            <button className="btn" type="button" onClick={() => setResetTarget(null)}>Cancel</button>
+            <button className="btn btn-danger" type="button" onClick={resetProfile}><IconTrash size={18} className="me-2" />Reset Profile</button>
+          </div>
+        </Modal>
+      )}
+      <CustomerDeviceDetailsPanel customer={deviceDetailsTarget} />
     </div>
   );
 }
@@ -1668,10 +4707,10 @@ function SitesDeploymentsPage() {
                     <td><span className="text-muted">{site.notes || ''}</span></td>
                     <td>{fmt(site.created_at)}</td>
                     <td className="site-actions-col text-end">
-                      <div className="btn-list justify-content-end flex-nowrap">
-                        <button className="btn btn-icon" type="button" title="Edit site" onClick={() => startEditSite(site)}><IconEdit size={18} /></button>
-                        <button className="btn btn-icon btn-outline-danger" type="button" title="Delete site" onClick={() => openDeleteSiteModal(site)}><IconTrash size={18} /></button>
-                      </div>
+                      <ActionBadgeGroup>
+                        <ActionBadgeButton icon={IconEdit} label="Edit site" tone="blue" onClick={() => startEditSite(site)} />
+                        <ActionBadgeButton icon={IconTrash} label="Delete site" tone="red" onClick={() => openDeleteSiteModal(site)} />
+                      </ActionBadgeGroup>
                     </td>
                   </tr>
                 ))}
@@ -2645,13 +5684,12 @@ function ListOfApsPage() {
                       <td>{ap.uptime || 'n/a'}</td>
                       <td>{formatOmadaTimestamp(ap.last_seen)}</td>
                       <td className="text-end">
-                        <div className="ap-action-list" aria-label="AP actions">
-                          <button className="ap-action-badge" type="button" onClick={(event) => { event.stopPropagation(); openEditAp(ap); }} title="Edit AP name" aria-label="Edit AP name">
-                            <IconEdit size={15} />
-                          </button>
-                          <button
-                            className="ap-action-badge ap-action-badge-primary"
-                            type="button"
+                        <ActionBadgeGroup>
+                          <ActionBadgeButton icon={IconEdit} label="Edit AP name" tone="blue" onClick={(event) => { event.stopPropagation(); openEditAp(ap); }} />
+                          <ActionBadgeButton
+                            icon={IconCloudUpload}
+                            label={ap.local_status === 'CONNECTED' ? 'Open AP config push steps' : 'AP must be connected before config can be pushed'}
+                            tone="green"
                             onClick={(event) => {
                               event.stopPropagation();
                               setPushResult(null);
@@ -2659,15 +5697,9 @@ function ListOfApsPage() {
                               setConfigPushTarget({ site, ap });
                             }}
                             disabled={ap.local_status !== 'CONNECTED'}
-                            title={ap.local_status === 'CONNECTED' ? 'Open AP config push steps' : 'AP must be connected before config can be pushed'}
-                            aria-label="Push AP config"
-                          >
-                            <IconCloudUpload size={15} />
-                          </button>
-                          <button className="ap-action-badge ap-action-badge-danger" type="button" onClick={(event) => { event.stopPropagation(); deleteAp(ap); }} title={ap.local_status === 'ADOPT_FAILED' ? 'Remove from site table' : 'Delete AP'} aria-label={ap.local_status === 'ADOPT_FAILED' ? 'Remove from site table' : 'Delete AP'}>
-                            {ap.local_status === 'ADOPT_FAILED' ? <IconX size={15} /> : <IconTrash size={15} />}
-                          </button>
-                        </div>
+                          />
+                          <ActionBadgeButton icon={ap.local_status === 'ADOPT_FAILED' ? IconX : IconTrash} label={ap.local_status === 'ADOPT_FAILED' ? 'Remove from site table' : 'Delete AP'} tone="red" onClick={(event) => { event.stopPropagation(); deleteAp(ap); }} />
+                        </ActionBadgeGroup>
                       </td>
                     </tr>
                   ))}
@@ -3050,10 +6082,31 @@ function ListOfApsPage() {
   );
 }
 
-function LongLatMap({ aps, center, zoom, setCenter, setZoom, selectedApId, onSelectAp, onPlaceAp, editable = true, canDragAp = () => true, editingApId = '' }) {
+function LongLatMap({
+  aps,
+  center,
+  zoom,
+  setCenter,
+  setZoom,
+  selectedApId,
+  onSelectAp,
+  onPlaceAp,
+  editable = true,
+  canDragAp = () => true,
+  editingApId = '',
+  coverageMeters = 200,
+  showClientBadges = true,
+  showLegend = true,
+  customerLocation = null,
+  routeAp = null,
+  routePath = [],
+  extraControls = null
+}) {
   const mapRef = useRef(null);
   const [size, setSize] = useState({ width: 1024, height: 640 });
   const panRef = useRef(null);
+  const pointersRef = useRef(new Map());
+  const pinchRef = useRef(null);
 
   useEffect(() => {
     if (!mapRef.current) return undefined;
@@ -3099,7 +6152,7 @@ function LongLatMap({ aps, center, zoom, setCenter, setZoom, selectedApId, onSel
     for (let y = minTileY; y <= maxTileY; y += 1) {
       tiles.push({
         key: `${x}-${y}`,
-        url: `https://tile.openstreetmap.org/${zoom}/${wrappedX}/${y}.png`,
+        url: `${API}/portal/map-tiles/${zoom}/${wrappedX}/${y}.png`,
         left: x * MAP_TILE_SIZE - topLeft.x,
         top: y * MAP_TILE_SIZE - topLeft.y
       });
@@ -3111,13 +6164,37 @@ function LongLatMap({ aps, center, zoom, setCenter, setZoom, selectedApId, onSel
     return worldPixelToLatLng(topLeft.x + clientX - rect.left, topLeft.y + clientY - rect.top, zoom);
   }
 
+  function pointerDistance(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
   function startMapDrag(e) {
-    if (e.button !== 0 || e.target.closest('.longlat-map-marker') || e.target.closest('.longlat-map-control')) return;
-    panRef.current = { x: e.clientX, y: e.clientY };
+    if ((e.pointerType === 'mouse' && e.button !== 0) || e.target.closest('.longlat-map-marker') || e.target.closest('.longlat-map-control')) return;
+    e.preventDefault();
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointersRef.current.size === 1) {
+      panRef.current = { x: e.clientX, y: e.clientY };
+      pinchRef.current = null;
+    }
+    if (pointersRef.current.size >= 2) {
+      const points = Array.from(pointersRef.current.values()).slice(0, 2);
+      pinchRef.current = { distance: Math.max(1, pointerDistance(points[0], points[1])), zoom };
+      panRef.current = null;
+    }
     e.currentTarget.setPointerCapture?.(e.pointerId);
   }
 
   function moveMap(e) {
+    if (!pointersRef.current.has(e.pointerId)) return;
+    e.preventDefault();
+    pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointersRef.current.size >= 2 && pinchRef.current) {
+      const points = Array.from(pointersRef.current.values()).slice(0, 2);
+      const ratio = pointerDistance(points[0], points[1]) / Math.max(1, pinchRef.current.distance);
+      const nextZoom = clamp(Math.round(pinchRef.current.zoom + Math.log2(ratio) * 2), 5, 19);
+      if (nextZoom !== zoom) setZoom(nextZoom);
+      return;
+    }
     if (!panRef.current) return;
     const dx = e.clientX - panRef.current.x;
     const dy = e.clientY - panRef.current.y;
@@ -3128,8 +6205,20 @@ function LongLatMap({ aps, center, zoom, setCenter, setZoom, selectedApId, onSel
     });
   }
 
-  function stopMapDrag() {
-    panRef.current = null;
+  function stopMapDrag(e) {
+    try {
+      e?.currentTarget?.releasePointerCapture?.(e.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+    if (e?.pointerId !== undefined) pointersRef.current.delete(e.pointerId);
+    if (pointersRef.current.size === 1) {
+      const point = Array.from(pointersRef.current.values())[0];
+      panRef.current = { x: point.x, y: point.y };
+    } else {
+      panRef.current = null;
+    }
+    if (pointersRef.current.size < 2) pinchRef.current = null;
   }
 
   function handleDrop(e) {
@@ -3139,6 +6228,22 @@ function LongLatMap({ aps, center, zoom, setCenter, setZoom, selectedApId, onSel
     if (!apId) return;
     onPlaceAp(apId, screenToLatLng(e.clientX, e.clientY));
   }
+
+  const customerPoint = customerLocation ? latLngToWorldPixel(customerLocation.latitude, customerLocation.longitude, zoom) : null;
+  const customerScreen = customerPoint ? { left: customerPoint.x - topLeft.x, top: customerPoint.y - topLeft.y } : null;
+  const routeApPoint = routeAp?.mapped ? latLngToWorldPixel(routeAp.map_latitude, routeAp.map_longitude, zoom) : null;
+  const routeApScreen = routeApPoint ? { left: routeApPoint.x - topLeft.x, top: routeApPoint.y - topLeft.y } : null;
+  const routeScreenPoints = Array.isArray(routePath)
+    ? routePath
+      .map((point) => {
+        const lat = Number(point.latitude);
+        const lng = Number(point.longitude);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+        const pixel = latLngToWorldPixel(lat, lng, zoom);
+        return `${pixel.x - topLeft.x},${pixel.y - topLeft.y}`;
+      })
+      .filter(Boolean)
+    : [];
 
   return (
     <div
@@ -3150,15 +6255,30 @@ function LongLatMap({ aps, center, zoom, setCenter, setZoom, selectedApId, onSel
       onPointerMove={moveMap}
       onPointerUp={stopMapDrag}
       onPointerCancel={stopMapDrag}
+      onPointerLeave={stopMapDrag}
     >
       {tiles.map((tile) => (
         <img className="longlat-map-tile" key={tile.key} src={tile.url} alt="" style={{ left: tile.left, top: tile.top }} draggable={false} />
       ))}
+      {routeScreenPoints.length >= 2 && (
+        <svg className="longlat-map-route-overlay" aria-hidden="true">
+          <polyline points={routeScreenPoints.join(' ')} />
+        </svg>
+      )}
+      {routeScreenPoints.length < 2 && customerScreen && routeApScreen && (
+        <svg className="longlat-map-route-overlay" aria-hidden="true">
+          <line x1={customerScreen.left} y1={customerScreen.top} x2={routeApScreen.left} y2={routeApScreen.top} />
+        </svg>
+      )}
       {aps.filter((ap) => ap.mapped).map((ap) => {
         const point = latLngToWorldPixel(ap.map_latitude, ap.map_longitude, zoom);
         const left = point.x - topLeft.x;
         const top = point.y - topLeft.y;
         const tone = apMapTone(ap);
+        const clientCount = apMapClientCount(ap);
+        const coverageRadiusPx = metersToMapPixels(coverageMeters, ap.map_latitude, zoom);
+        const coverageSizePx = Math.max(0, coverageRadiusPx * 2);
+        const coverageStyle = coverageSizePx > 0 ? { width: `${coverageSizePx}px`, height: `${coverageSizePx}px` } : {};
         const markerDraggable = editable && canDragAp(ap);
         const markerEditing = editingApId === ap.id;
         return (
@@ -3176,20 +6296,32 @@ function LongLatMap({ aps, center, zoom, setCenter, setZoom, selectedApId, onSel
               e.dataTransfer.setData('text/plain', ap.id);
             } : undefined}
           >
+            <span className="longlat-coverage-ring" style={coverageStyle} />
+            <span className="longlat-coverage-wave" style={coverageStyle} />
             <span className="longlat-marker-pulse" />
             <span className="longlat-marker-core"><IconWifi size={15} /></span>
+            {showClientBadges && clientCount > 0 && <span className="longlat-marker-client-badge">{clientCount > 99 ? '99+' : clientCount}</span>}
           </button>
         );
       })}
+      {customerScreen && (
+        <span className="longlat-map-customer-marker" style={{ left: customerScreen.left, top: customerScreen.top }} title="Your approximate location">
+          <span><IconMapPin size={16} /></span>
+        </span>
+      )}
       <div className="longlat-map-controls">
         <button className="longlat-map-control" type="button" onClick={() => setZoom((current) => clamp(current + 1, 5, 19))}>+</button>
         <button className="longlat-map-control" type="button" onClick={() => setZoom((current) => clamp(current - 1, 5, 19))}>-</button>
+        {extraControls}
       </div>
-      <div className="longlat-map-legend">
-        <span><i className="legend-dot legend-green" />With clients</span>
-        <span><i className="legend-dot legend-gray" />No clients</span>
-        <span><i className="legend-dot legend-red" />AP error</span>
-      </div>
+      {showLegend && (
+        <div className="longlat-map-legend">
+          {showClientBadges && <span><i className="legend-dot legend-green" />With clients</span>}
+          <span><i className="legend-dot legend-gray" />No clients</span>
+          <span><i className="legend-dot legend-red" />AP error</span>
+          <span><i className="legend-signal-ring" />200m signal area</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -3549,6 +6681,7 @@ function LongLatPage() {
   const unmapped = filteredAps.filter((ap) => !ap.mapped);
   const visiblePanelAps = tab === 'mapped' ? mapped : unmapped;
   const selectedAp = filteredAps.find((ap) => ap.id === selectedApId);
+  const filteredClientCount = filteredAps.reduce((sum, ap) => sum + apMapClientCount(ap), 0);
   const filteredErrorCount = filteredAps.filter((ap) => ap.map_error).length;
 
   function selectAp(ap) {
@@ -3710,6 +6843,7 @@ function LongLatPage() {
       />
       <div className="ap-client-map-kpi-overlay longlat-map-kpi-overlay" aria-label="Long Lat map summary">
         <span className="ap-client-kpi-chip ap-client-kpi-aps"><i><IconWifi size={15} /></i><strong>APs</strong><em>({filteredAps.length})</em></span>
+        <span className="ap-client-kpi-chip ap-client-kpi-clients"><i><IconUsers size={15} /></i><strong>Clients</strong><em>({filteredClientCount})</em></span>
         <span className="ap-client-kpi-chip ap-client-kpi-mapped"><i><IconMapPin size={15} /></i><strong>Mapped</strong><em>({mapped.length})</em></span>
         <span className="ap-client-kpi-chip ap-client-kpi-unmapped"><i><IconInfoCircle size={15} /></i><strong>Unmapped</strong><em>({unmapped.length})</em></span>
         <span className="ap-client-kpi-chip ap-client-kpi-errors"><i><IconAlertTriangle size={15} /></i><strong>Errors</strong><em>({filteredErrorCount})</em></span>
@@ -4197,10 +7331,10 @@ function LocationManagementPage() {
                     <td>{location.latitude !== null && location.latitude !== undefined && location.longitude !== null && location.longitude !== undefined ? <code>{Number(location.latitude).toFixed(6)}, {Number(location.longitude).toFixed(6)}</code> : <span className="text-muted">n/a</span>}</td>
                     <td><span className="badge bg-blue-lt">{location.geocode_source || 'MANUAL'}</span></td>
                     <td>{fmt(location.created_at)}</td>
-                    <td>
-                      <button className="btn btn-icon btn-outline-danger" type="button" onClick={() => deleteLocation(location)} title="Delete location" aria-label="Delete location">
-                        <IconTrash size={18} />
-                      </button>
+                    <td className="text-end">
+                      <ActionBadgeGroup>
+                        <ActionBadgeButton icon={IconTrash} label="Delete location" tone="red" onClick={() => deleteLocation(location)} />
+                      </ActionBadgeGroup>
                     </td>
                   </tr>
                 ))}
@@ -4250,28 +7384,440 @@ function LocationManagementPage() {
   );
 }
 
-function Modal({ title, children, onClose, size = 'lg' }) {
+function Modal({ title, children, onClose, size = 'lg', dialogClassName = '', bodyClassName = '', contentClassName = '', lockPageRefresh = false }) {
   useEffect(() => {
+    const scrollY = window.scrollY || window.pageYOffset || 0;
+    const previousBodyStyle = {
+      position: document.body.style.position,
+      top: document.body.style.top,
+      left: document.body.style.left,
+      right: document.body.style.right,
+      width: document.body.style.width,
+    };
+    const previousHtmlOverscroll = document.documentElement.style.overscrollBehavior;
+    document.documentElement.classList.add('modal-open');
     document.body.classList.add('modal-open');
-    return () => document.body.classList.remove('modal-open');
-  }, []);
+    if (lockPageRefresh) {
+      document.documentElement.style.overscrollBehavior = 'none';
+      document.body.style.position = 'fixed';
+      document.body.style.top = `-${scrollY}px`;
+      document.body.style.left = '0';
+      document.body.style.right = '0';
+      document.body.style.width = '100%';
+    }
+    return () => {
+      document.documentElement.classList.remove('modal-open');
+      document.body.classList.remove('modal-open');
+      if (lockPageRefresh) {
+        document.documentElement.style.overscrollBehavior = previousHtmlOverscroll;
+        document.body.style.position = previousBodyStyle.position;
+        document.body.style.top = previousBodyStyle.top;
+        document.body.style.left = previousBodyStyle.left;
+        document.body.style.right = previousBodyStyle.right;
+        document.body.style.width = previousBodyStyle.width;
+        window.scrollTo(0, scrollY);
+      }
+    };
+  }, [lockPageRefresh]);
 
   return createPortal(
     <>
       <div className="modal-backdrop fade show app-modal-backdrop" onClick={onClose} />
       <div className="modal modal-blur fade show d-block app-modal-layer" tabIndex="-1" role="dialog">
-        <div className={`modal-dialog modal-${size} modal-dialog-centered`}>
-          <div className="modal-content">
+        <div className={`modal-dialog modal-${size} modal-dialog-centered ${dialogClassName}`}>
+          <div className={`modal-content ${contentClassName}`}>
             <div className="modal-header">
               <h5 className="modal-title">{title}</h5>
               <button type="button" className="btn-close" aria-label="Close" onClick={onClose} />
             </div>
-            <div className="modal-body">{children}</div>
+            <div className={`modal-body ${bodyClassName}`}>{children}</div>
           </div>
         </div>
       </div>
     </>,
     document.body
+  );
+}
+
+function PortalCoveragePage() {
+  const [settings, setSettings] = useState(null);
+  const [coverage, setCoverage] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [customerLocation, setCustomerLocation] = useState(null);
+  const [center, setCenter] = useState(DEFAULT_MAP_CENTER);
+  const [zoom, setZoom] = useState(DEFAULT_MAP_ZOOM);
+  const [routeApId, setRouteApId] = useState('');
+  const [selectedApId, setSelectedApId] = useState('');
+  const [routePath, setRoutePath] = useState([]);
+  const [routeLoadingId, setRouteLoadingId] = useState('');
+  const [sitesPanelOpen, setSitesPanelOpen] = useState(true);
+  const [expandedCoverageSites, setExpandedCoverageSites] = useState({});
+  const [coverageSearch, setCoverageSearch] = useState('');
+
+  const aps = coverage?.aps || [];
+  const summary = coverage?.summary || {};
+  const routeAp = routeApId ? aps.find((ap) => ap.id === routeApId) : null;
+  const selectedAp = selectedApId ? aps.find((ap) => ap.id === selectedApId) : null;
+  const nearest = customerLocation && aps.length
+    ? aps
+      .map((ap) => ({ ap, distance: distanceMetersBetween(customerLocation, ap) }))
+      .filter((item) => Number.isFinite(item.distance))
+      .sort((a, b) => a.distance - b.distance)[0]
+    : null;
+  const areaCount = Number(summary.areas_count || 0);
+  const routeStatus = routeLoadingId
+    ? 'Finding road route...'
+    : routeAp && routePath.length >= 2
+      ? `${routeAp.display_name || routeAp.name || 'Selected AP'} route loaded.`
+      : '';
+
+  function coverageSiteKey(ap) {
+    return ap.site_id || ap.site_name || ap.area_label || ap.barangay || 'unknown-site';
+  }
+
+  function coverageSiteLabel(ap) {
+    return ap.area_label || ap.barangay || ap.site_name || 'Mapped AP Area';
+  }
+
+  function coverageSiteGroups() {
+    const groups = new Map();
+    const query = String(coverageSearch || '').trim().toLowerCase();
+    aps.forEach((ap) => {
+      const key = coverageSiteKey(ap);
+      const siteLabel = coverageSiteLabel(ap);
+      const searchable = [
+        siteLabel,
+        ap.site_name,
+        ap.area_label,
+        ap.barangay,
+        ap.municipality,
+        ap.display_name,
+        ap.name,
+        ap.model,
+        ap.status,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (query && !searchable.includes(query)) return;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          label: siteLabel,
+          siteName: ap.site_name || '',
+          aps: [],
+          nearestDistance: null,
+        });
+      }
+      const distance = customerLocation ? distanceMetersBetween(customerLocation, ap) : null;
+      const row = { ...ap, distance };
+      const group = groups.get(key);
+      group.aps.push(row);
+      if (Number.isFinite(distance) && (!Number.isFinite(group.nearestDistance) || distance < group.nearestDistance)) {
+        group.nearestDistance = distance;
+      }
+    });
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        aps: group.aps.sort((a, b) => {
+          if (Number.isFinite(a.distance) && Number.isFinite(b.distance)) return a.distance - b.distance;
+          return (a.display_name || a.name || '').localeCompare(b.display_name || b.name || '');
+        }),
+      }))
+      .sort((a, b) => {
+        if (Number.isFinite(a.nearestDistance) && Number.isFinite(b.nearestDistance)) return a.nearestDistance - b.nearestDistance;
+        return a.label.localeCompare(b.label);
+      });
+  }
+
+  const siteGroups = coverageSiteGroups();
+
+  function toggleCoverageSite(key) {
+    setExpandedCoverageSites((current) => ({ ...current, [key]: current[key] === false }));
+  }
+
+  function clearCoverageRoute() {
+    setRouteApId('');
+    setRoutePath([]);
+    setRouteLoadingId('');
+  }
+
+  function updateCoverageCenter(data = coverage, location = customerLocation, targetAp = null) {
+    const rows = data?.aps || [];
+    const nearestRow = location && rows.length
+      ? rows
+        .map((ap) => ({ ap, distance: distanceMetersBetween(location, ap) }))
+        .filter((item) => Number.isFinite(item.distance))
+        .sort((a, b) => a.distance - b.distance)[0]
+      : null;
+    const ap = targetAp || nearestRow?.ap || rows[0];
+    if (location && ap) {
+      const mid = midpointLocation(location, ap);
+      if (mid) {
+        setCenter(mid);
+        setZoom(nearestRow?.distance && nearestRow.distance > 1500 ? 13 : 15);
+        return;
+      }
+    }
+    if (location) {
+      setCenter(location);
+      setZoom(16);
+      return;
+    }
+    if (ap) {
+      setCenter({ latitude: Number(ap.map_latitude), longitude: Number(ap.map_longitude) });
+      setZoom(16);
+    }
+  }
+
+  function requestLocation(data = coverage, options = {}) {
+    if (!navigator.geolocation) {
+      setError('Your browser did not allow location detection. Showing mapped AP areas only.');
+      updateCoverageCenter(data, null);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const location = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        };
+        setCustomerLocation(location);
+        setRouteApId('');
+        setRoutePath([]);
+        if (options.centerOnCustomer) {
+          setCenter(location);
+          setZoom(17);
+          setError('');
+        } else {
+          updateCoverageCenter(data || coverage, location);
+        }
+      },
+      () => {
+        setError('Location permission was not granted. Showing mapped AP areas only.');
+        updateCoverageCenter(data || coverage, null);
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
+    );
+  }
+
+  async function loadRoadRoute(ap, location) {
+    if (!ap || !location) return;
+    setRouteLoadingId(ap.id);
+    setRoutePath([]);
+    const params = new URLSearchParams({
+      from_lat: String(location.latitude),
+      from_lng: String(location.longitude),
+      to_lat: String(ap.map_latitude),
+      to_lng: String(ap.map_longitude),
+    });
+    try {
+      const result = await publicRequest(`/portal/ap-route?${params.toString()}`);
+      setRoutePath(Array.isArray(result.route) ? result.route : []);
+      if (result.status === 'FALLBACK') {
+        setError('Road route is unavailable right now. Showing a direct line instead.');
+      } else {
+        setError('');
+      }
+    } catch (err) {
+      setRoutePath([
+        { latitude: location.latitude, longitude: location.longitude },
+        { latitude: Number(ap.map_latitude), longitude: Number(ap.map_longitude) },
+      ]);
+      setError(err.message || 'Road route is unavailable right now. Showing a direct line instead.');
+    } finally {
+      setRouteLoadingId('');
+    }
+  }
+
+  function selectCoverageAp(ap) {
+    setSelectedApId(ap.id);
+    setRouteApId(ap.id);
+    if (customerLocation) {
+      updateCoverageCenter(coverage, customerLocation, ap);
+      loadRoadRoute(ap, customerLocation);
+      return;
+    }
+    setRoutePath([]);
+    setCenter({ latitude: Number(ap.map_latitude), longitude: Number(ap.map_longitude) });
+    setZoom(17);
+    setError('Tap Use my location to draw a route line from your phone to this AP.');
+  }
+
+  useEffect(() => {
+    let mounted = true;
+    Promise.all([
+      publicRequest('/portal/settings').catch(() => null),
+      publicRequest('/portal/ap-coverage'),
+    ]).then(([portalSettings, data]) => {
+      if (!mounted) return;
+      setSettings(portalSettings);
+      setCoverage(data);
+      const brandColor = portalSettings?.accent_color || '#066fd1';
+      document.documentElement.style.setProperty('--tblr-primary', brandColor);
+      document.documentElement.style.setProperty('--portal-brand-color', brandColor);
+      document.documentElement.style.setProperty('--portal-brand-rgb', cssHexToRgb(brandColor));
+      updateCoverageCenter(data, null);
+      requestLocation(data);
+    }).catch((err) => {
+      if (mounted) setError(err.message || 'Coverage map could not be loaded.');
+    }).finally(() => {
+      if (mounted) setLoading(false);
+    });
+    return () => { mounted = false; };
+  }, []);
+
+  const nearestText = nearest
+    ? `Shortest AP is ${formatDistanceMeters(nearest.distance)} away.`
+    : 'Allow location access to find the nearest AP.';
+
+  return (
+    <div className="portal-coverage-page">
+      {loading ? (
+        <div className="portal-coverage-loading">Loading AP areas...</div>
+      ) : aps.length ? (
+        <div className="portal-coverage-map-shell">
+          <LongLatMap
+            aps={aps}
+            center={center}
+            zoom={zoom}
+            setCenter={setCenter}
+            setZoom={setZoom}
+            selectedApId={selectedApId}
+            onSelectAp={selectCoverageAp}
+            editable={false}
+            coverageMeters={200}
+            showClientBadges={false}
+            showLegend={false}
+            customerLocation={customerLocation}
+            routeAp={routeAp}
+            routePath={routePath}
+            extraControls={(
+              <button className="longlat-map-control" type="button" onClick={() => requestLocation(coverage, { centerOnCustomer: true })} title="Use my location" aria-label="Use my location">
+                <IconMapPin size={18} />
+              </button>
+            )}
+          />
+          <div className={`portal-coverage-floating-panel portal-coverage-sites-panel ${sitesPanelOpen ? 'is-open' : 'is-closed'}`}>
+            <div className="portal-coverage-sites-header">
+              <div>
+                <div className="portal-coverage-title"><IconMapPin size={20} />3J WiFi AP Areas</div>
+                <div className="text-muted small">
+                  {areaCount ? `AP Areas: ${areaCount}` : 'Mapped AP areas are not available yet.'}
+                  {customerLocation && nearest ? ` · Nearest ${formatDistanceMeters(nearest.distance)}` : ''}
+                </div>
+              </div>
+              <button
+                className="btn btn-sm btn-icon"
+                type="button"
+                onClick={() => setSitesPanelOpen((current) => !current)}
+                title={sitesPanelOpen ? 'Hide AP list' : 'Show AP list'}
+                aria-label={sitesPanelOpen ? 'Hide AP list' : 'Show AP list'}
+              >
+                {sitesPanelOpen ? <IconX size={18} /> : <IconChevronUp size={18} />}
+              </button>
+            </div>
+            {sitesPanelOpen && (
+              <>
+                <div className="portal-coverage-search">
+                  <IconSearch size={16} />
+                  <input
+                    type="search"
+                    value={coverageSearch}
+                    onChange={(event) => setCoverageSearch(event.target.value)}
+                    placeholder="Search sites or APs"
+                    aria-label="Search sites or APs"
+                  />
+                  {coverageSearch && (
+                    <button type="button" onClick={() => setCoverageSearch('')} aria-label="Clear search">
+                      <IconX size={14} />
+                    </button>
+                  )}
+                </div>
+                {error && <div className="alert alert-warning py-2 mb-2">{error}</div>}
+                {!customerLocation && <div className="alert alert-info py-2 mb-2">Tap the location button beside zoom controls to show distance and road routes.</div>}
+                {routeStatus && <div className="portal-coverage-route-status">{routeStatus}</div>}
+                <div className="portal-coverage-sites-list">
+                  {siteGroups.map((site) => {
+                    const expanded = expandedCoverageSites[site.key] !== false;
+                    return (
+                      <div className="portal-coverage-site-group" key={`coverage-site-${site.key}`}>
+                        <button className="portal-coverage-site-toggle" type="button" onClick={() => toggleCoverageSite(site.key)}>
+                          <span className="portal-coverage-site-main">
+                            <span className="fw-semibold">{site.label}</span>
+                            <span className="text-muted small">{site.aps.length} AP{site.aps.length === 1 ? '' : 's'}{Number.isFinite(site.nearestDistance) ? ` · nearest ${formatDistanceMeters(site.nearestDistance)}` : ''}</span>
+                          </span>
+                          {expanded ? <IconChevronDown size={18} /> : <IconChevronRight size={18} />}
+                        </button>
+                        {expanded && (
+                          <div className="portal-coverage-ap-list">
+                            {site.aps.map((ap) => (
+                              <button
+                                className={`portal-coverage-ap-row ${selectedApId === ap.id ? 'active' : ''}`}
+                                type="button"
+                                key={`coverage-ap-${ap.id}`}
+                                onClick={() => selectCoverageAp(ap)}
+                              >
+                                <span className="portal-coverage-ap-icon"><IconWifi size={17} /></span>
+                                <span className="portal-coverage-ap-row-main">
+                                  <span className="fw-semibold">{ap.display_name || ap.name || '3J WiFi AP'}</span>
+                                  <span className="text-muted small">{ap.site_name || site.label}</span>
+                                </span>
+                                <span className="portal-coverage-distance-badge">
+                                  {routeLoadingId === ap.id ? 'Routing...' : Number.isFinite(ap.distance) ? formatDistanceMeters(ap.distance) : 'Locate'}
+                                </span>
+                                {routeApId === ap.id && (
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    className="portal-coverage-route-clear"
+                                    title="Close route"
+                                    aria-label="Close route"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      clearCoverageRoute();
+                                    }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter' || event.key === ' ') {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        clearCoverageRoute();
+                                      }
+                                    }}
+                                  >
+                                    <IconX size={15} />
+                                  </span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {!siteGroups.length && (
+                    <div className="portal-coverage-empty-search">
+                      No sites or APs match your search.
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          <button
+            className="portal-coverage-return-button"
+            type="button"
+            onClick={() => window.location.assign('/portal')}
+          >
+            <IconChevronLeft size={15} />
+            Captive Portal
+          </button>
+        </div>
+      ) : (
+        <div className="portal-coverage-loading">No mapped AP areas are available yet.</div>
+      )}
+    </div>
   );
 }
 
@@ -4351,23 +7897,1432 @@ function WalletPage({ refresh }) {
   );
 }
 
+const PRODUCT_PASS_TYPES = [
+  {
+    key: 'SINGLE_DEVICE',
+    title: 'Personal Pass',
+    subtitle: 'One customer phone or laptop only.',
+    icon: IconUser,
+  },
+  {
+    key: 'MULTI_DEVICE',
+    title: 'Shared Device Pass',
+    subtitle: 'One purchase can be used by several devices.',
+    icon: IconUsers,
+  },
+];
+
+function productPassType(item = {}) {
+  return item.device_scope || (Number(item.allowed_devices || 1) > 1 ? 'MULTI_DEVICE' : 'SINGLE_DEVICE');
+}
+
+function productPassLabel(item = {}) {
+  return productPassType(item) === 'MULTI_DEVICE' ? 'Shared Device Pass' : 'Personal Pass';
+}
+
+function ProductItemsPage() {
+  const emptyForm = {
+    category_id: '',
+    device_scope: 'SINGLE_DEVICE',
+    name: '',
+    description: '',
+    price: '0',
+    duration_value: '1',
+    duration_unit: 'hours',
+    allowed_devices: '1',
+    discounts: [],
+    status: 'ACTIVE',
+    sort_order: '0'
+  };
+  const emptyCategoryForm = {
+    name: '',
+    description: '',
+    image_url: '',
+    more_info_enabled: false,
+    more_info_text: '',
+    access_scope: 'ALL_LOCATIONS',
+    allowed_barangay: '',
+    status: 'ACTIVE',
+    sort_order: '0'
+  };
+  const [items, setItems] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [summary, setSummary] = useState({ total: 0, active: 0, disabled: 0, lowest_price: 0 });
+  const [modalMode, setModalMode] = useState('');
+  const [productModalStep, setProductModalStep] = useState(1);
+  const [categoryModalMode, setCategoryModalMode] = useState('');
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [categoryForm, setCategoryForm] = useState(emptyCategoryForm);
+  const [categoryImageFile, setCategoryImageFile] = useState(null);
+  const [categoryImagePreview, setCategoryImagePreview] = useState('');
+  const [draggedCategoryId, setDraggedCategoryId] = useState('');
+  const [categoryDragOverId, setCategoryDragOverId] = useState('');
+  const [categoryReorderSaving, setCategoryReorderSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const productDiscountPanelRefs = useRef({});
+  const [pendingProductDiscountFocusId, setPendingProductDiscountFocusId] = useState('');
+
+  function formatPrice(value) {
+    const amount = Number(value || 0);
+    return `PHP ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+
+  function durationText(item) {
+    if (item?.duration_label) return item.duration_label;
+    const value = Number(item?.duration_value || 0);
+    const unit = value === 1 ? String(item?.duration_unit || 'hours').replace(/s$/, '') : item?.duration_unit || 'hours';
+    return `${value} ${unit}`;
+  }
+
+  async function load() {
+    const data = await request('/product-items');
+    setItems(data.items || []);
+    setCategories(data.categories || []);
+    setSummary(data.summary || { total: 0, active: 0, disabled: 0, lowest_price: 0 });
+  }
+
+  useEffect(() => { load().catch((err) => setError(err.message)); }, []);
+
+  useEffect(() => {
+    if (!categoryImageFile) {
+      setCategoryImagePreview('');
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(categoryImageFile);
+    setCategoryImagePreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [categoryImageFile]);
+
+  useEffect(() => {
+    if (!pendingProductDiscountFocusId) return;
+    const panel = productDiscountPanelRefs.current[pendingProductDiscountFocusId];
+    if (!panel) return;
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    const target = panel.querySelector('input:not([type="checkbox"]), select, button');
+    target?.focus();
+    setPendingProductDiscountFocusId('');
+  }, [form.discounts, pendingProductDiscountFocusId]);
+
+  function openCreate() {
+    setError('');
+    setMessage('');
+    setSelectedItem(null);
+    setForm(emptyForm);
+    setProductModalStep(1);
+    setModalMode('create');
+  }
+
+  function openCreateCategory() {
+    setError('');
+    setMessage('');
+    setSelectedCategory(null);
+    setCategoryForm({ ...emptyCategoryForm, sort_order: String((categories || []).length + 1) });
+    setCategoryImageFile(null);
+    setCategoryModalMode('create');
+  }
+
+  function openEdit(item) {
+    setError('');
+    setMessage('');
+    setSelectedItem(item);
+    setForm({
+      category_id: item.category_id || '',
+      device_scope: productPassType(item),
+      name: item.name || '',
+      description: item.description || '',
+      price: String(item.price ?? 0),
+      duration_value: String(item.duration_value ?? 1),
+      duration_unit: item.duration_unit || 'hours',
+      allowed_devices: String(item.allowed_devices ?? 1),
+      discounts: (item.discounts || []).map((discount, index) => ({
+        id: discount.id || `existing-${index}`,
+        label: discount.label || '',
+        threshold_value: String(discount.threshold_value ?? 7),
+        threshold_unit: discount.threshold_unit || 'days',
+        discount_type: discount.discount_type || 'PERCENT',
+        discount_value: String(discount.discount_value ?? 0),
+        enabled: discount.enabled !== false,
+      })),
+      status: item.status || 'ACTIVE',
+      sort_order: String(item.sort_order ?? 0)
+    });
+    setProductModalStep(1);
+    setModalMode('edit');
+  }
+
+  function openEditCategory(category) {
+    setError('');
+    setMessage('');
+    setSelectedCategory(category);
+    setCategoryForm({
+      name: category.name || '',
+      description: category.description || '',
+      image_url: category.image_url || '',
+      more_info_enabled: Boolean(category.more_info_enabled),
+      more_info_text: category.more_info_text || '',
+      access_scope: category.access_scope || 'ALL_LOCATIONS',
+      allowed_barangay: category.allowed_barangay || '',
+      status: category.status || 'ACTIVE',
+      sort_order: String(category.sort_order ?? 0)
+    });
+    setCategoryImageFile(null);
+    setCategoryModalMode('edit');
+  }
+
+  function productPayload() {
+    const deviceScope = form.device_scope || 'SINGLE_DEVICE';
+    return {
+      category_id: form.category_id || null,
+      name: form.name.trim(),
+      description: form.description.trim(),
+      price: Number(form.price || 0),
+      duration_value: Number(form.duration_value || 1),
+      duration_unit: form.duration_unit,
+      device_scope: deviceScope,
+      allowed_devices: deviceScope === 'SINGLE_DEVICE' ? 1 : Math.max(2, Number(form.allowed_devices || 2)),
+      discounts: normalizeProductDiscounts(form.discounts),
+      status: form.status,
+      sort_order: Number(form.sort_order || 0)
+    };
+  }
+
+  function selectedProductFormCategory() {
+    return (categories || []).find((category) => category.id === form.category_id) || null;
+  }
+
+  function newProductDiscount() {
+    return {
+      id: `new-${Date.now()}-${(form.discounts || []).length + 1}`,
+      label: '',
+      threshold_value: '',
+      threshold_unit: 'days',
+      discount_type: 'PERCENT',
+      discount_value: '',
+      enabled: true,
+    };
+  }
+
+  function updateProductDiscount(index, patch) {
+    const discounts = [...(form.discounts || [])];
+    discounts[index] = { ...discounts[index], ...patch };
+    setForm({ ...form, discounts });
+  }
+
+  function addProductDiscount() {
+    const discount = newProductDiscount();
+    setForm({ ...form, discounts: [...(form.discounts || []), discount] });
+    setPendingProductDiscountFocusId(discount.id);
+  }
+
+  function removeProductDiscount(index) {
+    const discounts = (form.discounts || []).filter((_, discountIndex) => discountIndex !== index);
+    setForm({ ...form, discounts });
+  }
+
+  function normalizeProductDiscounts(discounts = []) {
+    return discounts
+      .filter((discount) => Number(discount.threshold_value || 0) > 0 && Number(discount.discount_value || 0) > 0)
+      .sort((a, b) => productDiscountSecondsFromForm(a) - productDiscountSecondsFromForm(b))
+      .map((discount, index) => ({
+        label: String(discount.label || '').trim() || null,
+        threshold_value: Number(discount.threshold_value || 1),
+        threshold_unit: discount.threshold_unit || 'days',
+        discount_type: discount.discount_type || 'PERCENT',
+        discount_value: Number(discount.discount_value || 0),
+        enabled: discount.enabled !== false,
+        sort_order: Number(discount.sort_order || index + 1)
+      }));
+  }
+
+  function productDiscountSecondsFromForm(discount = {}) {
+    const value = Number(discount.threshold_value || 0);
+    const unit = discount.threshold_unit || 'days';
+    if (unit === 'minutes') return value * 60;
+    if (unit === 'hours') return value * 3600;
+    return value * 86400;
+  }
+
+  function sortProductDiscountsByTime() {
+    setForm((current) => {
+      const entries = (current.discounts || []).map((discount, index) => ({ discount, index }));
+      entries.sort((a, b) => {
+        const aSeconds = productDiscountSecondsFromForm(a.discount);
+        const bSeconds = productDiscountSecondsFromForm(b.discount);
+        const aComplete = aSeconds > 0 && Number(a.discount.discount_value || 0) > 0;
+        const bComplete = bSeconds > 0 && Number(b.discount.discount_value || 0) > 0;
+        if (aComplete !== bComplete) return aComplete ? -1 : 1;
+        if (aSeconds !== bSeconds) return aSeconds - bSeconds;
+        return a.index - b.index;
+      });
+      const sortedDiscounts = entries.map((entry) => entry.discount);
+      const unchanged = sortedDiscounts.every((discount, index) => discount === (current.discounts || [])[index]);
+      return unchanged ? current : { ...current, discounts: sortedDiscounts };
+    });
+  }
+
+  function categoryPayload() {
+    const scope = categoryForm.access_scope || 'ALL_LOCATIONS';
+    return {
+      name: categoryForm.name.trim(),
+      description: categoryForm.description.trim(),
+      image_url: categoryForm.image_url || null,
+      more_info_enabled: Boolean(categoryForm.more_info_enabled && categoryForm.more_info_text.trim()),
+      more_info_text: categoryForm.more_info_text.trim(),
+      access_scope: scope,
+      allowed_barangay: null,
+      discounts: [],
+      status: categoryForm.status,
+      sort_order: Number(selectedCategory?.sort_order ?? categoryForm.sort_order ?? ((categories || []).length + 1))
+    };
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    setError('');
+    if (productModalStep < 3) {
+      setProductModalStep(productModalStep + 1);
+      return;
+    }
+    try {
+      const payload = productPayload();
+      if (!payload.name) throw new Error('Product name is required.');
+      if (modalMode === 'edit' && selectedItem) {
+        await request(`/product-items/${selectedItem.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+        setMessage('Product item updated.');
+      } else {
+        await request('/product-items', { method: 'POST', body: JSON.stringify(payload) });
+        setMessage('Product item created.');
+      }
+      setModalMode('');
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function saveCategory(e) {
+    e.preventDefault();
+    setError('');
+    try {
+      const payload = categoryPayload();
+      if (!payload.name) throw new Error('Category name is required.');
+      if (categoryImageFile && categoryImageFile.size > 2 * 1024 * 1024) {
+        throw new Error('Category image is too large. Upload a WebP, JPG, or PNG image up to 2 MB.');
+      }
+      let savedCategory;
+      if (categoryModalMode === 'edit' && selectedCategory) {
+        savedCategory = await request(`/product-categories/${selectedCategory.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      } else {
+        savedCategory = await request('/product-categories', { method: 'POST', body: JSON.stringify(payload) });
+      }
+      if (categoryImageFile && savedCategory?.id) {
+        await uploadRequest(`/product-categories/${savedCategory.id}/image`, 'category_image', categoryImageFile);
+      }
+      setMessage(categoryModalMode === 'edit' ? `Product category updated${categoryImageFile ? ' and image uploaded' : ''}.` : `Product category created${categoryImageFile ? ' with image' : ''}.`);
+      setCategoryImageFile(null);
+      setCategoryModalMode('');
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function remove(item) {
+    if (!window.confirm(`Delete product item "${item.name}"?`)) return;
+    setError('');
+    try {
+      await request(`/product-items/${item.id}`, { method: 'DELETE' });
+      setMessage('Product item deleted.');
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function removeCategory(category) {
+    if (!window.confirm(`Delete product category "${category.name}"? Product items inside it will become uncategorized.`)) return;
+    setError('');
+    try {
+      await request(`/product-categories/${category.id}`, { method: 'DELETE' });
+      setMessage('Product category deleted.');
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function persistCategoryOrder(nextCategories, previousCategories) {
+    setCategoryReorderSaving(true);
+    setError('');
+    try {
+      const data = await request('/product-categories/reorder', {
+        method: 'PUT',
+        body: JSON.stringify({ category_ids: nextCategories.map((category) => category.id) })
+      });
+      setCategories(data.categories || nextCategories);
+      setMessage('Product category order updated. Captive portal follows this top-to-bottom order.');
+    } catch (err) {
+      setCategories(previousCategories);
+      setError(err.message);
+    } finally {
+      setCategoryReorderSaving(false);
+      setDraggedCategoryId('');
+      setCategoryDragOverId('');
+    }
+  }
+
+  function reorderCategoryByDrop(sourceId, targetId, placement = 'before') {
+    if (!sourceId || !targetId || sourceId === targetId || categoryReorderSaving) return;
+    const previousCategories = [...categories];
+    const sourceIndex = previousCategories.findIndex((category) => category.id === sourceId);
+    const targetIndex = previousCategories.findIndex((category) => category.id === targetId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const nextCategories = [...previousCategories];
+    const [movedCategory] = nextCategories.splice(sourceIndex, 1);
+    let insertIndex = nextCategories.findIndex((category) => category.id === targetId);
+    if (placement === 'after') insertIndex += 1;
+    nextCategories.splice(insertIndex, 0, movedCategory);
+    setCategories(nextCategories);
+    persistCategoryOrder(nextCategories, previousCategories);
+  }
+
+  function categoryBadge(categoryOrItem = {}) {
+    const scope = categoryOrItem.access_scope || categoryOrItem.category_access_scope || 'ALL_LOCATIONS';
+    if (scope === 'BARANGAY_ONLY') {
+      return <span className="badge bg-orange-lt text-orange"><IconMapPin size={14} className="me-1" />Barangay only</span>;
+    }
+    return <span className="badge bg-green-lt text-green"><IconWifi size={14} className="me-1" />All locations</span>;
+  }
+
+  function discountBadge(item = {}) {
+    const discounts = (item.discounts || []).filter((discount) => discount.enabled);
+    if (!discounts.length) return <span className="badge bg-secondary-lt text-secondary">No tiers</span>;
+    return <span className="badge bg-yellow-lt text-yellow">{discounts.length} tier{discounts.length === 1 ? '' : 's'}</span>;
+  }
+
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
+          <div>
+            <h2 className="page-title mb-1">Product Items</h2>
+            <div className="text-muted">Group WiFi packages into categories and optionally limit a category to one Barangay.</div>
+          </div>
+          <div className="d-flex gap-2 flex-wrap">
+            <button className="btn btn-outline-primary" type="button" onClick={openCreateCategory}><IconPlus size={18} className="me-2" />Add Category</button>
+            <button className="btn btn-primary" type="button" onClick={openCreate}><IconPlus size={18} className="me-2" />Generate Voucher Product</button>
+          </div>
+        </div>
+      </div>
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
+      {error && <div className="col-12"><div className="alert alert-danger mb-0">{error}</div></div>}
+      <KpiCard icon={IconListDetails} label="Total Items" value={summary.total || 0} tone="blue" />
+      <KpiCard icon={IconArchive} label="Categories" value={summary.categories || 0} tone="azure" />
+      <KpiCard icon={IconMapPin} label="Barangay Limited" value={summary.barangay_limited_categories || 0} tone="orange" />
+      <KpiCard icon={IconCircleCheck} label="Active" value={summary.active || 0} tone="green" />
+      <KpiCard icon={IconBan} label="Disabled" value={summary.disabled || 0} tone="red" />
+      <KpiCard icon={IconUser} label="Personal Passes" value={summary.personal_passes || 0} tone="azure" />
+      <KpiCard icon={IconUsers} label="Shared Passes" value={summary.shared_passes || 0} tone="purple" />
+      <KpiCard icon={IconCash} label="Lowest Price" value={formatPrice(summary.lowest_price || 0)} tone="yellow" />
+      <KpiCard icon={IconUsers} label="Max Devices" value={summary.max_allowed_devices || 1} tone="purple" />
+      <div className="col-12">
+        <Card title="Product Categories" subtitle="Drag rows to sort categories. The top category appears first in the captive portal. Barangay-only categories can be bought and used only from matching site Barangays.">
+          {categoryReorderSaving && <div className="alert alert-info py-2 mb-3">Saving category order...</div>}
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead>
+                <tr>
+                  <th className="product-category-drag-heading" aria-label="Sort category" />
+                  <th>Category</th>
+                  <th>Access Scope</th>
+                  <th>Products</th>
+                  <th>Status</th>
+                  <th className="text-end">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {categories.length ? categories.map((category) => (
+                  <tr
+                    key={category.id}
+                    className={`product-category-sort-row ${draggedCategoryId === category.id ? 'is-dragging' : ''} ${categoryDragOverId === category.id && draggedCategoryId !== category.id ? 'is-drag-over' : ''}`}
+                    draggable={!categoryReorderSaving}
+                    onDragStart={(event) => {
+                      setDraggedCategoryId(category.id);
+                      event.dataTransfer.effectAllowed = 'move';
+                      event.dataTransfer.setData('text/plain', category.id);
+                    }}
+                    onDragOver={(event) => {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = 'move';
+                      setCategoryDragOverId(category.id);
+                    }}
+                    onDragLeave={() => {
+                      setCategoryDragOverId((current) => current === category.id ? '' : current);
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const sourceId = event.dataTransfer.getData('text/plain') || draggedCategoryId;
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      const placement = event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+                      reorderCategoryByDrop(sourceId, category.id, placement);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedCategoryId('');
+                      setCategoryDragOverId('');
+                    }}
+                  >
+                    <td className="product-category-drag-cell">
+                      <span className="product-category-drag-handle" title="Drag to sort category" aria-label="Drag to sort category">
+                        <IconGripVertical size={18} />
+                      </span>
+                    </td>
+                    <td>
+                      <div className="product-category-cell">
+                        {category.image_url ? (
+                          <img className="product-category-thumb" src={category.image_url} alt="" loading="lazy" />
+                        ) : (
+                          <span className="product-category-thumb product-category-thumb-empty"><IconPhoto size={20} /></span>
+                        )}
+                        <div>
+                          <div className="fw-semibold">{category.name}</div>
+                          {category.description && <div className="text-muted small">{category.description}</div>}
+                        </div>
+                      </div>
+                    </td>
+                    <td>{categoryBadge(category)}</td>
+                    <td><span className="badge bg-blue-lt text-blue">{category.product_count || 0} item{Number(category.product_count || 0) === 1 ? '' : 's'}</span></td>
+                    <td><span className={`badge ${category.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{category.status}</span></td>
+                    <td className="text-end">
+                      <ActionBadgeGroup className="justify-content-end">
+                        <ActionBadgeButton icon={IconEdit} label="Edit category" tone="blue" onClick={() => openEditCategory(category)} />
+                        <ActionBadgeButton icon={IconTrash} label="Delete category" tone="red" onClick={() => removeCategory(category)} />
+                      </ActionBadgeGroup>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={6} className="text-center text-muted py-4">No categories yet. Product items can still appear as uncategorized packages.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+      <div className="col-12">
+        <Card title="Product Item List" subtitle="Active items are displayed in the customer portal and portal design preview.">
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead>
+                <tr>
+                  <th>Item</th>
+                  <th>Category</th>
+                  <th>Pass Type</th>
+                  <th>Price</th>
+                  <th>Discount</th>
+                  <th>Time</th>
+                  <th>Devices</th>
+                  <th>Status</th>
+                  <th>Sort</th>
+                  <th className="text-end">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.length ? items.map((item) => (
+                  <tr key={item.id}>
+                    <td>
+                      <div className="fw-semibold">{item.name}</div>
+                      {item.description && <div className="text-muted small">{item.description}</div>}
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{item.category_name || 'Uncategorized'}</div>
+                      <div className="mt-1">{categoryBadge(item)}</div>
+                    </td>
+                    <td><span className={`badge ${productPassType(item) === 'MULTI_DEVICE' ? 'bg-purple-lt text-purple' : 'bg-azure-lt text-azure'}`}>{item.device_scope_label || productPassLabel(item)}</span></td>
+                    <td className="fw-semibold">{item.price_display || formatPrice(item.price)}</td>
+                    <td>{discountBadge(item)}</td>
+                    <td><span className="badge bg-blue-lt text-blue"><IconClock size={14} className="me-1" />{durationText(item)}</span></td>
+                    <td>
+                      {productPassType(item) === 'MULTI_DEVICE' ? (
+                        <span className="badge bg-purple-lt text-purple"><IconUsers size={14} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>
+                      ) : (
+                        <span className="badge bg-azure-lt text-azure"><IconUser size={14} className="me-1" />1 device</span>
+                      )}
+                    </td>
+                    <td><span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{item.status}</span></td>
+                    <td>{item.sort_order}</td>
+                    <td className="text-end">
+                      <ActionBadgeGroup className="justify-content-end">
+                        <ActionBadgeButton icon={IconEdit} label="Edit product item" tone="blue" onClick={() => openEdit(item)} />
+                        <ActionBadgeButton icon={IconTrash} label="Delete product item" tone="red" onClick={() => remove(item)} />
+                      </ActionBadgeGroup>
+                    </td>
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={10} className="text-center text-muted py-4">No product items yet. Add a package to display it in the captive portal.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+      {modalMode && (
+        <Modal
+          title={modalMode === 'edit' ? 'Edit Product Item' : 'Add Product Item'}
+          onClose={() => setModalMode('')}
+          dialogClassName="product-item-modal-dialog"
+          bodyClassName="product-item-modal-body"
+        >
+          <form className="product-item-form" onSubmit={save}>
+            {error && <div className="alert alert-danger">{error}</div>}
+            <ul className="nav nav-tabs product-item-tabs mb-3" role="tablist">
+              <li className="nav-item" role="presentation">
+                <button className={`nav-link ${productModalStep === 1 ? 'active' : ''}`} type="button" role="tab" onClick={() => setProductModalStep(1)}>
+                  <span className="product-step-circle">1</span>
+                  <span>Category & Pass Type</span>
+                </button>
+              </li>
+              <li className="nav-item" role="presentation">
+                <button className={`nav-link ${productModalStep === 2 ? 'active' : ''}`} type="button" role="tab" onClick={() => setProductModalStep(2)}>
+                  <span className="product-step-circle">2</span>
+                  <span>Package Details</span>
+                </button>
+              </li>
+              <li className="nav-item" role="presentation">
+                <button className={`nav-link ${productModalStep === 3 ? 'active' : ''}`} type="button" role="tab" onClick={() => setProductModalStep(3)}>
+                  <span className="product-step-circle">3</span>
+                  <span>Discounts</span>
+                </button>
+              </li>
+            </ul>
+            {productModalStep === 1 ? (
+              <div className="row g-3 product-item-step-body">
+                <div className="col-12">
+                  <label className="form-label">Category</label>
+                  <select className="form-select" value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}>
+                    <option value="">Uncategorized / All packages</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}{category.access_scope === 'BARANGAY_ONLY' ? ' · Barangay only' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="form-hint mt-2">Discount tiers are configured per product item in Step 3.</div>
+                </div>
+                <div className="col-12">
+                  <label className="form-label">Pass Type</label>
+                  <div className="product-pass-type-grid">
+                    {PRODUCT_PASS_TYPES.map((option) => {
+                      const OptionIcon = option.icon;
+                      const active = form.device_scope === option.key;
+                      return (
+                        <button
+                          key={option.key}
+                          className={`product-pass-type-option ${active ? 'active' : ''}`}
+                          type="button"
+                          onClick={() => setForm({ ...form, device_scope: option.key, allowed_devices: option.key === 'SINGLE_DEVICE' ? '1' : (Number(form.allowed_devices || 1) > 1 ? form.allowed_devices : '2') })}
+                        >
+                          <span className="product-pass-type-icon"><OptionIcon size={22} /></span>
+                          <span>
+                            <strong>{option.title}</strong>
+                            <small>{option.subtitle}</small>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            ) : productModalStep === 2 ? (
+              <div className="row g-3 product-item-step-body">
+                <div className="col-md-8">
+                  <label className="form-label">Item Name</label>
+                  <input className="form-control" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Example: 1 Day WiFi" required />
+                </div>
+                <div className="col-md-4">
+                  <label className="form-label">Price</label>
+                  <div className="input-group">
+                    <span className="input-group-text">PHP</span>
+                    <input className="form-control" type="number" min="0" step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} required />
+                  </div>
+                </div>
+                <div className="col-md-4">
+                  <label className="form-label">Time Value</label>
+                  <input className="form-control" type="number" min="1" value={form.duration_value} onChange={(e) => setForm({ ...form, duration_value: e.target.value })} required />
+                </div>
+                <div className="col-md-4">
+                  <label className="form-label">Time Unit</label>
+                  <select className="form-select" value={form.duration_unit} onChange={(e) => setForm({ ...form, duration_unit: e.target.value })}>
+                    <option value="minutes">Minutes</option>
+                    <option value="hours">Hours</option>
+                    <option value="days">Days</option>
+                  </select>
+                </div>
+                <div className="col-md-4">
+                  <label className="form-label">Status</label>
+                  <select className="form-select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                    <option value="ACTIVE">Active</option>
+                    <option value="DISABLED">Disabled</option>
+                  </select>
+                </div>
+                {form.device_scope === 'MULTI_DEVICE' ? (
+                  <div className="col-md-4">
+                    <label className="form-label">Allowed Devices</label>
+                    <input className="form-control" type="number" min="2" max="100" value={form.allowed_devices} onChange={(e) => setForm({ ...form, allowed_devices: e.target.value })} required />
+                    <div className="form-hint">Shared Device Pass requires at least 2 devices.</div>
+                  </div>
+                ) : (
+                  <div className="col-md-4">
+                    <label className="form-label">Allowed Devices</label>
+                    <div className="form-control-plaintext">
+                      <span className="badge bg-azure-lt text-azure"><IconUser size={14} className="me-1" />1 device</span>
+                    </div>
+                    <div className="form-hint">Personal Pass is always limited to one device.</div>
+                  </div>
+                )}
+                <div className="col-md-4">
+                  <label className="form-label">Sort Order</label>
+                  <input className="form-control" type="number" min="0" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: e.target.value })} />
+                </div>
+                <div className="col-md-8">
+                  <label className="form-label">Description</label>
+                  <input className="form-control" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Optional short note shown in the portal." />
+                </div>
+              </div>
+            ) : (
+              <div className="row g-3 product-item-step-body">
+                <div className="col-12">
+                  <div className="product-discount-panel">
+                    <div className="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+                      <div>
+                        <label className="form-label mb-1">Product Discounts</label>
+                        <div className="text-muted small">Discount tiers apply only to this product item when the selected total time reaches the tier threshold.</div>
+                      </div>
+                      <button className="btn btn-sm btn-outline-primary" type="button" onClick={addProductDiscount}>
+                        <IconPlus size={16} className="me-1" />Add Discount
+                      </button>
+                    </div>
+                    {(form.discounts || []).length ? (
+                      <div className="category-discount-list mt-3">
+                        {(form.discounts || []).map((discount, index) => (
+                          <div
+                            className="category-discount-row"
+                            key={discount.id || index}
+                            ref={(node) => {
+                              if (discount.id && node) productDiscountPanelRefs.current[discount.id] = node;
+                            }}
+                            onBlur={(event) => {
+                              if (!event.currentTarget.contains(event.relatedTarget)) sortProductDiscountsByTime();
+                            }}
+                          >
+                            <div className="category-discount-row-header">
+                              <label className="form-check form-switch mb-0">
+                                <input className="form-check-input" type="checkbox" checked={discount.enabled !== false} onChange={(e) => updateProductDiscount(index, { enabled: e.target.checked })} />
+                                <span className="form-check-label fw-semibold">Tier {index + 1}</span>
+                              </label>
+                              <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => removeProductDiscount(index)}>
+                                <IconTrash size={16} className="me-1" />Remove
+                              </button>
+                            </div>
+                            <div className="row g-2 mt-1">
+                              <div className="col-lg-3 col-md-6">
+                                <label className="form-label">Label</label>
+                                <input className="form-control" value={discount.label || ''} onChange={(e) => updateProductDiscount(index, { label: e.target.value })} placeholder="Example: 1 week" />
+                              </div>
+                              <div className="col-lg-2 col-md-3">
+                                <label className="form-label">Time</label>
+                                <input className="form-control" type="number" min="1" value={discount.threshold_value} onChange={(e) => updateProductDiscount(index, { threshold_value: e.target.value })} />
+                              </div>
+                              <div className="col-lg-2 col-md-3">
+                                <label className="form-label">Unit</label>
+                                <select className="form-select" value={discount.threshold_unit || 'days'} onChange={(e) => updateProductDiscount(index, { threshold_unit: e.target.value })}>
+                                  <option value="minutes">Minutes</option>
+                                  <option value="hours">Hours</option>
+                                  <option value="days">Days</option>
+                                </select>
+                              </div>
+                              <div className="col-lg-2 col-md-6">
+                                <label className="form-label">Type</label>
+                                <select className="form-select" value={discount.discount_type || 'PERCENT'} onChange={(e) => updateProductDiscount(index, { discount_type: e.target.value })}>
+                                  <option value="PERCENT">Percent</option>
+                                  <option value="FIXED">Fixed</option>
+                                </select>
+                              </div>
+                              <div className="col-lg-3 col-md-6">
+                                <label className="form-label">Value</label>
+                                <div className="input-group">
+                                  <span className="input-group-text">{discount.discount_type === 'FIXED' ? 'PHP' : '%'}</span>
+                                  <input className="form-control" type="number" min="0" max={discount.discount_type === 'PERCENT' ? '100' : undefined} step="0.01" value={discount.discount_value} onChange={(e) => updateProductDiscount(index, { discount_value: e.target.value })} />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="alert alert-info mt-3 mb-0">No discounts yet. Add tiers such as 7 days, 15 days, or 30 days if this product needs bundle pricing.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="modal-footer px-0 pb-0">
+              <button className="btn" type="button" onClick={() => setModalMode('')}>Cancel</button>
+              {productModalStep > 1 && (
+                <button className="btn btn-outline-secondary" type="button" onClick={() => setProductModalStep(productModalStep - 1)}>
+                  <IconChevronLeft size={18} className="me-2" />Previous
+                </button>
+              )}
+              <button className="btn btn-primary" type="submit">
+                {productModalStep < 3 ? (
+                  <><IconChevronRight size={18} className="me-2" />Next</>
+                ) : (
+                  <><IconDeviceFloppy size={18} className="me-2" />Save Product Item</>
+                )}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {categoryModalMode && (
+        <Modal
+          title={categoryModalMode === 'edit' ? 'Edit Product Category' : 'Add Product Category'}
+          onClose={() => setCategoryModalMode('')}
+          dialogClassName="product-category-admin-modal-dialog"
+        >
+          <form onSubmit={saveCategory}>
+            {error && <div className="alert alert-danger">{error}</div>}
+            <div className="row g-3">
+              <div className="col-md-8">
+                <label className="form-label">Category Name</label>
+                <input className="form-control" value={categoryForm.name} onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })} placeholder="Example: Internet with IPTV" required />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Status</label>
+                <select className="form-select" value={categoryForm.status} onChange={(e) => setCategoryForm({ ...categoryForm, status: e.target.value })}>
+                  <option value="ACTIVE">Active</option>
+                  <option value="DISABLED">Disabled</option>
+                </select>
+              </div>
+              <div className="col-12">
+                <label className="form-label">Description</label>
+                <input className="form-control" value={categoryForm.description} onChange={(e) => setCategoryForm({ ...categoryForm, description: e.target.value })} placeholder="Optional note shown in the portal." />
+              </div>
+              <div className="col-12">
+                <div className="product-category-image-panel">
+                  <div className="product-category-image-preview">
+                    {categoryImagePreview || categoryForm.image_url ? (
+                      <img src={categoryImagePreview || categoryForm.image_url} alt="" />
+                    ) : (
+                      <span><IconPhoto size={28} /></span>
+                    )}
+                  </div>
+                  <div className="flex-fill">
+                    <label className="form-label">Category Card Image</label>
+                    <input
+                      className="form-control"
+                      type="file"
+                      accept="image/webp,image/jpeg,image/png"
+                      onChange={(e) => setCategoryImageFile(e.target.files?.[0] || null)}
+                    />
+                    <div className="form-hint mt-2">
+                      WebP is preferred for faster loading on low-spec phones. JPG and PNG are accepted.
+                      Use a 16:9 image at 800x450px or 1200x675px, keep it under 300 KB when possible. Hard upload limit is 2 MB.
+                    </div>
+                    {categoryImageFile && <div className="small text-muted mt-2">Selected: {categoryImageFile.name}</div>}
+                  </div>
+                </div>
+              </div>
+              <div className="col-12">
+                <label className="form-label">Access Scope</label>
+                <div className="product-pass-type-grid">
+                  <button className={`product-pass-type-option ${categoryForm.access_scope === 'ALL_LOCATIONS' ? 'active' : ''}`} type="button" onClick={() => setCategoryForm({ ...categoryForm, access_scope: 'ALL_LOCATIONS' })}>
+                    <span className="product-pass-type-icon"><IconWifi size={22} /></span>
+                    <span><strong>All Locations</strong><small>Available across all stations and Barangays.</small></span>
+                  </button>
+                  <button className={`product-pass-type-option ${categoryForm.access_scope === 'BARANGAY_ONLY' ? 'active' : ''}`} type="button" onClick={() => setCategoryForm({ ...categoryForm, access_scope: 'BARANGAY_ONLY' })}>
+                    <span className="product-pass-type-icon"><IconMapPin size={22} /></span>
+                    <span><strong>Barangay only</strong><small>Customer chooses the Barangay during purchase.</small></span>
+                  </button>
+                </div>
+                <div className="form-hint mt-2">Barangay-only packages ask the customer to choose the Barangay during purchase. The chosen Barangay is then enforced on the created voucher.</div>
+              </div>
+              <div className="col-12">
+                <div className="product-category-more-info-panel">
+                  <label className="form-check form-switch mb-2">
+                    <input
+                      className="form-check-input"
+                      type="checkbox"
+                      checked={categoryForm.more_info_enabled}
+                      onChange={(e) => setCategoryForm({ ...categoryForm, more_info_enabled: e.target.checked })}
+                    />
+                    <span className="form-check-label fw-semibold">Show More Info button in the captive portal</span>
+                  </label>
+                  <textarea
+                    className="form-control"
+                    rows="4"
+                    value={categoryForm.more_info_text}
+                    onChange={(e) => setCategoryForm({ ...categoryForm, more_info_text: e.target.value })}
+                    placeholder="Write customer-facing details, reminders, coverage notes, IPTV inclusions, or limits for this package category."
+                    disabled={!categoryForm.more_info_enabled}
+                  />
+                  <div className="form-hint mt-2">When enabled, the portal shows a smaller More Info button beside the wider Buy button for this category.</div>
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer px-0 pb-0">
+              <button className="btn" type="button" onClick={() => setCategoryModalMode('')}>Cancel</button>
+              <button className="btn btn-primary" type="submit"><IconDeviceFloppy size={18} className="me-2" />Save Category</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function buildSalesTrendSeries(mode, data) {
+  const colors = ['#206bc4', '#2fb344', '#f59f00', '#d63939', '#6f42c1', '#0ca678', '#ae3ec9'];
+  const rowToPoint = (row, dateKey = 'date') => {
+    const date = row?.[dateKey] || row?.label;
+    const ts = date ? new Date(date).getTime() : NaN;
+    return Number.isFinite(ts)
+      ? { x: ts, y: Number(row?.amount_centavos || 0), order_count: Number(row?.order_count || 0) }
+      : null;
+  };
+  const buildGrouped = (labels, rows, title, breakdown) => {
+    const dates = Array.from(new Set((rows || []).map((item) => item.date))).sort();
+    const series = labels.map((label) => ({
+      name: label,
+      data: dates.map((date) => rowToPoint((rows || []).find((item) => item.label === label && item.date === date) || { date, amount_centavos: 0 })),
+    }));
+    return { series, colors: labels.map((_, index) => colors[index % colors.length]), title, breakdown, date_count: dates.length };
+  };
+  if (mode === 'site') {
+    const labels = (data.sales_by_site || []).slice(0, 5).map((item) => item.label);
+    return buildGrouped(labels, data.daily_sales_by_site || [], 'Sales Per Site', data.sales_by_site || []);
+  }
+  if (mode === 'barangay') {
+    const labels = (data.sales_by_barangay || []).slice(0, 5).map((item) => item.label);
+    return buildGrouped(labels, data.daily_sales_by_barangay || [], 'Sales Per Barangay', data.sales_by_barangay || []);
+  }
+  const points = (data.daily_sales || []).map((item) => rowToPoint(item, 'label')).filter(Boolean);
+  return {
+    series: [{ name: 'Total Sales', data: points }],
+    colors: ['#206bc4'],
+    title: 'Total Sales',
+    breakdown: [],
+    date_count: points.length,
+  };
+}
+
+function SalesApexLineChart({ trend }) {
+  const chartRef = useRef(null);
+  const chartInstanceRef = useRef(null);
+  const chartKey = JSON.stringify({ series: trend.series, colors: trend.colors, title: trend.title });
+
+  useEffect(() => {
+    if (chartInstanceRef.current) {
+      try { chartInstanceRef.current.destroy(); } catch (_error) {}
+      chartInstanceRef.current = null;
+    }
+    const el = chartRef.current;
+    const hasData = (trend.series || []).some((item) => (item.data || []).some((point) => Number(point?.y || 0) > 0));
+    if (!el || !(trend.series || []).length) return undefined;
+    const chart = new ApexCharts(el, {
+      chart: {
+        type: 'line',
+        height: 360,
+        toolbar: {
+          show: true,
+          tools: {
+            download: false,
+            selection: true,
+            zoom: true,
+            zoomin: true,
+            zoomout: true,
+            pan: true,
+            reset: true,
+          },
+        },
+        zoom: { enabled: true, type: 'x', autoScaleYaxis: true },
+        animations: { enabled: false },
+        fontFamily: 'inherit',
+      },
+      series: trend.series,
+      colors: trend.colors || ['#206bc4'],
+      stroke: { width: 3, curve: 'straight' },
+      markers: { size: 0, hover: { size: 5 } },
+      xaxis: {
+        type: 'datetime',
+        labels: { datetimeUTC: false },
+        tooltip: { enabled: false },
+      },
+      yaxis: {
+        min: 0,
+        labels: { formatter: (value) => formatCentavos(value, 'PHP').replace('PHP ', '') },
+      },
+      tooltip: {
+        shared: true,
+        intersect: false,
+        followCursor: true,
+        x: { formatter: (value) => compactDateTime(value) },
+        y: { formatter: (value) => formatCentavos(value) },
+      },
+      grid: { borderColor: '#e9ecef', strokeDashArray: 4 },
+      legend: {
+        show: true,
+        position: 'bottom',
+        horizontalAlign: 'left',
+        markers: { radius: 12 },
+      },
+      noData: { text: hasData ? undefined : 'No paid sales yet.' },
+    });
+    chartInstanceRef.current = chart;
+    chart.render().catch(() => {
+      if (el) el.innerHTML = '<div class="sales-chart-placeholder text-muted">Sales chart could not be rendered.</div>';
+    });
+    return () => {
+      try { chart.destroy(); } catch (_error) {}
+      if (chartInstanceRef.current === chart) chartInstanceRef.current = null;
+    };
+  }, [chartKey]);
+
+  if (!(trend.series || []).length) {
+    return <div className="sales-chart-placeholder text-muted">No paid sales yet.</div>;
+  }
+  return <div className="sales-apex-chart" ref={chartRef} />;
+}
+
+function SalesTrendPanel({ data, mode, setMode }) {
+  const trend = buildSalesTrendSeries(mode, data);
+  const viewOptions = [
+    { key: 'total', label: 'Total Sales', icon: IconCash },
+    { key: 'site', label: 'Per Site', icon: IconRouter },
+    { key: 'barangay', label: 'Per Barangay', icon: IconMapPin },
+  ];
+
+  return (
+    <Card title="Total Sales Trend" subtitle="Choose the view below to change the plotted lines.">
+      <div className="sales-trend-toolbar">
+        <div className="nav nav-pills sales-trend-tabs">
+          {viewOptions.map((item) => {
+            const ViewIcon = item.icon;
+            return (
+            <button key={item.key} type="button" className={`nav-link ${mode === item.key ? 'active' : ''}`} onClick={() => setMode(item.key)}>
+              <ViewIcon size={16} className="me-1" />{item.label}
+            </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="sales-chart-title-row">
+        <div>
+          <div className="fw-semibold">{trend.title}</div>
+          <div className="text-muted small">Showing {trend.date_count || 0} date point(s). Drag-select a range on the chart to zoom.</div>
+        </div>
+      </div>
+      <SalesApexLineChart trend={trend} />
+      {mode !== 'total' && <SalesBreakdownList title={mode === 'site' ? 'Top Sites' : 'Top Barangays'} rows={trend.breakdown} />}
+    </Card>
+  );
+}
+
+function SalesBreakdownList({ rows = [], title }) {
+  return (
+    <div className="sales-breakdown-list">
+      <div className="fw-semibold mb-2">{title}</div>
+      {rows.length ? rows.slice(0, 8).map((row) => (
+        <div className="sales-breakdown-row" key={row.label}>
+          <div>
+            <div className="fw-semibold">{row.label}</div>
+            <div className="text-muted small">{row.order_count} order{Number(row.order_count) === 1 ? '' : 's'}</div>
+          </div>
+          <span className="badge bg-green-lt text-green">{row.amount_display || formatCentavos(row.amount_centavos)}</span>
+        </div>
+      )) : <div className="text-muted small">No sales data yet.</div>}
+    </div>
+  );
+}
+
+function SalesPage() {
+  const [rangeDays, setRangeDays] = useState(30);
+  const [chartMode, setChartMode] = useState('total');
+  const [data, setData] = useState({ kpis: {}, daily_sales: [], sales_by_site: [], sales_by_barangay: [], daily_sales_by_site: [], daily_sales_by_barangay: [], orders: [] });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState('telegram');
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [salesSettings, setSalesSettings] = useState({
+    telegram_enabled: false,
+    telegram_bot_token: '',
+    telegram_bot_token_configured: false,
+    telegram_bot_token_hint: '',
+    telegram_chat_id: '',
+    daily_report_enabled: false,
+    report_time: '20:00',
+    include_site_breakdown: true,
+    include_barangay_breakdown: true,
+  });
+  const [clearConfirmation, setClearConfirmation] = useState('');
+  const [tableFilters, setTableFilters] = useState({ search: '', fulfillment: '', site: '', barangay: '' });
+  const [pageSize, setPageSize] = useState(10);
+  const [pageNo, setPageNo] = useState(1);
+
+  async function load(nextRange = rangeDays) {
+    setLoading(true);
+    setError('');
+    try {
+      const result = await request(`/sales?range_days=${encodeURIComponent(nextRange)}`);
+      setData(result);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load().catch(() => {}); }, []);
+
+  async function loadSalesSettings() {
+    const settings = await request('/sales/settings');
+    setSalesSettings({ ...settings, telegram_bot_token: '' });
+  }
+
+  function changeRange(value) {
+    const next = Number(value || 30);
+    setRangeDays(next);
+    load(next).catch(() => {});
+  }
+
+  function openSalesSettings(tab = 'telegram') {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+    setError('');
+    setMessage('');
+    loadSalesSettings().catch((err) => setError(err.message));
+  }
+
+  async function saveSalesSettings(e) {
+    e.preventDefault();
+    setSettingsSaving(true);
+    setError('');
+    try {
+      const payload = {
+        telegram_enabled: Boolean(salesSettings.telegram_enabled),
+        telegram_bot_token: salesSettings.telegram_bot_token || null,
+        telegram_chat_id: salesSettings.telegram_chat_id || '',
+        daily_report_enabled: Boolean(salesSettings.daily_report_enabled),
+        report_time: salesSettings.report_time || '20:00',
+        include_site_breakdown: Boolean(salesSettings.include_site_breakdown),
+        include_barangay_breakdown: Boolean(salesSettings.include_barangay_breakdown),
+      };
+      const saved = await request('/sales/settings', { method: 'PUT', body: JSON.stringify(payload) });
+      setSalesSettings({ ...saved, telegram_bot_token: '' });
+      setMessage('Sales reporting settings saved.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
+  async function sendTelegramTest() {
+    setSettingsSaving(true);
+    setError('');
+    try {
+      const data = await request('/sales/telegram-test', { method: 'POST' });
+      setSalesSettings({ ...(data.settings || salesSettings), telegram_bot_token: '' });
+      setMessage(data.message || 'Telegram sales report sent.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
+  async function clearSalesRecords(e) {
+    e.preventDefault();
+    setSettingsSaving(true);
+    setError('');
+    try {
+      const result = await request('/sales/clear', { method: 'POST', body: JSON.stringify({ confirmation: clearConfirmation }) });
+      setMessage(`Sales records cleared. ${result.deleted_count || 0} payment order(s) removed.`);
+      setClearConfirmation('');
+      setSettingsOpen(false);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
+  function updateTableFilter(key, value) {
+    setTableFilters({ ...tableFilters, [key]: value });
+    setPageNo(1);
+  }
+
+  const kpis = data.kpis || {};
+  const siteOptions = Array.from(new Set((data.orders || []).map((order) => order.site_name).filter(Boolean))).sort();
+  const barangayOptions = Array.from(new Set((data.orders || []).map((order) => order.barangay).filter(Boolean))).sort();
+  const filteredOrders = (data.orders || []).filter((order) => {
+    const search = tableFilters.search.trim().toLowerCase();
+    const customer = order.customer_display_name || order.customer_name || order.device_name || order.client_mac || 'Unprofiled device';
+    const haystack = [
+      order.public_order_id,
+      order.product_name,
+      customer,
+      order.customer_contact_number,
+      order.client_mac,
+      order.client_ip,
+      order.site_name,
+      order.barangay,
+      order.amount_display,
+      order.fulfillment_status,
+    ].join(' ').toLowerCase();
+    if (search && !haystack.includes(search)) return false;
+    if (tableFilters.fulfillment && order.fulfillment_status !== tableFilters.fulfillment) return false;
+    if (tableFilters.site && order.site_name !== tableFilters.site) return false;
+    if (tableFilters.barangay && order.barangay !== tableFilters.barangay) return false;
+    return true;
+  });
+  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / pageSize));
+  const currentPage = Math.min(pageNo, totalPages);
+  const pagedOrders = filteredOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const startEntry = filteredOrders.length ? ((currentPage - 1) * pageSize) + 1 : 0;
+  const endEntry = Math.min(currentPage * pageSize, filteredOrders.length);
+
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
+          <div>
+            <h2 className="page-title mb-1">Sales</h2>
+            <div className="text-muted">Track PayMongo package sales across sites and barangays.</div>
+          </div>
+          <div className="d-flex align-items-center gap-2">
+            <select className="form-select" value={rangeDays} onChange={(e) => changeRange(e.target.value)}>
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+              <option value={365}>Last 365 days</option>
+            </select>
+            <button className="btn btn-outline-primary" type="button" disabled={loading} onClick={() => load()}><IconRefresh size={18} className="me-2" />Refresh</button>
+            <button className="btn btn-outline-secondary" type="button" onClick={() => openSalesSettings()}><IconSettings size={18} className="me-2" />Settings</button>
+          </div>
+        </div>
+      </div>
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
+      {error && <div className="col-12"><div className="alert alert-danger mb-0">{error}</div></div>}
+      <KpiCard icon={IconCash} label="Total Sales" value={kpis.gross_sales_display || 'PHP 0.00'} tone="green" />
+      <KpiCard icon={IconListDetails} label="Paid Orders" value={kpis.paid_orders || 0} tone="blue" />
+      <KpiCard icon={IconCircleCheck} label="Fulfilled" value={kpis.fulfilled_orders || 0} tone="green" />
+      <KpiCard icon={IconActivity} label="Avg Order" value={kpis.average_order_display || 'PHP 0.00'} tone="yellow" />
+      <KpiCard icon={IconClock} label="Today" value={kpis.today_sales_display || 'PHP 0.00'} tone="purple" />
+      <KpiCard icon={IconCalendarStats} label="This Month" value={kpis.month_sales_display || 'PHP 0.00'} tone="azure" />
+      <KpiCard icon={IconMapPin} label="Sites With Sales" value={(data.sales_by_site || []).length} tone="cyan" />
+      <KpiCard icon={IconMapPin} label="Barangays With Sales" value={(data.sales_by_barangay || []).length} tone="orange" />
+
+      <div className="col-12">
+        <SalesTrendPanel data={data} mode={chartMode} setMode={setChartMode} />
+      </div>
+      <div className="col-12">
+        <Card title="Sales Table" subtitle="Latest paid payment orders.">
+          <div className="row g-2 align-items-end mb-3">
+            <div className="col-md-4">
+              <label className="form-label">Search</label>
+              <div className="input-icon">
+                <span className="input-icon-addon"><IconSearch size={18} /></span>
+                <input className="form-control" value={tableFilters.search} onChange={(e) => updateTableFilter('search', e.target.value)} placeholder="Search order, product, customer, site..." />
+              </div>
+            </div>
+            <div className="col-md-2">
+              <label className="form-label">Status</label>
+              <select className="form-select" value={tableFilters.fulfillment} onChange={(e) => updateTableFilter('fulfillment', e.target.value)}>
+                <option value="">All</option>
+                <option value="FULFILLED">Fulfilled</option>
+                <option value="FAILED">Failed</option>
+                <option value="PENDING">Pending</option>
+              </select>
+            </div>
+            <div className="col-md-2">
+              <label className="form-label">Site</label>
+              <select className="form-select" value={tableFilters.site} onChange={(e) => updateTableFilter('site', e.target.value)}>
+                <option value="">All sites</option>
+                {siteOptions.map((site) => <option key={site} value={site}>{site}</option>)}
+              </select>
+            </div>
+            <div className="col-md-2">
+              <label className="form-label">Barangay</label>
+              <select className="form-select" value={tableFilters.barangay} onChange={(e) => updateTableFilter('barangay', e.target.value)}>
+                <option value="">All barangays</option>
+                {barangayOptions.map((barangay) => <option key={barangay} value={barangay}>{barangay}</option>)}
+              </select>
+            </div>
+            <div className="col-md-2">
+              <label className="form-label">Show entries</label>
+              <select className="form-select" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPageNo(1); }}>
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+          </div>
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Product</th>
+                  <th>Customer</th>
+                  <th>Site</th>
+                  <th>Barangay</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                  <th>Paid At</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pagedOrders.length ? pagedOrders.map((order) => {
+                  const customerName = order.customer_display_name || order.customer_name || order.device_name || order.client_mac || 'Unprofiled device';
+                  return (
+                  <tr key={order.id}>
+                    <td><code>{order.public_order_id}</code></td>
+                    <td>
+                      <div className="fw-semibold">{order.product_name}</div>
+                      <div className="text-muted small">{deviceLimitLabel(order.allowed_devices)}</div>
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{customerName}</div>
+                      {order.customer_contact_number && <div className="text-muted small">{order.customer_contact_number}</div>}
+                      {!order.customer_name && order.device_name && <div className="text-muted small">Phone name</div>}
+                    </td>
+                    <td>{order.site_name || 'Unknown Site'}</td>
+                    <td>{order.barangay || 'Unknown Barangay'}</td>
+                    <td className="fw-semibold">{order.amount_display}</td>
+                    <td><span className={`badge ${order.fulfillment_status === 'FULFILLED' ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{order.fulfillment_status}</span></td>
+                    <td>{compactDateTime(order.sale_at)}</td>
+                  </tr>
+                  );
+                }) : (
+                  <tr><td colSpan={8} className="text-center text-muted py-4">No paid sales yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap mt-3">
+            <div className="text-muted small">Showing {startEntry} to {endEntry} of {filteredOrders.length} entr{filteredOrders.length === 1 ? 'y' : 'ies'}</div>
+            <div className="btn-list">
+              <button className="btn btn-sm" type="button" disabled={currentPage <= 1} onClick={() => setPageNo(currentPage - 1)}>Previous</button>
+              <span className="btn btn-sm disabled">Page {currentPage} of {totalPages}</span>
+              <button className="btn btn-sm" type="button" disabled={currentPage >= totalPages} onClick={() => setPageNo(currentPage + 1)}>Next</button>
+            </div>
+          </div>
+        </Card>
+      </div>
+      {settingsOpen && (
+        <Modal title="Sales Settings" onClose={() => setSettingsOpen(false)}>
+          <div className="nav nav-tabs mb-3">
+            <button className={`nav-link ${settingsTab === 'telegram' ? 'active' : ''}`} type="button" onClick={() => setSettingsTab('telegram')}><IconMessageCircle size={16} className="me-1" />Telegram Reporting</button>
+            <button className={`nav-link ${settingsTab === 'clear' ? 'active' : ''}`} type="button" onClick={() => setSettingsTab('clear')}><IconTrash size={16} className="me-1" />Clear Sales</button>
+          </div>
+          {settingsTab === 'telegram' ? (
+            <form onSubmit={saveSalesSettings}>
+              <div className="row g-3">
+                <div className="col-12">
+                  <label className="form-check form-switch">
+                    <input className="form-check-input" type="checkbox" checked={Boolean(salesSettings.telegram_enabled)} onChange={(e) => setSalesSettings({ ...salesSettings, telegram_enabled: e.target.checked })} />
+                    <span className="form-check-label">Enable Telegram sales reporting</span>
+                  </label>
+                </div>
+                <div className="col-md-7">
+                  <label className="form-label">Bot Token</label>
+                  <input className="form-control" type="password" value={salesSettings.telegram_bot_token || ''} onChange={(e) => setSalesSettings({ ...salesSettings, telegram_bot_token: e.target.value })} placeholder={salesSettings.telegram_bot_token_configured ? `Saved: ${salesSettings.telegram_bot_token_hint}` : '123456:ABC...'} />
+                  <div className="form-hint">Leave blank to keep the saved bot token.</div>
+                </div>
+                <div className="col-md-5">
+                  <label className="form-label">Chat ID</label>
+                  <input className="form-control" value={salesSettings.telegram_chat_id || ''} onChange={(e) => setSalesSettings({ ...salesSettings, telegram_chat_id: e.target.value })} placeholder="-1001234567890" />
+                </div>
+                <div className="col-md-4">
+                  <label className="form-check form-switch mt-4">
+                    <input className="form-check-input" type="checkbox" checked={Boolean(salesSettings.daily_report_enabled)} onChange={(e) => setSalesSettings({ ...salesSettings, daily_report_enabled: e.target.checked })} />
+                    <span className="form-check-label">Daily report</span>
+                  </label>
+                </div>
+                <div className="col-md-4">
+                  <label className="form-label">Report Time</label>
+                  <input className="form-control" type="time" value={salesSettings.report_time || '20:00'} onChange={(e) => setSalesSettings({ ...salesSettings, report_time: e.target.value })} />
+                </div>
+                <div className="col-md-4">
+                  <label className="form-label">Breakdowns</label>
+                  <label className="form-check">
+                    <input className="form-check-input" type="checkbox" checked={Boolean(salesSettings.include_site_breakdown)} onChange={(e) => setSalesSettings({ ...salesSettings, include_site_breakdown: e.target.checked })} />
+                    <span className="form-check-label">Include site totals</span>
+                  </label>
+                  <label className="form-check">
+                    <input className="form-check-input" type="checkbox" checked={Boolean(salesSettings.include_barangay_breakdown)} onChange={(e) => setSalesSettings({ ...salesSettings, include_barangay_breakdown: e.target.checked })} />
+                    <span className="form-check-label">Include barangay totals</span>
+                  </label>
+                </div>
+                {(salesSettings.last_test_status || salesSettings.last_test_error) && (
+                  <div className="col-12">
+                    <div className={`alert ${salesSettings.last_test_status === 'SUCCESS' ? 'alert-success' : 'alert-warning'} mb-0`}>
+                      Last Telegram test: {salesSettings.last_test_status || 'Not run'} {salesSettings.last_test_at ? `· ${compactDateTime(salesSettings.last_test_at)}` : ''}
+                      {salesSettings.last_test_error && <div className="small mt-1">{salesSettings.last_test_error}</div>}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="modal-footer px-0 pb-0">
+                <button className="btn" type="button" onClick={() => setSettingsOpen(false)}>Close</button>
+                <button className="btn btn-outline-primary" type="button" disabled={settingsSaving} onClick={sendTelegramTest}><IconSend size={18} className="me-2" />Send Test Report</button>
+                <button className="btn btn-primary" type="submit" disabled={settingsSaving}><IconDeviceFloppy size={18} className="me-2" />Save Settings</button>
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={clearSalesRecords}>
+              <div className="alert alert-danger">
+                Clearing sales removes local payment order records from this Sales page. It does not delete vouchers, customer access, or customer profiles.
+              </div>
+              <label className="form-label">Type CLEAR SALES to confirm</label>
+              <input className="form-control" value={clearConfirmation} onChange={(e) => setClearConfirmation(e.target.value)} placeholder="CLEAR SALES" />
+              <div className="modal-footer px-0 pb-0">
+                <button className="btn" type="button" onClick={() => setSettingsOpen(false)}>Cancel</button>
+                <button className="btn btn-danger" type="submit" disabled={settingsSaving || clearConfirmation.trim().toUpperCase() !== 'CLEAR SALES'}><IconTrash size={18} className="me-2" />Clear Sales</button>
+              </div>
+            </form>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function VouchersPage() {
   const [tab, setTab] = useState('Overview');
   const [data, setData] = useState({ summary: {}, vouchers: [] });
-  const [batches, setBatches] = useState([]);
+  const [activeVouchers, setActiveVouchers] = useState([]);
   const [redemptions, setRedemptions] = useState([]);
-  const [users, setUsers] = useState([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [created, setCreated] = useState(null);
-  const [batchResult, setBatchResult] = useState(null);
-  const [redeemResult, setRedeemResult] = useState(null);
-  const [filters, setFilters] = useState({ search: '', status: '', voucher_type: '', batch_id: '' });
+  const [addVoucherOpen, setAddVoucherOpen] = useState(false);
+  const [voucherTimeTarget, setVoucherTimeTarget] = useState(null);
+  const [voucherTimeForm, setVoucherTimeForm] = useState({ minutes: 5, note: '' });
+  const [filters, setFilters] = useState({ search: '', status: '', voucher_type: '' });
   const [redemptionFilter, setRedemptionFilter] = useState({ source: '', result: '', search: '' });
   const [single, setSingle] = useState({ voucher_type: 'TIME_BASED', code: '', time_value: 1, time_unit: 'hours', valid_until: '', unlimited_expires_at: '', expires_at: '', note: '', status: 'UNUSED', code_prefix: '3J', code_length: 8 });
-  const [bulk, setBulk] = useState({ batch_name: '', description: '', voucher_type: 'TIME_BASED', quantity: 10, time_value: 1, time_unit: 'hours', valid_until: '', unlimited_expires_at: '', expires_at: '', code_prefix: '3J', code_length: 8, note: '' });
-  const [redeem, setRedeem] = useState({ voucher_code: '', user_id: '', device_identifier: '' });
-  const tabs = ['Overview', 'Create Voucher', 'Bulk Generate', 'Voucher List', 'Batches', 'Redemption Logs', 'Test Redeem'];
+  const tabs = ['Overview', 'Voucher List', 'Redemption Logs'];
 
   function seconds(value, unit) {
     const amount = Number(value || 0);
@@ -4406,16 +9361,14 @@ function VouchersPage() {
   async function load() {
     const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString();
     const redemptionQuery = new URLSearchParams(Object.entries(redemptionFilter).filter(([, value]) => value)).toString();
-    const [voucherData, batchData, redemptionData, userData] = await Promise.all([
+    const [voucherData, activeData, redemptionData] = await Promise.all([
       request(`/vouchers${query ? `?${query}` : ''}`),
-      request('/voucher-batches'),
-      request(`/voucher-redemptions${redemptionQuery ? `?${redemptionQuery}` : ''}`),
-      request('/users')
+      request('/vouchers/active'),
+      request(`/voucher-redemptions${redemptionQuery ? `?${redemptionQuery}` : ''}`)
     ]);
     setData(voucherData);
-    setBatches(Array.isArray(batchData) ? batchData : []);
+    setActiveVouchers(Array.isArray(activeData.active_vouchers) ? activeData.active_vouchers : []);
     setRedemptions(Array.isArray(redemptionData) ? redemptionData : []);
-    setUsers(Array.isArray(userData) ? userData : []);
   }
   useEffect(() => { load().catch((err) => setError(err.message)); }, []);
   async function createVoucher(e) {
@@ -4425,16 +9378,8 @@ function VouchersPage() {
     const row = await request('/vouchers', { method: 'POST', body: JSON.stringify(payload) });
     setCreated(row);
     setSingle({ ...single, code: '' });
+    setAddVoucherOpen(false);
     setMessage('Voucher created.');
-    await load();
-  }
-  async function generateBatch(e) {
-    e.preventDefault();
-    setError('');
-    const payload = { ...voucherPayload(bulk), batch_name: bulk.batch_name, description: bulk.description || null, quantity: Number(bulk.quantity) || 1 };
-    const result = await request('/voucher-batches', { method: 'POST', body: JSON.stringify(payload) });
-    setBatchResult(result);
-    setMessage(`Generated ${result.generated_count} vouchers.`);
     await load();
   }
   async function voucherAction(id, action) {
@@ -4444,17 +9389,18 @@ function VouchersPage() {
     await load();
   }
   async function deleteVoucher(id) {
-    if (!window.confirm('Delete this unused voucher?')) return;
-    await request(`/vouchers/${id}`, { method: 'DELETE' });
-    setMessage('Voucher deleted.');
+    if (!window.confirm('Delete this voucher? Active access using this voucher will be removed.')) return;
+    const result = await request(`/vouchers/${id}`, { method: 'DELETE' });
+    const count = Number(result?.revoked_sessions || 0);
+    setMessage(count ? `Voucher deleted. Removed active access from ${count} device session(s).` : 'Voucher deleted.');
     await load();
   }
-  async function testRedeem(e) {
+  async function addVoucherTime(e) {
     e.preventDefault();
-    setError('');
-    const selected = users.find((user) => user.id === redeem.user_id);
-    const result = await request('/vouchers/redeem-test', { method: 'POST', body: JSON.stringify({ ...redeem, username: selected?.username }) });
-    setRedeemResult(result);
+    if (!voucherTimeTarget?.voucher_id) return;
+    await request(`/vouchers/${voucherTimeTarget.voucher_id}/time-adjust`, { method: 'POST', body: JSON.stringify({ amount_seconds: Math.max(0, Number(voucherTimeForm.minutes) || 0) * 60, note: voucherTimeForm.note || null }) });
+    setVoucherTimeTarget(null);
+    setMessage('Voucher time updated.');
     await load();
   }
   async function exportCsv(batchId = '') {
@@ -4477,11 +9423,29 @@ function VouchersPage() {
   }
   const vouchers = data.vouchers || [];
   const summary = data.summary || {};
+  const redemptionRows = redemptions.map((row) => ({
+    ...row,
+    created_at_display: compactDateTime(row.created_at),
+    redeemed_time_display: formatSeconds(row.redeemed_time_seconds)
+  }));
+  function voucherRedeemer(row) {
+    const name = row.redeemed_device_name || row.redeemed_by_username || row.latest_redemption_username || '';
+    const mac = row.redeemed_client_mac || '';
+    const ip = row.redeemed_device_ip || row.redeemed_client_ip || row.redeemed_ip_address || '';
+    if (!name && !mac && !ip) return <span className="text-muted">Not redeemed</span>;
+    return (
+      <div className="voucher-redeemer">
+        <div className="fw-semibold">{name || 'Unknown device'}</div>
+        <div className="text-muted small">
+          {mac && <span>MAC: <code>{mac}</code></span>}
+          {mac && ip && <span className="mx-1">·</span>}
+          {ip && <span>IP: {ip}</span>}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="row row-cards">
-      <div className="col-12">
-        <div className="alert alert-info">Vouchers are prepaid access codes. You can create one voucher or generate many at once. A customer will later enter the voucher in the captive portal to receive internet time or access.</div>
-      </div>
       {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
       {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
       <div className="col-12">
@@ -4498,11 +9462,48 @@ function VouchersPage() {
         <KpiCard icon={IconShieldLock} label="Disabled" value={summary.disabled || 0} tone="red" />
         <KpiCard icon={IconClock} label="Total Time Issued" value={formatSeconds(summary.total_time_issued)} tone="cyan" />
         <KpiCard icon={IconActivity} label="Total Time Redeemed" value={formatSeconds(summary.total_time_redeemed)} tone="green" />
-        <div className="col-12"><Card title="Recent Redemptions"><Table rows={redemptions.slice(0, 8)} columns={['voucher_code', 'result', 'username', 'source', 'redeemed_time_seconds', 'failure_reason', 'created_at']} /></Card></div>
+        <div className="col-12">
+          <Card title={<CardHeaderContent><div className="d-flex align-items-center justify-content-between w-100 gap-2"><div><h3 className="card-title mb-1">Active Vouchers</h3><div className="text-muted small">Current voucher-backed devices with remaining access time.</div></div><button className="btn btn-primary" type="button" onClick={() => { setCreated(null); setAddVoucherOpen(true); }}><IconPlus size={18} className="me-2" />Generate Voucher</button></div></CardHeaderContent>}>
+            <div className="table-responsive">
+              <table className="table card-table table-vcenter">
+                <thead>
+                  <tr>
+                    <th>Voucher</th>
+                    <th>Device</th>
+                    <th>MAC</th>
+                    <th>IP</th>
+                    <th>SSID</th>
+                    <th>Remaining Time</th>
+                    <th className="text-end">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeVouchers.map((row) => (
+                    <tr key={row.portal_session_id}>
+                      <td><code>{row.voucher_code}</code></td>
+                      <td><div className="fw-semibold">{row.device_name || row.username || 'Unknown device'}</div><div className="text-muted small">{row.site || row.portal_source || ''}</div></td>
+                      <td><code>{row.client_mac || 'n/a'}</code></td>
+                      <td>{row.client_ip || 'n/a'}</td>
+                      <td>{row.ssid || 'n/a'}</td>
+                      <td><span className="badge bg-green-lt text-green">{formatSeconds(row.remaining_time_seconds)}</span></td>
+                      <td className="text-end text-nowrap">
+                        <ActionBadgeGroup>
+                          <ActionBadgeButton icon={IconClock} label="Add more time" tone="blue" onClick={() => { setVoucherTimeTarget(row); setVoucherTimeForm({ minutes: 5, note: '' }); }} />
+                          <ActionBadgeButton icon={IconTrash} label="Delete voucher" tone="red" onClick={() => deleteVoucher(row.voucher_id)} />
+                        </ActionBadgeGroup>
+                      </td>
+                    </tr>
+                  ))}
+                  {!activeVouchers.length && <tr><td colSpan="7" className="text-muted p-4">No active vouchers right now.</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
       </>}
 
-      {tab === 'Create Voucher' && <div className="col-12">
-        <Card title="Create Voucher">
+      {addVoucherOpen && (
+        <Modal title="Generate Voucher" onClose={() => setAddVoucherOpen(false)} size="xl">
           <form onSubmit={createVoucher}>
             <div className="row g-3">
               <div className="col-md-3"><label className="form-label">Voucher Type</label><select className="form-select" value={single.voucher_type} onChange={(e) => setSingle({ ...single, voucher_type: e.target.value })}><option value="TIME_BASED">Time-based</option><option value="DATE_BASED">Date-based</option><option value="UNLIMITED">Unlimited</option></select></div>
@@ -4515,52 +9516,62 @@ function VouchersPage() {
               <div className="col-md-3"><label className="form-label">Expires At</label><input className="form-control" type="datetime-local" value={single.expires_at} onChange={(e) => setSingle({ ...single, expires_at: e.target.value })} /></div>
               <div className="col-md-2"><label className="form-label">Status</label><select className="form-select" value={single.status} onChange={(e) => setSingle({ ...single, status: e.target.value })}><option>UNUSED</option><option>DISABLED</option></select></div>
               <div className="col-12"><label className="form-label">Note</label><input className="form-control" value={single.note} onChange={(e) => setSingle({ ...single, note: e.target.value })} /></div>
-              <div className="col-12"><button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Create Voucher</button></div>
             </div>
+            <div className="modal-footer px-0 pb-0"><button className="btn" type="button" onClick={() => setAddVoucherOpen(false)}>Cancel</button><button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Generate Voucher</button></div>
           </form>
           {created && <div className="alert alert-success mt-3 mb-0">Created voucher: <code>{created.code}</code> <button className="btn btn-sm ms-2" type="button" onClick={() => navigator.clipboard?.writeText(created.code)}>Copy</button><button className="btn btn-sm ms-2" type="button" onClick={() => printCodes([created])}>Print</button></div>}
-        </Card>
-      </div>}
-
-      {tab === 'Bulk Generate' && <div className="col-12">
-        <Card title="Bulk Generate">
-          <form onSubmit={generateBatch}>
-            <div className="row g-3">
-              <div className="col-md-4"><label className="form-label">Batch Name</label><input className="form-control" required value={bulk.batch_name} onChange={(e) => setBulk({ ...bulk, batch_name: e.target.value })} /></div>
-              <div className="col-md-2"><label className="form-label">Quantity</label><input className="form-control" type="number" min="1" max="5000" value={bulk.quantity} onChange={(e) => setBulk({ ...bulk, quantity: Number(e.target.value) })} /></div>
-              <div className="col-md-3"><label className="form-label">Voucher Type</label><select className="form-select" value={bulk.voucher_type} onChange={(e) => setBulk({ ...bulk, voucher_type: e.target.value })}><option value="TIME_BASED">Time-based</option><option value="DATE_BASED">Date-based</option><option value="UNLIMITED">Unlimited</option></select></div>
-              {bulk.voucher_type === 'TIME_BASED' && <><div className="col-md-2"><label className="form-label">Time Value</label><input className="form-control" type="number" min="1" value={bulk.time_value} onChange={(e) => setBulk({ ...bulk, time_value: e.target.value })} /></div><div className="col-md-1"><label className="form-label">Unit</label><select className="form-select" value={bulk.time_unit} onChange={(e) => setBulk({ ...bulk, time_unit: e.target.value })}><option value="minutes">Min</option><option value="hours">Hr</option><option value="days">Day</option></select></div></>}
-              {bulk.voucher_type === 'DATE_BASED' && <div className="col-md-3"><label className="form-label">Valid Until</label><input className="form-control" type="datetime-local" value={bulk.valid_until} onChange={(e) => setBulk({ ...bulk, valid_until: e.target.value })} /></div>}
-              {bulk.voucher_type === 'UNLIMITED' && <div className="col-md-3"><label className="form-label">Optional Unlimited Expiry</label><input className="form-control" type="datetime-local" value={bulk.unlimited_expires_at} onChange={(e) => setBulk({ ...bulk, unlimited_expires_at: e.target.value })} /></div>}
-              <div className="col-md-2"><label className="form-label">Code Prefix</label><input className="form-control" value={bulk.code_prefix} onChange={(e) => setBulk({ ...bulk, code_prefix: e.target.value })} /></div>
-              <div className="col-md-2"><label className="form-label">Code Length</label><input className="form-control" type="number" min="4" max="32" value={bulk.code_length} onChange={(e) => setBulk({ ...bulk, code_length: Number(e.target.value) })} /></div>
-              <div className="col-md-3"><label className="form-label">Expires At</label><input className="form-control" type="datetime-local" value={bulk.expires_at} onChange={(e) => setBulk({ ...bulk, expires_at: e.target.value })} /></div>
-              <div className="col-12"><label className="form-label">Description / Note</label><input className="form-control" value={bulk.description} onChange={(e) => setBulk({ ...bulk, description: e.target.value, note: e.target.value })} /></div>
-              <div className="col-12 d-flex gap-2"><button className="btn" type="button" onClick={() => setBatchResult({ preview: Array.from({ length: Math.min(10, Number(bulk.quantity) || 1) }, () => ({ code: randomVoucher(bulk.code_prefix, bulk.code_length), voucher_type: bulk.voucher_type })) })}>Preview</button><button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Generate Batch</button></div>
-            </div>
-          </form>
-          {batchResult?.preview && <div className="mt-3"><h4>Preview</h4><div className="d-flex flex-wrap gap-2">{batchResult.preview.map((row) => <code key={row.code}>{row.code}</code>)}</div></div>}
-          {batchResult?.generated_count && <div className="alert alert-success mt-3 mb-0">Generated {batchResult.generated_count} vouchers. <button className="btn btn-sm ms-2" type="button" onClick={() => exportCsv(batchResult.batch.id)}>Export CSV</button><button className="btn btn-sm ms-2" type="button" onClick={() => printCodes(batchResult.vouchers)}>Print</button></div>}
-        </Card>
-      </div>}
+        </Modal>
+      )}
 
       {tab === 'Voucher List' && <div className="col-12">
-        <Card title="Voucher List">
+        <Card title={<CardHeaderContent><div className="d-flex flex-wrap align-items-center justify-content-between w-100 gap-2"><h3 className="card-title mb-0">Voucher List</h3><button className="btn btn-primary" type="button" onClick={() => { setCreated(null); setAddVoucherOpen(true); }}><IconPlus size={18} className="me-2" />Generate Voucher</button></div></CardHeaderContent>}>
           <div className="row g-2 mb-3">
             <div className="col-md-3"><input className="form-control" placeholder="Search code" value={filters.search} onChange={(e) => setFilters({ ...filters, search: e.target.value })} /></div>
             <div className="col-md-2"><select className="form-select" value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">All Status</option><option>UNUSED</option><option>USED</option><option>EXPIRED</option><option>DISABLED</option><option>VOIDED</option></select></div>
             <div className="col-md-2"><select className="form-select" value={filters.voucher_type} onChange={(e) => setFilters({ ...filters, voucher_type: e.target.value })}><option value="">All Types</option><option>TIME_BASED</option><option>DATE_BASED</option><option>UNLIMITED</option></select></div>
-            <div className="col-md-3"><select className="form-select" value={filters.batch_id} onChange={(e) => setFilters({ ...filters, batch_id: e.target.value })}><option value="">All Batches</option>{batches.map((batch) => <option key={batch.id} value={batch.id}>{batch.batch_name}</option>)}</select></div>
-            <div className="col-md-2 d-flex gap-2"><button className="btn" type="button" onClick={load}>Filter</button><button className="btn" type="button" onClick={() => exportCsv(filters.batch_id)}>CSV</button></div>
+            <div className="col-md-2 d-flex gap-2"><button className="btn" type="button" onClick={load}>Filter</button><button className="btn" type="button" onClick={() => exportCsv()}>CSV</button></div>
           </div>
-          <div className="table-responsive"><table className="table card-table table-vcenter text-nowrap"><thead><tr><th>Code</th><th>Type</th><th>Value</th><th>Status</th><th>Expires At</th><th>Redeemed By</th><th>Redeemed At</th><th>Batch</th><th>Created At</th><th className="text-end">Actions</th></tr></thead><tbody>{vouchers.map((row) => <tr key={row.id}><td><code>{row.code}</code></td><td>{row.voucher_type}</td><td>{valueLabel(row)}</td><td><span className="badge bg-blue-lt text-blue">{row.status}</span></td><td>{fmt(row.expires_at)}</td><td>{fmt(row.redeemed_by_username)}</td><td>{fmt(row.redeemed_at)}</td><td>{fmt(row.batch_name)}</td><td>{fmt(row.created_at)}</td><td className="text-end"><button className="btn btn-sm me-1" onClick={() => navigator.clipboard?.writeText(row.code)}>Copy</button>{row.status === 'DISABLED' ? <button className="btn btn-sm me-1" onClick={() => voucherAction(row.id, 'enable')}>Enable</button> : <button className="btn btn-sm me-1" onClick={() => voucherAction(row.id, 'disable')}>Disable</button>}<button className="btn btn-sm btn-warning me-1" onClick={() => voucherAction(row.id, 'void')}>Void</button>{row.status === 'UNUSED' && row.redemption_count === 0 && <button className="btn btn-sm btn-danger" onClick={() => deleteVoucher(row.id)}>Delete</button>}</td></tr>)}</tbody></table></div>
-        </Card>
-      </div>}
-
-      {tab === 'Batches' && <div className="col-12">
-        <Card title="Batches">
-          <Table rows={batches} columns={['batch_name', 'voucher_type', 'quantity', 'unused', 'used', 'expired', 'disabled', 'created_by', 'created_at']} />
-          <div className="mt-3 d-flex gap-2"><button className="btn" type="button" onClick={() => exportCsv()}>Export All CSV</button><button className="btn" type="button" onClick={() => printCodes(vouchers)}>Print Current List</button></div>
+          <div className="table-responsive">
+            <table className="table card-table table-vcenter">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Type</th>
+                  <th>Value</th>
+                  <th>Status</th>
+                  <th>Expires At</th>
+                  <th>Redeemed By</th>
+                  <th>Redeemed At</th>
+                  <th>Created At</th>
+                  <th className="text-end">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {vouchers.map((row) => (
+                  <tr key={row.id}>
+                    <td><code>{row.code}</code></td>
+                    <td>{row.voucher_type}</td>
+                    <td>{valueLabel(row)}</td>
+                    <td><span className="badge bg-blue-lt text-blue">{row.status}</span></td>
+                    <td>{compactDateTime(row.expires_at)}</td>
+                    <td>{voucherRedeemer(row)}</td>
+                    <td>{compactDateTime(row.redeemed_at)}</td>
+                    <td>{compactDateTime(row.created_at)}</td>
+                    <td className="text-end text-nowrap">
+                      <ActionBadgeGroup>
+                        <ActionBadgeButton icon={IconCopy} label="Copy voucher code" tone="blue" onClick={() => navigator.clipboard?.writeText(row.code)} />
+                        {row.status === 'DISABLED'
+                          ? <ActionBadgeButton icon={IconCircleCheck} label="Enable voucher" tone="green" onClick={() => voucherAction(row.id, 'enable')} />
+                          : <ActionBadgeButton icon={IconBan} label="Disable voucher" tone="orange" onClick={() => voucherAction(row.id, 'disable')} />}
+                        <ActionBadgeButton icon={IconX} label="Void voucher" tone="yellow" onClick={() => voucherAction(row.id, 'void')} />
+                        {row.status === 'UNUSED' && row.redemption_count === 0 && <ActionBadgeButton icon={IconTrash} label="Delete voucher" tone="red" onClick={() => deleteVoucher(row.id)} />}
+                      </ActionBadgeGroup>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Card>
       </div>}
 
@@ -4572,42 +9583,55 @@ function VouchersPage() {
             <div className="col-md-3"><select className="form-select" value={redemptionFilter.result} onChange={(e) => setRedemptionFilter({ ...redemptionFilter, result: e.target.value })}><option value="">All Results</option><option>SUCCESS</option><option>FAILED</option></select></div>
             <div className="col-md-3"><button className="btn" type="button" onClick={load}>Filter</button></div>
           </div>
-          <Table rows={redemptions} columns={['voucher_code', 'result', 'username', 'source', 'redeemed_time_seconds', 'failure_reason', 'ip_address', 'created_at']} />
+          <Table rows={redemptionRows} columns={['voucher_code', 'result', 'username', 'source', 'redeemed_time_display', 'failure_reason', 'ip_address', 'created_at_display']} />
         </Card>
       </div>}
-
-      {tab === 'Test Redeem' && <div className="col-12">
-        <Card title="Test Redeem">
-          <div className="alert alert-warning">Test Redeem is for admin validation only. It simulates what the customer portal will do later.</div>
-          <form onSubmit={testRedeem}>
+      {voucherTimeTarget && (
+        <Modal title={`Add Time: ${voucherTimeTarget.voucher_code}`} onClose={() => setVoucherTimeTarget(null)}>
+          <form onSubmit={addVoucherTime}>
             <div className="row g-3">
-              <div className="col-md-4"><label className="form-label">Voucher Code</label><input className="form-control" required value={redeem.voucher_code} onChange={(e) => setRedeem({ ...redeem, voucher_code: e.target.value })} /></div>
-              <div className="col-md-4"><label className="form-label">Existing Customer / Account</label><select className="form-select" required value={redeem.user_id} onChange={(e) => setRedeem({ ...redeem, user_id: e.target.value })}><option value="">Select customer</option>{users.map((user) => <option key={user.id} value={user.id}>{user.username}</option>)}</select></div>
-              <div className="col-md-4"><label className="form-label">Device Identifier</label><input className="form-control" value={redeem.device_identifier} onChange={(e) => setRedeem({ ...redeem, device_identifier: e.target.value })} /></div>
-              <div className="col-12"><button className="btn btn-primary"><IconKey size={18} className="me-2" />Test Redeem Voucher</button></div>
+              <div className="col-md-6"><label className="form-label">Minutes to Add</label><input className="form-control" type="number" min="1" value={voucherTimeForm.minutes} onChange={(e) => setVoucherTimeForm({ ...voucherTimeForm, minutes: e.target.value })} /></div>
+              <div className="col-md-6"><label className="form-label">Current Remaining</label><div className="form-control-plaintext fw-semibold">{formatSeconds(voucherTimeTarget.remaining_time_seconds)}</div></div>
+              <div className="col-12"><label className="form-label">Note</label><input className="form-control" value={voucherTimeForm.note} onChange={(e) => setVoucherTimeForm({ ...voucherTimeForm, note: e.target.value })} /></div>
             </div>
+            <div className="modal-footer px-0 pb-0"><button className="btn" type="button" onClick={() => setVoucherTimeTarget(null)}>Cancel</button><button className="btn btn-primary">Add Time</button></div>
           </form>
-          {redeemResult && <div className={`alert mt-3 mb-0 ${redeemResult.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'}`}><div className="fw-semibold">{redeemResult.status === 'SUCCESS' ? 'Voucher accepted' : redeemResult.reason}</div>{redeemResult.status === 'SUCCESS' ? <div>Time added: {formatSeconds(redeemResult.time_added_seconds)}. Transaction: <code>{redeemResult.transaction_id}</code></div> : <div>Suggested fix: check voucher status, expiry, and selected customer.</div>}<pre className="mt-2 mb-0"><code>{JSON.stringify(redeemResult, null, 2)}</code></pre></div>}
-        </Card>
-      </div>}
+        </Modal>
+      )}
     </div>
   );
 }
 
-function portalPreviewSrcDoc(htmlTemplate = '', cssTemplate = '') {
+function portalPreviewSrcDoc(htmlTemplate = '', cssTemplate = '', productItems = []) {
+  const escapePreviewHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   const brand = '<div class="client-portal-brand"><div class="client-portal-logo">3J</div><h1>3J WiFi</h1><p>Enter your voucher to connect</p></div>';
+  const previewProducts = productItems.length ? productItems : [
+    { id: 'sample-1', name: '1 Hour WiFi', duration_label: '1 hour', price_display: 'PHP 10.00', device_scope: 'SINGLE_DEVICE', device_scope_label: 'Personal Pass', allowed_devices_label: '1 device', description: '' },
+    { id: 'sample-2', name: 'Family WiFi Day Pass', duration_label: '1 day', price_display: 'PHP 50.00', device_scope: 'MULTI_DEVICE', device_scope_label: 'Shared Pass', allowed_devices_label: '3 devices', description: 'Sample package' }
+  ];
+  const productItemsHtml = `<div class="client-portal-products"><div class="client-portal-products-title">Available WiFi Packages</div><div class="client-portal-product-grid">${previewProducts.map((item) => `<div class="client-portal-product"><div><div class="client-portal-product-name">${escapePreviewHtml(item.name)}</div><div class="client-portal-product-badges"><span class="client-portal-duration-badge">${escapePreviewHtml(item.duration_label || '')}</span><span class="client-portal-duration-badge">${escapePreviewHtml(item.device_scope_label || productPassLabel(item))}</span>${productPassType(item) === 'MULTI_DEVICE' ? `<span class="client-portal-duration-badge">${escapePreviewHtml(item.allowed_devices_label || deviceLimitLabel(item.allowed_devices))}</span>` : ''}</div>${item.description ? `<div class="client-portal-product-desc">${escapePreviewHtml(item.description)}</div>` : ''}</div><div class="client-portal-product-meta"><strong>${escapePreviewHtml(item.price_display || `PHP ${Number(item.price || 0).toFixed(2)}`)}</strong></div></div>`).join('')}</div></div>`;
   const voucherForm = '<form class="client-portal-card"><div class="client-portal-welcome">Welcome to 3J WiFi. Please enter your voucher code to start using the internet.</div><label class="form-label">Voucher Code</label><input class="form-control form-control-lg text-center voucher-input" value="3J-ABCD-2345" readonly><button class="btn btn-primary btn-lg w-100 mt-3" type="button">Redeem / Connect</button></form>';
   const help = '<div class="client-portal-help"><p>Need a voucher? Ask the nearest vendo/operator.</p><p>If your voucher is valid but internet does not start, disconnect and reconnect to WiFi.</p><div class="client-portal-powered">Powered by 3JCentralPisowifi</div></div>';
-  const body = String(htmlTemplate || '').replaceAll('{{brand}}', brand).replaceAll('{{voucher_form}}', voucherForm).replaceAll('{{help}}', help);
-  const baseCss = `body{margin:0;font-family:Inter,Arial,sans-serif;background:#eef4fb;color:#1f2937}.client-portal-page{min-height:100vh;display:grid;place-items:center;padding:24px}.client-portal-shell{width:min(420px,100%)}.client-portal-brand{text-align:center;margin-bottom:18px}.client-portal-logo{display:inline-grid;place-items:center;width:64px;height:64px;border-radius:18px;background:#206bc4;color:white;font-weight:800;font-size:26px;margin-bottom:10px}.client-portal-brand h1{margin:0;font-size:30px}.client-portal-brand p{margin:6px 0 0;color:#64748b}.client-portal-card{background:white;border:1px solid #dbe3ed;border-radius:14px;box-shadow:0 18px 48px rgba(15,23,42,.12);padding:22px}.client-portal-welcome{color:#475569;margin-bottom:16px}.form-label{display:block;font-weight:700;margin-bottom:8px}.form-control{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:13px;font-size:18px}.text-center{text-align:center}.btn{border:0;border-radius:10px;padding:13px 16px;font-weight:800}.btn-primary{background:#206bc4;color:white}.w-100{width:100%}.mt-3{margin-top:16px}.client-portal-help{text-align:center;color:#64748b;font-size:14px;margin-top:16px}.client-portal-powered{font-weight:700;color:#206bc4}`;
+  const template = String(htmlTemplate || '{{brand}}\n{{product_items}}\n{{voucher_form}}\n{{help}}');
+  let body = template.replaceAll('{{brand}}', brand).replaceAll('{{product_items}}', productItemsHtml).replaceAll('{{voucher_form}}', voucherForm).replaceAll('{{help}}', help);
+  if (!template.includes('{{product_items}}')) body += productItemsHtml;
+  const baseCss = `body{margin:0;font-family:Inter,Arial,sans-serif;background:#eef4fb;color:#1f2937}.client-portal-page{min-height:100vh;display:grid;place-items:center;padding:24px}.client-portal-shell{width:min(420px,100%)}.client-portal-brand{text-align:center;margin-bottom:18px}.client-portal-logo{display:inline-grid;place-items:center;width:64px;height:64px;border-radius:18px;background:#206bc4;color:white;font-weight:800;font-size:26px;margin-bottom:10px}.client-portal-brand h1{margin:0;font-size:30px}.client-portal-brand p{margin:6px 0 0;color:#64748b}.client-portal-products{margin-bottom:14px}.client-portal-products-title{color:#334155;font-size:12px;font-weight:800;letter-spacing:.03em;margin-bottom:8px;text-transform:uppercase}.client-portal-product-grid{display:grid;gap:8px}.client-portal-product{align-items:center;background:#fff;border:1px solid #dbe7f3;border-radius:10px;display:flex;gap:10px;justify-content:space-between;padding:10px 12px}.client-portal-product-name{color:#172033;font-weight:800}.client-portal-product-desc{color:#64748b;font-size:13px}.client-portal-product-meta{align-items:flex-end;display:flex;flex-direction:column;gap:2px;text-align:right;white-space:nowrap}.client-portal-product-meta span{color:#64748b;font-size:12px;font-weight:700}.client-portal-product-meta strong{color:#206bc4;font-size:16px}.client-portal-card{background:white;border:1px solid #dbe3ed;border-radius:14px;box-shadow:0 18px 48px rgba(15,23,42,.12);padding:22px}.client-portal-welcome{color:#475569;margin-bottom:16px}.form-label{display:block;font-weight:700;margin-bottom:8px}.form-control{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:13px;font-size:18px}.text-center{text-align:center}.btn{border:0;border-radius:10px;padding:13px 16px;font-weight:800}.btn-primary{background:#206bc4;color:white}.w-100{width:100%}.mt-3{margin-top:16px}.client-portal-help{text-align:center;color:#64748b;font-size:14px;margin-top:16px}.client-portal-powered{font-weight:700;color:#206bc4}`;
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${baseCss}${cssTemplate || ''}</style></head><body><div class="client-portal-page"><div class="client-portal-shell">${body}</div></div></body></html>`;
 }
 
 function CaptivePortalEditorPage() {
   const [design, setDesign] = useState({ html_template: '', css_template: '' });
+  const [productItems, setProductItems] = useState([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  async function load() { setDesign(await request('/captive-portal/design')); }
+  async function load() {
+    const [nextDesign, products] = await Promise.all([
+      request('/captive-portal/design'),
+      request('/product-items').catch(() => ({ items: [] }))
+    ]);
+    setDesign(nextDesign);
+    setProductItems(products.items || []);
+  }
   useEffect(() => { load().catch((err) => setError(err.message)); }, []);
   async function save(e) {
     e.preventDefault();
@@ -4642,7 +9666,7 @@ function CaptivePortalEditorPage() {
         <form onSubmit={save}>
           <Card title="HTML Template">
             <textarea className="form-control portal-code-editor" value={design.html_template || ''} onChange={(e) => setDesign({ ...design, html_template: e.target.value })} spellCheck={false} />
-            <div className="text-muted small mt-2">Placeholders: <code>{'{{brand}}'}</code>, <code>{'{{voucher_form}}'}</code>, <code>{'{{help}}'}</code>.</div>
+            <div className="text-muted small mt-2">Placeholders: <code>{'{{brand}}'}</code>, <code>{'{{product_items}}'}</code>, <code>{'{{voucher_form}}'}</code>, <code>{'{{help}}'}</code>.</div>
           </Card>
           <Card title="CSS" className="mt-3">
             <textarea className="form-control portal-code-editor portal-css-editor" value={design.css_template || ''} onChange={(e) => setDesign({ ...design, css_template: e.target.value })} spellCheck={false} />
@@ -4652,7 +9676,7 @@ function CaptivePortalEditorPage() {
       </div>
       <div className="col-lg-6">
         <Card title="Preview">
-          <iframe className="portal-design-preview" title="Portal design preview" srcDoc={portalPreviewSrcDoc(design.html_template, design.css_template)} />
+          <iframe className="portal-design-preview" title="Portal design preview" srcDoc={portalPreviewSrcDoc(design.html_template, design.css_template, productItems.filter((item) => item.status === 'ACTIVE'))} />
         </Card>
       </div>
     </div>
@@ -4664,6 +9688,12 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [activeTab, setActiveTab] = useState(isMikrotikOnly ? 'MikroTik' : 'Portal');
   const [settings, setSettings] = useState(null);
   const [portalSettings, setPortalSettings] = useState(null);
+  const [portalDesignTab, setPortalDesignTab] = useState('No Internet Page');
+  const [avatarNotesTab, setAvatarNotesTab] = useState('Main Page First');
+  const [portalSmsSettings, setPortalSmsSettings] = useState(null);
+  const [portalSmsForm, setPortalSmsForm] = useState({ sender_id: '', monthly_credit_limit: '', monthly_reset_day: 1 });
+  const [portalSmsSaving, setPortalSmsSaving] = useState(false);
+  const [portalSmsRefreshing, setPortalSmsRefreshing] = useState(false);
   const [mikrotiks, setMikrotiks] = useState([]);
   const [mikrotikRows, setMikrotikRows] = useState([]);
   const [siteDeployments, setSiteDeployments] = useState([]);
@@ -4878,7 +9908,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     omada_site_name: '',
     routers: []
   });
-  const tabs = isMikrotikOnly ? ['MikroTik'] : ['Portal', 'Portal Notifs', 'Portal Settings', 'Sanity Check', 'Portal Sessions', 'Authorization Logs'];
+  const tabs = isMikrotikOnly ? ['MikroTik'] : ['Portal', 'Portal Design', 'Portal Notifs', 'Message Defaults', 'Portal Settings', 'Portal Sessions', 'Authorization Logs'];
   useEffect(() => {
     if (!message || !messageAlertRef.current) return;
     window.setTimeout(() => {
@@ -6876,10 +11906,32 @@ function CaptivePortalPage({ mode = 'full' }) {
       </div>
     );
   }
+  function hydratePortalSmsForm(data) {
+    setPortalSmsSettings(data);
+    setPortalSmsForm({
+      sender_id: data?.sender_id || '',
+      monthly_credit_limit: data?.monthly_credit_limit ?? '',
+      monthly_reset_day: data?.monthly_reset_day || 1
+    });
+  }
+  async function loadPortalSmsSettings({ quiet = false } = {}) {
+    if (!quiet) setPortalSmsRefreshing(true);
+    try {
+      const data = await request('/captive-portal/sms-confirmation-settings');
+      hydratePortalSmsForm(data);
+      return data;
+    } catch (error) {
+      if (!quiet) setMessage(error.message || 'Could not load portal SMS confirmation settings.');
+      return null;
+    } finally {
+      if (!quiet) setPortalSmsRefreshing(false);
+    }
+  }
   async function load() {
-    const [system, portalCfg, omadaPortal, routerRows, stationRows, apManagementRow, siteRows, events, voucherData, voucherLogs, portalSessions, authLogs] = await Promise.all([
+    const [system, portalCfg, portalSmsCfg, omadaPortal, routerRows, stationRows, apManagementRow, siteRows, events, voucherData, voucherLogs, portalSessions, authLogs] = await Promise.all([
       request('/system/settings'),
       request('/captive-portal/settings'),
+      request('/captive-portal/sms-confirmation-settings').catch(() => null),
       request('/captive-portal/omada/status').catch(() => null),
       request('/captive-portal/mikrotik'),
       request('/network/mikrotik/stations'),
@@ -6893,6 +11945,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     ]);
     setSettings(system);
     setPortalSettings(portalCfg);
+    if (portalSmsCfg) hydratePortalSmsForm(portalSmsCfg);
     setOmadaPortalStatus(omadaPortal);
     const safeRouterRows = Array.isArray(routerRows) ? routerRows : [];
     setMikrotiks(safeRouterRows);
@@ -7013,9 +12066,39 @@ function CaptivePortalPage({ mode = 'full' }) {
   }
   async function savePortalSettings(e) {
     e.preventDefault();
-    const saved = await request('/captive-portal/settings', { method: 'PUT', body: JSON.stringify(portalSettings) });
+    const saved = await request('/captive-portal/settings', { method: 'PUT', body: JSON.stringify({ ...portalSettings, sync_omada_portal: activeTab === 'Portal Settings' }) });
     setPortalSettings(saved);
-    setMessage('Portal settings saved.');
+    setMessage(saved.omada_sync?.message || 'Portal settings saved.');
+    if (saved.omada_sync) {
+      const omadaStatus = await request('/captive-portal/omada/status').catch(() => null);
+      setOmadaPortalStatus(omadaStatus);
+    }
+  }
+  async function savePortalSmsSettings(e) {
+    e.preventDefault();
+    setPortalSmsSaving(true);
+    try {
+      const saved = await request('/captive-portal/sms-confirmation-settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          sender_id: portalSmsForm.sender_id || null,
+          monthly_credit_limit: portalSmsForm.monthly_credit_limit === '' ? null : Number(portalSmsForm.monthly_credit_limit),
+          monthly_reset_day: Number(portalSmsForm.monthly_reset_day) || 1
+        })
+      });
+      hydratePortalSmsForm(saved);
+      setMessage('Portal SMS confirmation defaults saved.');
+    } catch (error) {
+      setMessage(error.message || 'Portal SMS confirmation defaults could not be saved.');
+    } finally {
+      setPortalSmsSaving(false);
+    }
+  }
+  async function uploadPortalNoInternetAvatar(type, file) {
+    if (!file) return;
+    const saved = await uploadRequest(`/captive-portal/no-internet-avatar/${type}`, 'no_internet_avatar', file);
+    setPortalSettings(saved);
+    setMessage(type === 'connected' ? 'Connected avatar uploaded.' : 'Disconnected avatar uploaded.');
   }
   function addMikrotikRow() {
     const existingNumbers = mikrotikRows
@@ -7846,6 +12929,88 @@ function CaptivePortalPage({ mode = 'full' }) {
   const portalSsidPrimary = portalSsid.primary_ssid || '3J-FreeWiFi';
   const sanityProgress = portalSettings?.test_checklist_progress || {};
   const hasPortalUrl = Boolean(portalSettings?.portal_url_staging || portalSettings?.portal_url_production);
+  const currentPortalUrl = portalSettings?.current_portal_url || portalSettings?.portal_url_production || portalSettings?.portal_url_staging || 'http://192.168.50.70/portal';
+  const avatarNotesConfig = normalizePortalAvatarNotesSettings(portalSettings?.avatar_notes_json || {});
+  const profileGiftDuration = profileGiftDurationParts(portalSettings?.profile_gift_duration_seconds || DEFAULT_PROFILE_GIFT.duration_seconds);
+  function updateProfileGiftDuration(value, unit = profileGiftDuration.unit) {
+    setPortalSettings((current) => ({
+      ...current,
+      profile_gift_duration_seconds: profileGiftDurationSeconds(value, unit),
+    }));
+  }
+  function updateAvatarNotesConfig(updates) {
+    setPortalSettings((current) => ({
+      ...current,
+      avatar_notes_json: {
+        ...normalizePortalAvatarNotesSettings(current?.avatar_notes_json || {}),
+        ...updates,
+      },
+    }));
+  }
+  function updateAvatarNote(noteId, updates) {
+    updateAvatarNotesConfig({
+      notes: avatarNotesConfig.notes.map((note) => note.id === noteId ? { ...note, ...updates } : note),
+    });
+  }
+  function updateMainPageAvatarNote(noteId, updates) {
+    updateAvatarNotesConfig({
+      main_page_notes: avatarNotesConfig.main_page_notes.map((note) => note.id === noteId ? { ...note, ...updates } : note),
+    });
+  }
+  function updateAvatarEventNotesConfig(updates) {
+    updateAvatarNotesConfig({
+      event_notes: {
+        ...avatarNotesConfig.event_notes,
+        ...updates,
+      },
+    });
+  }
+  function updateAvatarEventNote(type, noteId, updates) {
+    const key = type === 'LOW_TIME' ? 'low_time_notes' : 'purchase_success_notes';
+    updateAvatarEventNotesConfig({
+      [key]: avatarNotesConfig.event_notes[key].map((note) => note.id === noteId ? { ...note, ...updates } : note),
+    });
+  }
+  function addAvatarNote() {
+    updateAvatarNotesConfig({
+      notes: [
+        ...avatarNotesConfig.notes,
+        { id: `custom-${Date.now()}`, text: '', state: 'BOTH', enabled: true },
+      ],
+    });
+  }
+  function addMainPageAvatarNote() {
+    updateAvatarNotesConfig({
+      main_page_notes: [
+        ...avatarNotesConfig.main_page_notes,
+        { id: `main-custom-${Date.now()}`, text: 'Hi <USER>! Welcome back.', state: 'BOTH', enabled: true },
+      ],
+    });
+  }
+  function addAvatarEventNote(type) {
+    const key = type === 'LOW_TIME' ? 'low_time_notes' : 'purchase_success_notes';
+    updateAvatarEventNotesConfig({
+      [key]: [
+        ...avatarNotesConfig.event_notes[key],
+        { id: `${key}-${Date.now()}`, text: type === 'LOW_TIME' ? '<USER>, your WiFi time is almost done.' : 'Nice, <USER>! Your WiFi time is ready.', state: type === 'LOW_TIME' ? 'CONNECTED' : 'BOTH', enabled: true },
+      ],
+    });
+  }
+  function removeAvatarNote(noteId) {
+    updateAvatarNotesConfig({ notes: avatarNotesConfig.notes.filter((note) => note.id !== noteId) });
+  }
+  function removeMainPageAvatarNote(noteId) {
+    updateAvatarNotesConfig({ main_page_notes: avatarNotesConfig.main_page_notes.filter((note) => note.id !== noteId) });
+  }
+  function removeAvatarEventNote(type, noteId) {
+    const key = type === 'LOW_TIME' ? 'low_time_notes' : 'purchase_success_notes';
+    updateAvatarEventNotesConfig({
+      [key]: avatarNotesConfig.event_notes[key].filter((note) => note.id !== noteId),
+    });
+  }
+  function resetAvatarNotes() {
+    setPortalSettings((current) => ({ ...current, avatar_notes_json: DEFAULT_PORTAL_AVATAR_NOTES_SETTINGS }));
+  }
   const hasUnusedVouchers = Number(voucherSummary?.unused || 0) > 0;
   const hasSuccessfulPortalRedemption = redemptions.some((row) => row.result === 'SUCCESS');
   const hasPortalSession = sessions.length > 0;
@@ -8256,25 +13421,8 @@ function CaptivePortalPage({ mode = 'full' }) {
       {activeTab === 'Portal' && <>
         <div className="col-md-6">
           <Card title="Portal URL">
-            <div className="mb-2"><span className="text-muted">Staging</span><div className="h3 mb-0">{portalSettings?.portal_url_staging || 'http://192.168.50.70:8080/portal'}</div></div>
-            <div className="mb-2"><span className="text-muted">Production</span><div className="h3 mb-0">{portalSettings?.portal_url_production || 'http://192.168.50.70/portal'}</div></div>
-            <div>
-              <div className="d-flex align-items-center gap-2">
-                <span className="text-muted">SSID Names</span>
-                <button className="btn btn-icon btn-sm" type="button" title="Edit SSID and Security" aria-label="Edit SSID and Security" onClick={openSsidConfiguration}>
-                  <IconEdit size={15} />
-                </button>
-              </div>
-              {portalSsid.use_same_ssid ? (
-                <div className="h3 mb-0">{portalSsidDisplay}</div>
-              ) : (
-                <div className="d-flex flex-wrap gap-2 mt-1">
-                  <span className="badge bg-blue-lt text-blue">2.4GHz: {portalSsid.ssid_2g}</span>
-                  <span className="badge bg-cyan-lt text-cyan">5GHz: {portalSsid.ssid_5g}</span>
-                </div>
-              )}
-              <div className="text-muted small mt-1">Managed in APs Deployment - Sites - Configurations - SSID and Security.</div>
-            </div>
+            <span className="text-muted">Current Portal URL</span>
+            <div className="h3 mb-0 text-break">{currentPortalUrl}</div>
           </Card>
         </div>
         <div className="col-md-6">
@@ -8322,7 +13470,6 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <tr>
                       <th>AP</th>
                       <th>Site</th>
-                      <th>SSID(s)</th>
                       <th>VLAN</th>
                       <th>Portal</th>
                     </tr>
@@ -8335,13 +13482,6 @@ function CaptivePortalPage({ mode = 'full' }) {
                           <div className="text-muted small">{ap.ip || ap.model || ''}</div>
                         </td>
                         <td>{ap.site_name || 'Unlinked'}</td>
-                        <td>
-                          <div className="d-flex flex-wrap gap-1">
-                            {(ap.desired_ssids || []).length ? (ap.desired_ssids || []).map((ssid) => (
-                              <span className="badge bg-blue-lt text-blue" key={`${ap.id}-${ssid}`}>{ssid}</span>
-                            )) : <span className="text-muted small">No SSID configured</span>}
-                          </div>
-                        </td>
                         <td>{ap.vlan_id ? <span className="badge bg-purple-lt text-purple">VLAN {ap.vlan_id}</span> : <span className="text-muted">None</span>}</td>
                         <td>
                           <span className={`badge ${ap.portal_connected ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`} title={ap.reason || ap.portal_status}>
@@ -8352,7 +13492,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                       </tr>
                     )) : (
                       <tr>
-                        <td colSpan={5} className="text-muted text-center py-4">
+                        <td colSpan={4} className="text-muted text-center py-4">
                           No APs are linked to Omada portal status yet. Push WiFi config from List of APs after the AP is connected.
                         </td>
                       </tr>
@@ -8394,14 +13534,440 @@ function CaptivePortalPage({ mode = 'full' }) {
             )}
           </Card>
         </div>
+      </>}
+      {activeTab === 'Portal Design' && <>
         <div className="col-12">
-          <Card title="Portal Design">
-            <div className="d-flex align-items-center justify-content-between gap-2 mb-3">
-              <div className="text-muted">This is the customer-facing voucher portal design. Edit HTML/CSS only if you keep the required voucher form placeholder.</div>
-              <button className="btn btn-primary" type="button" onClick={() => { window.history.pushState({}, '', '/admin/captive-portal/editor'); window.dispatchEvent(new PopStateEvent('popstate')); }}><IconEdit size={18} className="me-2" />Edit Portal Design</button>
+          <div className="card">
+            <div className="card-body border-bottom py-2">
+              <ul className="nav nav-tabs flex-nowrap overflow-auto" role="tablist">
+                {['No Internet Page', 'Welcome Gift', 'Outside Network & Bag', 'Avatar Notes', 'Customer Consent', 'Preview'].map((tab) => (
+                  <li className="nav-item" role="presentation" key={tab}>
+                    <button type="button" className={`nav-link ${portalDesignTab === tab ? 'active' : ''}`} onClick={() => setPortalDesignTab(tab)}>
+                      {tab}
+                    </button>
+                  </li>
+                ))}
+              </ul>
             </div>
-            <iframe className="portal-design-preview portal-design-preview-wide" title="Portal design preview" srcDoc={portalPreviewSrcDoc(portalSettings?.custom_html, portalSettings?.custom_css)} />
-          </Card>
+            <div className="card-body">
+              {portalDesignTab === 'No Internet Page' && (
+                <Card title="No Internet Page" subtitle="This is the first screen customers see before buying or entering a voucher.">
+                  {portalSettings ? <form onSubmit={savePortalSettings}>
+                    <div className="row g-3 align-items-start">
+                      <div className="col-md-6">
+                        <label className="form-label">No Internet Headline</label>
+                        <input className="form-control" value={portalSettings.no_internet_headline || 'No Internet Detected'} onChange={(e) => setPortalSettings({ ...portalSettings, no_internet_headline: e.target.value })} />
+                        <div className="form-hint">Shown below the large avatar on the first portal page.</div>
+                      </div>
+                      <div className="col-md-6">
+                        <label className="form-label">No Internet Subtitle</label>
+                        <input className="form-control" value={portalSettings.no_internet_subtitle || 'Connect with a voucher or buy a WiFi package.'} onChange={(e) => setPortalSettings({ ...portalSettings, no_internet_subtitle: e.target.value })} />
+                        <div className="form-hint">Shown under the headline before Buy Now and Log In.</div>
+                      </div>
+                      <div className="col-md-6">
+                        <div className="border rounded p-3 h-100">
+                          <div className="d-flex align-items-center gap-3 mb-3">
+                            <span className="avatar avatar-xl bg-red-lt text-red"><img src={portalSettings.no_internet_avatar_disconnected_url || DEFAULT_PORTAL_AVATARS.disconnected} alt="" /></span>
+                            <div>
+                              <div className="fw-semibold">Disconnected Avatar</div>
+                              <div className="text-muted small">Shown when the customer has no active time.</div>
+                            </div>
+                          </div>
+                          <input className="form-control" type="file" accept="image/*" onChange={(e) => uploadPortalNoInternetAvatar('disconnected', e.target.files?.[0]).catch((err) => setMessage(err.message))} />
+                        </div>
+                      </div>
+                      <div className="col-md-6">
+                        <div className="border rounded p-3 h-100">
+                          <div className="d-flex align-items-center gap-3 mb-3">
+                            <span className="avatar avatar-xl bg-green-lt text-green"><img src={portalSettings.no_internet_avatar_connected_url || DEFAULT_PORTAL_AVATARS.connected} alt="" /></span>
+                            <div>
+                              <div className="fw-semibold">Connected Avatar</div>
+                              <div className="text-muted small">Shown when the customer already has active time.</div>
+                            </div>
+                          </div>
+                          <input className="form-control" type="file" accept="image/*" onChange={(e) => uploadPortalNoInternetAvatar('connected', e.target.files?.[0]).catch((err) => setMessage(err.message))} />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save No Internet Page</button>
+                    </div>
+                  </form> : <div className="empty">Loading portal design settings...</div>}
+                </Card>
+              )}
+              {portalDesignTab === 'Welcome Gift' && (
+                <Card title="Profile Welcome Gift" subtitle="Controls the free gift created after a customer verifies and saves their profile.">
+                  {portalSettings ? <form onSubmit={savePortalSettings}>
+                    <div className="row g-3">
+                      <div className="col-lg-4">
+                        <div className="border rounded p-3 h-100">
+                          <label className="form-check form-switch mb-3">
+                            <input
+                              className="form-check-input"
+                              type="checkbox"
+                              checked={portalSettings.profile_gift_enabled !== false}
+                              onChange={(e) => setPortalSettings({ ...portalSettings, profile_gift_enabled: e.target.checked })}
+                            />
+                            <span className="form-check-label fw-semibold">Enable profile welcome gift</span>
+                          </label>
+                          <label className="form-label d-flex align-items-center gap-1">Free time <FieldHint text="This is the voucher duration created after the customer saves a verified profile. Existing already-created gift vouchers keep their original time." /></label>
+                          <div className="input-group">
+                            <input
+                              className="form-control"
+                              type="number"
+                              min="1"
+                              value={profileGiftDuration.value}
+                              onChange={(e) => updateProfileGiftDuration(e.target.value, profileGiftDuration.unit)}
+                            />
+                            <select className="form-select" value={profileGiftDuration.unit} onChange={(e) => updateProfileGiftDuration(profileGiftDuration.value, e.target.value)}>
+                              <option value="minutes">minutes</option>
+                              <option value="hours">hours</option>
+                              <option value="days">days</option>
+                              <option value="seconds">seconds</option>
+                            </select>
+                          </div>
+                          <div className="form-hint">Current value: {formatSeconds(portalSettings.profile_gift_duration_seconds || DEFAULT_PROFILE_GIFT.duration_seconds)}</div>
+                          <div className="portal-gift-admin-preview mt-3">
+                            <IconGift size={24} />
+                            <div>
+                              <div className="fw-semibold">{portalSettings.profile_gift_title || DEFAULT_PROFILE_GIFT.title}</div>
+                              <div className="text-muted small">{portalSettings.profile_gift_available_message || DEFAULT_PROFILE_GIFT.available_message}</div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="col-lg-8">
+                        <div className="row g-3">
+                          <div className="col-md-6">
+                            <label className="form-label">Gift title</label>
+                            <input className="form-control" value={portalSettings.profile_gift_title || DEFAULT_PROFILE_GIFT.title} onChange={(e) => setPortalSettings({ ...portalSettings, profile_gift_title: e.target.value })} />
+                          </div>
+                          <div className="col-md-6">
+                            <label className="form-label">Gift waiting message</label>
+                            <input className="form-control" value={portalSettings.profile_gift_available_message || DEFAULT_PROFILE_GIFT.available_message} onChange={(e) => setPortalSettings({ ...portalSettings, profile_gift_available_message: e.target.value })} />
+                          </div>
+                          <div className="col-12">
+                            <label className="form-label">Gift description in captive portal</label>
+                            <textarea className="form-control" rows={2} value={portalSettings.profile_gift_description || DEFAULT_PROFILE_GIFT.description} onChange={(e) => setPortalSettings({ ...portalSettings, profile_gift_description: e.target.value })} />
+                          </div>
+                          <div className="col-12">
+                            <label className="form-label">Message after saving profile</label>
+                            <textarea className="form-control" rows={2} value={portalSettings.profile_gift_profile_saved_message || DEFAULT_PROFILE_GIFT.profile_saved_message} onChange={(e) => setPortalSettings({ ...portalSettings, profile_gift_profile_saved_message: e.target.value })} />
+                            <div className="form-hint">Shown in the customer portal immediately after profile verification succeeds.</div>
+                          </div>
+                          <div className="col-12">
+                            <label className="form-label">Message after redeeming free time</label>
+                            <textarea className="form-control" rows={2} value={portalSettings.profile_gift_redeemed_message || DEFAULT_PROFILE_GIFT.redeemed_message} onChange={(e) => setPortalSettings({ ...portalSettings, profile_gift_redeemed_message: e.target.value })} />
+                            <div className="form-hint">Shown after the gift voucher is activated. This does not apply RouterOS changes.</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Welcome Gift</button>
+                    </div>
+                  </form> : <div className="empty">Loading welcome gift settings...</div>}
+                </Card>
+              )}
+              {portalDesignTab === 'Outside Network & Bag' && (
+                <Card title="Outside Network and Customer Bag" subtitle="Controls the warning shown when a customer is not detected on a 3J AP, plus the default bag auto-activation behavior.">
+                  {portalSettings ? <form onSubmit={savePortalSettings}>
+                    <div className="row g-3">
+                      <div className="col-lg-4">
+                        <div className="border rounded p-3 h-100">
+                          <label className="form-check form-switch mb-3">
+                            <input
+                              className="form-check-input"
+                              type="checkbox"
+                              checked={portalSettings.outside_network_warning_enabled !== false}
+                              onChange={(e) => setPortalSettings({ ...portalSettings, outside_network_warning_enabled: e.target.checked })}
+                            />
+                            <span className="form-check-label fw-semibold">Show outside-network warning</span>
+                          </label>
+                          <label className="form-check form-switch mb-3">
+                            <input
+                              className="form-check-input"
+                              type="checkbox"
+                              checked={portalSettings.bag_auto_activate_default !== false}
+                              onChange={(e) => setPortalSettings({ ...portalSettings, bag_auto_activate_default: e.target.checked })}
+                            />
+                            <span className="form-check-label fw-semibold">Default Auto Activate for new bags</span>
+                          </label>
+                          <label className="form-label d-flex align-items-center gap-1">Overlap seconds <FieldHint text="When Auto Activate is enabled, the next queued item is started this many seconds before the active item ends. Default is 10 seconds." /></label>
+                          <input
+                            className="form-control"
+                            type="number"
+                            min="0"
+                            max="300"
+                            value={portalSettings.bag_activation_overlap_seconds ?? 10}
+                            onChange={(e) => setPortalSettings({ ...portalSettings, bag_activation_overlap_seconds: Number(e.target.value) })}
+                          />
+                        </div>
+                      </div>
+                      <div className="col-lg-8">
+                        <div className="row g-3">
+                          <div className="col-12">
+                            <label className="form-label">Outside-network status warning</label>
+                            <textarea className="form-control" rows={2} value={portalSettings.outside_network_warning_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, outside_network_warning_message: e.target.value })} />
+                            <div className="form-hint">Shown in the portal when the browser is not detected on a 3J AP path.</div>
+                          </div>
+                          <div className="col-md-6">
+                            <label className="form-label">Purchase confirmation title</label>
+                            <input className="form-control" value={portalSettings.outside_network_purchase_title || ''} onChange={(e) => setPortalSettings({ ...portalSettings, outside_network_purchase_title: e.target.value })} />
+                          </div>
+                          <div className="col-md-6">
+                            <label className="form-label">Bag save success message</label>
+                            <input className="form-control" value={portalSettings.outside_network_purchase_success_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, outside_network_purchase_success_message: e.target.value })} />
+                          </div>
+                          <div className="col-12">
+                            <label className="form-label">Purchase confirmation message</label>
+                            <textarea className="form-control" rows={3} value={portalSettings.outside_network_purchase_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, outside_network_purchase_message: e.target.value })} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Outside Network & Bag</button>
+                    </div>
+                  </form> : <div className="empty">Loading outside network settings...</div>}
+                </Card>
+              )}
+              {portalDesignTab === 'Avatar Notes' && (
+                <Card title="Avatar Notes" subtitle="Friendly note bubbles shown above the customer avatar. The first note always appears on page load after the configured delay.">
+                  {portalSettings ? <form onSubmit={savePortalSettings}>
+                    <div className="alert alert-info">
+                      <div className="fw-semibold mb-1">How avatar notes work</div>
+                      <div className="small">
+                        Notes appear as a Messenger-style thought bubble attached above the avatar. The portal shows one note, reveals it word by word like it is talking, keeps the full note visible for the next-note delay, hides it for the note pause, then shows the next note. By default notes follow the order below from top to bottom. Enable random order if you want the portal to pick the next note randomly.
+                      </div>
+                    </div>
+                    <div className="row g-3 mb-3">
+                      <div className="col-md-3 col-xl-2">
+                        <label className="form-check mt-4">
+                          <input className="form-check-input" type="checkbox" checked={avatarNotesConfig.enabled !== false} onChange={(e) => updateAvatarNotesConfig({ enabled: e.target.checked })} />
+                          <span className="form-check-label">Enable notes</span>
+                          <FieldHint text="Turns the avatar note bubble on or off in the customer portal." />
+                        </label>
+                      </div>
+                      <div className="col-md-3 col-xl-2">
+                        <label className="form-check mt-4">
+                          <input className="form-check-input" type="checkbox" checked={avatarNotesConfig.random_order === true} onChange={(e) => updateAvatarNotesConfig({ random_order: e.target.checked })} />
+                          <span className="form-check-label">Random order</span>
+                          <FieldHint text="When off, notes display from top to bottom. When on, the next note is picked randomly from matching enabled notes." />
+                        </label>
+                      </div>
+                      <div className="col-md-3 col-xl-2">
+                        <label className="form-label d-flex align-items-center gap-1">Initial delay <FieldHint text="How many seconds after the portal loads before the first note appears. Set 3 for a friendly delayed pop-up." /></label>
+                        <input className="form-control" type="number" min="0" value={avatarNotesConfig.initial_delay_seconds ?? 3} onChange={(e) => updateAvatarNotesConfig({ initial_delay_seconds: Number(e.target.value) })} />
+                      </div>
+                      <div className="col-md-3 col-xl-2">
+                        <label className="form-label d-flex align-items-center gap-1">Next note delay <FieldHint text="How many seconds the full note stays visible after all words finish displaying." /></label>
+                        <input className="form-control" type="number" min="1" value={avatarNotesConfig.next_note_delay_seconds ?? 8} onChange={(e) => updateAvatarNotesConfig({ next_note_delay_seconds: Number(e.target.value) })} />
+                      </div>
+                      <div className="col-md-3 col-xl-2">
+                        <label className="form-label d-flex align-items-center gap-1">Note Pause <FieldHint text="How many seconds the note bubble stays hidden before the next note appears. Default is 5 seconds." /></label>
+                        <input className="form-control" type="number" min="0" value={avatarNotesConfig.note_pause_seconds ?? 5} onChange={(e) => updateAvatarNotesConfig({ note_pause_seconds: Number(e.target.value) })} />
+                      </div>
+                      <div className="col-md-3 col-xl-2">
+                        <label className="form-label d-flex align-items-center gap-1">Word speed <FieldHint text="How fast each word appears. Lower is faster. 180ms feels like a short talking animation." /></label>
+                        <input className="form-control" type="number" min="40" step="10" value={avatarNotesConfig.word_delay_ms ?? 180} onChange={(e) => updateAvatarNotesConfig({ word_delay_ms: Number(e.target.value) })} />
+                      </div>
+                    </div>
+                    <ul className="nav nav-tabs mb-3 flex-nowrap overflow-auto">
+                      {['Main Page First', 'Rotating Notes', 'Time Events'].map((tab) => (
+                        <li className="nav-item" key={tab}>
+                          <button type="button" className={`nav-link ${avatarNotesTab === tab ? 'active' : ''}`} onClick={() => setAvatarNotesTab(tab)}>
+                            {tab}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                    {avatarNotesTab === 'Main Page First' && <div className="border rounded p-3 mb-3">
+                      <div className="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+                        <div>
+                          <div className="fw-semibold">Main Page First Notes</div>
+                          <div className="text-muted small">Shown once when the customer enters the main portal page, before the normal rotating notes. Use <code>{'<USER>'}</code> to greet the saved profile name.</div>
+                        </div>
+                        <button className="btn btn-outline-primary btn-sm" type="button" onClick={addMainPageAvatarNote}><IconPlus size={16} className="me-1" />Add Main Note</button>
+                      </div>
+                      <div className="portal-avatar-note-editor-list">
+                        {avatarNotesConfig.main_page_notes.map((note) => (
+                          <div className="portal-avatar-note-editor-row" key={note.id}>
+                            <div className="row g-2 align-items-center">
+                              <div className="col-lg-6">
+                                <input className="form-control" value={note.text || ''} onChange={(e) => updateMainPageAvatarNote(note.id, { text: e.target.value })} placeholder="Hi <USER>! Welcome back." />
+                              </div>
+                              <div className="col-sm-4 col-lg-2">
+                                <select className="form-select" value={note.state || 'BOTH'} onChange={(e) => updateMainPageAvatarNote(note.id, { state: e.target.value })}>
+                                  <option value="DISCONNECTED">Disconnected</option>
+                                  <option value="CONNECTED">Connected</option>
+                                  <option value="BOTH">Both</option>
+                                </select>
+                              </div>
+                              <div className="col-sm-4 col-lg-2">
+                                <label className="form-check m-0">
+                                  <input className="form-check-input" type="checkbox" checked={note.enabled !== false} onChange={(e) => updateMainPageAvatarNote(note.id, { enabled: e.target.checked })} />
+                                  <span className="form-check-label">Enabled</span>
+                                </label>
+                              </div>
+                              <div className="col-sm-4 col-lg-2 text-end">
+                                <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => removeMainPageAvatarNote(note.id)}><IconTrash size={16} className="me-1" />Remove</button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>}
+                    {avatarNotesTab === 'Rotating Notes' && <>
+                    <div className="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+                      <div>
+                        <div className="fw-semibold">Rotating Notes</div>
+                        <div className="text-muted small">These notes continue after the main page first note has been shown.</div>
+                      </div>
+                    </div>
+                    <div className="portal-avatar-note-editor-list">
+                      {avatarNotesConfig.notes.map((note, index) => (
+                        <div className="portal-avatar-note-editor-row" key={note.id || index}>
+                          <div className="row g-2 align-items-center">
+                            <div className="col-lg-6">
+                              <input className="form-control" value={note.text || ''} onChange={(e) => updateAvatarNote(note.id, { text: e.target.value })} placeholder="Write a short friendly note..." />
+                            </div>
+                            <div className="col-sm-4 col-lg-2">
+                              <select className="form-select" value={note.state || 'BOTH'} onChange={(e) => updateAvatarNote(note.id, { state: e.target.value })}>
+                                <option value="DISCONNECTED">Disconnected</option>
+                                <option value="CONNECTED">Connected</option>
+                                <option value="BOTH">Both</option>
+                              </select>
+                            </div>
+                            <div className="col-sm-4 col-lg-2">
+                              <label className="form-check m-0">
+                                <input className="form-check-input" type="checkbox" checked={note.enabled !== false} onChange={(e) => updateAvatarNote(note.id, { enabled: e.target.checked })} />
+                                <span className="form-check-label">Enabled</span>
+                              </label>
+                            </div>
+                            <div className="col-sm-4 col-lg-2 text-end">
+                              <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => removeAvatarNote(note.id)}><IconTrash size={16} className="me-1" />Remove</button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    </>}
+                    {avatarNotesTab === 'Time Events' && <div className="border rounded p-3 mb-3">
+                      <div className="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-3">
+                        <div>
+                          <div className="fw-semibold">Time Event Notes</div>
+                          <div className="text-muted small">These notes appear only after a successful time purchase/redeem or when active time drops below the warning threshold. Use <code>{'<USER>'}</code>, <code>{'<TIME>'}</code>, or <code>{'<REMAINING>'}</code>.</div>
+                        </div>
+                        <div className="w-auto">
+                          <label className="form-label d-flex align-items-center gap-1">Low time threshold <FieldHint text="When connected time is below this number of minutes, the low-time note can appear once for that countdown window." /></label>
+                          <div className="input-group">
+                            <input className="form-control" type="number" min="1" value={avatarNotesConfig.event_notes.low_time_threshold_minutes ?? 60} onChange={(e) => updateAvatarEventNotesConfig({ low_time_threshold_minutes: Number(e.target.value) })} />
+                            <span className="input-group-text">minutes</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="row g-3">
+                        <div className="col-lg-6">
+                          <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+                            <div>
+                              <div className="fw-semibold">After Buy / Redeem Success</div>
+                              <div className="text-muted small">Shown after voucher, welcome gift, or PayMongo time activation succeeds.</div>
+                            </div>
+                            <button className="btn btn-outline-primary btn-sm" type="button" onClick={() => addAvatarEventNote('PURCHASE_SUCCESS')}><IconPlus size={16} className="me-1" />Add</button>
+                          </div>
+                          <div className="portal-avatar-note-editor-list">
+                            {avatarNotesConfig.event_notes.purchase_success_notes.map((note) => (
+                              <div className="portal-avatar-note-editor-row" key={note.id}>
+                                <div className="row g-2 align-items-center">
+                                  <div className="col-12"><input className="form-control" value={note.text || ''} onChange={(e) => updateAvatarEventNote('PURCHASE_SUCCESS', note.id, { text: e.target.value })} /></div>
+                                  <div className="col-5">
+                                    <select className="form-select" value={note.state || 'BOTH'} onChange={(e) => updateAvatarEventNote('PURCHASE_SUCCESS', note.id, { state: e.target.value })}>
+                                      <option value="DISCONNECTED">Disconnected</option>
+                                      <option value="CONNECTED">Connected</option>
+                                      <option value="BOTH">Both</option>
+                                    </select>
+                                  </div>
+                                  <div className="col-4">
+                                    <label className="form-check m-0">
+                                      <input className="form-check-input" type="checkbox" checked={note.enabled !== false} onChange={(e) => updateAvatarEventNote('PURCHASE_SUCCESS', note.id, { enabled: e.target.checked })} />
+                                      <span className="form-check-label">Enabled</span>
+                                    </label>
+                                  </div>
+                                  <div className="col-3 text-end">
+                                    <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => removeAvatarEventNote('PURCHASE_SUCCESS', note.id)}><IconTrash size={16} /></button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="col-lg-6">
+                          <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+                            <div>
+                              <div className="fw-semibold">Low Remaining Time</div>
+                              <div className="text-muted small">Shown once when connected time is below the configured threshold.</div>
+                            </div>
+                            <button className="btn btn-outline-primary btn-sm" type="button" onClick={() => addAvatarEventNote('LOW_TIME')}><IconPlus size={16} className="me-1" />Add</button>
+                          </div>
+                          <div className="portal-avatar-note-editor-list">
+                            {avatarNotesConfig.event_notes.low_time_notes.map((note) => (
+                              <div className="portal-avatar-note-editor-row" key={note.id}>
+                                <div className="row g-2 align-items-center">
+                                  <div className="col-12"><input className="form-control" value={note.text || ''} onChange={(e) => updateAvatarEventNote('LOW_TIME', note.id, { text: e.target.value })} /></div>
+                                  <div className="col-5">
+                                    <select className="form-select" value={note.state || 'CONNECTED'} onChange={(e) => updateAvatarEventNote('LOW_TIME', note.id, { state: e.target.value })}>
+                                      <option value="CONNECTED">Connected</option>
+                                      <option value="BOTH">Both</option>
+                                    </select>
+                                  </div>
+                                  <div className="col-4">
+                                    <label className="form-check m-0">
+                                      <input className="form-check-input" type="checkbox" checked={note.enabled !== false} onChange={(e) => updateAvatarEventNote('LOW_TIME', note.id, { enabled: e.target.checked })} />
+                                      <span className="form-check-label">Enabled</span>
+                                    </label>
+                                  </div>
+                                  <div className="col-3 text-end">
+                                    <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => removeAvatarEventNote('LOW_TIME', note.id)}><IconTrash size={16} /></button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>}
+                    <div className="d-flex flex-wrap gap-2 mt-3">
+                      <button className="btn btn-outline-primary" type="button" onClick={addAvatarNote}><IconPlus size={18} className="me-2" />Add Note</button>
+                      <button className="btn btn-outline-secondary" type="button" onClick={resetAvatarNotes}><IconRefresh size={18} className="me-2" />Reset 10 Defaults</button>
+                      <button className="btn btn-primary ms-auto"><IconDeviceFloppy size={18} className="me-2" />Save Avatar Notes</button>
+                    </div>
+                  </form> : <div className="empty">Loading avatar notes...</div>}
+                </Card>
+              )}
+              {portalDesignTab === 'Customer Consent' && (
+                <Card title="Customer Profile Consent" subtitle="Shown in the customer profile modal when the customer chooses whether to receive promotional SMS.">
+                  {portalSettings ? <form onSubmit={savePortalSettings}>
+                    <label className="form-label">Marketing SMS Consent Text</label>
+                    <textarea className="form-control" rows={4} value={portalSettings.marketing_sms_consent_text || ''} onChange={(e) => setPortalSettings({ ...portalSettings, marketing_sms_consent_text: e.target.value })} />
+                    <div className="form-hint">This belongs to customer profile/data consent, not the No Internet landing page.</div>
+                    <div className="mt-3">
+                      <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Consent Text</button>
+                    </div>
+                  </form> : <div className="empty">Loading customer profile consent...</div>}
+                </Card>
+              )}
+              {portalDesignTab === 'Preview' && (
+                <Card title="Portal Design Preview">
+                  <div className="d-flex align-items-center justify-content-between gap-2 mb-3">
+                    <div className="text-muted">The current live portal uses the Tabler purchase/profile flow. The editor remains available for legacy HTML/CSS preview work.</div>
+                    <button className="btn btn-primary" type="button" onClick={() => { window.history.pushState({}, '', '/admin/captive-portal/editor'); window.dispatchEvent(new PopStateEvent('popstate')); }}><IconEdit size={18} className="me-2" />Open Legacy Editor</button>
+                  </div>
+                  <iframe className="portal-design-preview portal-design-preview-wide" title="Portal design preview" srcDoc={portalPreviewSrcDoc(portalSettings?.custom_html, portalSettings?.custom_css, portalSettings?.product_items || [])} />
+                </Card>
+              )}
+            </div>
+          </div>
         </div>
       </>}
 	      {activeTab === 'MikroTik' && <>
@@ -8515,14 +14081,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                             <div className="text-muted small">Read-only scan data is used to validate station fields.</div>
                           </td>
                           <td className="text-end">
-                            <div className="btn-list justify-content-end flex-nowrap">
-                              <button className="btn btn-sm btn-outline-secondary" type="button" disabled={!router.latest_preflight_scan} onClick={() => window.open(`/admin/network/mikrotik/scan-result?router_id=${encodeURIComponent(router.id)}`, '_blank', 'noopener,noreferrer')} title={router.latest_preflight_scan ? 'View scanned result' : 'Run a scan first'}>
-                                <IconEye size={16} className="me-1" />View Scan Result
-                              </button>
-                              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => runPreflightScan(router.id)} disabled={preflightScanning}>
-                                <IconSearch size={16} className="me-1" />{preflightScanning && preflightRouterId === router.id ? 'Scanning...' : 'Run Scan'}
-                              </button>
-                            </div>
+                            <ActionBadgeGroup>
+                              <ActionBadgeButton icon={IconEye} label={router.latest_preflight_scan ? 'View scanned result' : 'Run a scan first'} tone="blue" disabled={!router.latest_preflight_scan} onClick={() => window.open(`/admin/network/mikrotik/scan-result?router_id=${encodeURIComponent(router.id)}`, '_blank', 'noopener,noreferrer')} />
+                              <ActionBadgeButton icon={IconSearch} label={preflightScanning && preflightRouterId === router.id ? 'Scanning...' : 'Run scan'} tone="green" disabled={preflightScanning} onClick={() => runPreflightScan(router.id)} />
+                            </ActionBadgeGroup>
                           </td>
                         </tr>
                       ))}
@@ -8577,7 +14139,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                 )}
                               </div>
                             </div>
-                            <div className="btn-list justify-content-end flex-nowrap">
+                            <ActionBadgeGroup>
                               <span className="badge bg-secondary-lt text-secondary align-self-center">{station.status}</span>
 	                              {(() => {
 	                                const progress = stationProgressSummary(station);
@@ -8589,27 +14151,15 @@ function CaptivePortalPage({ mode = 'full' }) {
                               <span className={`badge align-self-center ${station.omada_site_id || station.omada_site_name ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>
                                 {station.omada_site_name || station.omada_site_id ? `Omada: ${station.omada_site_name || station.omada_site_id}` : 'Omada site not bound'}
                               </span>
-			                              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => setStationReview(station)} title="View generated station plan">
-		                                <IconEye size={16} className="me-1" />View
-		                              </button>
-                              <button className="btn btn-sm btn-outline-info" type="button" onClick={() => openStationOmadaPortalPlan(station)} title="Review Omada captive portal setup for this station">
-                                <IconWifi size={16} className="me-1" />Omada Portal
-                              </button>
-	                              <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => openEditStation(station)} title="Edit station plan">
-	                                <IconEdit size={16} className="me-1" />Edit
-	                              </button>
-	                              <button className="btn btn-sm btn-primary" type="button" onClick={() => openStationImplementation(station)} title="Open config push workflow">
-                                <IconPlayerPlay size={16} className="me-1" />Push Config
-                              </button>
+			                              <ActionBadgeButton icon={IconEye} label="View generated station plan" tone="blue" onClick={() => setStationReview(station)} />
+                              <ActionBadgeButton icon={IconWifi} label="Review Omada captive portal setup for this station" tone="cyan" onClick={() => openStationOmadaPortalPlan(station)} />
+	                              <ActionBadgeButton icon={IconEdit} label="Edit station plan" tone="secondary" onClick={() => openEditStation(station)} />
+	                              <ActionBadgeButton icon={IconPlayerPlay} label="Open config push workflow" tone="green" onClick={() => openStationImplementation(station)} />
                               {station.status === 'ACTIVE' && (
-                                <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => openStationRemove(station)} title="Remove station-created RouterOS config">
-                                  <IconTrash size={16} className="me-1" />Remove Config
-                                </button>
+                                <ActionBadgeButton icon={IconTrash} label="Remove station-created RouterOS config" tone="red" onClick={() => openStationRemove(station)} />
                               )}
-                              <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => setStationDeleteTarget(station)} title="Delete station plan from the system">
-                                <IconTrash size={16} className="me-1" />Delete Station
-                              </button>
-                            </div>
+                              <ActionBadgeButton icon={IconX} label="Delete station plan from the system" tone="red" onClick={() => setStationDeleteTarget(station)} />
+                            </ActionBadgeGroup>
                           </div>
                           <div className="station-plan-card-body">
                             {renderStationChainPath(station)}
@@ -8855,7 +14405,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                             )}
                           </div>
                         </div>
-                        <div className="btn-list justify-content-end flex-nowrap">
+                        <ActionBadgeGroup>
                           {(() => {
                             const progress = apManagementProgressSummary(apManagementConfig);
                             return <span className={`badge align-self-center ${progress.pushed >= progress.total && progress.total ? 'bg-green-lt text-green' : progress.pushed ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>{progress.pushed}/{progress.total} pushed</span>;
@@ -8867,16 +14417,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                               <span className="badge bg-orange-lt text-orange align-self-center">Cleanup pending</span>
                             )}
 	                          {apManagementConfig.plan?.omada_controller_discovery_ip && <span className="badge bg-green-lt text-green align-self-center">Omada {apManagementConfig.plan.omada_controller_discovery_ip}</span>}
-                          <button className="btn btn-sm btn-outline-secondary" type="button" onClick={openApManagementModal} title="Edit AP management plan">
-                            <IconEdit size={16} className="me-1" />Edit
-                          </button>
-                          <button className="btn btn-sm btn-primary" type="button" onClick={openApManagementImplementation} title="Open AP management config push workflow">
-                            <IconPlayerPlay size={16} className="me-1" />Push Config
-                          </button>
-                          <button className="btn btn-sm btn-outline-danger" type="button" onClick={openApManagementRemove} title="Remove AP management-created RouterOS config">
-                            <IconTrash size={16} className="me-1" />Remove Config
-                          </button>
-                        </div>
+                          <ActionBadgeButton icon={IconEdit} label="Edit AP management plan" tone="secondary" onClick={openApManagementModal} />
+                          <ActionBadgeButton icon={IconPlayerPlay} label="Open AP management config push workflow" tone="green" onClick={openApManagementImplementation} />
+                          <ActionBadgeButton icon={IconTrash} label="Remove AP management-created RouterOS config" tone="red" onClick={openApManagementRemove} />
+                        </ActionBadgeGroup>
                       </div>
                       <div className="station-plan-card-body">
                         {renderApManagementChainPath(apManagementConfig)}
@@ -8935,7 +14479,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                             )}
                           </div>
                         </div>
-                        <div className="btn-list justify-content-end flex-nowrap">
+                        <ActionBadgeGroup>
                           {(() => {
                             const progress = officeApPathProgressSummary(officeApPathConfig);
                             return <span className={`badge align-self-center ${progress.pushed >= progress.total && progress.total ? 'bg-green-lt text-green' : progress.pushed ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>{progress.pushed}/{progress.total} pushed</span>;
@@ -8944,16 +14488,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                           <span className="badge bg-blue-lt text-blue align-self-center">VLAN {officeApPathConfig.transport_vlan_id}</span>
                           <span className="badge bg-purple-lt text-purple align-self-center">Office: {officeApPathConfig.office_bridge_name}</span>
                           {(officeApPathConfig.has_pending_cleanup || officeApPathConfig.plan?.has_pending_cleanup) && <span className="badge bg-orange-lt text-orange align-self-center">Cleanup pending</span>}
-                          <button className="btn btn-sm btn-outline-secondary" type="button" onClick={openOfficeApPathModal} title="Edit office AP path plan">
-                            <IconEdit size={16} className="me-1" />Edit
-                          </button>
-                          <button className="btn btn-sm btn-primary" type="button" onClick={openOfficeApPathImplementation} title="Open office AP path config push workflow">
-                            <IconPlayerPlay size={16} className="me-1" />Push Config
-                          </button>
-                          <button className="btn btn-sm btn-outline-danger" type="button" onClick={openOfficeApPathRemove} title="Remove office AP path-created RouterOS config">
-                            <IconTrash size={16} className="me-1" />Remove Config
-                          </button>
-                        </div>
+                          <ActionBadgeButton icon={IconEdit} label="Edit office AP path plan" tone="secondary" onClick={openOfficeApPathModal} />
+                          <ActionBadgeButton icon={IconPlayerPlay} label="Open office AP path config push workflow" tone="green" onClick={openOfficeApPathImplementation} />
+                          <ActionBadgeButton icon={IconTrash} label="Remove office AP path-created RouterOS config" tone="red" onClick={openOfficeApPathRemove} />
+                        </ActionBadgeGroup>
                       </div>
                       <div className="station-plan-card-body">
                         {renderOfficeApPathChainPath(officeApPathConfig)}
@@ -11006,14 +16544,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                               <td>{row.blocking_conflicts}</td>
                               <td>{row.next_action}</td>
                               <td className="text-end">
-                                <div className="btn-list justify-content-end flex-nowrap">
-                                  <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => openPreflightRouter(row.router_id)} title="View Router Scan">
-                                    <IconEye size={16} />
-                                  </button>
-                                  <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => runPreflightScan(row.router_id)} title="Run Scan">
-                                    <IconSearch size={16} />
-                                  </button>
-                                </div>
+                                <ActionBadgeGroup>
+                                  <ActionBadgeButton icon={IconEye} label="View router scan" tone="blue" onClick={() => openPreflightRouter(row.router_id)} />
+                                  <ActionBadgeButton icon={IconSearch} label="Run scan" tone="green" onClick={() => runPreflightScan(row.router_id)} />
+                                </ActionBadgeGroup>
                               </td>
                             </tr>
                           ))}
@@ -11326,11 +16860,11 @@ function CaptivePortalPage({ mode = 'full' }) {
                                 </td>
                                 <td className="text-muted small" style={{ maxWidth: 300 }}>{router.recommended_action}</td>
                                 <td className="text-end">
-                                  <div className="btn-list justify-content-end flex-nowrap">
-                                    <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openAiPlanningModal(router.id, setPilotModalOpen)}>Pilot</button>
-                                    <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => openAiPlanningModal(router.id, setQuestionsModalOpen)} disabled={!router.isPilot}>Questions</button>
-                                    <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => openAiPlanningModal(router.id, setDraftPlanModalOpen)} disabled={!router.isPilot}>Draft</button>
-                                  </div>
+                                  <ActionBadgeGroup>
+                                    <ActionBadgeButton icon={IconRouter} label="Pilot router selection" tone="blue" onClick={() => openAiPlanningModal(router.id, setPilotModalOpen)} />
+                                    <ActionBadgeButton icon={IconListDetails} label="Planning questions" tone="secondary" onClick={() => openAiPlanningModal(router.id, setQuestionsModalOpen)} disabled={!router.isPilot} />
+                                    <ActionBadgeButton icon={IconDeviceFloppy} label="Draft plan" tone="secondary" onClick={() => openAiPlanningModal(router.id, setDraftPlanModalOpen)} disabled={!router.isPilot} />
+                                  </ActionBadgeGroup>
                                 </td>
                               </tr>
                             ))}
@@ -11361,12 +16895,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                                 <td><span className={`badge ${pilotSuitabilityClass(item.pilot_suitability)}`}>{pilotSuitabilityLabel(item.pilot_suitability)}</span></td>
                                 <td className="text-muted small" style={{ maxWidth: 300 }}>{item.reason}</td>
                                 <td>
-                                  <div className="btn-list flex-nowrap">
-                                    <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => setAiRouterId(item.router_id)}>View</button>
-                                    <button className="btn btn-sm btn-primary" type="button" onClick={() => { setAiRouterId(item.router_id); setPilotForm((current) => ({ ...current, router_id: item.router_id, reason: current.reason || item.reason || item.recommended_action || '' })); selectPilotRouter(item.router_id); }} disabled={pilotSaving}>
-                                      Select
-                                    </button>
-                                  </div>
+                                  <ActionBadgeGroup>
+                                    <ActionBadgeButton icon={IconEye} label="View router" tone="blue" onClick={() => setAiRouterId(item.router_id)} />
+                                    <ActionBadgeButton icon={IconCircleCheck} label="Select as pilot" tone="green" onClick={() => { setAiRouterId(item.router_id); setPilotForm((current) => ({ ...current, router_id: item.router_id, reason: current.reason || item.reason || item.recommended_action || '' })); selectPilotRouter(item.router_id); }} disabled={pilotSaving} />
+                                  </ActionBadgeGroup>
                                 </td>
                               </tr>
                             ))}
@@ -12260,14 +17792,92 @@ function CaptivePortalPage({ mode = 'full' }) {
 	          </form> : <div className="empty">Loading portal notifications...</div>}
 	        </Card>
 	      </div>}
+	      {activeTab === 'Message Defaults' && <>
+	        {portalSmsSettings ? <>
+	          <div className="col-12">
+	            <div className="row g-3">
+	              {[
+	                { label: 'Portal SMS Used', value: portalSmsSettings.tracking?.used_credits ?? 0, icon: IconBell, tone: 'bg-blue-lt text-blue' },
+	                { label: 'Remaining Local Credits', value: portalSmsSettings.tracking?.remaining_credits ?? 'No limit', icon: IconWallet, tone: 'bg-green-lt text-green' },
+	                { label: 'Profile Codes', value: portalSmsSettings.tracking?.profile_otp_sent ?? 0, icon: IconUser, tone: 'bg-purple-lt text-purple' },
+	                { label: 'Missing-Time Codes', value: portalSmsSettings.tracking?.missing_time_otp_sent ?? 0, icon: IconClock, tone: 'bg-orange-lt text-orange' }
+	              ].map((item) => {
+	                const KpiIcon = item.icon;
+	                return (
+	                  <div className="col-sm-6 col-xl-3" key={`portal-sms-kpi-${item.label}`}>
+	                    <div className="border rounded p-3 h-100 d-flex align-items-start gap-3 bg-white">
+	                      <span className={`mikrotik-overview-kpi-icon ${item.tone}`}><KpiIcon size={26} /></span>
+	                      <div>
+	                        <div className="text-muted small">{item.label}</div>
+	                        <div className="h2 mb-0">{item.value}</div>
+	                      </div>
+	                    </div>
+	                  </div>
+	                );
+	              })}
+	            </div>
+	          </div>
+	          <div className="col-12">
+	            <Card title={<CardHeaderContent><div className="d-flex align-items-center gap-2"><IconMessageCircle size={20} /><h3 className="card-title mb-0">Portal SMS Confirmation Defaults</h3></div></CardHeaderContent>} subtitle="These settings are only for portal contact verification and missing-time confirmation SMS. They do not change the global Smart A2P API credentials.">
+	              <form onSubmit={savePortalSmsSettings}>
+	                <div className="row g-3">
+	                  <div className="col-md-3">
+	                    <label className="form-label">A2P Status</label>
+	                    <div className="border rounded p-3 h-100">
+	                      <span className={`badge ${portalSmsSettings.enabled ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>{portalSmsSettings.enabled ? 'Enabled' : 'Disabled'}</span>
+	                      <div className="text-muted small mt-2">{portalSmsSettings.a2p_provider || 'Smart Messaging Suite'}</div>
+	                      {!portalSmsSettings.a2p_configured && <div className="text-danger small mt-2">Configure Smart A2P credentials in System Settings before sending customer verification codes.</div>}
+	                    </div>
+	                  </div>
+	                  <div className="col-md-5">
+	                    <label className="form-label">Default Sender ID</label>
+	                    <select className="form-select" value={portalSmsForm.sender_id || ''} onChange={(e) => setPortalSmsForm({ ...portalSmsForm, sender_id: e.target.value })}>
+	                      <option value="">Use Smart account default</option>
+	                      {(portalSmsSettings.sender_options || []).map((sender) => <option value={sender} key={`portal-sms-sender-${sender}`}>{sender}</option>)}
+	                    </select>
+	                    <div className="form-hint">Used for profile verification and Report Missing Time verification codes.</div>
+	                  </div>
+	                  <div className="col-md-2">
+	                    <label className="form-label">Monthly Limit</label>
+	                    <input className="form-control" type="number" min="0" value={portalSmsForm.monthly_credit_limit} onChange={(e) => setPortalSmsForm({ ...portalSmsForm, monthly_credit_limit: e.target.value })} placeholder="Optional" />
+	                  </div>
+	                  <div className="col-md-2">
+	                    <label className="form-label">Reset Day</label>
+	                    <input className="form-control" type="number" min="1" max="31" value={portalSmsForm.monthly_reset_day} onChange={(e) => setPortalSmsForm({ ...portalSmsForm, monthly_reset_day: e.target.value })} />
+	                  </div>
+	                  <div className="col-12">
+	                    <div className="border rounded p-3 d-flex align-items-start justify-content-between gap-3 flex-wrap">
+	                      <div>
+	                        <div className="fw-semibold">Portal confirmation SMS tracking</div>
+	                        <div className="text-muted small">
+	                          Counts only profile verification and Report Missing Time verification SMS sent by the captive portal. Period: {formatPortalDateTime(portalSmsSettings.tracking?.period_start)} to {formatPortalDateTime(portalSmsSettings.tracking?.period_end)}.
+	                        </div>
+	                        <div className="text-muted small mt-1">{portalSmsSettings.tracking?.unit}</div>
+	                        {portalSmsSettings.tracking?.last_sent_at && <div className="small mt-2">Last portal confirmation SMS: {formatPortalDateTime(portalSmsSettings.tracking.last_sent_at)}</div>}
+	                      </div>
+	                      <div className="btn-list">
+	                        <button className="btn btn-outline-secondary" type="button" onClick={() => loadPortalSmsSettings()} disabled={portalSmsRefreshing}>
+	                          <IconRefresh size={18} className="me-2" />{portalSmsRefreshing ? 'Refreshing...' : 'Refresh Tracking'}
+	                        </button>
+	                        <button className="btn btn-primary" disabled={portalSmsSaving}>
+	                          <IconDeviceFloppy size={18} className="me-2" />{portalSmsSaving ? 'Saving...' : 'Save Message Defaults'}
+	                        </button>
+	                      </div>
+	                    </div>
+	                  </div>
+	                </div>
+	              </form>
+	            </Card>
+	          </div>
+	        </> : <div className="col-12"><div className="empty">Loading portal SMS confirmation defaults...</div></div>}
+	      </>}
 	      {activeTab === 'Portal Settings' && <>
         <div className="col-12">
           <Card title="Portal Settings">
             {portalSettings ? <form onSubmit={savePortalSettings}>
               <div className="row g-3">
                 <div className="col-md-4"><label className="form-label">Default Unlimited Duration</label><input className="form-control" type="number" value={portalSettings.default_access_duration_seconds || 86400} onChange={(e) => setPortalSettings({ ...portalSettings, default_access_duration_seconds: Number(e.target.value) })} /></div>
-                <div className="col-md-6"><label className="form-label">Staging Portal URL</label><input className="form-control" value={portalSettings.portal_url_staging || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_url_staging: e.target.value })} /></div>
-                <div className="col-md-6"><label className="form-label">Production Portal URL</label><input className="form-control" value={portalSettings.portal_url_production || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_url_production: e.target.value })} /></div>
+                <div className="col-md-8"><label className="form-label">Current Portal URL</label><input className="form-control" value={currentPortalUrl} onChange={(e) => setPortalSettings({ ...portalSettings, current_portal_url: e.target.value, portal_url_staging: e.target.value, portal_url_production: e.target.value })} /></div>
                 <div className="col-12"><label className="form-label">Post-login Redirect URL</label><input className="form-control" value={portalSettings.post_login_redirect_url || ''} onChange={(e) => setPortalSettings({ ...portalSettings, post_login_redirect_url: e.target.value })} /></div>
                 <div className="col-12"><button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Settings</button></div>
               </div>
@@ -12291,56 +17901,6 @@ function CaptivePortalPage({ mode = 'full' }) {
           </Card>
         </div>
       </>}
-      {activeTab === 'Sanity Check' && <div className="col-12">
-        <Card title="Captive Portal Sanity Check">
-          <div className="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
-            <div>
-              <div className="text-muted">Use this checklist before field testing the voucher captive portal.</div>
-              <div className="small text-muted">Automatic checks use the current system data. Manual checks are for the operator to confirm during one-AP or one-router testing.</div>
-            </div>
-            <div className="d-flex gap-2 flex-wrap">
-              <span className="badge bg-green-lt text-green">Ready {readySanityChecks}/{requiredSanityChecks.length}</span>
-              <span className="badge bg-yellow-lt text-yellow">Placeholders {sanityChecks.filter((item) => item.state === 'placeholder').length}</span>
-            </div>
-          </div>
-          <div className="table-responsive">
-            <table className="table table-vcenter">
-              <thead>
-                <tr>
-                  <th>Area</th>
-                  <th>Check</th>
-                  <th>Details</th>
-                  <th>Status</th>
-                  <th className="text-end">Manual</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sanityChecks.map((item) => (
-                  <tr key={item.key} className={item.state === 'placeholder' ? 'table-warning' : ''}>
-                    <td><span className="badge bg-secondary-lt text-secondary">{item.group}</span></td>
-                    <td>
-                      <div className="fw-semibold">{item.title}</div>
-                      <div className="small text-muted">{item.mode === 'auto' ? 'Automatic' : item.mode === 'manual' ? 'Operator check' : 'Placeholder'}</div>
-                    </td>
-                    <td className="text-muted">{item.details}</td>
-                    <td>{sanityBadge(item)}</td>
-                    <td className="text-end">
-                      {item.mode === 'manual' ? (
-                        <label className="form-check form-switch d-inline-flex align-items-center mb-0">
-                          <input className="form-check-input" type="checkbox" checked={Boolean(sanityProgress[item.key])} onChange={() => toggleChecklist(item.key)} />
-                        </label>
-                      ) : <span className="text-muted small">-</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="alert alert-info mb-0">
-            Required live path: SSID from APs Deployment, MikroTik gateway reachable, voucher stock available, portal redemption working, and sessions/logs visible. Items marked coming soon are intentionally not blocking this development stage.
-          </div>
-        </Card>
-      </div>}
       {activeTab === 'Portal Sessions' && <div className="col-12">
         <Card title="Portal Sessions">
           <Table rows={sessions} columns={['created_at', 'source', 'client_mac_masked', 'ssid', 'site', 'voucher_code', 'status', 'omada_authorization_status', 'access_expires_at', 'last_error']} />
@@ -12428,7 +17988,7 @@ function NasClients({ refresh }) {
                     <p>This page is where you add the routers, access points, or controllers that are allowed to ask this system if a WiFi customer can connect.</p>
                     <p>Think of each device here as a trusted “gatekeeper” at a branch or substation. When a customer tries to connect to WiFi, that device asks 3JCentralPisowifi: “Should this customer be allowed online?”</p>
                     <p>Only devices added here will be trusted by the system. If a router or access point is not listed here, it may not be able to authenticate customers.</p>
-                    <p>You do not need to add WiFi customers here. Customer access is currently managed through vouchers, while detected AP clients are monitored under Connected Devices.</p>
+                    <p>You do not need to add WiFi customers here. Customer access is currently managed through vouchers, while detected AP clients are monitored under Customer Devices.</p>
                     <p className="mb-0">The Shared Secret is the private key between this system and the router/access point. It must match on both sides. Keep it safe and do not share it publicly.</p>
                   </div>
                 )}
@@ -12487,9 +18047,9 @@ function NasClients({ refresh }) {
                         <td>{fmt(row.notes)}</td>
                         <td>{fmt(row.created_at)}</td>
                         <td className="text-end">
-                          <button className="badge bg-blue-lt text-blue border-0 nas-action-badge" type="button" onClick={() => openEdit(row)}>
-                            <IconEdit size={15} className="me-1" />Edit
-                          </button>
+                          <ActionBadgeGroup>
+                            <ActionBadgeButton icon={IconEdit} label="Edit NAS client" tone="blue" onClick={() => openEdit(row)} />
+                          </ActionBadgeGroup>
                         </td>
                       </tr>
                     ))}
@@ -13247,9 +18807,11 @@ function SessionsPage({ refresh }) {
                 <td>{fmt(row.input_octets)} / {fmt(row.output_octets)}</td>
                 <td><span className="badge bg-blue-lt text-blue">{row.display_status || row.status}</span></td>
                 <td className="text-end">
-                  <button className="btn btn-sm me-1" onClick={() => viewDetails(row)}>View Details</button>
-                  {row.display_status === 'ACTIVE' && <button className="btn btn-sm btn-warning me-1" onClick={() => action(row, 'mark-stale')}>Mark Stale</button>}
-                  {['ACTIVE', 'STALE'].includes(row.display_status) && <button className="btn btn-sm btn-danger" onClick={() => action(row, 'force-stop-local')}>Force Stop Locally</button>}
+                  <ActionBadgeGroup>
+                    <ActionBadgeButton icon={IconEye} label="View details" tone="blue" onClick={() => viewDetails(row)} />
+                    {row.display_status === 'ACTIVE' && <ActionBadgeButton icon={IconClock} label="Mark stale" tone="yellow" onClick={() => action(row, 'mark-stale')} />}
+                    {['ACTIVE', 'STALE'].includes(row.display_status) && <ActionBadgeButton icon={IconPlayerStop} label="Force stop locally" tone="red" onClick={() => action(row, 'force-stop-local')} />}
+                  </ActionBadgeGroup>
                 </td>
               </tr>
             ))}
@@ -13322,7 +18884,7 @@ function ProfilePage({ onSaved }) {
 }
 
 function SystemSettingsPage({ refresh }) {
-  const tabs = ['General', 'Access', 'System Update', 'Backup', 'Danger'];
+  const tabs = ['General', 'Access', 'Public HTTPS', 'Payments', 'A2P Messaging', 'System Update', 'Backup', 'Danger'];
   const [tab, setTab] = useState('General');
   const [settings, setSettings] = useState(null);
   const [admins, setAdmins] = useState([]);
@@ -13493,6 +19055,9 @@ function SystemSettingsPage({ refresh }) {
         </div>
       )}
 
+      {tab === 'Payments' && <PaymentSettingsTab />}
+      {tab === 'Public HTTPS' && <PublicEndpointSettingsTab />}
+      {tab === 'A2P Messaging' && <A2PMessagingSettingsTab />}
       {tab === 'System Update' && <UpdatePanel />}
       {tab === 'Backup' && <BackupPanel />}
       {tab === 'Danger' && (
@@ -13508,6 +19073,1041 @@ function SystemSettingsPage({ refresh }) {
         </Card>
       )}
     </>
+  );
+}
+
+function PublicEndpointSettingsTab() {
+  const emptyForm = {
+    enabled: false,
+    provider: 'CLOUDFLARE_TUNNEL',
+    domain: '3jhotspot.com',
+    public_hostname: 'portal.3jhotspot.com',
+    local_service_url: 'http://proxy:80',
+    portal_path: '/portal',
+    connector_command: ''
+  };
+  const [config, setConfig] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [actionLoading, setActionLoading] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  function hydrate(nextConfig) {
+    setConfig(nextConfig);
+    setForm({
+      ...emptyForm,
+      enabled: Boolean(nextConfig.enabled),
+      provider: nextConfig.provider || 'CLOUDFLARE_TUNNEL',
+      domain: nextConfig.domain || emptyForm.domain,
+      public_hostname: nextConfig.public_hostname || emptyForm.public_hostname,
+      local_service_url: nextConfig.local_service_url || emptyForm.local_service_url,
+      portal_path: nextConfig.portal_path || emptyForm.portal_path,
+      connector_command: ''
+    });
+  }
+
+  async function loadPublicEndpoint() {
+    setLoading(true);
+    try {
+      const data = await request('/system-settings/public-endpoint');
+      hydrate(data);
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadPublicEndpoint(); }, []);
+
+  async function savePublicEndpoint(event) {
+    event.preventDefault();
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const payload = {
+        enabled: form.enabled,
+        provider: form.provider,
+        domain: form.domain,
+        public_hostname: form.public_hostname,
+        local_service_url: form.local_service_url,
+        portal_path: form.portal_path
+      };
+      if (form.connector_command.trim()) payload.connector_command = form.connector_command.trim();
+      const data = await request('/system-settings/public-endpoint', {
+        method: 'PATCH',
+        body: JSON.stringify(payload)
+      });
+      hydrate(data);
+      setMessage('Public HTTPS settings saved.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function runCloudflaredAction(action) {
+    const labels = { start: 'Start Tunnel', stop: 'Stop Tunnel', restart: 'Restart Tunnel' };
+    setActionLoading(action);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request(`/system-settings/public-endpoint/cloudflare/${action}`, { method: 'POST' });
+      hydrate(data);
+      setMessage(`${labels[action]} completed.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading('');
+    }
+  }
+
+  async function copyText(text, label) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setMessage(`${label} copied.`);
+    } catch {
+      setError('Could not copy to clipboard.');
+    }
+  }
+
+  if (loading) return <div className="empty">Loading Public HTTPS settings...</div>;
+
+  const running = Boolean(config?.cloudflared_running);
+  const tokenReady = Boolean(config?.tunnel_token_configured);
+  const publicUrl = config?.public_portal_url || `https://${form.public_hostname}${form.portal_path || '/portal'}`;
+  const localOk = config?.local_service_check?.status === 'SUCCESS';
+  const publicOk = config?.public_service_check?.status === 'SUCCESS';
+  const tunnelTone = running ? 'green' : tokenReady ? 'orange' : 'red';
+
+  return (
+    <div className="row row-cards public-endpoint-settings">
+      <div className="col-12">
+        <div className="alert alert-info">
+          Cloudflare Tunnel gives the portal a permanent public HTTPS endpoint without opening MikroTik inbound ports. Create the tunnel in Cloudflare One, paste the connector command here, then set the Cloudflare public hostname service URL to <code>{form.local_service_url || 'http://proxy:80'}</code>.
+        </div>
+      </div>
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
+      {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
+
+      <KpiCard icon={IconCloudUpload} label="Tunnel" value={running ? 'Running' : tokenReady ? 'Ready' : 'Missing Token'} tone={tunnelTone} />
+      <KpiCard icon={IconShieldLock} label="Public HTTPS" value={publicOk ? 'Reachable' : 'Not Verified'} tone={publicOk ? 'green' : 'orange'} />
+      <KpiCard icon={IconServer} label="Local App" value={localOk ? 'Reachable' : 'Check Needed'} tone={localOk ? 'green' : 'orange'} />
+      <KpiCard icon={IconKey} label="Token" value={tokenReady ? 'Saved' : 'Not Saved'} tone={tokenReady ? 'green' : 'red'} />
+
+      <div className="col-lg-7">
+        <Card title="Cloudflare Tunnel Setup" subtitle="Paste the connector command from Cloudflare. The token is stored encrypted and is not shown again.">
+          <form onSubmit={savePublicEndpoint}>
+            <div className="row g-3">
+              <div className="col-md-6">
+                <label className="form-label">Domain</label>
+                <input className="form-control" value={form.domain} onChange={(e) => setForm({ ...form, domain: e.target.value })} />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Public Hostname</label>
+                <input className="form-control" value={form.public_hostname} onChange={(e) => setForm({ ...form, public_hostname: e.target.value })} />
+              </div>
+              <div className="col-md-8">
+                <label className="form-label">Local Service URL</label>
+                <input className="form-control" value={form.local_service_url} onChange={(e) => setForm({ ...form, local_service_url: e.target.value })} />
+                <div className="form-hint">Use <code>http://proxy:80</code> when the connector runs inside this Docker app network.</div>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Portal Path</label>
+                <input className="form-control" value={form.portal_path} onChange={(e) => setForm({ ...form, portal_path: e.target.value })} />
+              </div>
+              <div className="col-12">
+                <label className="form-label">Cloudflare Connector Command / Token</label>
+                <textarea
+                  className="form-control font-monospace"
+                  rows="4"
+                  value={form.connector_command}
+                  onChange={(e) => setForm({ ...form, connector_command: e.target.value })}
+                  placeholder="docker run cloudflare/cloudflared:latest tunnel --no-autoupdate run --token ey..."
+                />
+                <div className="form-hint">Leave blank to keep the saved token. Saved token: {config?.tunnel_token_hint || 'none'}.</div>
+              </div>
+              <div className="col-12">
+                <label className="form-check">
+                  <input className="form-check-input" type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
+                  <span className="form-check-label">Start tunnel automatically when the API service starts</span>
+                </label>
+              </div>
+              <div className="col-12">
+                <div className="btn-list justify-content-end">
+                  <button className="btn btn-primary" disabled={saving}>
+                    <IconDeviceFloppy size={18} className="me-2" />{saving ? 'Saving...' : 'Save Settings'}
+                  </button>
+                  <button className="btn btn-success" type="button" disabled={!!actionLoading || !tokenReady} onClick={() => runCloudflaredAction('start')}>
+                    <IconPlayerPlay size={18} className="me-2" />{actionLoading === 'start' ? 'Starting...' : 'Start Tunnel'}
+                  </button>
+                  <button className="btn btn-outline-primary" type="button" disabled={!!actionLoading || !tokenReady} onClick={() => runCloudflaredAction('restart')}>
+                    <IconRefresh size={18} className="me-2" />{actionLoading === 'restart' ? 'Restarting...' : 'Restart'}
+                  </button>
+                  <button className="btn btn-outline-danger" type="button" disabled={!!actionLoading || !running} onClick={() => runCloudflaredAction('stop')}>
+                    <IconPlayerStop size={18} className="me-2" />{actionLoading === 'stop' ? 'Stopping...' : 'Stop'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </form>
+        </Card>
+      </div>
+
+      <div className="col-lg-5">
+        <Card title="Status Report" subtitle="Use this to confirm the tunnel and hostname before switching portal/payment URLs.">
+          <div className="public-endpoint-status-list">
+            <div><span className="text-muted">cloudflared binary</span><span className={`badge ${config?.cloudflared_installed ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>{config?.cloudflared_installed ? 'Installed' : 'Missing'}</span></div>
+            <div><span className="text-muted">Connector process</span><span className={`badge ${running ? 'bg-green-lt text-green' : 'bg-secondary-lt'}`}>{running ? `Running PID ${config?.cloudflared_pid}` : 'Stopped'}</span></div>
+            <div><span className="text-muted">Local health</span><span className={`badge ${localOk ? 'bg-green-lt text-green' : 'bg-orange-lt text-orange'}`}>{config?.local_service_check?.http_status || config?.local_service_check?.status || 'Not checked'}</span></div>
+            <div><span className="text-muted">Public DNS</span><span className={`badge ${config?.public_dns_check?.status === 'SUCCESS' ? 'bg-green-lt text-green' : 'bg-orange-lt text-orange'}`}>{config?.public_dns_check?.status || 'Not checked'}</span></div>
+            <div><span className="text-muted">Public HTTPS</span><span className={`badge ${publicOk ? 'bg-green-lt text-green' : 'bg-orange-lt text-orange'}`}>{config?.public_service_check?.http_status || config?.public_service_check?.status || 'Not checked'}</span></div>
+          </div>
+          {config?.last_action_error && <div className="alert alert-danger py-2 mt-3">{config.last_action_error}</div>}
+          <div className="mt-3">
+            <label className="form-label">Public Portal URL</label>
+            <div className="input-group">
+              <input className="form-control" value={publicUrl} readOnly />
+              <button className="btn btn-outline-secondary" type="button" onClick={() => copyText(publicUrl, 'Public portal URL')}><IconCopy size={16} /></button>
+            </div>
+          </div>
+          <div className="mt-3">
+            <label className="form-label">Cloudflare Public Hostname Service</label>
+            <div className="border rounded p-3 bg-light">
+              <div className="small"><strong>Subdomain:</strong> portal</div>
+              <div className="small"><strong>Domain:</strong> {form.domain || '3jhotspot.com'}</div>
+              <div className="small"><strong>Type:</strong> HTTP</div>
+              <div className="small"><strong>URL:</strong> {form.local_service_url || 'http://proxy:80'}</div>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      <div className="col-12">
+        <Card title="Connector Logs" subtitle="Recent cloudflared log lines. Tokens are not printed by the system.">
+          {config?.logs?.length ? (
+            <pre className="public-endpoint-log">{config.logs.join('\n')}</pre>
+          ) : (
+            <div className="empty">No cloudflared log lines yet.</div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function PaymentSettingsTab() {
+  const emptyForm = {
+    enabled: false,
+    provider: 'PAYMONGO',
+    mode: 'TEST',
+    api_base_url: 'https://api.paymongo.com/v1',
+    public_key: '',
+    secret_key: '',
+    webhook_secret: '',
+    test_public_key: '',
+    test_secret_key: '',
+    test_webhook_secret: '',
+    live_public_key: '',
+    live_secret_key: '',
+    live_webhook_secret: '',
+    currency: 'PHP',
+    enabled_payment_methods: ['gcash'],
+    success_url: 'http://192.168.50.70/portal?payment=success',
+    cancel_url: 'http://192.168.50.70/portal?payment=cancelled',
+    notes: ''
+  };
+  const [config, setConfig] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [credentialTab, setCredentialTab] = useState('TEST');
+
+  function hydrateForm(nextConfig, syncCredentialTab = false) {
+    const nextMode = nextConfig.mode || 'TEST';
+    setForm({
+      ...emptyForm,
+      enabled: Boolean(nextConfig.enabled),
+      provider: nextConfig.provider || 'PAYMONGO',
+      mode: nextMode,
+      api_base_url: nextConfig.api_base_url || emptyForm.api_base_url,
+      public_key: '',
+      secret_key: '',
+      webhook_secret: '',
+      test_public_key: '',
+      test_secret_key: '',
+      test_webhook_secret: '',
+      live_public_key: '',
+      live_secret_key: '',
+      live_webhook_secret: '',
+      currency: nextConfig.currency || 'PHP',
+      enabled_payment_methods: nextConfig.enabled_payment_methods?.length ? nextConfig.enabled_payment_methods : ['gcash'],
+      success_url: nextConfig.success_url || emptyForm.success_url,
+      cancel_url: nextConfig.cancel_url || emptyForm.cancel_url,
+      notes: nextConfig.notes || ''
+    });
+    if (syncCredentialTab) setCredentialTab(nextMode);
+  }
+
+  async function loadPaymentSettings() {
+    setLoading(true);
+    try {
+      const nextConfig = await request('/system-settings/payments');
+      setConfig(nextConfig);
+      hydrateForm(nextConfig, true);
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadPaymentSettings(); }, []);
+
+  function updateField(key, value) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function togglePaymentMethod(methodId) {
+    setForm((current) => {
+      const currentMethods = current.enabled_payment_methods || [];
+      const hasMethod = currentMethods.includes(methodId);
+      const nextMethods = hasMethod ? currentMethods.filter((item) => item !== methodId) : [...currentMethods, methodId];
+      return { ...current, enabled_payment_methods: nextMethods.length ? nextMethods : ['gcash'] };
+    });
+  }
+
+  async function savePaymentSettings(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const payload = {
+        enabled: form.enabled,
+        provider: form.provider,
+        mode: form.mode,
+        api_base_url: form.api_base_url,
+        currency: form.currency,
+        enabled_payment_methods: form.enabled_payment_methods,
+        success_url: form.success_url,
+        cancel_url: form.cancel_url,
+        notes: form.notes
+      };
+      if (form.public_key.trim()) payload.public_key = form.public_key.trim();
+      if (form.secret_key.trim()) payload.secret_key = form.secret_key.trim();
+      if (form.webhook_secret.trim()) payload.webhook_secret = form.webhook_secret.trim();
+      if (form.test_public_key.trim()) payload.test_public_key = form.test_public_key.trim();
+      if (form.test_secret_key.trim()) payload.test_secret_key = form.test_secret_key.trim();
+      if (form.test_webhook_secret.trim()) payload.test_webhook_secret = form.test_webhook_secret.trim();
+      if (form.live_public_key.trim()) payload.live_public_key = form.live_public_key.trim();
+      if (form.live_secret_key.trim()) payload.live_secret_key = form.live_secret_key.trim();
+      if (form.live_webhook_secret.trim()) payload.live_webhook_secret = form.live_webhook_secret.trim();
+      const nextConfig = await request('/system-settings/payments', {
+        method: 'PATCH',
+        body: JSON.stringify(payload)
+      });
+      setConfig(nextConfig);
+      hydrateForm(nextConfig);
+      setMessage('Payment settings saved.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clearPaymentSecret(mode, secret) {
+    const labels = {
+      public_key: 'public key',
+      secret_key: 'secret key',
+      webhook_secret: 'webhook signing secret'
+    };
+    const modeLabel = mode === 'LIVE' ? 'live' : 'test';
+    if (!window.confirm(`Remove the saved PayMongo ${modeLabel} ${labels[secret]}?`)) return;
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const clearKey = `clear_${mode.toLowerCase()}_${secret}`;
+      const nextConfig = await request('/system-settings/payments', {
+        method: 'PATCH',
+        body: JSON.stringify({ [clearKey]: true })
+      });
+      setConfig(nextConfig);
+      hydrateForm(nextConfig);
+      setMessage(`PayMongo ${modeLabel} ${labels[secret]} removed.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <div className="empty">Loading payment settings...</div>;
+
+  const methodOptions = config?.payment_method_options || [
+    { id: 'gcash', label: 'GCash' },
+    { id: 'qrph', label: 'QR Ph' },
+    { id: 'card', label: 'Card' },
+    { id: 'paymaya', label: 'Maya / PayMaya' },
+    { id: 'grab_pay', label: 'GrabPay' }
+  ];
+  const credentialModes = [
+    { mode: 'TEST', label: 'Test Keys', help: 'Use pk_test_ and sk_test_ while developing. These keys do not process real payments.' },
+    { mode: 'LIVE', label: 'Live Keys', help: 'Use pk_live_ and sk_live_ only when you are ready to accept real customer payments.' }
+  ];
+  const requirements = config?.requirements || {};
+  const requirementRows = [
+    ['Payments enabled', requirements.payments_enabled],
+    ['GCash enabled', requirements.gcash_enabled],
+    [`${form.mode === 'LIVE' ? 'Live' : 'Test'} public key saved`, requirements.public_key],
+    [`${form.mode === 'LIVE' ? 'Live' : 'Test'} secret key saved`, requirements.secret_key],
+    ['Webhook signing secret saved', requirements.webhook_secret]
+  ];
+
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        {message && <AutoDismissAlert message={message} onDismiss={() => setMessage('')} />}
+        {error && <div className="alert alert-danger auto-dismiss-alert">{error}</div>}
+      </div>
+      <div className="col-12 col-xl-8">
+        <Card title="PayMongo Payment Gateway" subtitle="Configure PayMongo keys, checkout defaults, and webhook verification for captive portal package purchases.">
+          <form onSubmit={savePaymentSettings}>
+            <div className="row g-4">
+              <div className="col-12">
+                <div className="alert alert-info mb-0">
+                  Product Items can now start PayMongo hosted checkout from the captive portal. Access is granted only after a verified PayMongo webhook confirms payment.
+                </div>
+              </div>
+              <div className="col-12">
+                <div className="d-flex align-items-center gap-2 border-bottom pb-2">
+                  <IconCash size={22} className="text-primary" />
+                  <div className="fw-bold">1. Gateway Status</div>
+                </div>
+              </div>
+              <div className="col-md-4">
+                <label className="form-check form-switch">
+                  <input className="form-check-input" type="checkbox" checked={form.enabled} onChange={(e) => updateField('enabled', e.target.checked)} />
+                  <span className="form-check-label">Enable payments</span>
+                </label>
+                <div className="text-muted small mt-1">This only enables the payment feature flag. Checkout is added in Phase 2.</div>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Provider</label>
+                <select className="form-select" value={form.provider} onChange={(e) => updateField('provider', e.target.value)}>
+                  <option value="PAYMONGO">PayMongo</option>
+                </select>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Mode</label>
+                <div className="d-flex flex-wrap gap-2">
+                  {['TEST', 'LIVE'].map((mode) => (
+                    <label className={`payment-mode-option ${form.mode === mode ? 'active' : ''}`} key={mode}>
+                      <input className="form-check-input m-0" type="radio" name="paymongo_mode" checked={form.mode === mode} onChange={() => { updateField('mode', mode); setCredentialTab(mode); }} />
+                      <span>{mode === 'LIVE' ? 'Live' : 'Test'}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="text-muted small mt-1">Checkout will use the saved keys for the selected mode.</div>
+              </div>
+              <div className="col-12">
+                <div className="d-flex align-items-center gap-2 border-bottom pb-2">
+                  <IconShieldLock size={22} className="text-primary" />
+                  <div className="fw-bold">2. PayMongo API Keys</div>
+                  <IconInfoCircle size={17} className="text-muted" title="PayMongo has separate API keys and webhook signing secrets for test and live mode." />
+                </div>
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">API Base URL</label>
+                <input className="form-control" value={form.api_base_url} onChange={(e) => updateField('api_base_url', e.target.value)} />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Currency</label>
+                <input className="form-control" value={form.currency} onChange={(e) => updateField('currency', e.target.value.toUpperCase())} />
+              </div>
+              <div className="col-12">
+                <div className="payment-key-tabs">
+                  {credentialModes.map((item) => (
+                    <button
+                      className={`btn ${credentialTab === item.mode ? 'btn-primary' : 'btn-outline-secondary'}`}
+                      key={item.mode}
+                      type="button"
+                      onClick={() => setCredentialTab(item.mode)}
+                    >
+                      {item.label}
+                      {form.mode === item.mode && <span className="badge bg-white text-primary ms-2">Active</span>}
+                    </button>
+                  ))}
+                </div>
+                {(() => {
+                  const item = credentialModes.find((mode) => mode.mode === credentialTab) || credentialModes[0];
+                  const prefix = item.mode.toLowerCase();
+                  const modeCredentials = config?.credentials?.[item.mode] || {};
+                  return (
+                    <div className={`payment-key-panel ${form.mode === item.mode ? 'active' : ''}`}>
+                      <div className="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-3">
+                        <div>
+                          <div className="fw-bold d-flex align-items-center gap-2">
+                            <IconShieldLock size={18} className="text-primary" />
+                            {item.label}
+                            {form.mode === item.mode && <span className="badge bg-blue-lt text-blue">Active checkout mode</span>}
+                          </div>
+                          <div className="text-muted small">{item.help}</div>
+                        </div>
+                      </div>
+                      <div className="row g-3">
+                        <div className="col-md-4">
+                          <label className="form-label">Public Key</label>
+                          <input className="form-control" type="password" value={form[`${prefix}_public_key`]} placeholder={modeCredentials.public_key_configured ? `Saved: ${modeCredentials.public_key_hint}` : `${item.mode === 'LIVE' ? 'pk_live_' : 'pk_test_'}...`} onChange={(e) => updateField(`${prefix}_public_key`, e.target.value)} />
+                          {modeCredentials.public_key_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearPaymentSecret(item.mode, 'public_key')}>Clear saved {item.mode === 'LIVE' ? 'live' : 'test'} public key</button>}
+                        </div>
+                        <div className="col-md-4">
+                          <label className="form-label">Secret Key</label>
+                          <input className="form-control" type="password" value={form[`${prefix}_secret_key`]} placeholder={modeCredentials.secret_key_configured ? `Saved: ${modeCredentials.secret_key_hint}` : `${item.mode === 'LIVE' ? 'sk_live_' : 'sk_test_'}...`} onChange={(e) => updateField(`${prefix}_secret_key`, e.target.value)} />
+                          {modeCredentials.secret_key_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearPaymentSecret(item.mode, 'secret_key')}>Clear saved {item.mode === 'LIVE' ? 'live' : 'test'} secret key</button>}
+                        </div>
+                        <div className="col-md-4">
+                          <label className="form-label d-inline-flex align-items-center gap-1">
+                            Webhook Signing Secret
+                            <IconInfoCircle size={15} className="text-muted" title="This appears after creating a webhook endpoint in PayMongo's Webhooks module. Payment fulfillment will stay pending until a verified webhook confirms payment." />
+                          </label>
+                          <input className="form-control" type="password" value={form[`${prefix}_webhook_secret`]} placeholder={modeCredentials.webhook_secret_configured ? `Saved: ${modeCredentials.webhook_secret_hint}` : 'Webhook endpoint secret'} onChange={(e) => updateField(`${prefix}_webhook_secret`, e.target.value)} />
+                          {modeCredentials.webhook_secret_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearPaymentSecret(item.mode, 'webhook_secret')}>Clear saved {item.mode === 'LIVE' ? 'live' : 'test'} webhook secret</button>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+              <div className="col-12">
+                <div className="d-flex align-items-center gap-2 border-bottom pb-2">
+                  <IconWallet size={22} className="text-primary" />
+                  <div className="fw-bold">3. Payment Methods</div>
+                </div>
+              </div>
+              <div className="col-12">
+                <div className="row g-2">
+                  {methodOptions.map((method) => (
+                    <div className="col-sm-6 col-lg-4" key={method.id}>
+                      <label className="payment-method-option">
+                        <input className="form-check-input m-0 flex-shrink-0" type="checkbox" checked={(form.enabled_payment_methods || []).includes(method.id)} onChange={() => togglePaymentMethod(method.id)} />
+                        <span className="fw-semibold">{method.label}</span>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="col-12">
+                <div className="d-flex align-items-center gap-2 border-bottom pb-2">
+                  <IconExternalLink size={22} className="text-primary" />
+                  <div className="fw-bold">4. Redirect URLs</div>
+                </div>
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Success URL</label>
+                <input className="form-control" value={form.success_url} onChange={(e) => updateField('success_url', e.target.value)} />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Cancel URL</label>
+                <input className="form-control" value={form.cancel_url} onChange={(e) => updateField('cancel_url', e.target.value)} />
+              </div>
+              <div className="col-12">
+                <label className="form-label">Notes</label>
+                <textarea className="form-control" rows="3" value={form.notes} onChange={(e) => updateField('notes', e.target.value)} placeholder="PayMongo account notes, GCash activation status, or webhook setup notes." />
+              </div>
+              <div className="col-12 text-end">
+                <button className="btn btn-primary" disabled={saving}><IconDeviceFloppy size={18} className="me-2" />{saving ? 'Saving...' : 'Save Payment Settings'}</button>
+              </div>
+            </div>
+          </form>
+        </Card>
+      </div>
+      <div className="col-12 col-xl-4">
+        <div className="row row-cards">
+          <div className="col-12">
+            <Card title="Payment Setup Status">
+              <div className="d-flex align-items-center gap-3 mb-3">
+                <span className={`badge ${config?.ready_for_gcash ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'} header-icon-badge`}>
+                  {config?.ready_for_gcash ? <IconCircleCheck size={22} /> : <IconAlertTriangle size={22} />}
+                </span>
+                <div>
+                  <div className="fw-bold">{config?.ready_for_gcash ? `${form.mode === 'LIVE' ? 'Live' : 'Test'} keys ready` : `${form.mode === 'LIVE' ? 'Live' : 'Test'} setup needs keys`}</div>
+                  <div className="text-muted small">Active mode: {form.mode} · {config?.phase || 'PHASE_1_SETTINGS_ONLY'}</div>
+                </div>
+              </div>
+              <div className="alert alert-info small">
+                Webhook signing secret is created from PayMongo's Webhooks module after adding our webhook URL. It can stay blank during the settings-only phase.
+              </div>
+              <div className="list-group list-group-flush">
+                {requirementRows.map(([label, ok]) => (
+                  <div className="list-group-item px-0 d-flex align-items-center justify-content-between" key={label}>
+                    <span>{label}</span>
+                    <span className={`badge ${ok ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{ok ? 'OK' : 'Missing'}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+          <div className="col-12">
+            <Card title="Checkout Flow">
+              <div className="d-flex flex-column gap-3">
+                <div className="d-flex gap-2">
+                  <IconListDetails size={22} className="text-primary flex-shrink-0" />
+                  <div><strong>Payment orders</strong><div className="text-muted small">Create a pending order when a portal customer selects a Product Item.</div></div>
+                </div>
+                <div className="d-flex gap-2">
+                  <IconExternalLink size={22} className="text-primary flex-shrink-0" />
+                  <div><strong>GCash redirect</strong><div className="text-muted small">Send the customer to PayMongo/GCash checkout from the captive portal.</div></div>
+                </div>
+                <div className="d-flex gap-2">
+                  <IconShieldLock size={22} className="text-primary flex-shrink-0" />
+                  <div><strong>Webhook verification</strong><div className="text-muted small">Grant voucher/wallet time only after PayMongo webhook signature and paid amount are verified.</div></div>
+                </div>
+                <div className="alert alert-info small mb-0">
+                  Webhook URL path: <code>{config?.webhook_endpoint_path || '/api/payments/paymongo/webhook'}</code>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function A2PMessagingSettingsTab() {
+  const emptyForm = {
+    enabled: false,
+    provider: 'SMART_MESSAGING_SUITE',
+    base_url: 'https://enterprise.messagingsuite.smart.com.ph',
+    send_path: '/cgphttp/servlet/sendmsg',
+    query_path: '/cgphttp/servlet/querymsg',
+    cancel_path: '/cgphttp/servlet/cancelmsg',
+    start_batch_path: '/cgphttp/servlet/startbatch',
+    send_batch_path: '/cgphttp/servlet/sendbatch',
+    credits_path: '/cgpapi/service1/credits',
+    auth_method: 'API_KEY_HEADERS',
+    api_id: '',
+    api_key: '',
+    username: '',
+    password: '',
+    default_source: '',
+    source_addresses: '',
+    registered_delivery: true,
+    monthly_credit_limit: '',
+    monthly_reset_day: 1,
+    notes: ''
+  };
+  const [config, setConfig] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [checkingCredits, setCheckingCredits] = useState(false);
+  const [sendingTest, setSendingTest] = useState(false);
+  const [creditMessage, setCreditMessage] = useState('');
+  const [creditError, setCreditError] = useState('');
+  const [testMessage, setTestMessage] = useState('');
+  const [testError, setTestError] = useState('');
+  const [testForm, setTestForm] = useState({
+    destination: '',
+    message_text: '3JCentralPisowifi A2P test message.',
+    source: '',
+    registered_delivery: true
+  });
+
+  function hydrateForm(nextConfig) {
+    setForm({
+      ...emptyForm,
+      enabled: Boolean(nextConfig.enabled),
+      provider: nextConfig.provider || 'SMART_MESSAGING_SUITE',
+      base_url: nextConfig.base_url || emptyForm.base_url,
+      send_path: nextConfig.send_path || emptyForm.send_path,
+      query_path: nextConfig.query_path || emptyForm.query_path,
+      cancel_path: nextConfig.cancel_path || emptyForm.cancel_path,
+      start_batch_path: nextConfig.start_batch_path || emptyForm.start_batch_path,
+      send_batch_path: nextConfig.send_batch_path || emptyForm.send_batch_path,
+      credits_path: nextConfig.credits_path || emptyForm.credits_path,
+      auth_method: nextConfig.auth_method || 'API_KEY_HEADERS',
+      api_id: nextConfig.api_id || '',
+      api_key: '',
+      username: nextConfig.username || '',
+      password: '',
+      default_source: nextConfig.default_source || '',
+      source_addresses: (nextConfig.source_addresses || []).join('\n'),
+      registered_delivery: Boolean(nextConfig.registered_delivery),
+      monthly_credit_limit: nextConfig.monthly_credit_limit ?? '',
+      monthly_reset_day: nextConfig.monthly_reset_day || 1,
+      notes: nextConfig.notes || ''
+    });
+  }
+
+  async function loadA2PSettings() {
+    setLoading(true);
+    try {
+      const nextConfig = await request('/system-settings/a2p-messaging');
+      setConfig(nextConfig);
+      hydrateForm(nextConfig);
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadA2PSettings(); }, []);
+
+  function updateField(key, value) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  async function saveA2PSettings(event) {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const payload = {
+        enabled: form.enabled,
+        provider: form.provider,
+        base_url: form.base_url,
+        send_path: form.send_path,
+        query_path: form.query_path,
+        cancel_path: form.cancel_path,
+        start_batch_path: form.start_batch_path,
+        send_batch_path: form.send_batch_path,
+        credits_path: form.credits_path,
+        auth_method: form.auth_method,
+        api_id: form.api_id,
+        username: form.username,
+        registered_delivery: form.registered_delivery,
+        monthly_credit_limit: form.monthly_credit_limit === '' ? null : Number(form.monthly_credit_limit),
+        monthly_reset_day: Number(form.monthly_reset_day) || 1,
+        notes: form.notes
+      };
+      if (form.api_key.trim()) payload.api_key = form.api_key.trim();
+      if (form.password.trim()) payload.password = form.password.trim();
+      const nextConfig = await request('/system-settings/a2p-messaging', {
+        method: 'PATCH',
+        body: JSON.stringify(payload)
+      });
+      setConfig(nextConfig);
+      hydrateForm(nextConfig);
+      setMessage('A2P messaging settings saved.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clearA2PSecret(secret) {
+    const label = secret === 'api_key' ? 'API key' : 'password';
+    if (!window.confirm(`Remove the saved A2P ${label}?`)) return;
+    setSaving(true);
+    setError('');
+    setMessage('');
+    try {
+      const nextConfig = await request('/system-settings/a2p-messaging', {
+        method: 'PATCH',
+        body: JSON.stringify(secret === 'api_key' ? { clear_api_key: true } : { clear_password: true })
+      });
+      setConfig(nextConfig);
+      hydrateForm(nextConfig);
+      setMessage(`A2P ${label} removed.`);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function checkCredits() {
+    setCheckingCredits(true);
+    setError('');
+    setMessage('');
+    setCreditError('');
+    setCreditMessage('');
+    try {
+      const nextConfig = await request('/system-settings/a2p-messaging/check-credits', { method: 'POST' });
+      setConfig(nextConfig);
+      hydrateForm(nextConfig);
+      const available = nextConfig.credit_check?.available ?? nextConfig.last_credit_available;
+      const responseSummary = nextConfig.credit_check?.response_summary || nextConfig.last_credit_response || '';
+      setCreditMessage(available === null || available === undefined
+        ? `Credits check completed, but Smart did not return a parsable Available value.${responseSummary ? ` Response: ${responseSummary}` : ''}`
+        : `Credits check completed. Available credits: ${available}.`);
+    } catch (err) {
+      setCreditError(err.message);
+      await loadA2PSettings();
+    } finally {
+      setCheckingCredits(false);
+    }
+  }
+
+  async function sendTestMessage(event) {
+    event.preventDefault();
+    setSendingTest(true);
+    setError('');
+    setMessage('');
+    setTestError('');
+    setTestMessage('');
+    try {
+      const nextConfig = await request('/system-settings/a2p-messaging/test-send', {
+        method: 'POST',
+        body: JSON.stringify({
+          destination: testForm.destination,
+          message_text: testForm.message_text,
+          source: testForm.source || null,
+          registered_delivery: testForm.registered_delivery
+        })
+      });
+      setConfig(nextConfig);
+      hydrateForm(nextConfig);
+      setTestMessage(`Test SMS accepted by Smart${nextConfig.test_send?.message_id ? ` · Message-ID ${nextConfig.test_send.message_id}` : ''}.`);
+    } catch (err) {
+      setTestError(err.message);
+      await loadA2PSettings();
+    } finally {
+      setSendingTest(false);
+    }
+  }
+
+  if (loading) return <div className="empty">Loading A2P messaging settings...</div>;
+
+  const capabilities = config?.capabilities || {};
+  const creditsTracking = config?.credits_tracking || {};
+  const authMethod = form.auth_method || 'API_KEY_HEADERS';
+  const hasApiKey = Boolean(config?.api_key_configured);
+  const hasPassword = Boolean(config?.password_configured);
+  const senderOptions = Array.from(new Set([
+    ...String(form.source_addresses || '').split(/\n|,/).map((item) => item.trim()).filter(Boolean),
+    form.default_source
+  ].filter(Boolean)));
+  const groupHeader = (icon, title, tooltip) => (
+    <div className="col-12">
+      <div className="d-flex align-items-center gap-2 border-bottom pb-2 mb-1">
+        {icon}
+        <div className="fw-bold">{title}</div>
+        {tooltip && <IconInfoCircle size={17} className="text-muted" title={tooltip} />}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        {message && <div className="alert alert-info auto-dismiss-alert">{message}</div>}
+        {error && <div className="alert alert-danger auto-dismiss-alert">{error}</div>}
+      </div>
+
+      <div className="col-12 col-xl-8">
+        <Card title="A2P Messaging API" subtitle="Organized Smart Messaging Suite account, endpoint, and credit settings.">
+          <form onSubmit={saveA2PSettings}>
+            <div className="row g-4">
+              {groupHeader(<IconSettings size={22} className="text-primary flex-shrink-0" />, '1. Integration Status', 'Enable A2P only after Smart/Soprano has provisioned HTTP API access for the account.')}
+              <div className="col-12">
+                <label className="form-check form-switch">
+                  <input className="form-check-input" type="checkbox" checked={form.enabled} onChange={(e) => updateField('enabled', e.target.checked)} />
+                  <span className="form-check-label">Enable A2P messaging integration</span>
+                </label>
+                <div className="text-muted small mt-1">Saving settings here does not send SMS. Sending will be wired in a later voucher/notification flow.</div>
+              </div>
+              {groupHeader(<IconDatabase size={22} className="text-primary flex-shrink-0" />, '2. Provider and Account', 'Default values are based on the Smart Messaging Suite HTTP developer guide.')}
+              <div className="col-md-6">
+                <label className="form-label">Provider</label>
+                <input className="form-control" value={form.provider} onChange={(e) => updateField('provider', e.target.value)} />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Base URL</label>
+                <input className="form-control" value={form.base_url} onChange={(e) => updateField('base_url', e.target.value)} />
+              </div>
+              {groupHeader(<IconShieldLock size={22} className="text-primary flex-shrink-0" />, '3. Authentication', 'API key headers are recommended by the Smart guide. Basic Auth and body credentials are kept for compatibility.')}
+              <div className="col-md-4">
+                <label className="form-label">Auth Method</label>
+                <select className="form-select" value={authMethod} onChange={(e) => updateField('auth_method', e.target.value)}>
+                  <option value="API_KEY_HEADERS">API key headers</option>
+                  <option value="BASIC_AUTH">Basic authentication</option>
+                  <option value="BODY_CREDENTIALS">Username/password body fields</option>
+                </select>
+                <div className="text-muted small mt-1">Smart recommends X-MEMS API ID and API Key headers.</div>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">API ID</label>
+                <input className="form-control" value={form.api_id} onChange={(e) => updateField('api_id', e.target.value)} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">API Key</label>
+                <input className="form-control" type="password" value={form.api_key} placeholder={hasApiKey ? `Saved: ${config.api_key_hint}` : ''} onChange={(e) => updateField('api_key', e.target.value)} />
+                {hasApiKey && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearA2PSecret('api_key')}>Clear saved API key</button>}
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Username</label>
+                <input className="form-control" value={form.username} onChange={(e) => updateField('username', e.target.value)} />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Password</label>
+                <input className="form-control" type="password" value={form.password} placeholder={hasPassword ? `Saved: ${config.password_hint}` : ''} onChange={(e) => updateField('password', e.target.value)} />
+                {hasPassword && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearA2PSecret('password')}>Clear saved password</button>}
+              </div>
+              {groupHeader(<IconListDetails size={22} className="text-primary flex-shrink-0" />, '4. API Endpoint Paths', 'Keep these default paths unless Smart gives a different tenant-specific interface.')}
+              <div className="col-12">
+                <div className="row g-3">
+                  <div className="col-md-4"><label className="form-label">Send SMS</label><input className="form-control" value={form.send_path} onChange={(e) => updateField('send_path', e.target.value)} /></div>
+                  <div className="col-md-4"><label className="form-label">Query Message</label><input className="form-control" value={form.query_path} onChange={(e) => updateField('query_path', e.target.value)} /></div>
+                  <div className="col-md-4"><label className="form-label">Cancel Message</label><input className="form-control" value={form.cancel_path} onChange={(e) => updateField('cancel_path', e.target.value)} /></div>
+                  <div className="col-md-4"><label className="form-label">Start Batch</label><input className="form-control" value={form.start_batch_path} onChange={(e) => updateField('start_batch_path', e.target.value)} /></div>
+                  <div className="col-md-4"><label className="form-label">Send Batch</label><input className="form-control" value={form.send_batch_path} onChange={(e) => updateField('send_batch_path', e.target.value)} /></div>
+                  <div className="col-md-4"><label className="form-label">Current Credits</label><input className="form-control" value={form.credits_path} onChange={(e) => updateField('credits_path', e.target.value)} /></div>
+                </div>
+              </div>
+              {groupHeader(<IconBell size={22} className="text-primary flex-shrink-0" />, '5. Delivery Receipts', 'Sender defaults for portal confirmation SMS are configured in Captive Portal -> Message Defaults.')}
+              <div className="col-12 d-flex align-items-end">
+                <label className="form-check mb-2">
+                  <input className="form-check-input" type="checkbox" checked={form.registered_delivery} onChange={(e) => updateField('registered_delivery', e.target.checked)} />
+                  <span className="form-check-label">Request delivery receipts by default</span>
+                </label>
+              </div>
+              {groupHeader(<IconWallet size={22} className="text-primary flex-shrink-0" />, '6. Local Credit Rules', 'Smart can return current prepaid credits. Monthly consumption tracking will use our own SMS logs when sending flows are added.')}
+              <div className="col-md-4">
+                <label className="form-label">Monthly Credit Limit</label>
+                <input className="form-control" type="number" min="0" value={form.monthly_credit_limit} onChange={(e) => updateField('monthly_credit_limit', e.target.value)} placeholder="Optional" />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Monthly Reset Day</label>
+                <input className="form-control" type="number" min="1" max="31" value={form.monthly_reset_day} onChange={(e) => updateField('monthly_reset_day', e.target.value)} />
+              </div>
+              <div className="col-md-4"><label className="form-label">Direct Credits API</label><div className="form-control-plaintext">Supported for prepaid accounts</div></div>
+              <div className="col-12">
+                <label className="form-label">Notes</label>
+                <textarea className="form-control" rows="3" value={form.notes} onChange={(e) => updateField('notes', e.target.value)} placeholder="Account notes, provisioned source addresses, support ticket references, or whitelist details." />
+              </div>
+              <div className="col-12 text-end">
+                <button className="btn btn-primary" disabled={saving}><IconDeviceFloppy size={18} className="me-2" />{saving ? 'Saving...' : 'Save A2P Settings'}</button>
+              </div>
+            </div>
+          </form>
+        </Card>
+      </div>
+
+      <div className="col-12 col-xl-4">
+        <div className="row row-cards">
+          <div className="col-12">
+            <Card title="Smart API Summary">
+              <div className="d-flex flex-column gap-3">
+                <div className="d-flex gap-2">
+                  <IconBell size={22} className="text-primary flex-shrink-0" />
+                  <div><strong>SMS sending</strong><div className="text-muted small">Use sendmsg for one or more destinations. The guide documents up to {capabilities.max_destinations_per_sendmsg || 300} destinations per request.</div></div>
+                </div>
+                <div className="d-flex gap-2">
+                  <IconListDetails size={22} className="text-primary flex-shrink-0" />
+                  <div><strong>Message lifecycle</strong><div className="text-muted small">querymsg checks status by Message-ID; cancelmsg can cancel queued or scheduled messages when still cancellable.</div></div>
+                </div>
+                <div className="d-flex gap-2">
+                  <IconDatabase size={22} className="text-primary flex-shrink-0" />
+                  <div><strong>Batch and reports</strong><div className="text-muted small">startbatch/sendbatch can send templated batches. Portal reports show API and portal messages in real time.</div></div>
+                </div>
+                <div className="d-flex gap-2">
+                  <IconShieldLock size={22} className="text-primary flex-shrink-0" />
+                  <div><strong>Provisioning</strong><div className="text-muted small">HTTP API must be enabled by Smart/Soprano. Source IP whitelisting can be requested during provisioning.</div></div>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          <div className="col-12">
+            <Card title="Credits Tracking">
+              <div className="mb-2">
+                <span className={`badge ${config?.last_credit_check_status === 'SUCCESS' ? 'bg-success' : config?.last_credit_check_status === 'FAILED' ? 'bg-danger' : 'bg-secondary'}`}>
+                  {config?.last_credit_check_status || 'NOT CHECKED'}
+                </span>
+              </div>
+              <div className="row g-2 mb-3">
+                <div className="col-6">
+                  <div className="text-muted small">Available credits</div>
+                  <div className="h3 mb-0">{config?.last_credit_available ?? '-'}</div>
+                </div>
+                <div className="col-6">
+                  <div className="text-muted small">Last checked</div>
+                  <div className="small">{config?.last_credit_check_at ? formatPortalDateTime(config.last_credit_check_at) : '-'}</div>
+                </div>
+              </div>
+              <button type="button" className="btn btn-outline-primary w-100 mb-3" onClick={checkCredits} disabled={checkingCredits}>
+                <IconRefresh size={18} className="me-2" />{checkingCredits ? 'Checking credits...' : 'Retrieve Current Credits'}
+              </button>
+              {creditMessage && <div className="alert alert-success py-2">{creditMessage}</div>}
+              {creditError && <div className="alert alert-danger py-2">{creditError}</div>}
+              {config?.last_credit_error && <div className="alert alert-warning py-2">{config.last_credit_error}</div>}
+              {config?.last_credit_response && (
+                <div className="border rounded p-2 mb-3">
+                  <div className="text-muted small mb-1">Last Smart response</div>
+                  <code className="small text-wrap d-block">{config.last_credit_response}</code>
+                </div>
+              )}
+              <div className="text-muted small">
+                Yes, current credits can be retrieved by API for prepaid accounts. The HTTP guide documents {creditsTracking.smart_prepaid_credits_endpoint || '/cgpapi/service1/credits'} with an Available credits response.
+                Monthly usage tracking will require local SMS logs once the send flow is added, then reconciliation with Smart Message/Performance Reports.
+              </div>
+            </Card>
+          </div>
+
+          <div className="col-12">
+            <Card title="Test Send SMS" subtitle="Sends one real SMS through Smart. This can consume credits.">
+              <form onSubmit={sendTestMessage}>
+                <div className="mb-3">
+                  <label className="form-label">Contact #</label>
+                  <input className="form-control" value={testForm.destination} onChange={(e) => setTestForm({ ...testForm, destination: e.target.value })} placeholder="639171234567" />
+                </div>
+                <div className="mb-3">
+                  <label className="form-label">Message</label>
+                  <textarea className="form-control" rows="3" value={testForm.message_text} onChange={(e) => setTestForm({ ...testForm, message_text: e.target.value })} />
+                </div>
+                <div className="mb-3">
+                  <label className="form-label">Sender ID / Source Address</label>
+                  <select className="form-select" value={testForm.source} onChange={(e) => setTestForm({ ...testForm, source: e.target.value })}>
+                    <option value="">{form.default_source ? `Use default sender (${form.default_source})` : 'Use account default sender'}</option>
+                    {senderOptions.map((source) => <option key={source} value={source}>{source}</option>)}
+                  </select>
+                  {!senderOptions.length && <div className="text-muted small mt-1">No registered Sender IDs returned by the current A2P settings.</div>}
+                </div>
+                <label className="form-check mb-3">
+                  <input className="form-check-input" type="checkbox" checked={testForm.registered_delivery} onChange={(e) => setTestForm({ ...testForm, registered_delivery: e.target.checked })} />
+                  <span className="form-check-label">Request delivery receipt for this test</span>
+                </label>
+                <button className="btn btn-primary w-100" disabled={sendingTest || !testForm.destination.trim() || !testForm.message_text.trim()}>
+                  <IconBell size={18} className="me-2" />{sendingTest ? 'Sending...' : 'Send Test SMS'}
+                </button>
+                {testMessage && <div className="alert alert-success py-2 mt-3">{testMessage}</div>}
+                {testError && <div className="alert alert-danger py-2 mt-3">{testError}</div>}
+                {(config?.last_test_send_status || config?.last_test_send_response || config?.last_test_send_error) && (
+                  <div className="mt-3 border rounded p-2">
+                    <div className="d-flex align-items-center gap-2 mb-2">
+                      <span className={`badge ${config?.last_test_send_status === 'SUCCESS' ? 'bg-success' : 'bg-danger'}`}>{config?.last_test_send_status || 'UNKNOWN'}</span>
+                      <span className="text-muted small">{config?.last_test_send_at ? formatPortalDateTime(config.last_test_send_at) : ''}</span>
+                    </div>
+                    <div className="small"><strong>Destination:</strong> {config?.last_test_send_destination || '-'}</div>
+                    <div className="small"><strong>Message ID:</strong> {config?.last_test_send_message_id || '-'}</div>
+                    <div className="text-muted small mt-2">{config?.last_test_send_error || config?.last_test_send_response}</div>
+                  </div>
+                )}
+              </form>
+            </Card>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -14696,10 +21296,154 @@ function OmadaControllerPage({ refresh }) {
   );
 }
 
+function SupportInboxPage() {
+  const [items, setItems] = useState([]);
+  const [selectedId, setSelectedId] = useState('');
+  const [selected, setSelected] = useState(null);
+  const [reply, setReply] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+
+  async function loadList() {
+    const query = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : '';
+    const data = await request(`/support/conversations${query}`);
+    setItems(data.items || []);
+    if (!selectedId && data.items?.[0]?.id) setSelectedId(data.items[0].id);
+  }
+
+  async function loadSelected(id = selectedId) {
+    if (!id) {
+      setSelected(null);
+      return;
+    }
+    const data = await request(`/support/conversations/${id}`);
+    setSelected(data);
+  }
+
+  useEffect(() => { loadList().catch((err) => setMessage(err.message)); }, [statusFilter]);
+  useEffect(() => { loadSelected().catch((err) => setMessage(err.message)); }, [selectedId]);
+
+  async function sendReply(e) {
+    e.preventDefault();
+    if (!reply.trim() || !selectedId) return;
+    setLoading(true);
+    setMessage('');
+    try {
+      const data = await request(`/support/conversations/${selectedId}/messages`, { method: 'POST', body: JSON.stringify({ message_text: reply }) });
+      setSelected(data);
+      setReply('');
+      await loadList();
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function updateConversation(patch) {
+    if (!selectedId) return;
+    setLoading(true);
+    setMessage('');
+    try {
+      const data = await request(`/support/conversations/${selectedId}`, { method: 'PATCH', body: JSON.stringify(patch) });
+      setSelected(data);
+      await loadList();
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        <div className="page-header d-print-none mb-3">
+          <div>
+            <h2 className="page-title mb-1">Support Inbox</h2>
+            <div className="text-muted">Back-and-forth customer messages from the captive portal help button.</div>
+          </div>
+        </div>
+        {message && <AutoDismissAlert message={message} tone={message.toLowerCase().includes('failed') || message.toLowerCase().includes('not') ? 'danger' : 'success'} onDismiss={() => setMessage('')} />}
+      </div>
+      <div className="col-lg-4">
+        <Card title="Conversations">
+          <div className="mb-3">
+            <select className="form-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="">All statuses</option>
+              <option value="PENDING_ADMIN">Pending admin</option>
+              <option value="PENDING_CUSTOMER">Pending customer</option>
+              <option value="OPEN">Open</option>
+              <option value="CLOSED">Closed</option>
+            </select>
+          </div>
+          <div className="list-group list-group-flush support-inbox-list">
+            {items.map((item) => (
+              <button className={`list-group-item list-group-item-action px-0 ${selectedId === item.id ? 'active' : ''}`} type="button" key={item.id} onClick={() => setSelectedId(item.id)}>
+                <div className="d-flex justify-content-between gap-2">
+                  <div className="fw-semibold">{item.customer_name || 'Customer'}</div>
+                  <span className={`badge ${item.status === 'PENDING_ADMIN' ? 'bg-red-lt text-red' : item.status === 'CLOSED' ? 'bg-secondary-lt text-secondary' : 'bg-blue-lt text-blue'}`}>{item.status}</span>
+                </div>
+                <div className="small text-muted">{item.contact_number || item.email || item.public_conversation_id}</div>
+                <div className="small text-muted">{formatPortalDateTime(item.last_message_at || item.created_at)}</div>
+                {item.unread_admin_count > 0 && <span className="badge bg-orange-lt text-orange mt-1">{item.unread_admin_count} unread</span>}
+              </button>
+            ))}
+            {!items.length && <div className="text-muted text-center py-4">No customer messages yet.</div>}
+          </div>
+        </Card>
+      </div>
+      <div className="col-lg-8">
+        <Card title={selected ? selected.customer_name || 'Customer Conversation' : 'Conversation'} subtitle={selected?.public_conversation_id}>
+          {selected ? (
+            <div>
+              <div className="d-flex flex-wrap gap-2 mb-3">
+                <span className="badge bg-blue-lt text-blue">{selected.status}</span>
+                <span className="badge bg-secondary-lt text-secondary">{selected.priority}</span>
+                {selected.contact_number && <span className="badge bg-green-lt text-green"><IconPhone size={14} className="me-1" />{selected.contact_number}</span>}
+                {selected.email && <span className="badge bg-cyan-lt text-cyan"><IconMail size={14} className="me-1" />{selected.email}</span>}
+              </div>
+              <div className="portal-chat-thread admin-chat-thread mb-3">
+                {(selected.messages || []).map((item) => (
+                  <div className={`portal-chat-bubble ${item.sender_type === 'ADMIN' ? 'is-admin' : 'is-customer'}`} key={item.id}>
+                    <div>{item.message_text}</div>
+                    <div className="small opacity-75 mt-1">{item.sender_type === 'ADMIN' ? `Admin${item.admin_username ? ` · ${item.admin_username}` : ''}` : 'Customer'} · {formatPortalDateTime(item.created_at)}</div>
+                  </div>
+                ))}
+              </div>
+              <form onSubmit={sendReply}>
+                <label className="form-label">Reply</label>
+                <textarea className="form-control" rows={4} value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Write a clear support reply..." />
+                <div className="d-flex flex-wrap justify-content-between gap-2 mt-3">
+                  <div className="btn-list">
+                    <button className="btn btn-outline-secondary" type="button" disabled={loading} onClick={() => updateConversation({ status: selected.status === 'CLOSED' ? 'OPEN' : 'CLOSED' })}>
+                      {selected.status === 'CLOSED' ? 'Reopen' : 'Close'}
+                    </button>
+                    <select className="form-select w-auto" value={selected.priority || 'NORMAL'} onChange={(e) => updateConversation({ priority: e.target.value })} disabled={loading}>
+                      <option value="LOW">Low</option>
+                      <option value="NORMAL">Normal</option>
+                      <option value="HIGH">High</option>
+                      <option value="URGENT">Urgent</option>
+                    </select>
+                  </div>
+                  <button className="btn btn-primary" disabled={loading || !reply.trim()}><IconSend size={18} className="me-2" />Send Reply</button>
+                </div>
+              </form>
+            </div>
+          ) : (
+            <div className="empty">Select a conversation.</div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 const nav = [
   { page: 'Dashboard', icon: IconDashboard, tone: 'blue' },
   { page: 'AP & Client Map', icon: IconMapPin, tone: 'teal' },
-  { page: 'Connected Devices', icon: IconWifi, tone: 'azure' },
+  { page: 'Customer Devices', icon: IconWifi, tone: 'azure' },
   {
     page: 'APs Deployment',
     icon: IconRouter,
@@ -14712,8 +21456,11 @@ const nav = [
   },
   { page: 'Location Management', icon: IconMapPin, tone: 'green' },
   { page: 'Vouchers', icon: IconKey, tone: 'yellow' },
+  { page: 'Product Items', icon: IconListDetails, tone: 'green' },
+  { page: 'Sales', icon: IconCalendarStats, tone: 'green' },
   { page: 'Wallet / Manual Top-Up', icon: IconCash, tone: 'green' },
   { page: 'Captive Portal', icon: IconWifi, tone: 'blue' },
+  { page: 'Support Inbox', icon: IconMessageCircle, tone: 'orange' },
   { page: 'Network', icon: IconRouter, tone: 'purple' },
   { page: 'Omada Controller', icon: IconServer, tone: 'cyan' },
   { page: 'System Settings', icon: IconSettings, tone: 'secondary' },
@@ -14861,7 +21608,8 @@ function Header({ page, dashboard, resources, omadaPortalStatus, onToggleSidebar
 }
 
 function App() {
-  const isPortalRoute = window.location.pathname.startsWith('/portal');
+  const portalPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  const isPortalRoute = portalPath.startsWith('/portal');
   const [authed, setAuthed] = useState(Boolean(localStorage.getItem('centralwifi_token')));
   const [page, setPage] = useState(() => pageFromLocation());
   const [dashboard, setDashboard] = useState(null);
@@ -14955,6 +21703,7 @@ function App() {
       window.clearInterval(timer);
     };
   }, [authed]);
+  if (portalPath === '/portal/ap-coverage') return <PortalCoveragePage />;
   if (isPortalRoute) return <PortalApp />;
   if (!authed) return <Login onLogin={() => setAuthed(true)} branding={branding} />;
 
@@ -14976,13 +21725,16 @@ function App() {
           <div className="page-body">
             <div className="container-xl">
             {page === 'Dashboard' && <Dashboard data={dashboard} />}
-            {page === 'Connected Devices' && <ConnectedDevicesPage />}
+            {page === 'Customer Devices' && <CustomerDevicesPage />}
             {page === 'Sites' && <SitesDeploymentsPage />}
             {page === 'List of APs' && <ListOfApsPage />}
             {page === 'Location Management' && <LocationManagementPage />}
             {page === 'Vouchers' && <VouchersPage />}
+            {page === 'Product Items' && <ProductItemsPage />}
+            {page === 'Sales' && <SalesPage />}
             {page === 'Wallet / Manual Top-Up' && <WalletPage refresh={refresh} />}
             {page === 'Captive Portal' && <CaptivePortalPage />}
+            {page === 'Support Inbox' && <SupportInboxPage />}
             {page === 'Portal Editor' && <CaptivePortalEditorPage />}
             {page === 'Network' && <NetworkPage refresh={refresh} />}
             {page === 'MikroTik Scan Result' && <MikroTikScanResultPage />}

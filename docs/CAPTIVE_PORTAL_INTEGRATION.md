@@ -36,9 +36,11 @@ MikroTik:
 ## Portal URLs
 
 ```text
-Staging:    http://192.168.50.70:8080/portal
-Production: http://192.168.50.70/portal
+Local/Staging fallback: http://192.168.50.70:8080/portal
+Production HTTPS:       https://portal.3jhotspot.com/portal
 ```
+
+For production, configure the public HTTPS endpoint in `System Settings -> Public HTTPS`. The preferred path is Cloudflare Tunnel to `http://proxy:80`, avoiding MikroTik inbound port-forwarding.
 
 ## Omada Query Parameters
 
@@ -150,6 +152,13 @@ Client authorized but no internet:
 - Confirm the phone received an IP from the station customer subnet.
 - Confirm the SSID VLAN matches the station VLAN.
 
+PayMongo GCash checkout:
+- Product Items shown in the captive portal can start a PayMongo hosted checkout when System Settings -> Payments is enabled and the active Test/Live mode has keys saved.
+- A PayMongo redirect back to `/portal` is only a status hint. 3JCentralPisowifi grants access only after the backend confirms the checkout is paid, either from `/api/payments/paymongo/webhook` with a valid `Paymongo-Signature` or from a server-side PayMongo order reconciliation check.
+- Successful webhook fulfillment creates a system voucher for the Product Item duration and then uses the same Omada authorization path as normal voucher redemption.
+- Valid signed PayMongo webhooks are acknowledged with HTTP 200 after being recorded. If local fulfillment fails, the event is marked failed for operator review rather than returning HTTP 500 to PayMongo.
+- If the webhook secret is not configured, customers can reach PayMongo checkout but access remains pending after payment until the webhook is configured and delivered.
+
 ## Retired From Active Workflow
 
 - RADIUS / FreeRADIUS customer login.
@@ -157,4 +166,4 @@ Client authorized but no internet:
 - WPA2-Enterprise test SSID automation.
 - AI/OpenAI assistant planning.
 - MikroTik HotSpot enforcement and managed `login.html`.
-- Payments, SMS, coinslot/vendo, WireGuard automation, and production rollout automation.
+- SMS, coinslot/vendo, WireGuard automation, and production rollout automation.

@@ -495,3 +495,48 @@ AP shows `Managed by Others`:
 - Omada can see the AP IP, but this controller is not managing the AP configuration.
 - SSIDs from the selected site will not broadcast while the AP is in this state.
 - Factory reset the AP if needed, then adopt it again manually in Omada Controller.
+
+PayMongo checkout button is disabled:
+- Open System Settings -> Payments.
+- Confirm payments are enabled.
+- Confirm the active mode is correct: Test for `pk_test_`/`sk_test_`, Live for `pk_live_`/`sk_live_`.
+- Confirm GCash is checked in Payment Methods.
+- Product Item price must be greater than zero.
+
+Customer paid in PayMongo but internet access did not activate:
+- Do not trust the redirect page alone. Access is activated only after the backend confirms the PayMongo checkout is paid by verified webhook or server-side order reconciliation.
+- In PayMongo, create a webhook endpoint pointing to `/api/payments/paymongo/webhook` and subscribe to `payment.paid` and `payment.failed`.
+- Copy the webhook signing secret into the matching Test Keys or Live Keys tab in System Settings -> Payments.
+- Confirm the payment amount in PayMongo matches the Product Item price. Amount mismatches are blocked.
+- If the order is paid but fulfillment failed, check whether Omada authorization failed for that device/session.
+
+PayMongo webhook fails:
+- Confirm the request includes the `Paymongo-Signature` header.
+- Confirm the webhook was created in the same mode as the active order. Test webhooks use the test signing secret and live webhooks use the live signing secret.
+- The system verifies the raw request body using HMAC SHA-256 over `timestamp.raw_body`; proxy middleware must not modify the body before it reaches the API.
+- Valid signed webhook events return HTTP 200 after being recorded. If local fulfillment fails, check `payment_webhook_events.processing_status` and `payment_orders.last_error`; do not expect PayMongo to retry local fulfillment errors.
+
+Customer cannot save portal profile:
+- Confirm System Settings -> A2P Messaging is enabled and can send a test SMS.
+- Confirm Captive Portal -> Message Defaults has a valid Sender ID selected for portal confirmation SMS, or is intentionally using the Smart account default.
+- Check Captive Portal -> Message Defaults for portal confirmation SMS usage. This local counter only tracks profile verification and Report Missing Time verification codes.
+- Confirm the contact number is unique. One verified contact number can only own one welcome gift profile.
+- If the verification code expired, send a new code from the profile modal.
+
+Customer says remaining time is missing after random MAC/device change:
+- Ask them to open Help -> Report Missing Time on the captive portal.
+- They must verify the same contact number used on their profile.
+- If active time exists for that contact, the system moves it to the current device/session and attempts Omada authorization.
+
+Support messages are not appearing:
+- Customer messages are stored in Admin -> Support Inbox.
+- Message Admin is not A2P/SMS. It is an in-system conversation tied to the portal browser/session.
+
+Cloudflare Tunnel / Public HTTPS is not reachable:
+- Open System Settings -> Public HTTPS.
+- Confirm `cloudflared binary` is Installed and `Connector process` is Running.
+- Confirm Cloudflare Tunnel Public Hostname uses service type `HTTP` and URL `http://proxy:80`.
+- Confirm the public hostname is `portal.3jhotspot.com`.
+- Check Local health first. If local health fails, the app reverse proxy is not reachable from the connector container.
+- If local health passes but public HTTPS fails, check Cloudflare One -> Networks -> Connectors -> Cloudflare Tunnels and confirm the connector is Healthy.
+- Do not add MikroTik dst-nat rules for this path; Cloudflare Tunnel works through outbound connector traffic.

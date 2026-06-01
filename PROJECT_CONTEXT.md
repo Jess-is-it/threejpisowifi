@@ -2,6 +2,9 @@
 
 Every future AI agent, developer, or maintainer must read this file before changing the project. Update it whenever architecture, deployment, features, commands, branches, workflows, or decisions change.
 
+## Shared screenshot location
+When the project owner references an attached screenshot/image by filename only, immediately check `/mnt/windows_vod/3jmain_ss/` for matching files. Example: if the user says `payment1`, inspect `/mnt/windows_vod/3jmain_ss/payment1*` before asking for the image path.
+
 ## 1. Project overview
 3JCentralPisowifi is now focused on Omada Captive Portal + Voucher customer access. 3JCentralPisowifi validates vouchers, tracks wallet/access/session state, and authorizes clients through Omada captive portal APIs. MikroTik remains for station VLAN/DHCP/NAT transport and read-only preflight validation.
 
@@ -36,6 +39,23 @@ Active cleanup phase: remove retired RADIUS/WPA2-Enterprise lab tooling, AI/Open
 - Template tags include `<TIME>`, `<REMAINING>`, `<VOUCHER>`, `<SSID>`, `<EXPIRES_AT>`, `<BRAND>`, and `<STATUS>`.
 - The portal attempts browser/Web Notifications where the phone browser allows them and always shows an in-portal fallback message.
 - The system cannot customize the Android/iOS built-in `Sign in to WiFi network` notification text.
+
+## Captive Portal — Message Defaults
+- Admin -> Captive Portal -> Message Defaults owns portal SMS confirmation defaults.
+- The default Sender ID is selected from the provisioned Smart A2P Sender IDs. Do not show or edit the Sender ID list in this tab.
+- Portal SMS confirmation tracking is separate from global A2P tracking and counts only captive-portal profile verification and Report Missing Time verification codes.
+- System Settings -> A2P Messaging remains for Smart provider credentials, API paths, direct credits check, and test SMS only.
+
+## Public HTTPS Endpoint — Cloudflare Tunnel
+- Production public HTTPS should use Cloudflare Tunnel instead of MikroTik inbound port-forwarding.
+- Current production domain: `3jhotspot.com`; active portal hostname: `net.3jhotspot.com`.
+- Admin -> System Settings -> Public HTTPS stores the Cloudflare tunnel connector token encrypted and can start/stop/restart the local `cloudflared` connector.
+- The connector runs from the 3JCentralPisowifi API container and reaches the app reverse proxy at `http://proxy:80`.
+- In Cloudflare Tunnel Public Hostname, use subdomain `net`, domain `3jhotspot.com`, service type `HTTP`, and service URL `http://proxy:80`.
+- Public portal URL target: `https://net.3jhotspot.com/portal`.
+- PayMongo webhook target: `https://net.3jhotspot.com/api/payments/paymongo/webhook`.
+- Do not commit Cloudflare tunnel tokens, API tokens, or connector commands containing secrets.
+- MikroTik public NAT/port-forward rules are not required for this Cloudflare Tunnel path.
 
 ## 4. Historical Phase 1 scope
 The Phase 1 notes below are historical context. The active May 2026 product direction above supersedes any old RADIUS/WPA2/NAS/session workflow references.
@@ -1245,3 +1265,51 @@ Safety:
 - These rules are station-scoped by customer subnet, VLAN interface, and exact `3J Station - ... VLAN {id}` comments.
 - Station Remove Config removes only those managed anti-tethering rules by exact comments.
 - This blocks normal phone hotspot sharing but is not a cryptographic guarantee. A rooted or deliberately modified client may still attempt TTL manipulation, so future abuse monitoring/counters may be added.
+
+## Captive Portal Product Items — 2026-05-26
+
+- Product Items is an active admin page for defining customer-facing WiFi packages with name, price, duration value, duration unit, status, and sort order.
+- Active product items are displayed in the customer captive portal and in the Portal Design Editor through the `{{product_items}}` template slot.
+- Product Items are now the source of purchasable WiFi packages for PayMongo hosted checkout. Manual vouchers remain available.
+- Captive Portal now displays one current portal URL instead of separate staging/production labels. Portal Settings keeps the backend-compatible staging/production columns synchronized to that current URL.
+- The Captive Portal Sanity Check tab is retired from the active UI.
+
+## Payment Gateway Phase 1 — PayMongo Settings Foundation — 2026-05-26
+
+- System Settings -> Payments is the active place to configure PayMongo for future GCash purchases.
+- Phase 1 stores only gateway settings: enabled flag, PayMongo active mode, API base URL, separate TEST and LIVE public/secret key pairs, separate TEST and LIVE webhook signing secrets, currency, enabled payment methods, success URL, cancel URL, and notes.
+- No payment orders, GCash checkout redirect, webhook fulfillment, voucher issuance, wallet top-up, or Omada authorization are performed in Phase 1.
+- PayMongo secret keys and webhook signing secrets must never be returned to the frontend in plain text. The UI only shows masked hints and configured/missing status.
+- PayMongo webhook signing secrets are created from PayMongo's Webhooks module after a webhook endpoint exists. They may be blank during the settings-only phase.
+- Phase 1 was superseded by Phase 2 checkout foundation. Keep the same credential safety rules.
+
+## Payment Gateway Phase 2 — PayMongo GCash Checkout Foundation — 2026-05-26
+
+- System Settings -> Payments now uses tabs for separate Test Keys and Live Keys while keeping a single active checkout mode selector.
+- Captive portal Product Items can start PayMongo hosted checkout for GCash when payments are enabled and the active mode has a public key, secret key, and GCash enabled.
+- Checkout creates a local `payment_orders` record first, then sends the customer to PayMongo. Redirect return URLs are only status hints and must never grant internet access by themselves.
+- PayMongo webhook endpoint: `/api/payments/paymongo/webhook`.
+- Webhook fulfillment verifies the `Paymongo-Signature` header with the configured test/live webhook signing secret, checks the paid amount against the local order, creates a system voucher for the Product Item duration, and then uses the existing Omada/MikroTik portal authorization path to grant access.
+- If the webhook secret is missing, invalid, delayed outside the tolerance window, or the paid amount does not match the order, the order is not fulfilled.
+- PayMongo secret keys, webhook secrets, and raw sensitive payment details must not be returned to the frontend. Stored webhook/API responses must remain sanitized.
+- Next payment phase should add an admin payment orders/reconciliation view, refund/manual resolution controls, and live-mode operational checks.
+
+## Captive Portal Customer Profile, Welcome Gift, and Support — 2026-05-28
+
+- The customer portal first screen is a No Internet page with operator-managed connected/disconnected avatar images, editable headline text, Buy Now action, and disabled Login placeholder.
+- Portal Design is its own Captive Portal admin tab. It owns No Internet page settings, avatar uploads, profile welcome gift settings, avatar notes, and the editable marketing SMS consent text shown during customer profile registration.
+- Customer profile save requires name, unique verified contact number, optional email, terms/data consent, and optional marketing SMS consent. Contact verification uses the existing A2P Messaging integration with a 4-character code.
+- Saving a verified customer profile creates a one-time welcome gift voucher using the operator-configured Portal Design -> Welcome Gift duration and copy. It does not activate automatically. The portal shows a clickable gift below the avatar until the customer unwraps and redeems it.
+- Contact number uniqueness is the anti-abuse control for welcome gifts and is also used by the Report Missing Time flow to recover active remaining time after random MAC/device changes.
+- Message Admin is in-system support chat, not SMS. Customers send messages from the portal Help button; admins answer from the Support Inbox page.
+- PayMongo checkout orders now store customer profile name/email/contact when available and include those values in sanitized PayMongo metadata. PayMongo-hosted checkout may still ask for customer information if PayMongo does not prefill it from metadata.
+- Captive portal page backgrounds must cover the full viewport in both desktop and mobile dark/light modes so no white page strip appears around the portal shell.
+
+## Captive Portal Customer Bag and Seamless Auto Activation — 2026-06-01
+
+- Paid Product Items are no longer treated as one merged timer. A successful PayMongo payment creates a separate customer bag item with its own duration, product/category, device limit, priority, status, and history.
+- Customers can open My WiFi Bag from the portal, see the active item, queued items, and consumed history, and drag queued items to choose activation priority.
+- Auto Activate can be enabled per customer bag. When enabled, the next queued item is activated 10 seconds before the current item ends so the customer should not feel the package transition.
+- Bag history records whether Auto Activate was enabled when an item was consumed.
+- Purchases made outside a 3J AP can be saved to the bag. Omada/MikroTik authorization still only happens when the customer is connected through a supported 3J captive portal session.
+- The deterministic backend still performs gateway authorization. The frontend bag UI cannot grant internet access by itself.

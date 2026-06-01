@@ -1,13 +1,16 @@
 import os
 import base64
+import calendar
 import concurrent.futures
 import csv
 import ftplib
 import html
 import io
 import json
+import math
 import re
 import secrets
+import shlex
 import shutil
 import socket
 import ssl
@@ -17,12 +20,13 @@ import threading
 import time
 import hmac
 import uuid
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from hashlib import md5, sha256
 from ipaddress import ip_address, ip_interface, ip_network
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import paramiko
 import redis
@@ -39,6 +43,7 @@ from .omada_client import OmadaApiClient, OmadaApiError
 from .security import create_token, current_admin, hash_password, verify_password
 
 app = FastAPI(title="3JCentralPisowifi API", version="0.1.0")
+BAG_AUTO_ACTIVATION_THREAD_STARTED = False
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -353,6 +358,9 @@ class VoucherCreate(BaseModel):
     max_redemptions: int = Field(default=1, ge=1)
     code_prefix: Optional[str] = None
     code_length: int = Field(default=8, ge=4, le=32)
+    product_category_id: Optional[str] = None
+    access_scope: str = "ALL_LOCATIONS"
+    allowed_barangay: Optional[str] = None
 
 
 class VoucherUpdate(BaseModel):
@@ -382,6 +390,57 @@ class VoucherBatchCreate(BaseModel):
     max_redemptions: int = Field(default=1, ge=1)
 
 
+class ProductDiscountPayload(BaseModel):
+    label: Optional[str] = Field(default=None, max_length=80)
+    threshold_value: int = Field(default=7, ge=1, le=100_000)
+    threshold_unit: str = Field(default="days", max_length=20)
+    discount_type: str = Field(default="PERCENT", max_length=20)
+    discount_value: float = Field(default=0, ge=0, le=1_000_000)
+    enabled: bool = True
+    sort_order: int = Field(default=0, ge=0, le=1_000_000)
+
+
+class ProductItemPayload(BaseModel):
+    category_id: Optional[str] = None
+    name: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=500)
+    price: float = Field(default=0, ge=0, le=1_000_000)
+    duration_value: int = Field(default=1, ge=1, le=100_000)
+    duration_unit: str = Field(default="hours", max_length=20)
+    device_scope: str = Field(default="SINGLE_DEVICE", max_length=30)
+    allowed_devices: int = Field(default=1, ge=1, le=100)
+    use_category_discounts: bool = True
+    enabled_category_discount_ids: Optional[list[str]] = None
+    discounts: list[ProductDiscountPayload] = Field(default_factory=list)
+    discount_enabled: bool = False
+    discount_min_quantity: Optional[int] = Field(default=None, ge=2, le=365)
+    discount_type: Optional[str] = Field(default=None, max_length=20)
+    discount_value: Optional[float] = Field(default=0, ge=0, le=1_000_000)
+    status: str = Field(default="ACTIVE", max_length=20)
+    sort_order: int = Field(default=0, ge=0, le=1_000_000)
+
+
+class ProductCategoryDiscountPayload(ProductDiscountPayload):
+    pass
+
+
+class ProductCategoryPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=500)
+    image_url: Optional[str] = Field(default=None, max_length=500)
+    more_info_enabled: bool = False
+    more_info_text: Optional[str] = Field(default=None, max_length=4000)
+    access_scope: str = Field(default="ALL_LOCATIONS", max_length=40)
+    allowed_barangay: Optional[str] = Field(default=None, max_length=120)
+    discounts: list[ProductCategoryDiscountPayload] = Field(default_factory=list)
+    status: str = Field(default="ACTIVE", max_length=20)
+    sort_order: int = Field(default=0, ge=0, le=1_000_000)
+
+
+class ProductCategoryReorderPayload(BaseModel):
+    category_ids: list[str] = Field(default_factory=list)
+
+
 class VoucherRedeemTest(BaseModel):
     voucher_code: str
     user_id: Optional[str] = None
@@ -389,9 +448,19 @@ class VoucherRedeemTest(BaseModel):
     device_identifier: Optional[str] = None
 
 
+class PortalTimeAdjustRequest(BaseModel):
+    amount_seconds: int
+    note: Optional[str] = None
+
+
+class PortalBlockDeviceRequest(BaseModel):
+    reason: Optional[str] = None
+
+
 class PortalSessionRequest(BaseModel):
     portal_session_id: Optional[str] = None
     device_token: Optional[str] = None
+    handoff: Optional[str] = None
     mac: Optional[str] = None
     ip: Optional[str] = None
     client_mac: Optional[str] = None
@@ -434,6 +503,59 @@ class PortalRedeemRequest(PortalSessionRequest):
     voucher_code: str
 
 
+class PortalPaymentCheckoutRequest(PortalSessionRequest):
+    product_item_id: str
+    payment_method: str = Field(default="gcash", max_length=40)
+    purchase_quantity: int = Field(default=1, ge=1, le=365)
+    selected_barangay: Optional[str] = Field(default=None, max_length=120)
+
+
+class PortalBagSettingsRequest(PortalSessionRequest):
+    auto_activate: bool = True
+
+
+class PortalBagReorderRequest(PortalSessionRequest):
+    item_ids: list[str] = Field(default_factory=list)
+
+
+class PortalBagActivateRequest(PortalSessionRequest):
+    pass
+
+
+class PortalProfileOtpRequest(PortalSessionRequest):
+    contact_number: str = Field(min_length=6, max_length=32)
+
+
+class PortalProfileSaveRequest(PortalSessionRequest):
+    display_name: str = Field(min_length=1, max_length=120)
+    email: Optional[str] = Field(default=None, max_length=255)
+    contact_number: str = Field(min_length=6, max_length=32)
+    verification_code: str = Field(min_length=4, max_length=12)
+    terms_accepted: bool = False
+    marketing_sms_consent: bool = False
+
+
+class PortalWelcomeGiftRedeemRequest(PortalSessionRequest):
+    pass
+
+
+class PortalMissingTimeOtpRequest(PortalSessionRequest):
+    contact_number: str = Field(min_length=6, max_length=32)
+
+
+class PortalMissingTimeRestoreRequest(PortalSessionRequest):
+    contact_number: str = Field(min_length=6, max_length=32)
+    verification_code: str = Field(min_length=4, max_length=12)
+
+
+class PortalSupportConversationCreateRequest(PortalSessionRequest):
+    message_text: str = Field(min_length=1, max_length=2000)
+
+
+class PortalSupportMessageRequest(PortalSessionRequest):
+    message_text: str = Field(min_length=1, max_length=2000)
+
+
 class CaptivePortalSettingsUpdate(BaseModel):
     portal_mode: Optional[str] = None
     open_ssid_name: Optional[str] = None
@@ -454,6 +576,27 @@ class CaptivePortalSettingsUpdate(BaseModel):
     portal_expired_notification_message: Optional[str] = None
     portal_reconnect_notification_enabled: Optional[bool] = None
     portal_reconnect_notification_message: Optional[str] = None
+    no_internet_headline: Optional[str] = Field(default=None, max_length=160)
+    no_internet_subtitle: Optional[str] = Field(default=None, max_length=240)
+    no_internet_avatar_disconnected_url: Optional[str] = Field(default=None, max_length=500)
+    no_internet_avatar_connected_url: Optional[str] = Field(default=None, max_length=500)
+    avatar_notes_json: Optional[dict] = None
+    marketing_sms_consent_text: Optional[str] = Field(default=None, max_length=1000)
+    profile_gift_enabled: Optional[bool] = None
+    profile_gift_duration_seconds: Optional[int] = Field(default=None, ge=1)
+    profile_gift_title: Optional[str] = Field(default=None, max_length=160)
+    profile_gift_available_message: Optional[str] = Field(default=None, max_length=240)
+    profile_gift_description: Optional[str] = Field(default=None, max_length=500)
+    profile_gift_profile_saved_message: Optional[str] = Field(default=None, max_length=500)
+    profile_gift_redeemed_message: Optional[str] = Field(default=None, max_length=500)
+    outside_network_warning_enabled: Optional[bool] = None
+    outside_network_warning_message: Optional[str] = Field(default=None, max_length=1000)
+    outside_network_purchase_title: Optional[str] = Field(default=None, max_length=160)
+    outside_network_purchase_message: Optional[str] = Field(default=None, max_length=1000)
+    outside_network_purchase_success_message: Optional[str] = Field(default=None, max_length=500)
+    bag_auto_activate_default: Optional[bool] = None
+    bag_activation_overlap_seconds: Optional[int] = Field(default=None, ge=0, le=300)
+    sync_omada_portal: Optional[bool] = False
     status: Optional[str] = None
 
 
@@ -651,6 +794,95 @@ class OpenAISettingsPayload(BaseModel):
     project_id: Optional[str] = Field(default=None, max_length=200)
 
 
+class A2PMessagingSettingsPayload(BaseModel):
+    enabled: Optional[bool] = None
+    provider: Optional[str] = Field(default=None, max_length=80)
+    base_url: Optional[str] = Field(default=None, max_length=300)
+    send_path: Optional[str] = Field(default=None, max_length=200)
+    query_path: Optional[str] = Field(default=None, max_length=200)
+    cancel_path: Optional[str] = Field(default=None, max_length=200)
+    start_batch_path: Optional[str] = Field(default=None, max_length=200)
+    send_batch_path: Optional[str] = Field(default=None, max_length=200)
+    credits_path: Optional[str] = Field(default=None, max_length=200)
+    auth_method: Optional[str] = Field(default=None, max_length=40)
+    api_id: Optional[str] = Field(default=None, max_length=200)
+    api_key: Optional[str] = Field(default=None, max_length=500)
+    clear_api_key: bool = False
+    username: Optional[str] = Field(default=None, max_length=200)
+    password: Optional[str] = Field(default=None, max_length=500)
+    clear_password: bool = False
+    default_source: Optional[str] = Field(default=None, max_length=80)
+    source_addresses: Optional[list[str]] = None
+    registered_delivery: Optional[bool] = None
+    monthly_credit_limit: Optional[int] = Field(default=None, ge=0, le=1000000000)
+    monthly_reset_day: Optional[int] = Field(default=None, ge=1, le=31)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+class PaymentGatewaySettingsPayload(BaseModel):
+    enabled: Optional[bool] = None
+    provider: Optional[str] = Field(default=None, max_length=40)
+    mode: Optional[str] = Field(default=None, max_length=20)
+    api_base_url: Optional[str] = Field(default=None, max_length=300)
+    public_key: Optional[str] = Field(default=None, max_length=500)
+    clear_public_key: bool = False
+    secret_key: Optional[str] = Field(default=None, max_length=500)
+    clear_secret_key: bool = False
+    webhook_secret: Optional[str] = Field(default=None, max_length=500)
+    clear_webhook_secret: bool = False
+    test_public_key: Optional[str] = Field(default=None, max_length=500)
+    clear_test_public_key: bool = False
+    test_secret_key: Optional[str] = Field(default=None, max_length=500)
+    clear_test_secret_key: bool = False
+    test_webhook_secret: Optional[str] = Field(default=None, max_length=500)
+    clear_test_webhook_secret: bool = False
+    live_public_key: Optional[str] = Field(default=None, max_length=500)
+    clear_live_public_key: bool = False
+    live_secret_key: Optional[str] = Field(default=None, max_length=500)
+    clear_live_secret_key: bool = False
+    live_webhook_secret: Optional[str] = Field(default=None, max_length=500)
+    clear_live_webhook_secret: bool = False
+    currency: Optional[str] = Field(default=None, max_length=10)
+    enabled_payment_methods: Optional[list[str]] = None
+    success_url: Optional[str] = Field(default=None, max_length=500)
+    cancel_url: Optional[str] = Field(default=None, max_length=500)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+class PublicEndpointSettingsPayload(BaseModel):
+    enabled: Optional[bool] = None
+    provider: Optional[str] = Field(default=None, max_length=80)
+    domain: Optional[str] = Field(default=None, max_length=253)
+    public_hostname: Optional[str] = Field(default=None, max_length=253)
+    local_service_url: Optional[str] = Field(default=None, max_length=500)
+    portal_path: Optional[str] = Field(default=None, max_length=120)
+    connector_command: Optional[str] = Field(default=None, max_length=8000)
+    tunnel_token: Optional[str] = Field(default=None, max_length=8000)
+    clear_tunnel_token: bool = False
+
+
+class A2PMessagingTestSendPayload(BaseModel):
+    destination: str = Field(min_length=8, max_length=32)
+    message_text: str = Field(min_length=1, max_length=500)
+    source: Optional[str] = Field(default=None, max_length=80)
+    registered_delivery: Optional[bool] = None
+
+
+class PortalSmsConfirmationSettingsPayload(BaseModel):
+    sender_id: Optional[str] = Field(default=None, max_length=80)
+    monthly_credit_limit: Optional[int] = Field(default=None, ge=0, le=1000000000)
+    monthly_reset_day: Optional[int] = Field(default=None, ge=1, le=31)
+
+
+class SupportConversationReplyPayload(BaseModel):
+    message_text: str = Field(min_length=1, max_length=4000)
+
+
+class SupportConversationUpdatePayload(BaseModel):
+    status: Optional[str] = Field(default=None, max_length=40)
+    priority: Optional[str] = Field(default=None, max_length=40)
+
+
 class OpenAITestPayload(BaseModel):
     prompt: str = Field(default="Reply with one short sentence confirming this API key works.", max_length=4000)
     model_id: Optional[str] = Field(default=None, max_length=80)
@@ -707,6 +939,20 @@ class MikrotikVlanPathPlanPayload(BaseModel):
     ap_vlan_mode: str = "UNKNOWN"
     ssid_vlan_id: Optional[int] = Field(default=None, ge=1, le=4094)
     confirmation_status: str = "DRAFT"
+
+
+class SalesClearRequest(BaseModel):
+    confirmation: str
+
+
+class SalesReportingSettingsUpdate(BaseModel):
+    telegram_enabled: bool = False
+    telegram_bot_token: Optional[str] = Field(default=None, max_length=300)
+    telegram_chat_id: Optional[str] = Field(default=None, max_length=120)
+    daily_report_enabled: bool = False
+    report_time: Optional[str] = Field(default="20:00", max_length=20)
+    include_site_breakdown: bool = True
+    include_barangay_breakdown: bool = True
 
 
 def audit(actor_id: str, action: str, target_type: str = None, target_id: str = None, details: dict = None):
@@ -1087,6 +1333,1430 @@ def public_openai_settings() -> dict:
         "selected_model_reasoning_efforts": public_openai_reasoning_efforts(selected_model),
         "pricing_source": OPENAI_PRICING_SOURCE,
     }
+
+
+A2P_AUTH_METHODS = {"API_KEY_HEADERS", "BASIC_AUTH", "BODY_CREDENTIALS"}
+A2P_DEFAULT_SOURCE_ADDRESSES = ["3JXENTRONET", "3J BILL", "3J ALERT", "3J PROMO", "3J FibrWIFI"]
+A2P_DEFAULT_SETTINGS = {
+    "enabled": False,
+    "provider": "SMART_MESSAGING_SUITE",
+    "base_url": "https://enterprise.messagingsuite.smart.com.ph",
+    "send_path": "/cgphttp/servlet/sendmsg",
+    "query_path": "/cgphttp/servlet/querymsg",
+    "cancel_path": "/cgphttp/servlet/cancelmsg",
+    "start_batch_path": "/cgphttp/servlet/startbatch",
+    "send_batch_path": "/cgphttp/servlet/sendbatch",
+    "credits_path": "/cgpapi/service1/credits",
+    "auth_method": "API_KEY_HEADERS",
+    "api_id": "",
+    "default_source": "",
+    "source_addresses": A2P_DEFAULT_SOURCE_ADDRESSES,
+    "registered_delivery": True,
+    "monthly_credit_limit": None,
+    "monthly_reset_day": 1,
+    "notes": "",
+}
+
+
+def normalize_a2p_text(value, max_length: int = 500) -> str:
+    text = "" if value is None else str(value)
+    text = text.replace("\x00", "")
+    text = re.sub(r"[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    return text.strip()[:max_length]
+
+
+def normalize_a2p_path(value, fallback: str) -> str:
+    path = normalize_a2p_text(value or fallback, 200)
+    if not path:
+        path = fallback
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return path
+
+
+def normalize_a2p_base_url(value) -> str:
+    url = normalize_a2p_text(value or A2P_DEFAULT_SETTINGS["base_url"], 300).rstrip("/")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="A2P base URL must be a valid http or https URL")
+    return url
+
+
+def mask_a2p_secret(value: Optional[str]) -> Optional[str]:
+    text = normalize_a2p_text(value)
+    if not text:
+        return None
+    if len(text) <= 8:
+        return f"{text[:2]}..."
+    return f"{text[:4]}...{text[-4:]}"
+
+
+def normalize_a2p_source_addresses(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = re.split(r"[\n,]+", value)
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        raw_items = []
+    addresses = []
+    seen = set()
+    for item in raw_items:
+        source = normalize_a2p_text(item, 80)
+        if not source or source in seen:
+            continue
+        seen.add(source)
+        addresses.append(source)
+    return addresses[:50]
+
+
+def a2p_messaging_store() -> dict:
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'a2p_messaging'")
+    value = row["value"] if row and isinstance(row["value"], dict) else {}
+    store = {**A2P_DEFAULT_SETTINGS, **value}
+    store["enabled"] = bool(store.get("enabled"))
+    store["provider"] = normalize_a2p_text(store.get("provider") or "SMART_MESSAGING_SUITE", 80)
+    store["base_url"] = normalize_a2p_base_url(store.get("base_url"))
+    for key in ("send_path", "query_path", "cancel_path", "start_batch_path", "send_batch_path", "credits_path"):
+        store[key] = normalize_a2p_path(store.get(key), A2P_DEFAULT_SETTINGS[key])
+    auth_method = normalize_a2p_text(store.get("auth_method") or "API_KEY_HEADERS", 40).upper()
+    store["auth_method"] = auth_method if auth_method in A2P_AUTH_METHODS else "API_KEY_HEADERS"
+    store["api_id"] = normalize_a2p_text(store.get("api_id"), 200)
+    store["default_source"] = normalize_a2p_text(store.get("default_source"), 80)
+    store["source_addresses"] = normalize_a2p_source_addresses(store.get("source_addresses")) or A2P_DEFAULT_SOURCE_ADDRESSES.copy()
+    store["registered_delivery"] = bool(store.get("registered_delivery", True))
+    monthly_credit_limit = store.get("monthly_credit_limit")
+    store["monthly_credit_limit"] = int(monthly_credit_limit) if monthly_credit_limit not in (None, "") else None
+    monthly_reset_day = store.get("monthly_reset_day") or 1
+    store["monthly_reset_day"] = min(31, max(1, int(monthly_reset_day)))
+    store["notes"] = normalize_a2p_text(store.get("notes"), 1000)
+    return store
+
+
+def save_a2p_messaging_store(store: dict):
+    clean = {
+        "enabled": bool(store.get("enabled")),
+        "provider": normalize_a2p_text(store.get("provider") or "SMART_MESSAGING_SUITE", 80),
+        "base_url": normalize_a2p_base_url(store.get("base_url")),
+        "send_path": normalize_a2p_path(store.get("send_path"), A2P_DEFAULT_SETTINGS["send_path"]),
+        "query_path": normalize_a2p_path(store.get("query_path"), A2P_DEFAULT_SETTINGS["query_path"]),
+        "cancel_path": normalize_a2p_path(store.get("cancel_path"), A2P_DEFAULT_SETTINGS["cancel_path"]),
+        "start_batch_path": normalize_a2p_path(store.get("start_batch_path"), A2P_DEFAULT_SETTINGS["start_batch_path"]),
+        "send_batch_path": normalize_a2p_path(store.get("send_batch_path"), A2P_DEFAULT_SETTINGS["send_batch_path"]),
+        "credits_path": normalize_a2p_path(store.get("credits_path"), A2P_DEFAULT_SETTINGS["credits_path"]),
+        "auth_method": store.get("auth_method") if store.get("auth_method") in A2P_AUTH_METHODS else "API_KEY_HEADERS",
+        "api_id": normalize_a2p_text(store.get("api_id"), 200),
+        "api_key_encrypted": store.get("api_key_encrypted"),
+        "username": normalize_a2p_text(store.get("username"), 200),
+        "password_encrypted": store.get("password_encrypted"),
+        "default_source": normalize_a2p_text(store.get("default_source"), 80),
+        "source_addresses": normalize_a2p_source_addresses(store.get("source_addresses")),
+        "registered_delivery": bool(store.get("registered_delivery", True)),
+        "monthly_credit_limit": store.get("monthly_credit_limit"),
+        "monthly_reset_day": min(31, max(1, int(store.get("monthly_reset_day") or 1))),
+        "notes": normalize_a2p_text(store.get("notes"), 1000),
+        "last_credit_check_at": store.get("last_credit_check_at"),
+        "last_credit_check_status": store.get("last_credit_check_status"),
+        "last_credit_available": store.get("last_credit_available"),
+        "last_credit_response": store.get("last_credit_response"),
+        "last_credit_error": store.get("last_credit_error"),
+        "last_test_send_at": store.get("last_test_send_at"),
+        "last_test_send_status": store.get("last_test_send_status"),
+        "last_test_send_destination": store.get("last_test_send_destination"),
+        "last_test_send_message_id": store.get("last_test_send_message_id"),
+        "last_test_send_response": store.get("last_test_send_response"),
+        "last_test_send_error": store.get("last_test_send_error"),
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES ('a2p_messaging', %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (Json(clean),),
+            )
+
+
+def public_a2p_messaging_settings() -> dict:
+    store = a2p_messaging_store()
+    api_key = decrypt_secret(store.get("api_key_encrypted"))
+    password = decrypt_secret(store.get("password_encrypted"))
+    return {
+        "enabled": bool(store.get("enabled")),
+        "provider": store.get("provider"),
+        "base_url": store.get("base_url"),
+        "send_path": store.get("send_path"),
+        "query_path": store.get("query_path"),
+        "cancel_path": store.get("cancel_path"),
+        "start_batch_path": store.get("start_batch_path"),
+        "send_batch_path": store.get("send_batch_path"),
+        "credits_path": store.get("credits_path"),
+        "auth_method": store.get("auth_method"),
+        "api_id": store.get("api_id"),
+        "api_key_configured": bool(normalize_a2p_text(api_key)),
+        "api_key_hint": mask_a2p_secret(api_key),
+        "username": store.get("username"),
+        "password_configured": bool(normalize_a2p_text(password)),
+        "password_hint": mask_a2p_secret(password),
+        "default_source": store.get("default_source"),
+        "source_addresses": store.get("source_addresses") or [],
+        "registered_delivery": bool(store.get("registered_delivery")),
+        "monthly_credit_limit": store.get("monthly_credit_limit"),
+        "monthly_reset_day": store.get("monthly_reset_day"),
+        "notes": store.get("notes"),
+        "last_credit_check_at": store.get("last_credit_check_at"),
+        "last_credit_check_status": store.get("last_credit_check_status"),
+        "last_credit_available": store.get("last_credit_available"),
+        "last_credit_response": store.get("last_credit_response"),
+        "last_credit_error": store.get("last_credit_error"),
+        "last_test_send_at": store.get("last_test_send_at"),
+        "last_test_send_status": store.get("last_test_send_status"),
+        "last_test_send_destination": store.get("last_test_send_destination"),
+        "last_test_send_message_id": store.get("last_test_send_message_id"),
+        "last_test_send_response": store.get("last_test_send_response"),
+        "last_test_send_error": store.get("last_test_send_error"),
+        "capabilities": {
+            "send_sms": True,
+            "send_batch": True,
+            "query_message": True,
+            "cancel_message": True,
+            "delivery_receipts": True,
+            "mobile_originated_replies": True,
+            "credits_query": True,
+            "max_destinations_per_sendmsg": 300,
+            "documented_request_rate_per_customer_ip": "100 requests/second",
+        },
+        "credits_tracking": {
+            "smart_prepaid_credits_endpoint": "/cgpapi/service1/credits",
+            "direct_balance_check_supported": True,
+            "monthly_usage_requires_local_message_logs": True,
+            "portal_reports_available": True,
+        },
+}
+
+
+def portal_sms_period_window(reset_day: int) -> tuple[datetime, datetime]:
+    now = datetime.now(timezone.utc)
+
+    def month_anchor(year: int, month: int) -> datetime:
+        day = min(max(1, reset_day), calendar.monthrange(year, month)[1])
+        return datetime(year, month, day, tzinfo=timezone.utc)
+
+    start = month_anchor(now.year, now.month)
+    if now < start:
+        prev_month = 12 if now.month == 1 else now.month - 1
+        prev_year = now.year - 1 if now.month == 1 else now.year
+        start = month_anchor(prev_year, prev_month)
+    next_month = 1 if start.month == 12 else start.month + 1
+    next_year = start.year + 1 if start.month == 12 else start.year
+    end = month_anchor(next_year, next_month)
+    return start, end
+
+
+def portal_sms_confirmation_tracking(row=None) -> dict:
+    row = row or ensure_captive_portal_settings()
+    reset_day = min(31, max(1, int(row.get("portal_sms_monthly_reset_day") or 1)))
+    period_start, period_end = portal_sms_period_window(reset_day)
+    summary = fetch_one(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE event_type IN ('PROFILE_OTP_SENT', 'MISSING_TIME_OTP_SENT')) AS total_sent,
+            COUNT(*) FILTER (WHERE event_type = 'PROFILE_OTP_SENT') AS profile_otp_sent,
+            COUNT(*) FILTER (WHERE event_type = 'MISSING_TIME_OTP_SENT') AS missing_time_otp_sent,
+            MAX(created_at) FILTER (WHERE event_type IN ('PROFILE_OTP_SENT', 'MISSING_TIME_OTP_SENT')) AS last_sent_at
+        FROM portal_events
+        WHERE created_at >= %s
+          AND created_at < %s
+        """,
+        (period_start, period_end),
+    ) or {}
+    used = int(summary.get("total_sent") or 0)
+    limit = row.get("portal_sms_monthly_credit_limit")
+    limit = int(limit) if limit not in (None, "") else None
+    return {
+        "period_start": period_start.isoformat(),
+        "period_end": period_end.isoformat(),
+        "monthly_reset_day": reset_day,
+        "monthly_credit_limit": limit,
+        "used_credits": used,
+        "remaining_credits": max(0, limit - used) if limit is not None else None,
+        "profile_otp_sent": int(summary.get("profile_otp_sent") or 0),
+        "missing_time_otp_sent": int(summary.get("missing_time_otp_sent") or 0),
+        "last_sent_at": summary.get("last_sent_at"),
+        "unit": "1 confirmation SMS = 1 local portal SMS credit",
+    }
+
+
+def public_portal_sms_confirmation_settings(row=None) -> dict:
+    row = row or ensure_captive_portal_settings()
+    a2p_settings = public_a2p_messaging_settings()
+    sender_options = normalize_a2p_source_addresses(a2p_settings.get("source_addresses")) or A2P_DEFAULT_SOURCE_ADDRESSES.copy()
+    sender_id = normalize_a2p_text(row.get("portal_sms_sender_id"), 80)
+    if sender_id and sender_id not in sender_options:
+        sender_options = [sender_id, *sender_options]
+    return {
+        "enabled": bool(a2p_settings.get("enabled")),
+        "a2p_provider": a2p_settings.get("provider"),
+        "a2p_configured": bool(a2p_settings.get("api_key_configured") or (a2p_settings.get("username") and a2p_settings.get("password_configured"))),
+        "sender_id": sender_id,
+        "sender_options": sender_options,
+        "monthly_credit_limit": row.get("portal_sms_monthly_credit_limit"),
+        "monthly_reset_day": min(31, max(1, int(row.get("portal_sms_monthly_reset_day") or 1))),
+        "tracking": portal_sms_confirmation_tracking(row),
+    }
+
+
+PUBLIC_ENDPOINT_DEFAULT_SETTINGS = {
+    "enabled": False,
+    "provider": "CLOUDFLARE_TUNNEL",
+    "domain": "3jhotspot.com",
+    "public_hostname": "portal.3jhotspot.com",
+    "local_service_url": "http://proxy:80",
+    "portal_path": "/portal",
+    "last_started_at": None,
+    "last_stopped_at": None,
+    "last_action_status": None,
+    "last_action_error": None,
+}
+PUBLIC_ENDPOINT_LOG_FILE = Path(os.getenv("CLOUDFLARED_LOG_FILE", "/tmp/3jcentralpisowifi-cloudflared.log"))
+PUBLIC_ENDPOINT_TOKEN_FILE = Path(os.getenv("CLOUDFLARED_TOKEN_FILE", "/tmp/3jcentralpisowifi-cloudflared.token"))
+CLOUDFLARED_PROCESS = None
+CLOUDFLARED_PROCESS_STARTED_AT = None
+CLOUDFLARED_LOCK = threading.Lock()
+
+
+def normalize_public_endpoint_text(value, max_length: int = 500) -> str:
+    text = "" if value is None else str(value)
+    text = text.replace("\x00", "")
+    text = re.sub(r"[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    return text.strip()[:max_length]
+
+
+def normalize_public_endpoint_hostname(value, fallback: str = "") -> str:
+    text = normalize_public_endpoint_text(value or fallback, 253).lower()
+    if text.startswith("http://") or text.startswith("https://"):
+        parsed = urlparse(text)
+        text = parsed.netloc or parsed.path
+    text = text.strip().strip(".")
+    if not text:
+        return ""
+    if len(text) > 253 or not re.match(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$", text):
+        raise HTTPException(status_code=400, detail="Public hostname must be a valid DNS hostname")
+    return text
+
+
+def normalize_public_endpoint_url(value, fallback: str) -> str:
+    url = normalize_public_endpoint_text(value or fallback, 500).rstrip("/")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Local service URL must be a valid http or https URL")
+    return url
+
+
+def normalize_public_endpoint_path(value) -> str:
+    path = normalize_public_endpoint_text(value or "/portal", 120)
+    if not path.startswith("/"):
+        path = f"/{path}"
+    return path or "/portal"
+
+
+def extract_cloudflare_tunnel_token(value: Optional[str]) -> str:
+    text = normalize_public_endpoint_text(value, 8000)
+    if not text:
+        return ""
+    token = ""
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        parts = text.split()
+    for index, part in enumerate(parts):
+        if part == "--token" and index + 1 < len(parts):
+            token = parts[index + 1]
+            break
+        if part.startswith("--token="):
+            token = part.split("=", 1)[1]
+            break
+    if not token and len(text) >= 80 and not re.search(r"\s", text):
+        token = text
+    token = token.strip().strip("\"'")
+    if token and (len(token) < 80 or re.search(r"\s", token)):
+        raise HTTPException(status_code=400, detail="Cloudflare tunnel token was found but does not look valid. Paste the full connector command or raw token.")
+    return token
+
+
+def mask_public_endpoint_secret(value: Optional[str]) -> Optional[str]:
+    text = normalize_public_endpoint_text(value)
+    if not text:
+        return None
+    if len(text) <= 16:
+        return f"{text[:4]}..."
+    return f"{text[:8]}...{text[-6:]}"
+
+
+def public_endpoint_store() -> dict:
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'public_endpoint'")
+    value = row["value"] if row and isinstance(row["value"], dict) else {}
+    store = {**PUBLIC_ENDPOINT_DEFAULT_SETTINGS, **value}
+    store["enabled"] = bool(store.get("enabled"))
+    store["provider"] = normalize_public_endpoint_text(store.get("provider") or "CLOUDFLARE_TUNNEL", 80).upper()
+    store["domain"] = normalize_public_endpoint_hostname(store.get("domain"), PUBLIC_ENDPOINT_DEFAULT_SETTINGS["domain"])
+    store["public_hostname"] = normalize_public_endpoint_hostname(store.get("public_hostname"), PUBLIC_ENDPOINT_DEFAULT_SETTINGS["public_hostname"])
+    store["local_service_url"] = normalize_public_endpoint_url(store.get("local_service_url"), PUBLIC_ENDPOINT_DEFAULT_SETTINGS["local_service_url"])
+    store["portal_path"] = normalize_public_endpoint_path(store.get("portal_path"))
+    return store
+
+
+def save_public_endpoint_store(store: dict):
+    clean = {
+        "enabled": bool(store.get("enabled")),
+        "provider": normalize_public_endpoint_text(store.get("provider") or "CLOUDFLARE_TUNNEL", 80).upper(),
+        "domain": normalize_public_endpoint_hostname(store.get("domain"), PUBLIC_ENDPOINT_DEFAULT_SETTINGS["domain"]),
+        "public_hostname": normalize_public_endpoint_hostname(store.get("public_hostname"), PUBLIC_ENDPOINT_DEFAULT_SETTINGS["public_hostname"]),
+        "local_service_url": normalize_public_endpoint_url(store.get("local_service_url"), PUBLIC_ENDPOINT_DEFAULT_SETTINGS["local_service_url"]),
+        "portal_path": normalize_public_endpoint_path(store.get("portal_path")),
+        "tunnel_token_encrypted": store.get("tunnel_token_encrypted"),
+        "last_started_at": store.get("last_started_at"),
+        "last_stopped_at": store.get("last_stopped_at"),
+        "last_action_status": normalize_public_endpoint_text(store.get("last_action_status"), 80),
+        "last_action_error": normalize_public_endpoint_text(store.get("last_action_error"), 1000),
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES ('public_endpoint', %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (Json(clean),),
+            )
+
+
+def public_endpoint_public_url(store: Optional[dict] = None) -> str:
+    current = store or public_endpoint_store()
+    hostname = current.get("public_hostname") or PUBLIC_ENDPOINT_DEFAULT_SETTINGS["public_hostname"]
+    return f"https://{hostname}{normalize_public_endpoint_path(current.get('portal_path'))}"
+
+
+def public_endpoint_write_token_file(token: str):
+    PUBLIC_ENDPOINT_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    PUBLIC_ENDPOINT_TOKEN_FILE.write_text(token)
+    try:
+        PUBLIC_ENDPOINT_TOKEN_FILE.chmod(0o600)
+    except Exception:
+        pass
+
+
+def cloudflared_binary_path() -> Optional[str]:
+    return shutil.which("cloudflared")
+
+
+def cloudflared_process_running() -> bool:
+    global CLOUDFLARED_PROCESS
+    return CLOUDFLARED_PROCESS is not None and CLOUDFLARED_PROCESS.poll() is None
+
+
+def read_cloudflared_log_tail(line_count: int = 80) -> list[str]:
+    try:
+        if not PUBLIC_ENDPOINT_LOG_FILE.exists():
+            return []
+        lines = PUBLIC_ENDPOINT_LOG_FILE.read_text(errors="replace").splitlines()
+        return [normalize_public_endpoint_text(line, 600) for line in lines[-line_count:]]
+    except Exception as exc:
+        return [f"Could not read cloudflared log: {exc}"]
+
+
+def public_endpoint_check_url(url: str) -> dict:
+    started = time.perf_counter()
+    try:
+        response = requests.get(url, timeout=8, allow_redirects=False)
+        latency_ms = int(round((time.perf_counter() - started) * 1000))
+        return {
+            "status": "SUCCESS" if response.status_code < 500 else "WARNING",
+            "http_status": response.status_code,
+            "latency_ms": latency_ms,
+        }
+    except Exception as exc:
+        return {
+            "status": "FAILED",
+            "error": normalize_public_endpoint_text(str(exc), 500),
+        }
+
+
+def public_endpoint_status(include_checks: bool = True) -> dict:
+    store = public_endpoint_store()
+    token = decrypt_secret(store.get("tunnel_token_encrypted"))
+    binary = cloudflared_binary_path()
+    running = cloudflared_process_running()
+    exit_code = None
+    if CLOUDFLARED_PROCESS is not None and not running:
+        exit_code = CLOUDFLARED_PROCESS.poll()
+    result = {
+        "enabled": bool(store.get("enabled")),
+        "provider": store.get("provider"),
+        "domain": store.get("domain"),
+        "public_hostname": store.get("public_hostname"),
+        "public_portal_url": public_endpoint_public_url(store),
+        "public_health_url": f"https://{store.get('public_hostname')}/health",
+        "local_service_url": store.get("local_service_url"),
+        "local_health_url": f"{store.get('local_service_url')}/health",
+        "portal_path": store.get("portal_path"),
+        "tunnel_token_configured": bool(token),
+        "tunnel_token_hint": mask_public_endpoint_secret(token),
+        "cloudflared_installed": bool(binary),
+        "cloudflared_path": binary,
+        "cloudflared_running": running,
+        "cloudflared_pid": CLOUDFLARED_PROCESS.pid if running else None,
+        "cloudflared_exit_code": exit_code,
+        "process_started_at": CLOUDFLARED_PROCESS_STARTED_AT,
+        "last_started_at": store.get("last_started_at"),
+        "last_stopped_at": store.get("last_stopped_at"),
+        "last_action_status": store.get("last_action_status"),
+        "last_action_error": store.get("last_action_error"),
+        "dashboard_instructions": {
+            "cloudflare_hostname": store.get("public_hostname"),
+            "service_type": "HTTP",
+            "service_url": store.get("local_service_url"),
+            "note": "In Cloudflare Tunnel Public Hostname, set the service URL to the local Docker service URL shown here because the connector runs inside the app network.",
+        },
+        "logs": read_cloudflared_log_tail(60),
+    }
+    if include_checks:
+        result["local_service_check"] = public_endpoint_check_url(f"{store.get('local_service_url')}/health")
+        if store.get("public_hostname"):
+            try:
+                socket.getaddrinfo(store["public_hostname"], 443)
+                dns_status = {"status": "SUCCESS"}
+            except Exception as exc:
+                dns_status = {"status": "FAILED", "error": normalize_public_endpoint_text(str(exc), 400)}
+            result["public_dns_check"] = dns_status
+            result["public_service_check"] = public_endpoint_check_url(f"https://{store.get('public_hostname')}/health")
+    return result
+
+
+def start_cloudflared_connector() -> dict:
+    global CLOUDFLARED_PROCESS, CLOUDFLARED_PROCESS_STARTED_AT
+    with CLOUDFLARED_LOCK:
+        store = public_endpoint_store()
+        token = decrypt_secret(store.get("tunnel_token_encrypted"))
+        if not token:
+            raise HTTPException(status_code=400, detail="Save the Cloudflare tunnel connector command or token first.")
+        binary = cloudflared_binary_path()
+        if not binary:
+            raise HTTPException(status_code=400, detail="cloudflared is not installed in the API container. Rebuild the API image after this update.")
+        if cloudflared_process_running():
+            return public_endpoint_status()
+        public_endpoint_write_token_file(token)
+        PUBLIC_ENDPOINT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            PUBLIC_ENDPOINT_LOG_FILE.touch(exist_ok=True)
+        except Exception:
+            pass
+        cmd = [
+            binary,
+            "tunnel",
+            "--loglevel",
+            "info",
+            "--logfile",
+            str(PUBLIC_ENDPOINT_LOG_FILE),
+            "--no-autoupdate",
+            "run",
+            "--token-file",
+            str(PUBLIC_ENDPOINT_TOKEN_FILE),
+        ]
+        CLOUDFLARED_PROCESS = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        CLOUDFLARED_PROCESS_STARTED_AT = datetime.now(timezone.utc).isoformat()
+        store["enabled"] = True
+        store["last_started_at"] = CLOUDFLARED_PROCESS_STARTED_AT
+        store["last_action_status"] = "STARTED"
+        store["last_action_error"] = ""
+        save_public_endpoint_store(store)
+        time.sleep(0.5)
+        return public_endpoint_status()
+
+
+def stop_cloudflared_connector() -> dict:
+    global CLOUDFLARED_PROCESS, CLOUDFLARED_PROCESS_STARTED_AT
+    with CLOUDFLARED_LOCK:
+        if cloudflared_process_running():
+            CLOUDFLARED_PROCESS.terminate()
+            try:
+                CLOUDFLARED_PROCESS.wait(timeout=8)
+            except subprocess.TimeoutExpired:
+                CLOUDFLARED_PROCESS.kill()
+                CLOUDFLARED_PROCESS.wait(timeout=3)
+        CLOUDFLARED_PROCESS = None
+        CLOUDFLARED_PROCESS_STARTED_AT = None
+        store = public_endpoint_store()
+        store["enabled"] = False
+        store["last_stopped_at"] = datetime.now(timezone.utc).isoformat()
+        store["last_action_status"] = "STOPPED"
+        store["last_action_error"] = ""
+        save_public_endpoint_store(store)
+        return public_endpoint_status()
+
+
+def restart_cloudflared_connector() -> dict:
+    stop_cloudflared_connector()
+    return start_cloudflared_connector()
+
+
+@app.on_event("startup")
+def start_saved_public_endpoint_connector():
+    try:
+        start_customer_bag_auto_activation_worker()
+    except Exception:
+        pass
+    try:
+        store = public_endpoint_store()
+        if store.get("enabled") and decrypt_secret(store.get("tunnel_token_encrypted")):
+            start_cloudflared_connector()
+    except Exception:
+        # Startup must not block the application; the settings page will show the exact failure.
+        pass
+
+
+PAYMENT_PROVIDER_OPTIONS = ("PAYMONGO",)
+PAYMENT_MODE_OPTIONS = ("TEST", "LIVE")
+PAYMENT_METHOD_OPTIONS = {
+    "gcash": "GCash",
+    "qrph": "QR Ph",
+    "card": "Card",
+    "paymaya": "Maya / PayMaya",
+    "grab_pay": "GrabPay",
+}
+PAYMENT_GATEWAY_DEFAULT_SETTINGS = {
+    "enabled": False,
+    "provider": "PAYMONGO",
+    "mode": "TEST",
+    "api_base_url": "https://api.paymongo.com/v1",
+    "currency": "PHP",
+    "enabled_payment_methods": ["gcash"],
+    "success_url": "http://192.168.50.70/portal?payment=success",
+    "cancel_url": "http://192.168.50.70/portal?payment=cancelled",
+    "notes": "",
+    "credentials": {
+        "TEST": {},
+        "LIVE": {},
+    },
+}
+
+
+def normalize_payment_text(value, max_length: int = 500) -> str:
+    text = "" if value is None else str(value)
+    text = text.replace("\x00", "")
+    text = re.sub(r"[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    return text.strip()[:max_length]
+
+
+def normalize_payment_base_url(value) -> str:
+    url = normalize_payment_text(value or PAYMENT_GATEWAY_DEFAULT_SETTINGS["api_base_url"], 300).rstrip("/")
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Payment API base URL must be a valid https URL")
+    return url
+
+
+def normalize_payment_mode(value) -> str:
+    mode = normalize_payment_text(value or "TEST", 20).upper()
+    if mode not in PAYMENT_MODE_OPTIONS:
+        raise HTTPException(status_code=400, detail="Payment mode must be TEST or LIVE")
+    return mode
+
+
+def normalize_payment_provider(value) -> str:
+    provider = normalize_payment_text(value or "PAYMONGO", 40).upper()
+    if provider not in PAYMENT_PROVIDER_OPTIONS:
+        raise HTTPException(status_code=400, detail="Unsupported payment provider")
+    return provider
+
+
+def normalize_payment_currency(value) -> str:
+    currency = normalize_payment_text(value or "PHP", 10).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise HTTPException(status_code=400, detail="Currency must be a 3-letter code such as PHP")
+    return currency
+
+
+def normalize_payment_methods(value) -> list[str]:
+    raw_items = value if isinstance(value, list) else []
+    methods = []
+    seen = set()
+    for item in raw_items:
+        method = normalize_payment_text(item, 40).lower()
+        if method not in PAYMENT_METHOD_OPTIONS or method in seen:
+            continue
+        seen.add(method)
+        methods.append(method)
+    return methods or ["gcash"]
+
+
+def normalize_payment_url(value, fallback: str) -> str:
+    url = normalize_payment_text(value or fallback, 500)
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="Payment redirect URL must be a valid http or https URL")
+    return url
+
+
+def normalize_upload_image_url(value: Optional[str]) -> Optional[str]:
+    text = normalize_payment_text(value, 500)
+    if not text:
+        return None
+    if text.startswith("/api/uploads/"):
+        return text
+    parsed = urlparse(text)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return text
+    raise HTTPException(status_code=400, detail="Image URL must be an uploaded /api/uploads path or a valid http/https URL")
+
+
+def mask_payment_secret(value: Optional[str]) -> Optional[str]:
+    text = normalize_payment_text(value)
+    if not text:
+        return None
+    if len(text) <= 12:
+        return f"{text[:4]}..."
+    return f"{text[:8]}...{text[-4:]}"
+
+
+def normalize_payment_credentials(store: dict) -> dict:
+    raw_credentials = store.get("credentials") if isinstance(store.get("credentials"), dict) else {}
+    credentials = {}
+    for mode in PAYMENT_MODE_OPTIONS:
+        raw_mode = raw_credentials.get(mode) if isinstance(raw_credentials.get(mode), dict) else {}
+        credentials[mode] = {
+            "public_key": normalize_payment_text(raw_mode.get("public_key"), 500),
+            "secret_key_encrypted": normalize_payment_text(raw_mode.get("secret_key_encrypted"), 2000),
+            "webhook_secret_encrypted": normalize_payment_text(raw_mode.get("webhook_secret_encrypted"), 2000),
+        }
+    legacy_mode = normalize_payment_mode(store.get("mode"))
+    if store.get("public_key") and not credentials[legacy_mode].get("public_key"):
+        credentials[legacy_mode]["public_key"] = normalize_payment_text(store.get("public_key"), 500)
+    if store.get("secret_key_encrypted") and not credentials[legacy_mode].get("secret_key_encrypted"):
+        credentials[legacy_mode]["secret_key_encrypted"] = normalize_payment_text(store.get("secret_key_encrypted"), 2000)
+    if store.get("webhook_secret_encrypted") and not credentials[legacy_mode].get("webhook_secret_encrypted"):
+        credentials[legacy_mode]["webhook_secret_encrypted"] = normalize_payment_text(store.get("webhook_secret_encrypted"), 2000)
+    return credentials
+
+
+def public_payment_credential_payload(credentials: dict, mode: str) -> dict:
+    mode_credentials = credentials.get(mode, {})
+    public_key = normalize_payment_text(mode_credentials.get("public_key"), 500)
+    secret_key = decrypt_secret(mode_credentials.get("secret_key_encrypted"))
+    webhook_secret = decrypt_secret(mode_credentials.get("webhook_secret_encrypted"))
+    return {
+        "public_key": public_key,
+        "public_key_configured": bool(public_key),
+        "public_key_hint": mask_payment_secret(public_key),
+        "secret_key_configured": bool(secret_key),
+        "secret_key_hint": mask_payment_secret(secret_key),
+        "webhook_secret_configured": bool(webhook_secret),
+        "webhook_secret_hint": mask_payment_secret(webhook_secret),
+    }
+
+
+def payment_gateway_store() -> dict:
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'payment_gateway'")
+    value = row["value"] if row and isinstance(row["value"], dict) else {}
+    store = {**PAYMENT_GATEWAY_DEFAULT_SETTINGS, **value}
+    store["enabled"] = bool(store.get("enabled"))
+    store["provider"] = normalize_payment_provider(store.get("provider"))
+    store["mode"] = normalize_payment_mode(store.get("mode"))
+    store["api_base_url"] = normalize_payment_base_url(store.get("api_base_url"))
+    store["currency"] = normalize_payment_currency(store.get("currency"))
+    store["enabled_payment_methods"] = normalize_payment_methods(store.get("enabled_payment_methods"))
+    store["success_url"] = normalize_payment_url(store.get("success_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["success_url"])
+    store["cancel_url"] = normalize_payment_url(store.get("cancel_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["cancel_url"])
+    store["notes"] = normalize_payment_text(store.get("notes"), 1000)
+    store["credentials"] = normalize_payment_credentials(store)
+    return store
+
+
+def save_payment_gateway_store(store: dict):
+    credentials = normalize_payment_credentials(store)
+    clean = {
+        "enabled": bool(store.get("enabled")),
+        "provider": normalize_payment_provider(store.get("provider")),
+        "mode": normalize_payment_mode(store.get("mode")),
+        "api_base_url": normalize_payment_base_url(store.get("api_base_url")),
+        "credentials": credentials,
+        "currency": normalize_payment_currency(store.get("currency")),
+        "enabled_payment_methods": normalize_payment_methods(store.get("enabled_payment_methods")),
+        "success_url": normalize_payment_url(store.get("success_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["success_url"]),
+        "cancel_url": normalize_payment_url(store.get("cancel_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["cancel_url"]),
+        "notes": normalize_payment_text(store.get("notes"), 1000),
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES ('payment_gateway', %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (Json(clean),),
+            )
+
+
+def public_payment_gateway_settings() -> dict:
+    store = payment_gateway_store()
+    credentials = store.get("credentials") or {}
+    credential_payloads = {mode: public_payment_credential_payload(credentials, mode) for mode in PAYMENT_MODE_OPTIONS}
+    active_mode = normalize_payment_mode(store.get("mode"))
+    active_credentials = credential_payloads[active_mode]
+    enabled_methods = store.get("enabled_payment_methods") or []
+    ready_for_gcash = bool(active_credentials["public_key_configured"] and active_credentials["secret_key_configured"] and "gcash" in enabled_methods)
+    ready_for_webhooks = bool(active_credentials["webhook_secret_configured"])
+    return {
+        "enabled": bool(store.get("enabled")),
+        "provider": store.get("provider"),
+        "mode": store.get("mode"),
+        "api_base_url": store.get("api_base_url"),
+        "credentials": credential_payloads,
+        "public_key": active_credentials["public_key"],
+        "public_key_configured": active_credentials["public_key_configured"],
+        "public_key_hint": active_credentials["public_key_hint"],
+        "secret_key_configured": active_credentials["secret_key_configured"],
+        "secret_key_hint": active_credentials["secret_key_hint"],
+        "webhook_secret_configured": active_credentials["webhook_secret_configured"],
+        "webhook_secret_hint": active_credentials["webhook_secret_hint"],
+        "currency": store.get("currency"),
+        "enabled_payment_methods": enabled_methods,
+        "payment_method_options": [{"id": key, "label": label} for key, label in PAYMENT_METHOD_OPTIONS.items()],
+        "success_url": store.get("success_url"),
+        "cancel_url": store.get("cancel_url"),
+        "notes": store.get("notes"),
+        "phase": "PHASE_2_CHECKOUT_FOUNDATION",
+        "ready_for_gcash": ready_for_gcash,
+        "ready_for_webhooks": ready_for_webhooks,
+        "webhook_endpoint_path": "/api/payments/paymongo/webhook",
+        "requirements": {
+            "public_key": active_credentials["public_key_configured"],
+            "secret_key": active_credentials["secret_key_configured"],
+            "webhook_secret": active_credentials["webhook_secret_configured"],
+            "gcash_enabled": "gcash" in enabled_methods,
+            "payments_enabled": bool(store.get("enabled")),
+        },
+        "next_phase": "Verify a PayMongo webhook in test mode before enabling live customer checkout.",
+    }
+
+
+PAYMONGO_WEBHOOK_TOLERANCE_SECONDS = 30 * 60
+
+
+def payment_gateway_active_credentials(store: Optional[dict] = None, mode: Optional[str] = None) -> dict:
+    store = store or payment_gateway_store()
+    active_mode = normalize_payment_mode(mode or store.get("mode"))
+    mode_credentials = (store.get("credentials") or {}).get(active_mode, {})
+    return {
+        "mode": active_mode,
+        "public_key": normalize_payment_text(mode_credentials.get("public_key"), 500),
+        "secret_key": decrypt_secret(mode_credentials.get("secret_key_encrypted")),
+        "webhook_secret": decrypt_secret(mode_credentials.get("webhook_secret_encrypted")),
+    }
+
+
+def public_payment_gateway_portal_status() -> dict:
+    store = payment_gateway_store()
+    active = payment_gateway_active_credentials(store)
+    enabled_methods = store.get("enabled_payment_methods") or []
+    checkout_ready = bool(
+        store.get("enabled")
+        and active.get("public_key")
+        and active.get("secret_key")
+        and "gcash" in enabled_methods
+    )
+    return {
+        "enabled": bool(store.get("enabled")),
+        "provider": store.get("provider"),
+        "mode": active["mode"],
+        "currency": store.get("currency"),
+        "enabled_payment_methods": enabled_methods,
+        "ready_for_checkout": checkout_ready,
+        "ready_for_webhooks": bool(active.get("webhook_secret")),
+        "public_key_configured": bool(active.get("public_key")),
+        "secret_key_configured": bool(active.get("secret_key")),
+        "webhook_secret_configured": bool(active.get("webhook_secret")),
+    }
+
+
+def payment_amount_centavos(price) -> int:
+    try:
+        amount = Decimal(str(price or "0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid payment amount")
+    centavos = int((amount * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    if centavos <= 0:
+        raise HTTPException(status_code=400, detail="Product price must be greater than zero for online checkout")
+    return centavos
+
+
+def append_url_params(url: str, params: dict) -> str:
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    for key, value in params.items():
+        if value is not None:
+            query[key] = str(value)
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def generate_payment_order_public_id() -> str:
+    return f"PMO-{secrets.token_urlsafe(12).replace('_', '').replace('-', '').upper()[:16]}"
+
+
+def paymongo_api_url(store: dict, path: str) -> str:
+    base_url = normalize_payment_base_url(store.get("api_base_url")).rstrip("/")
+    return f"{base_url}/{path.lstrip('/')}"
+
+
+def paymongo_request(store: dict, secret_key: str, method: str, path: str, payload: Optional[dict] = None) -> dict:
+    if not secret_key:
+        raise HTTPException(status_code=400, detail="PayMongo secret key is not configured for the active mode")
+    try:
+        response = requests.request(
+            method,
+            paymongo_api_url(store, path),
+            auth=(secret_key, ""),
+            headers={"accept": "application/json", "content-type": "application/json"},
+            json=payload,
+            timeout=25,
+        )
+        data = response.json() if response.content else {}
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"PayMongo request failed: {exc}")
+    except ValueError:
+        data = {"raw_response": response.text}
+    if response.status_code >= 400:
+        message = "PayMongo rejected the checkout request"
+        errors = data.get("errors") if isinstance(data, dict) else None
+        if isinstance(errors, list) and errors:
+            first = errors[0] if isinstance(errors[0], dict) else {}
+            message = first.get("detail") or first.get("message") or message
+        raise HTTPException(status_code=502, detail=message)
+    return data if isinstance(data, dict) else {}
+
+
+def paymongo_checkout_phone(value: Optional[str]) -> Optional[str]:
+    original = normalize_payment_text(value, 32)
+    digits = re.sub(r"\D", "", original)
+    if not digits:
+        return None
+    if digits.startswith("63") and len(digits) == 12:
+        return f"+{digits}"
+    if digits.startswith("9") and len(digits) == 10:
+        return f"+63{digits}"
+    if digits.startswith("09") and len(digits) == 11:
+        return f"+63{digits[1:]}"
+    if original.startswith("+") and 8 <= len(digits) <= 15:
+        return f"+{digits}"
+    return None
+
+
+def paymongo_checkout_billing(order: dict) -> dict:
+    billing = {}
+    name = normalize_payment_text(order.get("customer_name"), 120)
+    email = normalize_payment_text(order.get("customer_email"), 255)
+    phone = paymongo_checkout_phone(order.get("customer_contact_number"))
+    if name:
+        billing["name"] = name
+    if email:
+        billing["email"] = email
+    if phone:
+        billing["phone"] = phone
+    return billing
+
+
+def paymongo_create_checkout_session(store: dict, secret_key: str, order: dict, session: dict, payment_method: str) -> dict:
+    order_device_scope = normalize_product_device_scope(order.get("device_scope"))
+    order_allowed_devices = normalize_product_allowed_devices(order_device_scope, int(order.get("allowed_devices") or 1))
+    purchase_quantity = max(1, int(order.get("purchase_quantity") or 1))
+    discount_amount = int(order.get("discount_amount_centavos") or 0)
+    quantity_label = f" x{purchase_quantity}" if purchase_quantity > 1 else ""
+    discount_label = f" Discount applied: PHP {discount_amount / 100:.2f}." if discount_amount > 0 else ""
+    default_product_description = (
+        f"{order['duration_seconds']} seconds WiFi access for up to {order_allowed_devices} devices.{discount_label}"
+        if order_device_scope == "MULTI_DEVICE"
+        else f"{order['duration_seconds']} seconds WiFi access for one device.{discount_label}"
+    )
+    success_url = append_url_params(store.get("success_url"), {
+        "payment": "success",
+        "payment_order_id": order["public_order_id"],
+        "handoff": create_portal_handoff_token(session.get("public_session_id"), ttl_seconds=1800),
+    })
+    cancel_url = append_url_params(store.get("cancel_url"), {
+        "payment": "cancelled",
+        "payment_order_id": order["public_order_id"],
+    })
+    attributes = {
+        "cancel_url": cancel_url,
+        "success_url": success_url,
+        "description": f"{order['product_name']}{quantity_label} WiFi access",
+        "line_items": [
+            {
+                "currency": order["currency"],
+                "amount": int(order["amount_centavos"]),
+                "name": f"{order['product_name']}{quantity_label}",
+                "description": order.get("product_description") or default_product_description,
+                "quantity": 1,
+            }
+        ],
+        "payment_method_types": [payment_method],
+        "reference_number": order["public_order_id"],
+        "send_email_receipt": False,
+        "show_description": True,
+        "show_line_items": True,
+        "metadata": {
+            "payment_order_id": order["public_order_id"],
+            "portal_session_id": session["public_session_id"],
+            "product_item_id": str(order["product_item_id"]) if order.get("product_item_id") else "",
+            "product_category_id": str(order["product_category_id"]) if order.get("product_category_id") else "",
+            "product_category_name": order.get("product_category_name") or "",
+            "product_category_access_scope": order.get("product_category_access_scope") or "ALL_LOCATIONS",
+            "product_category_barangay": order.get("product_category_barangay") or "",
+            "device_scope": order_device_scope,
+            "customer_name": order.get("customer_name") or "",
+            "customer_email": order.get("customer_email") or "",
+            "customer_contact_number": order.get("customer_contact_number") or "",
+            "allowed_devices": str(order_allowed_devices),
+            "purchase_quantity": str(purchase_quantity),
+            "base_amount_centavos": str(order.get("base_amount_centavos") or order.get("amount_centavos") or ""),
+            "discount_amount_centavos": str(discount_amount),
+            "discount_type": order.get("discount_type") or "",
+            "discount_value": str(order.get("discount_value") or ""),
+        },
+    }
+    billing = paymongo_checkout_billing(order)
+    if billing:
+        attributes["billing"] = billing
+    payload = {
+        "data": {
+            "attributes": attributes
+        }
+    }
+    return paymongo_request(store, secret_key, "POST", "/checkout_sessions", payload)
+
+
+def parse_paymongo_signature(header: str) -> dict:
+    parts = {}
+    for raw_part in (header or "").split(","):
+        if "=" not in raw_part:
+            continue
+        key, value = raw_part.split("=", 1)
+        parts[key.strip()] = value.strip()
+    return parts
+
+
+def verify_paymongo_webhook_signature(raw_body: bytes, header: str) -> dict:
+    parts = parse_paymongo_signature(header)
+    timestamp = parts.get("t")
+    if not timestamp:
+        raise HTTPException(status_code=400, detail="Missing PayMongo webhook timestamp")
+    try:
+        sent_at = int(timestamp)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid PayMongo webhook timestamp")
+    if abs(int(time.time()) - sent_at) > PAYMONGO_WEBHOOK_TOLERANCE_SECONDS:
+        raise HTTPException(status_code=400, detail="PayMongo webhook timestamp is outside the accepted window")
+    store = payment_gateway_store()
+    signed_payload = timestamp.encode("utf-8") + b"." + raw_body
+    for mode, signature_key in (("TEST", "te"), ("LIVE", "li")):
+        provided = parts.get(signature_key)
+        credentials = payment_gateway_active_credentials(store, mode)
+        secret = credentials.get("webhook_secret")
+        if not provided or not secret:
+            continue
+        expected = hmac.new(secret.encode("utf-8"), signed_payload, sha256).hexdigest()
+        if hmac.compare_digest(expected, provided):
+            return {"mode": mode, "timestamp": sent_at}
+    raise HTTPException(status_code=400, detail="Invalid PayMongo webhook signature or missing webhook secret")
+
+
+def nested_value(payload: dict, path: list[str]):
+    current = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def recursive_find_value(payload, keys: set[str]):
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in keys and value not in (None, ""):
+                return value
+        for value in payload.values():
+            found = recursive_find_value(value, keys)
+            if found not in (None, ""):
+                return found
+    if isinstance(payload, list):
+        for value in payload:
+            found = recursive_find_value(value, keys)
+            if found not in (None, ""):
+                return found
+    return None
+
+
+def paymongo_event_type(payload: dict) -> str:
+    return (
+        nested_value(payload, ["data", "attributes", "type"])
+        or nested_value(payload, ["data", "type"])
+        or ""
+    )
+
+
+def paymongo_event_id(payload: dict) -> str:
+    return normalize_payment_text(nested_value(payload, ["data", "id"]) or f"evt_local_{secrets.token_urlsafe(18)}", 120)
+
+
+def paymongo_payment_reference(payload: dict) -> Optional[str]:
+    def find_order_id(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {"payment_order_id", "public_order_id", "reference_number"}:
+                    text = normalize_payment_text(item, 120)
+                    if text.startswith("PMO-"):
+                        return text
+            for item in value.values():
+                found = find_order_id(item)
+                if found:
+                    return found
+        if isinstance(value, list):
+            for item in value:
+                found = find_order_id(item)
+                if found:
+                    return found
+        return None
+
+    return find_order_id(payload)
+
+
+def paymongo_provider_payment_id(payload: dict) -> Optional[str]:
+    value = nested_value(payload, ["data", "attributes", "data", "id"]) or recursive_find_value(payload, {"payment_id", "paymentId"})
+    return normalize_payment_text(value, 120) or None
+
+
+def paymongo_payload_amount(payload: dict) -> Optional[int]:
+    value = (
+        nested_value(payload, ["data", "attributes", "data", "attributes", "amount"])
+        or nested_value(payload, ["data", "attributes", "amount"])
+        or recursive_find_value(payload, {"amount", "paid_amount"})
+    )
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def paymongo_checkout_attributes(payload: dict) -> dict:
+    data = payload.get("data") if isinstance(payload, dict) else {}
+    attributes = data.get("attributes") if isinstance(data, dict) else {}
+    return attributes if isinstance(attributes, dict) else {}
+
+
+def paymongo_checkout_payments(payload: dict) -> list[dict]:
+    attributes = paymongo_checkout_attributes(payload)
+    payments = attributes.get("payments")
+    if not isinstance(payments, list):
+        payments = []
+    intent = attributes.get("payment_intent") if isinstance(attributes.get("payment_intent"), dict) else {}
+    intent_attributes = intent.get("attributes") if isinstance(intent.get("attributes"), dict) else {}
+    intent_payments = intent_attributes.get("payments")
+    if isinstance(intent_payments, list):
+        payments = [*payments, *intent_payments]
+
+    seen = set()
+    unique_payments = []
+    for payment in payments:
+        if not isinstance(payment, dict):
+            continue
+        payment_id = payment.get("id") or json.dumps(sanitize_summary(payment), sort_keys=True)
+        if payment_id in seen:
+            continue
+        seen.add(payment_id)
+        unique_payments.append(payment)
+    return unique_payments
+
+
+def paymongo_paid_payment_from_checkout(payload: dict) -> Optional[dict]:
+    for payment in paymongo_checkout_payments(payload):
+        attributes = payment.get("attributes") if isinstance(payment.get("attributes"), dict) else {}
+        status = normalize_payment_text(attributes.get("status"), 40).lower()
+        if status == "paid" or attributes.get("paid_at"):
+            return payment
+    return None
+
+
+def paymongo_checkout_is_paid(payload: dict) -> bool:
+    attributes = paymongo_checkout_attributes(payload)
+    if attributes.get("paid_at") or paymongo_paid_payment_from_checkout(payload):
+        return True
+    intent = attributes.get("payment_intent") if isinstance(attributes.get("payment_intent"), dict) else {}
+    intent_attributes = intent.get("attributes") if isinstance(intent.get("attributes"), dict) else {}
+    return normalize_payment_text(intent_attributes.get("status"), 40).lower() in {"succeeded", "paid"}
+
+
+def paymongo_checkout_paid_amount(payload: dict) -> Optional[int]:
+    payment = paymongo_paid_payment_from_checkout(payload)
+    payment_attributes = payment.get("attributes") if isinstance(payment, dict) and isinstance(payment.get("attributes"), dict) else {}
+    value = payment_attributes.get("amount")
+    if value is None:
+        attributes = paymongo_checkout_attributes(payload)
+        intent = attributes.get("payment_intent") if isinstance(attributes.get("payment_intent"), dict) else {}
+        intent_attributes = intent.get("attributes") if isinstance(intent.get("attributes"), dict) else {}
+        value = intent_attributes.get("amount")
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def paymongo_checkout_payment_id(payload: dict) -> Optional[str]:
+    payment = paymongo_paid_payment_from_checkout(payload)
+    if isinstance(payment, dict):
+        return normalize_payment_text(payment.get("id"), 120) or None
+    return None
+
+
+def paymongo_checkout_paid_at(payload: dict) -> Optional[datetime]:
+    attributes = paymongo_checkout_attributes(payload)
+    paid_at = attributes.get("paid_at")
+    payment = paymongo_paid_payment_from_checkout(payload)
+    payment_attributes = payment.get("attributes") if isinstance(payment, dict) and isinstance(payment.get("attributes"), dict) else {}
+    paid_at = payment_attributes.get("paid_at") or paid_at
+    try:
+        return datetime.fromtimestamp(int(paid_at), timezone.utc) if paid_at is not None else None
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def sync_paymongo_checkout_status(cur, order: dict, request: Request) -> dict:
+    if not order or order.get("provider") != "PAYMONGO" or not order.get("checkout_session_id"):
+        return order
+    if order.get("status") == "PAID" and order.get("fulfillment_status") == "FULFILLED":
+        return order
+
+    store = payment_gateway_store()
+    credentials = payment_gateway_active_credentials(store, order.get("provider_mode") or store.get("mode"))
+    checkout = paymongo_request(store, credentials.get("secret_key"), "GET", f"/checkout_sessions/{order['checkout_session_id']}")
+    paid = paymongo_checkout_is_paid(checkout)
+    provider_payment_id = paymongo_checkout_payment_id(checkout)
+
+    if not paid:
+        cur.execute(
+            """
+            UPDATE payment_orders
+            SET provider_response_json = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (Json(sanitize_summary(checkout)), order["id"]),
+        )
+        return cur.fetchone()
+
+    paid_amount = paymongo_checkout_paid_amount(checkout)
+    if paid_amount is None:
+        raise RuntimeError("PayMongo checkout is paid, but the paid amount could not be verified.")
+    if int(paid_amount) != int(order["amount_centavos"]):
+        raise RuntimeError(f"Paid amount mismatch. Expected {order['amount_centavos']} centavos, got {paid_amount}.")
+
+    paid_at = paymongo_checkout_paid_at(checkout)
+    sync_event_id = f"checkout_sync:{order['checkout_session_id']}:{provider_payment_id or int((paid_at or datetime.now(timezone.utc)).timestamp())}"
+    cur.execute(
+        """
+        UPDATE payment_orders
+        SET status = 'PAID',
+            provider_payment_id = COALESCE(%s, provider_payment_id),
+            provider_event_id = COALESCE(provider_event_id, %s),
+            provider_response_json = %s,
+            paid_at = COALESCE(paid_at, %s, now()),
+            last_error = NULL,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (provider_payment_id, sync_event_id, Json(sanitize_summary(checkout)), paid_at, order["id"]),
+    )
+    order = cur.fetchone()
+    if order.get("portal_session_id"):
+        create_portal_event(
+            cur,
+            order["portal_session_id"],
+            "PAYMENT_PAID",
+            request,
+            "PayMongo payment marked paid by checkout status check",
+            raw_context={"payment_order_id": order["public_order_id"], "source": "checkout_status_reconciliation", "payment_id": provider_payment_id},
+        )
+
+    try:
+        fulfillment = fulfill_paid_payment_order(cur, order, request)
+        return fulfillment.get("order") or order
+    except Exception as exc:
+        message = str(exc)
+        cur.execute(
+            """
+            UPDATE payment_orders
+            SET fulfillment_status = 'FAILED',
+                last_error = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (message, order["id"]),
+        )
+        order = cur.fetchone()
+        if order.get("portal_session_id"):
+            create_portal_event(cur, order["portal_session_id"], "PAYMENT_FULFILLMENT_FAILED", request, message, raw_context={"payment_order_id": order["public_order_id"], "source": "checkout_status_reconciliation"})
+        return order
+
+
+def payment_order_status_payload(order: Optional[dict]) -> dict:
+    if not order:
+        return {"found": False, "status": "NOT_FOUND"}
+    bag_item = order.get("_bag_item")
+    return {
+        "found": True,
+        "payment_order_id": order["public_order_id"],
+        "status": order["status"],
+        "fulfillment_status": order["fulfillment_status"],
+        "provider": order["provider"],
+        "mode": order["provider_mode"],
+        "payment_method": order["payment_method"],
+        "amount_centavos": order["amount_centavos"],
+        "currency": order["currency"],
+        "product_name": order["product_name"],
+        "product_category_name": order.get("product_category_name"),
+        "product_category_access_scope": order.get("product_category_access_scope") or "ALL_LOCATIONS",
+        "product_category_barangay": order.get("product_category_barangay"),
+        "duration_seconds": order["duration_seconds"],
+        "device_scope": normalize_product_device_scope(order.get("device_scope")),
+        "allowed_devices": int(order.get("allowed_devices") or 1),
+        "customer_name": order.get("customer_name"),
+        "customer_email": order.get("customer_email"),
+        "customer_contact_number": order.get("customer_contact_number"),
+        "checkout_url": order.get("checkout_url"),
+        "last_error": order.get("last_error"),
+        "portal_session_id": order.get("_portal_session_public_id"),
+        "portal_handoff_url": order.get("_portal_handoff_url"),
+        "device_token": order.get("_device_token"),
+        "paid_at": order.get("paid_at"),
+        "fulfilled_at": order.get("fulfilled_at"),
+        "voucher_id": str(order["voucher_id"]) if order.get("voucher_id") else None,
+        "bag_item": bag_item_public(bag_item) if bag_item else None,
+        "bag_item_status": bag_item.get("status") if bag_item else None,
+        "created_at": order.get("created_at"),
+        "updated_at": order.get("updated_at"),
+    }
+
+
+def a2p_join_url(base_url: str, path: str) -> str:
+    return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+
+def normalize_a2p_destination(value: str) -> str:
+    original = normalize_a2p_text(value, 32)
+    digits = re.sub(r"\D", "", original)
+    if digits.startswith("09") and len(digits) == 11:
+        digits = f"63{digits[1:]}"
+    if not re.fullmatch(r"\d{8,15}", digits or ""):
+        raise HTTPException(status_code=400, detail="Destination must be an international-format mobile number, for example 639171234567")
+    return digits
+
+
+def mask_a2p_destination(destination: str) -> str:
+    digits = normalize_a2p_text(destination, 32)
+    if len(digits) <= 6:
+        return "***"
+    return f"{digits[:4]}...{digits[-3:]}"
+
+
+def a2p_auth_parts(store: dict):
+    headers = {"User-Agent": "3JCentralPisowifi/0.1 a2p-messaging"}
+    auth = None
+    extra_params = {}
+    api_key = decrypt_secret(store.get("api_key_encrypted"))
+    username = normalize_a2p_text(store.get("username"), 200)
+    password = decrypt_secret(store.get("password_encrypted"))
+    auth_method = store.get("auth_method")
+    if auth_method == "API_KEY_HEADERS":
+        if not store.get("api_id") or not api_key:
+            raise HTTPException(status_code=400, detail="Save API ID and API key first")
+        headers["X-MEMS-API-ID"] = store["api_id"]
+        headers["X-MEMS-API-KEY"] = api_key
+    elif auth_method == "BASIC_AUTH":
+        if not username or not password:
+            raise HTTPException(status_code=400, detail="Save username and password first")
+        auth = (username, password)
+    else:
+        if not username or not password:
+            raise HTTPException(status_code=400, detail="Save username and password first")
+        extra_params["username"] = username
+        extra_params["password"] = password
+    return headers, auth, extra_params
+
+
+def send_a2p_sms_message(destination: str, message_text: str, source: Optional[str] = None) -> dict:
+    store = a2p_messaging_store()
+    if not store.get("enabled"):
+        raise HTTPException(status_code=400, detail="A2P Messaging is disabled in System Settings.")
+    clean_message = normalize_a2p_text(message_text, 500)
+    if not clean_message:
+        raise HTTPException(status_code=400, detail="SMS message text is required.")
+    clean_destination = normalize_a2p_destination(destination)
+    clean_source = normalize_a2p_text(source if source is not None else store.get("default_source"), 80)
+    url = a2p_join_url(store["base_url"], store["send_path"])
+    headers, auth, extra_params = a2p_auth_parts(store)
+    headers["Accept"] = "text/plain"
+    form_data = {
+        **extra_params,
+        "destination": clean_destination,
+        "text": clean_message,
+        "registered": "1" if store.get("registered_delivery") else "0",
+    }
+    if clean_source:
+        form_data["source"] = clean_source
+    response = requests.post(url, headers=headers, auth=auth, data=form_data, timeout=30)
+    text = normalize_a2p_text(response.text, 1000)
+    if response.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"Smart SMS send failed: HTTP {response.status_code} {text[:240]}")
+    accepted = bool(re.match(r"^\s*0\s+\d{3}\s+OK", text, re.IGNORECASE))
+    if not accepted:
+        raise HTTPException(status_code=400, detail=f"Smart SMS was not accepted: {text[:300]}")
+    message_id_match = re.search(r"Message[- ]ID\s*:\s*([^\s]+)", text, re.IGNORECASE)
+    return {
+        "status": "SUCCESS",
+        "destination": mask_a2p_destination(clean_destination),
+        "message_id": message_id_match.group(1) if message_id_match else None,
+        "response_summary": text[:300],
+    }
+
+
+def parse_a2p_credit_available(text: str):
+    clean = normalize_a2p_text(text, 1000)
+    patterns = [
+        r"Available\s*[:=]?\s*([\d,]+(?:\.\d+)?)",
+        r"Credits?\s*[:=]?\s*([\d,]+(?:\.\d+)?)",
+        r"Balance\s*[:=]?\s*([\d,]+(?:\.\d+)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, clean, re.IGNORECASE)
+        if match:
+            value = match.group(1).replace(",", "")
+            return float(value) if "." in value else int(value)
+    if re.fullmatch(r"[\d,]+(?:\.\d+)?", clean):
+        value = clean.replace(",", "")
+        return float(value) if "." in value else int(value)
+    return None
 
 
 def extract_openai_response_text(response_data: dict) -> str:
@@ -3985,6 +5655,130 @@ def normalize_mac(mac: Optional[str]) -> Optional[str]:
     return ":".join(clean[i:i + 2] for i in range(0, 12, 2)).upper()
 
 
+def normalize_mac_if_valid(mac: Optional[str]) -> Optional[str]:
+    if not mac:
+        return None
+    clean = re.sub(r"[^A-Fa-f0-9]", "", str(mac))
+    if len(clean) != 12:
+        return None
+    return ":".join(clean[i:i + 2] for i in range(0, 12, 2)).upper()
+
+
+def infer_device_name_from_user_agent(user_agent: Optional[str]) -> Optional[str]:
+    ua = str(user_agent or "").strip()
+    if not ua:
+        return None
+    if "iPhone" in ua:
+        return "iPhone"
+    if "iPad" in ua:
+        return "iPad"
+    if "Android" in ua:
+        match = re.search(r"\(([^)]*Android[^)]*)\)", ua)
+        if match:
+            parts = [part.strip() for part in match.group(1).split(";")]
+            for part in parts:
+                if not part or part.lower() in {"linux", "android"} or part.lower().startswith("android "):
+                    continue
+                return re.sub(r"\s+Build/.*$", "", part).strip() or "Android device"
+        return "Android device"
+    if "Windows" in ua:
+        return "Windows device"
+    if "Macintosh" in ua or "Mac OS X" in ua:
+        return "Mac device"
+    return None
+
+
+GENERIC_DEVICE_NAMES = {
+    "",
+    "unknown",
+    "unknown device",
+    "android device",
+    "windows device",
+    "mac device",
+    "portal",
+}
+
+
+def omada_style_device_name(value: Optional[str]) -> Optional[str]:
+    text = sanitize_routeros_text(value, max_length=120).strip()
+    if not text:
+        return None
+    lowered = text.lower().strip()
+    if lowered in GENERIC_DEVICE_NAMES or lowered.startswith("portal_"):
+        return None
+    if normalize_mac_if_valid(text):
+        return None
+    try:
+        ip_address(text)
+        return None
+    except Exception:
+        pass
+    text = re.sub(r"[\s_]+", "-", text)
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+    return text or None
+
+
+def preferred_device_name(*candidates: Optional[str]) -> Optional[str]:
+    for candidate in candidates:
+        name = omada_style_device_name(candidate)
+        if name:
+            return name
+    return None
+
+
+_omada_client_name_cache_lock = threading.Lock()
+_omada_client_name_cache = {"expires_at": 0.0, "data": {}}
+
+
+def fetch_omada_client_name_map(force: bool = False) -> dict:
+    now = time.time()
+    with _omada_client_name_cache_lock:
+        if not force and _omada_client_name_cache["expires_at"] > now:
+            return dict(_omada_client_name_cache["data"])
+    names: dict[str, str] = {}
+    try:
+        site_rows = fetch_all(
+            """
+            SELECT DISTINCT omada_site_id AS site_id, site_name
+            FROM site_deployments
+            WHERE omada_site_id IS NOT NULL AND omada_site_id <> ''
+            UNION
+            SELECT DISTINCT omada_site_id AS site_id, site_name
+            FROM ap_deployments
+            WHERE omada_site_id IS NOT NULL AND omada_site_id <> '' AND deployment_status <> 'DELETED'
+            ORDER BY site_name
+            """
+        )
+        settings = ensure_captive_portal_settings()
+        _, selected_site_id, selected_site_name = omada_selected_site(settings)
+        if selected_site_id and not any(str(row.get("site_id") or "") == str(selected_site_id) for row in site_rows):
+            site_rows.insert(0, {"site_id": selected_site_id, "site_name": selected_site_name})
+        _, client = omada_api_client_from_settings()
+        for site in site_rows:
+            site_id = site.get("site_id")
+            if not site_id:
+                continue
+            result = client.get_clients_if_supported(site_id, site.get("site_name"))
+            for item in result.get("clients", []):
+                mac = normalize_mac_if_valid(item.get("client_mac"))
+                name = preferred_device_name(item.get("hostname"))
+                if mac and name:
+                    names[mac] = name
+    except Exception:
+        names = {}
+    with _omada_client_name_cache_lock:
+        _omada_client_name_cache["expires_at"] = time.time() + 20
+        _omada_client_name_cache["data"] = dict(names)
+    return names
+
+
+def host_ip(value) -> Optional[str]:
+    if not value:
+        return None
+    text = str(value)
+    return text.split("/")[0] if "/" in text else text
+
+
 def portal_device_token_hash(token: Optional[str]) -> Optional[str]:
     token_text = str(token or "").strip()
     if len(token_text) < 24:
@@ -3995,6 +5789,105 @@ def portal_device_token_hash(token: Optional[str]) -> Optional[str]:
 
 def new_portal_device_token() -> str:
     return secrets.token_urlsafe(36)
+
+
+def portal_secret_seed() -> str:
+    return os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET") or os.getenv("POSTGRES_PASSWORD") or "change-me"
+
+
+def portal_handoff_signature(payload: str) -> str:
+    return hmac.new(portal_secret_seed().encode(), payload.encode(), sha256).hexdigest()
+
+
+def create_portal_handoff_token(public_session_id: Optional[str], ttl_seconds: int = 900) -> Optional[str]:
+    if not public_session_id:
+        return None
+    payload = {
+        "sid": str(public_session_id),
+        "exp": int(time.time()) + int(ttl_seconds),
+    }
+    payload_text = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    signature = portal_handoff_signature(payload_text)
+    return f"{payload_text}.{signature}"
+
+
+def parse_portal_handoff_token(token: Optional[str]) -> Optional[str]:
+    token_text = str(token or "").strip()
+    if "." not in token_text or len(token_text) > 1000:
+        return None
+    payload_text, signature = token_text.rsplit(".", 1)
+    if not hmac.compare_digest(portal_handoff_signature(payload_text), signature):
+        return None
+    try:
+        padded = payload_text + ("=" * (-len(payload_text) % 4))
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+    except Exception:
+        return None
+    if int(payload.get("exp") or 0) < int(time.time()):
+        return None
+    sid = str(payload.get("sid") or "").strip()
+    return sid or None
+
+
+def portal_handoff_url(public_session_id: Optional[str]) -> Optional[str]:
+    token = create_portal_handoff_token(public_session_id)
+    if not token:
+        return None
+    base_url = current_captive_portal_url()
+    return append_url_params(base_url, {"handoff": token})
+
+
+def local_portal_url() -> str:
+    return os.getenv("PORTAL_LOCAL_URL", "http://192.168.50.70:8080/portal").strip() or "http://192.168.50.70:8080/portal"
+
+
+PORTAL_SESSION_COOKIE = "centralwifi_portal_session"
+PORTAL_DEVICE_TOKEN_COOKIE = "centralwifi_portal_device_token"
+PORTAL_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
+
+
+def set_portal_session_cookies(response: Response, public_session_id: Optional[str] = None, device_token: Optional[str] = None):
+    if public_session_id:
+        response.set_cookie(
+            PORTAL_SESSION_COOKIE,
+            public_session_id,
+            max_age=PORTAL_COOKIE_MAX_AGE_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+        )
+    if device_token:
+        response.set_cookie(
+            PORTAL_DEVICE_TOKEN_COOKIE,
+            device_token,
+            max_age=PORTAL_COOKIE_MAX_AGE_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="lax",
+        )
+
+
+def issue_portal_device_token_for_session(cur, session_id) -> Optional[str]:
+    if not session_id:
+        return None
+    cur.execute("SELECT device_token_hash FROM portal_sessions WHERE id = %s FOR UPDATE", (session_id,))
+    session = cur.fetchone()
+    if not session or session.get("device_token_hash"):
+        return None
+    token = new_portal_device_token()
+    token_hash = portal_device_token_hash(token)
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET device_token_hash = %s,
+            device_token_created_at = now(),
+            device_token_last_seen_at = now(),
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (token_hash, session_id),
+    )
+    return token
 
 
 def portal_mac_rebind_limit() -> int:
@@ -4023,6 +5916,62 @@ def portal_effective_mac_from_session(session: dict) -> Optional[str]:
 
 def portal_effective_mac_from_context(ctx: dict) -> Optional[str]:
     return normalize_mac(ctx.get("client_mac"))
+
+
+def portal_context_has_client_identity(ctx: dict) -> bool:
+    return bool(portal_effective_mac_from_context(ctx) or host_ip(ctx.get("client_ip")))
+
+
+def portal_session_matches_context(session: Optional[dict], ctx: dict) -> bool:
+    if not session:
+        return False
+    ctx_mac = portal_effective_mac_from_context(ctx)
+    session_mac = portal_effective_mac_from_session(session)
+    if ctx_mac and session_mac:
+        return ctx_mac == session_mac
+    if ctx_mac:
+        return True
+    ctx_ip = host_ip(ctx.get("client_ip"))
+    session_ip = host_ip(session.get("client_ip") or session.get("mikrotik_client_ip"))
+    if ctx_ip and session_ip:
+        return ctx_ip == session_ip
+    return True
+
+
+def portal_session_can_follow_device_token(session: Optional[dict], ctx: dict, request: Request) -> bool:
+    if portal_session_matches_context(session, ctx):
+        return True
+    request_user_agent = normalize_payment_text(request.headers.get("user-agent"), 500)
+    session_user_agent = normalize_payment_text((session or {}).get("user_agent"), 500)
+    if request_user_agent and session_user_agent and request_user_agent != session_user_agent:
+        return False
+    return True
+
+
+def portal_blocked_device(cur, client_mac: Optional[str] = None, client_ip: Optional[str] = None):
+    normalized_mac = normalize_mac_if_valid(client_mac)
+    ip_text = host_ip(client_ip)
+    if not normalized_mac and not ip_text:
+        return None
+    clauses = []
+    params = []
+    if normalized_mac:
+        clauses.append("normalized_mac = %s")
+        params.append(normalized_mac)
+    if ip_text:
+        clauses.append("client_ip = NULLIF(%s, '')::inet")
+        params.append(ip_text)
+    cur.execute(
+        f"""
+        SELECT *
+        FROM portal_blocked_devices
+        WHERE status = 'ACTIVE' AND ({' OR '.join(clauses)})
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        tuple(params),
+    )
+    return cur.fetchone()
 
 
 def raw_query_value(raw: dict, *names: str):
@@ -4119,6 +6068,71 @@ def find_site_deployment_by_ssid_name(ssid_name: Optional[str]) -> Optional[dict
     )
 
 
+def site_deployment_for_portal_context(session: Optional[dict] = None, payload: Optional[PortalSessionRequest] = None) -> Optional[dict]:
+    ctx = portal_context(payload) if payload else {}
+    session = session or {}
+    site_id = (
+        (session.get("omada_site_id") or "").strip()
+        or (ctx.get("site_id") or "").strip()
+        or None
+    )
+    site_name = (
+        (session.get("omada_site_name") or "").strip()
+        or (session.get("site") or "").strip()
+        or (ctx.get("site_name") or "").strip()
+        or (ctx.get("site") or "").strip()
+        or None
+    )
+    if site_name and looks_like_omada_site_id(site_name):
+        site_id = site_id or site_name
+        site_name = None
+    site_row = find_site_deployment_by_omada(site_id, site_name)
+    if site_row:
+        return site_row
+    ssid_name = (session.get("ssid") or ctx.get("ssid") or "").strip()
+    if ssid_name:
+        return find_site_deployment_by_ssid_name(ssid_name)
+    return None
+
+
+def portal_current_barangay(session: Optional[dict] = None, payload: Optional[PortalSessionRequest] = None) -> Optional[str]:
+    site_row = site_deployment_for_portal_context(session, payload)
+    return normalize_barangay_label((site_row or {}).get("barangay"))
+
+
+def category_access_allowed_for_site(access_scope: Optional[str], allowed_barangay: Optional[str], site_row: Optional[dict]) -> tuple[bool, Optional[str], Optional[str]]:
+    scope = normalize_product_access_scope(access_scope)
+    if scope != "BARANGAY_ONLY":
+        return True, None, None
+    required_barangay = normalize_barangay_label(allowed_barangay)
+    current_barangay = normalize_barangay_label((site_row or {}).get("barangay"))
+    if not required_barangay:
+        return False, "This product category is Barangay-limited but no Barangay was configured.", current_barangay
+    if not current_barangay:
+        return False, f"This product is only allowed in {required_barangay}, but the current Omada site has no Barangay set.", current_barangay
+    if barangay_key(required_barangay) != barangay_key(current_barangay):
+        return False, f"This product is only allowed in {required_barangay}. You are currently connected in {current_barangay}.", current_barangay
+    return True, None, current_barangay
+
+
+def product_category_access_allowed_for_session(product: dict, session: Optional[dict], payload: Optional[PortalSessionRequest]) -> tuple[bool, Optional[str], Optional[str]]:
+    site_row = site_deployment_for_portal_context(session, payload)
+    return category_access_allowed_for_site(
+        product.get("category_access_scope") or "ALL_LOCATIONS",
+        product.get("category_allowed_barangay"),
+        site_row,
+    )
+
+
+def voucher_access_allowed_for_session(voucher: dict, session: Optional[dict], payload: Optional[PortalSessionRequest]) -> tuple[bool, Optional[str], Optional[str]]:
+    site_row = site_deployment_for_portal_context(session, payload)
+    return category_access_allowed_for_site(
+        voucher.get("access_scope") or "ALL_LOCATIONS",
+        voucher.get("allowed_barangay"),
+        site_row,
+    )
+
+
 def portal_source(payload: PortalSessionRequest) -> str:
     ctx = portal_context(payload)
     if ctx["site"] or ctx["ap_mac"] or ctx["client_mac"] or ctx["auth_token"]:
@@ -4137,11 +6151,16 @@ def station_hotspot_server_name(station: Optional[dict]) -> Optional[str]:
 def station_portal_url(station: Optional[dict] = None) -> str:
     settings = ensure_captive_portal_settings()
     return (
-        (station or {}).get("portal_url")
+        settings.get("portal_url_production")
         or settings.get("portal_url_staging")
-        or settings.get("portal_url_production")
-        or "http://192.168.50.70:8080/portal"
+        or (station or {}).get("portal_url")
+        or "http://192.168.50.70/portal"
     )
+
+
+def current_captive_portal_url(row: Optional[dict] = None) -> str:
+    row = row or ensure_captive_portal_settings()
+    return row.get("portal_url_production") or row.get("portal_url_staging") or "http://192.168.50.70/portal"
 
 
 def station_capport_url(station: Optional[dict] = None) -> str:
@@ -4238,15 +6257,6 @@ def portal_session_has_current_gateway_access(session: Optional[dict]) -> bool:
 def find_current_gateway_session_for_context(cur, ctx: dict, request: Request) -> Optional[dict]:
     conditions = []
     params = []
-    candidate_ip = ctx.get("client_ip") or public_ip(request)
-    if candidate_ip:
-        try:
-            candidate_ip = str(ip_address(str(candidate_ip).strip()))
-            conditions.append("client_ip = %s::inet")
-            params.append(candidate_ip)
-        except ValueError:
-            pass
-
     candidate_mac = portal_effective_mac_from_context(ctx)
     clean_mac = re.sub(r"[^A-Fa-f0-9]", "", candidate_mac or "").lower()
     if len(clean_mac) == 12:
@@ -4260,6 +6270,15 @@ def find_current_gateway_session_for_context(cur, ctx: dict, request: Request) -
             """
         )
         params.extend([clean_mac, clean_mac, clean_mac])
+    else:
+        candidate_ip = ctx.get("client_ip")
+        if candidate_ip:
+            try:
+                candidate_ip = str(ip_address(str(candidate_ip).strip()))
+                conditions.append("client_ip = %s::inet")
+                params.append(candidate_ip)
+            except ValueError:
+                pass
 
     if not conditions:
         return None
@@ -4283,9 +6302,118 @@ def find_current_gateway_session_for_context(cur, ctx: dict, request: Request) -
     return cur.fetchone()
 
 
+def find_unique_recent_gateway_session_for_request(cur, request: Request) -> Optional[dict]:
+    request_ip = public_ip(request)
+    if not request_ip:
+        return None
+    try:
+        request_ip = str(ip_address(str(request_ip).strip()))
+    except ValueError:
+        return None
+    if not station_for_client_ip(request_ip):
+        return None
+    cur.execute(
+        """
+        WITH candidates AS (
+            SELECT DISTINCT ps.*
+            FROM portal_sessions ps
+            JOIN portal_events pe ON pe.portal_session_id = ps.id
+            WHERE pe.ip_address = %s::inet
+              AND pe.created_at > now() - interval '45 minutes'
+              AND ps.source IN ('OMADA', 'MIKROTIK')
+              AND ps.user_id IS NOT NULL
+              AND ps.voucher_id IS NOT NULL
+              AND ps.status IN ('ACCESS_GRANTED', 'VOUCHER_REDEEMED')
+              AND ps.access_expires_at IS NOT NULL
+              AND ps.access_expires_at > now()
+        )
+        SELECT *, count(*) OVER () AS candidate_count
+        FROM candidates
+        ORDER BY access_expires_at DESC, updated_at DESC
+        LIMIT 2
+        """,
+        (request_ip,),
+    )
+    rows = cur.fetchall()
+    if len(rows) == 1 and int(rows[0].get("candidate_count") or 0) == 1:
+        return rows[0]
+    return None
+
+
+def portal_session_has_profile(cur, session: Optional[dict]) -> bool:
+    if not session or not session.get("user_id"):
+        return False
+    cur.execute("SELECT id FROM portal_customer_profiles WHERE user_id = %s LIMIT 1", (session["user_id"],))
+    return bool(cur.fetchone())
+
+
+def portal_profile_handoff_user_id(cur, session: Optional[dict], ctx: dict, request: Request) -> Optional[str]:
+    if not session or not session.get("user_id"):
+        return None
+    if not portal_session_can_follow_device_token(session, ctx, request):
+        return None
+    if not portal_session_has_profile(cur, session):
+        return None
+    return session["user_id"]
+
+
+def find_unique_recent_profile_session_for_browser_context(cur, ctx: dict, request: Request) -> Optional[dict]:
+    """Best-effort profile carry-over for the same phone moving between 2G/5G SSIDs.
+
+    This only carries the verified customer profile. It does not authorize access or
+    transfer voucher time; those still require a device token, voucher, or missing-time
+    verification.
+    """
+    user_agent = normalize_payment_text(request.headers.get("user-agent"), 500)
+    ap_mac = normalize_mac_if_valid(ctx.get("ap_mac"))
+    site_id = str(ctx.get("site_id") or "").strip()
+    site_name = str(ctx.get("site_name") or ctx.get("site") or "").strip()
+    if not user_agent or not portal_context_has_client_identity(ctx):
+        return None
+    conditions = ["ps.user_agent = %s"]
+    params = [user_agent]
+    if ap_mac:
+        conditions.append(
+            "regexp_replace(lower(coalesce(ps.omada_ap_mac::text, ps.ap_mac::text, '')), '[^a-f0-9]', '', 'g') = %s"
+        )
+        params.append(re.sub(r"[^a-f0-9]", "", ap_mac.lower()))
+    elif site_id:
+        conditions.append("coalesce(ps.omada_site_id, '') = %s")
+        params.append(site_id)
+    elif site_name:
+        conditions.append("lower(coalesce(ps.omada_site_name, ps.site, '')) = lower(%s)")
+        params.append(site_name)
+    else:
+        return None
+    cur.execute(
+        f"""
+        WITH candidates AS (
+            SELECT DISTINCT ON (ps.user_id) ps.*
+            FROM portal_sessions ps
+            JOIN portal_customer_profiles p ON p.user_id = ps.user_id
+            WHERE ps.source IN ('OMADA', 'MIKROTIK')
+              AND ps.user_id IS NOT NULL
+              AND ps.updated_at > now() - interval '14 days'
+              AND {' AND '.join(conditions)}
+            ORDER BY ps.user_id, ps.updated_at DESC
+        )
+        SELECT *, count(*) OVER () AS candidate_count
+        FROM candidates
+        ORDER BY updated_at DESC
+        LIMIT 2
+        """,
+        tuple(params),
+    )
+    rows = cur.fetchall()
+    if len(rows) == 1 and int(rows[0].get("candidate_count") or 0) == 1:
+        return rows[0]
+    return None
+
+
 def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
     incoming_device_token_hash = portal_device_token_hash(payload.device_token)
     token_session = None
+    token_session_row = None
     if incoming_device_token_hash:
         cur.execute(
             """
@@ -4317,34 +6445,91 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             ctx["site"] = ssid_site.get("omada_site_id") or ssid_site.get("site_name")
     omada_site_id, omada_site_name = resolve_omada_site_from_context(ctx)
     current_gateway_session = find_current_gateway_session_for_context(cur, ctx, request)
+    payload_session_id = None
+    payload_session = None
+    if payload.portal_session_id:
+        cur.execute("SELECT * FROM portal_sessions WHERE public_session_id = %s", (payload.portal_session_id,))
+        payload_session = cur.fetchone()
+        if (
+            portal_session_has_current_gateway_access(payload_session)
+            and (
+                not portal_context_has_client_identity(ctx)
+                or portal_session_matches_context(payload_session, ctx)
+            )
+        ):
+            payload_session_id = payload_session["public_session_id"]
     preferred_token_session_id = None
     if token_session:
         cur.execute("SELECT * FROM portal_sessions WHERE public_session_id = %s", (token_session["public_session_id"],))
         token_session_row = cur.fetchone()
-        if portal_session_has_current_gateway_access(token_session_row):
+        if (
+            portal_session_has_current_gateway_access(token_session_row)
+            and portal_session_can_follow_device_token(token_session_row, ctx, request)
+        ):
             preferred_token_session_id = token_session_row["public_session_id"]
+    recent_request_session = None
+    if not (preferred_token_session_id or (current_gateway_session or {}).get("public_session_id") or payload_session_id):
+        recent_request_session = find_unique_recent_gateway_session_for_request(cur, request)
+    existing_session_id = (
+        (current_gateway_session or {}).get("public_session_id")
+        or preferred_token_session_id
+        or payload_session_id
+        or (recent_request_session or {}).get("public_session_id")
+    )
+    profile_handoff_user_id = None
+    if not existing_session_id:
+        for candidate_session in (payload_session, token_session_row):
+            profile_handoff_user_id = portal_profile_handoff_user_id(cur, candidate_session, ctx, request)
+            if profile_handoff_user_id:
+                break
+        if not profile_handoff_user_id:
+            recent_profile_session = find_unique_recent_profile_session_for_browser_context(cur, ctx, request)
+            profile_handoff_user_id = portal_profile_handoff_user_id(cur, recent_profile_session, ctx, request)
     public_session_id = (
-        preferred_token_session_id
-        or (current_gateway_session or {}).get("public_session_id")
-        or (token_session or {}).get("public_session_id")
-        or payload.portal_session_id
+        existing_session_id
+        or (
+            (token_session or {}).get("public_session_id")
+            if (
+                token_session
+                and (
+                    not portal_context_has_client_identity(ctx)
+                    or portal_session_matches_context(token_session_row if token_session else None, ctx)
+                )
+            )
+            else None
+        )
+        or (
+            payload.portal_session_id
+            if (
+                payload.portal_session_id
+                and (
+                    not portal_context_has_client_identity(ctx)
+                    or portal_session_matches_context(payload_session, ctx)
+                )
+            )
+            else None
+        )
         or secrets.token_urlsafe(18)
     )
+    device_token_hash_to_store = incoming_device_token_hash
+    if token_session and str(public_session_id) != str(token_session["public_session_id"]):
+        device_token_hash_to_store = None
     cur.execute(
         """
-        INSERT INTO portal_sessions(public_session_id, client_mac, client_ip, ap_mac, ssid, site, gateway, nas_id, redirect_url, user_agent, source,
+        INSERT INTO portal_sessions(public_session_id, user_id, client_mac, client_ip, ap_mac, ssid, site, gateway, nas_id, redirect_url, user_agent, source,
                                     gateway_mac, vlan_id, raw_query_params, omada_site_id, omada_site_name, omada_client_mac, omada_ap_mac,
                                     omada_gateway_mac, omada_token_encrypted, omada_redirect_url, omada_authorization_status,
                                     mikrotik_client_mac, mikrotik_client_ip, mikrotik_server_name, mikrotik_link_login,
                                     mikrotik_link_login_only, mikrotik_link_orig, mikrotik_chap_id, mikrotik_chap_challenge,
                                     mikrotik_authorization_status, device_token_hash, device_token_created_at, device_token_last_seen_at)
-        VALUES (%s, %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        VALUES (%s, %s, %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 CASE WHEN %s = 'OMADA' THEN 'PENDING' WHEN %s = 'MANUAL_TEST' THEN 'MANUAL_TEST' ELSE 'NOT_REQUIRED' END,
                 %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s, %s,
                 CASE WHEN %s = 'MIKROTIK' THEN 'PENDING' WHEN %s = 'MANUAL_TEST' THEN 'MANUAL_TEST' ELSE 'NOT_REQUIRED' END,
                 %s::text, CASE WHEN %s::text IS NULL THEN NULL ELSE now() END, CASE WHEN %s::text IS NULL THEN NULL ELSE now() END)
         ON CONFLICT (public_session_id) DO UPDATE
-        SET client_mac = COALESCE(EXCLUDED.client_mac, portal_sessions.client_mac),
+        SET user_id = COALESCE(portal_sessions.user_id, EXCLUDED.user_id),
+            client_mac = COALESCE(EXCLUDED.client_mac, portal_sessions.client_mac),
             client_ip = COALESCE(EXCLUDED.client_ip, portal_sessions.client_ip),
             ap_mac = COALESCE(EXCLUDED.ap_mac, portal_sessions.ap_mac),
             gateway_mac = COALESCE(EXCLUDED.gateway_mac, portal_sessions.gateway_mac),
@@ -4391,6 +6576,7 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
         """,
         (
             public_session_id,
+            profile_handoff_user_id,
             ctx["client_mac"],
             ctx["client_ip"] or "",
             ctx["ap_mac"],
@@ -4423,9 +6609,9 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             ctx["mikrotik_chap_challenge"],
             source,
             source,
-            incoming_device_token_hash,
-            incoming_device_token_hash,
-            incoming_device_token_hash,
+            device_token_hash_to_store,
+            device_token_hash_to_store,
+            device_token_hash_to_store,
         ),
     )
     return cur.fetchone()
@@ -4477,6 +6663,233 @@ def ensure_portal_user(cur, session):
     return user
 
 
+def normalize_portal_contact_number(value: str) -> tuple[str, str]:
+    original = normalize_a2p_text(value, 32)
+    digits = re.sub(r"\D", "", original)
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if digits.startswith("09") and len(digits) == 11:
+        digits = f"63{digits[1:]}"
+    elif digits.startswith("9") and len(digits) == 10:
+        digits = f"63{digits}"
+    elif original.startswith("+"):
+        digits = re.sub(r"\D", "", original)
+    if not re.fullmatch(r"\d{8,15}", digits or ""):
+        raise HTTPException(status_code=400, detail="Enter a valid mobile number, for example 09171234567 or +639171234567.")
+    return f"+{digits}", digits
+
+
+def normalize_portal_email(value: Optional[str]) -> Optional[str]:
+    email = normalize_payment_text(value, 255).lower()
+    if not email:
+        return None
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address.")
+    return email
+
+
+def portal_otp_hash(code: str, normalized_contact: str, purpose: str) -> str:
+    seed = os.getenv("SECRET_KEY") or os.getenv("JWT_SECRET") or os.getenv("POSTGRES_PASSWORD") or "change-me"
+    payload = f"{purpose}:{normalized_contact}:{normalize_payment_text(code, 20).upper()}".encode("utf-8")
+    return hmac.new(seed.encode("utf-8"), payload, sha256).hexdigest()
+
+
+def generate_portal_otp() -> str:
+    return "".join(secrets.choice("23456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(4))
+
+
+def create_portal_contact_verification(cur, session: dict, contact_number: str, purpose: str, request: Request) -> dict:
+    normalized_contact, a2p_destination = normalize_portal_contact_number(contact_number)
+    cur.execute(
+        """
+        SELECT created_at
+        FROM portal_contact_verifications
+        WHERE normalized_contact = %s
+          AND purpose = %s
+          AND created_at > now() - interval '60 seconds'
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (normalized_contact, purpose),
+    )
+    recent = cur.fetchone()
+    if recent:
+        elapsed = int((datetime.now(timezone.utc) - aware_utc(recent["created_at"])).total_seconds())
+        wait_seconds = max(1, 60 - elapsed)
+        raise HTTPException(status_code=429, detail=f"Send Code Again After ({wait_seconds}s).")
+    code = generate_portal_otp()
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    cur.execute(
+        """
+        UPDATE portal_contact_verifications
+        SET status = 'EXPIRED', updated_at = now()
+        WHERE normalized_contact = %s AND purpose = %s AND status = 'PENDING'
+        """,
+        (normalized_contact, purpose),
+    )
+    cur.execute(
+        """
+        INSERT INTO portal_contact_verifications(portal_session_id, user_id, purpose, contact_number, normalized_contact, code_hash, expires_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING *
+        """,
+        (
+            session.get("id"),
+            session.get("user_id"),
+            purpose,
+            normalized_contact,
+            normalized_contact,
+            portal_otp_hash(code, normalized_contact, purpose),
+            expires_at,
+        ),
+    )
+    verification = cur.fetchone()
+    message = f"Your 3J WiFi verification code is {code}. It expires in 10 minutes."
+    portal_sms_settings = public_portal_sms_confirmation_settings()
+    sms_result = send_a2p_sms_message(a2p_destination, message, source=portal_sms_settings.get("sender_id"))
+    create_portal_event(
+        cur,
+        session["id"],
+        "PROFILE_OTP_SENT" if purpose == "PROFILE" else "MISSING_TIME_OTP_SENT",
+        request,
+        f"Verification code sent to {mask_a2p_destination(a2p_destination)}.",
+        raw_context={"purpose": purpose, "sender_id": portal_sms_settings.get("sender_id"), "sms": sanitize_summary(sms_result)},
+    )
+    return {
+        "status": "SENT",
+        "verification_id": str(verification["id"]),
+        "expires_at": verification["expires_at"],
+        "contact_hint": mask_a2p_destination(a2p_destination),
+    }
+
+
+def verify_portal_contact_code(cur, contact_number: str, purpose: str, code: str) -> dict:
+    normalized_contact, _ = normalize_portal_contact_number(contact_number)
+    cur.execute(
+        """
+        SELECT *
+        FROM portal_contact_verifications
+        WHERE normalized_contact = %s AND purpose = %s AND status = 'PENDING'
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (normalized_contact, purpose),
+    )
+    verification = cur.fetchone()
+    if not verification:
+        raise HTTPException(status_code=400, detail="No active verification code was found for this contact number.")
+    if aware_utc(verification["expires_at"]) <= datetime.now(timezone.utc):
+        cur.execute("UPDATE portal_contact_verifications SET status = 'EXPIRED', updated_at = now() WHERE id = %s", (verification["id"],))
+        raise HTTPException(status_code=400, detail="Verification code expired. Send a new code.")
+    attempts = int(verification.get("attempts") or 0) + 1
+    if attempts > 5:
+        cur.execute("UPDATE portal_contact_verifications SET status = 'FAILED', attempts = %s, updated_at = now() WHERE id = %s", (attempts, verification["id"]))
+        raise HTTPException(status_code=400, detail="Too many incorrect verification attempts. Send a new code.")
+    expected = verification["code_hash"]
+    provided = portal_otp_hash(code, normalized_contact, purpose)
+    if not hmac.compare_digest(str(expected), str(provided)):
+        cur.execute("UPDATE portal_contact_verifications SET attempts = %s, updated_at = now() WHERE id = %s", (attempts, verification["id"]))
+        raise HTTPException(status_code=400, detail="Verification code is incorrect.")
+    cur.execute(
+        """
+        UPDATE portal_contact_verifications
+        SET status = 'VERIFIED', attempts = %s, verified_at = now(), updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (attempts, verification["id"]),
+    )
+    return cur.fetchone()
+
+
+def portal_profile_for_user(cur, user_id) -> Optional[dict]:
+    if not user_id:
+        return None
+    cur.execute("SELECT * FROM portal_customer_profiles WHERE user_id = %s", (user_id,))
+    return cur.fetchone()
+
+
+def public_portal_profile(profile: Optional[dict]) -> dict:
+    if not profile:
+        return {
+            "configured": False,
+            "display_name": "",
+            "email": "",
+            "contact_number": "",
+            "marketing_sms_consent": False,
+            "welcome_gift_status": "NONE",
+            "welcome_voucher_code": None,
+        }
+    voucher_code = None
+    if profile.get("welcome_voucher_id") and profile.get("welcome_gift_status") == "AVAILABLE":
+        voucher = fetch_one("SELECT code FROM vouchers WHERE id = %s", (profile["welcome_voucher_id"],))
+        voucher_code = voucher.get("code") if voucher else None
+    return {
+        "configured": True,
+        "display_name": profile.get("display_name"),
+        "email": profile.get("email") or "",
+        "contact_number": profile.get("contact_number"),
+        "marketing_sms_consent": bool(profile.get("marketing_sms_consent")),
+        "contact_verified": bool(profile.get("contact_verified_at")),
+        "welcome_gift_status": profile.get("welcome_gift_status") or "NONE",
+        "welcome_voucher_code": voucher_code,
+        "welcome_gift_created_at": profile.get("welcome_gift_created_at"),
+        "welcome_gift_redeemed_at": profile.get("welcome_gift_redeemed_at"),
+    }
+
+
+PORTAL_PROFILE_GIFT_DEFAULTS = {
+    "enabled": True,
+    "duration_seconds": 86400,
+    "title": "FREE 1Day Welcome Gift",
+    "available_message": "Welcome gift waiting",
+    "description": "Redeem this once on your verified contact number. It will be hidden after redemption.",
+    "profile_saved_message": "Profile saved. You have a FREE 1D welcome gift waiting below your avatar.",
+    "redeemed_message": "FREE 1D welcome gift redeemed. You may now use the internet.",
+}
+
+
+def portal_profile_gift_settings(row: Optional[dict] = None) -> dict:
+    row = row or ensure_captive_portal_settings()
+    try:
+        duration_seconds = int(row.get("profile_gift_duration_seconds") or PORTAL_PROFILE_GIFT_DEFAULTS["duration_seconds"])
+    except (TypeError, ValueError):
+        duration_seconds = PORTAL_PROFILE_GIFT_DEFAULTS["duration_seconds"]
+    enabled_value = row.get("profile_gift_enabled")
+    return {
+        "enabled": PORTAL_PROFILE_GIFT_DEFAULTS["enabled"] if enabled_value is None else bool(enabled_value),
+        "duration_seconds": max(1, duration_seconds),
+        "title": (row.get("profile_gift_title") or PORTAL_PROFILE_GIFT_DEFAULTS["title"]).strip(),
+        "available_message": (row.get("profile_gift_available_message") or PORTAL_PROFILE_GIFT_DEFAULTS["available_message"]).strip(),
+        "description": (row.get("profile_gift_description") or PORTAL_PROFILE_GIFT_DEFAULTS["description"]).strip(),
+        "profile_saved_message": (row.get("profile_gift_profile_saved_message") or PORTAL_PROFILE_GIFT_DEFAULTS["profile_saved_message"]).strip(),
+        "redeemed_message": (row.get("profile_gift_redeemed_message") or PORTAL_PROFILE_GIFT_DEFAULTS["redeemed_message"]).strip(),
+    }
+
+
+def create_welcome_voucher_if_needed(cur, user: dict, profile: Optional[dict], gift_settings: Optional[dict] = None) -> dict:
+    if profile and profile.get("welcome_voucher_id"):
+        cur.execute("SELECT * FROM vouchers WHERE id = %s", (profile["welcome_voucher_id"],))
+        voucher = cur.fetchone()
+        if voucher:
+            return voucher
+    gift_settings = gift_settings or portal_profile_gift_settings()
+    return create_single_voucher(
+        cur,
+        VoucherCreate(
+            voucher_type="TIME_BASED",
+            time_value_seconds=gift_settings["duration_seconds"],
+            note=f"{gift_settings['title']} for verified portal customer profile",
+            status="UNUSED",
+            max_redemptions=1,
+            code_prefix="GIFT",
+            code_length=8,
+        ),
+        None,
+    )
+
+
 def portal_wallet_status(cur, session):
     if not session.get("user_id"):
         return None
@@ -4511,7 +6924,17 @@ def portal_access_view(session, wallet, redemption=None):
     unlimited = bool((wallet or {}).get("is_unlimited"))
     valid_until = aware_utc((wallet or {}).get("valid_until"))
     access_expires_at = aware_utc(session.get("access_expires_at"))
-    if not access_expires_at and session.get("source") in {"OMADA", "MIKROTIK"} and redemption:
+    session_voucher_id = str(session.get("voucher_id") or "")
+    redemption_voucher_id = str((redemption or {}).get("voucher_id") or "")
+    can_infer_gateway_window = bool(
+        not access_expires_at
+        and session.get("source") in {"OMADA", "MIKROTIK"}
+        and session.get("status") in {"ACCESS_GRANTED", "VOUCHER_REDEEMED"}
+        and session_voucher_id
+        and redemption_voucher_id
+        and session_voucher_id == redemption_voucher_id
+    )
+    if can_infer_gateway_window:
         redeemed_seconds = int(redemption.get("redeemed_time_seconds") or 0)
         granted_at = aware_utc(session.get("access_granted_at")) or aware_utc(redemption.get("created_at"))
         if redeemed_seconds > 0 and granted_at:
@@ -4543,7 +6966,11 @@ def portal_access_view(session, wallet, redemption=None):
         "access_expires_at": access_expires_at,
         "access_expired": access_expired,
         "connected": bool(unlimited or wallet_remaining > 0 or (valid_until and valid_until > now)),
-        "message": "Access time fully consumed. Enter a new voucher to continue." if access_expired else ("Access loaded." if wallet else "Enter a voucher to start."),
+        "message": (
+            "Access time fully consumed. Enter a new voucher to continue."
+            if access_expired
+            else ("Access loaded." if unlimited or wallet_remaining > 0 or (valid_until and valid_until > now) else "No active internet time. Buy a package or enter a voucher.")
+        ),
     }
 
 
@@ -4576,7 +7003,7 @@ def ensure_portal_device_token(cur, session: dict, provided_token: Optional[str]
 
 
 def latest_portal_redemption(cur, session: dict):
-    if not session.get("user_id"):
+    if not session.get("user_id") or not session.get("voucher_id"):
         return None
     cur.execute(
         """
@@ -4584,10 +7011,11 @@ def latest_portal_redemption(cur, session: dict):
         FROM voucher_redemptions r
         LEFT JOIN vouchers v ON v.id = r.voucher_id
         WHERE r.user_id = %s
+          AND r.voucher_id = %s
         ORDER BY r.created_at DESC
         LIMIT 1
         """,
-        (session["user_id"],),
+        (session["user_id"], session["voucher_id"]),
     )
     return cur.fetchone()
 
@@ -4596,6 +7024,487 @@ def portal_session_access_state(cur, session: dict) -> dict:
     wallet = portal_wallet_status(cur, session)
     redemption = latest_portal_redemption(cur, session)
     return portal_access_view(session, wallet, redemption)
+
+
+def bag_overlap_seconds(settings: Optional[dict] = None) -> int:
+    settings = settings or ensure_captive_portal_settings()
+    try:
+        return min(max(int(settings.get("bag_activation_overlap_seconds") or 10), 0), 300)
+    except (TypeError, ValueError):
+        return 10
+
+
+def portal_network_presence(session: Optional[dict], request: Optional[Request] = None, payload: Optional[PortalSessionRequest] = None) -> dict:
+    ctx = portal_context(payload) if payload else {}
+    request_ip = public_ip(request) if request else None
+    current_station = station_for_client_ip(request_ip) or station_for_client_ip(ctx.get("client_ip"))
+    has_gateway_context = bool(
+        portal_context_has_client_identity(ctx)
+        or ctx.get("auth_token")
+        or ctx.get("ap_mac")
+        or ctx.get("site_id")
+        or ctx.get("site_name")
+        or ctx.get("site")
+    )
+    known_gateway_session = bool((session or {}).get("source") in {"OMADA", "MIKROTIK"})
+    connected_to_3j = bool(current_station or has_gateway_context or known_gateway_session)
+    return {
+        "connected_to_3j_ap": connected_to_3j,
+        "status": "ON_3J_NETWORK" if connected_to_3j else "OUTSIDE_3J_NETWORK",
+        "message": "Connected through a 3J WiFi access path." if connected_to_3j else "Not currently detected on a 3J WiFi AP.",
+    }
+
+
+def bag_item_public(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return None
+    now = datetime.now(timezone.utc)
+    active_until = aware_utc(row.get("active_until"))
+    remaining = int(row.get("remaining_seconds") or 0)
+    if row.get("status") == "ACTIVE" and active_until:
+        remaining = max(int((active_until - now).total_seconds()), 0)
+    return {
+        "id": str(row["id"]),
+        "product_name": row.get("product_name"),
+        "product_category_name": row.get("product_category_name"),
+        "source": row.get("source"),
+        "status": row.get("status"),
+        "priority": int(row.get("priority") or 0),
+        "duration_seconds": int(row.get("duration_seconds") or 0),
+        "remaining_seconds": remaining,
+        "activated_at": row.get("activated_at"),
+        "active_until": row.get("active_until"),
+        "consumed_at": row.get("consumed_at"),
+        "auto_activate_snapshot": row.get("auto_activate_snapshot"),
+        "overlap_seconds_snapshot": row.get("overlap_seconds_snapshot"),
+        "device_scope": normalize_product_device_scope(row.get("device_scope")),
+        "allowed_devices": int(row.get("allowed_devices") or 1),
+        "access_scope": normalize_product_access_scope(row.get("access_scope")),
+        "allowed_barangay": row.get("allowed_barangay"),
+        "purchase_quantity": int(row.get("purchase_quantity") or 1),
+        "amount_centavos": row.get("amount_centavos"),
+        "currency": row.get("currency") or "PHP",
+        "metadata": row.get("metadata_json") or {},
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def create_customer_bag_event(cur, user_id, bag_item_id=None, portal_session_id=None, event_type: str = "BAG_EVENT", message: str = None, auto_activate_enabled: Optional[bool] = None, overlap_seconds_value: Optional[int] = None, metadata: Optional[dict] = None):
+    cur.execute(
+        """
+        INSERT INTO customer_bag_events(user_id, bag_item_id, portal_session_id, event_type, message, auto_activate_enabled, overlap_seconds, metadata_json)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """,
+        (user_id, bag_item_id, portal_session_id, event_type, message, auto_activate_enabled, overlap_seconds_value, Json(sanitize_summary(metadata or {}))),
+    )
+
+
+def ensure_customer_bag_settings(cur, user_id) -> dict:
+    portal_settings_row = ensure_captive_portal_settings()
+    default_auto = bool(portal_settings_row.get("bag_auto_activate_default"))
+    cur.execute(
+        """
+        INSERT INTO customer_bag_settings(user_id, auto_activate)
+        VALUES (%s, %s)
+        ON CONFLICT (user_id) DO UPDATE SET user_id = EXCLUDED.user_id
+        RETURNING *
+        """,
+        (user_id, default_auto),
+    )
+    return cur.fetchone()
+
+
+def customer_bag_payload(cur, user_id) -> dict:
+    if not user_id:
+        return {
+            "settings": {"auto_activate": False, "overlap_seconds": bag_overlap_seconds()},
+            "active_item": None,
+            "queued_items": [],
+            "history_items": [],
+            "summary": {"queued_count": 0, "history_count": 0, "remaining_seconds": 0},
+        }
+    settings = ensure_customer_bag_settings(cur, user_id)
+    overlap = bag_overlap_seconds()
+    cur.execute(
+        """
+        SELECT *
+        FROM customer_bag_items
+        WHERE user_id = %s AND status IN ('ACTIVE', 'QUEUED')
+        ORDER BY CASE status WHEN 'ACTIVE' THEN 0 ELSE 1 END, priority ASC, created_at ASC
+        """,
+        (user_id,),
+    )
+    active_and_queued = cur.fetchall()
+    cur.execute(
+        """
+        SELECT *
+        FROM customer_bag_items
+        WHERE user_id = %s AND status IN ('CONSUMED', 'EXPIRED', 'CANCELLED')
+        ORDER BY COALESCE(consumed_at, updated_at, created_at) DESC
+        LIMIT 30
+        """,
+        (user_id,),
+    )
+    history = cur.fetchall()
+    active_item = next((row for row in active_and_queued if row.get("status") == "ACTIVE"), None)
+    queued = [row for row in active_and_queued if row.get("status") == "QUEUED"]
+    active_public = bag_item_public(active_item)
+    queued_public = [bag_item_public(row) for row in queued]
+    history_public = [bag_item_public(row) for row in history]
+    remaining = int((active_public or {}).get("remaining_seconds") or 0) + sum(int(item.get("remaining_seconds") or 0) for item in queued_public)
+    return {
+        "settings": {
+            "auto_activate": bool(settings.get("auto_activate")),
+            "overlap_seconds": overlap,
+        },
+        "active_item": active_public,
+        "queued_items": queued_public,
+        "history_items": history_public,
+        "summary": {
+            "queued_count": len(queued_public),
+            "history_count": len(history_public),
+            "remaining_seconds": remaining,
+        },
+    }
+
+
+def customer_bag_item_for_payment(cur, payment_order_id) -> Optional[dict]:
+    if not payment_order_id:
+        return None
+    cur.execute("SELECT * FROM customer_bag_items WHERE payment_order_id = %s", (payment_order_id,))
+    return cur.fetchone()
+
+
+def create_customer_bag_item_from_payment(cur, order: dict, session: dict, user: dict) -> dict:
+    existing = customer_bag_item_for_payment(cur, order["id"])
+    if existing:
+        return existing
+    ensure_customer_bag_settings(cur, user["id"])
+    cur.execute(
+        """
+        SELECT COALESCE(MAX(priority), 0) + 100 AS next_priority
+        FROM customer_bag_items
+        WHERE user_id = %s AND status = 'QUEUED'
+        """,
+        (user["id"],),
+    )
+    priority = int((cur.fetchone() or {}).get("next_priority") or 100)
+    metadata = {
+        "payment_order_id": order.get("public_order_id"),
+        "payment_method": order.get("payment_method"),
+        "base_amount_centavos": order.get("base_amount_centavos"),
+        "discount_type": order.get("discount_type"),
+        "discount_value": float(order.get("discount_value") or 0),
+        "discount_amount_centavos": order.get("discount_amount_centavos") or 0,
+    }
+    cur.execute(
+        """
+        INSERT INTO customer_bag_items(
+            user_id, portal_session_id, payment_order_id, product_item_id, product_category_id,
+            product_name, product_category_name, source, status, priority, duration_seconds, remaining_seconds,
+            device_scope, allowed_devices, access_scope, allowed_barangay, purchase_quantity, amount_centavos, currency, metadata_json
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'PAYMENT', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING *
+        """,
+        (
+            user["id"],
+            session["id"],
+            order["id"],
+            order.get("product_item_id"),
+            order.get("product_category_id"),
+            order.get("product_name") or "WiFi package",
+            order.get("product_category_name"),
+            priority,
+            int(order.get("duration_seconds") or 0),
+            int(order.get("duration_seconds") or 0),
+            normalize_product_device_scope(order.get("device_scope")),
+            normalize_product_allowed_devices(order.get("device_scope"), int(order.get("allowed_devices") or 1)),
+            normalize_product_access_scope(order.get("product_category_access_scope") or "ALL_LOCATIONS"),
+            order.get("product_category_barangay"),
+            int(order.get("purchase_quantity") or 1),
+            order.get("amount_centavos"),
+            order.get("currency") or "PHP",
+            Json(sanitize_summary(metadata)),
+        ),
+    )
+    item = cur.fetchone()
+    create_customer_bag_event(cur, user["id"], item["id"], session["id"], "ITEM_ADDED", "Product item added to customer bag.", metadata={"payment_order_id": order.get("public_order_id")})
+    return item
+
+
+def ensure_bag_item_voucher(cur, item: dict) -> dict:
+    if item.get("voucher_id"):
+        cur.execute("SELECT * FROM vouchers WHERE id = %s FOR UPDATE", (item["voucher_id"],))
+        voucher = cur.fetchone()
+        if voucher:
+            return voucher
+    voucher = create_single_voucher(
+        cur,
+        VoucherCreate(
+            voucher_type="TIME_BASED",
+            time_value_seconds=int(item.get("duration_seconds") or item.get("remaining_seconds") or 0),
+            note=f"Bag item {item['id']} for {item.get('product_name') or 'WiFi package'}",
+            status="UNUSED",
+            max_redemptions=max(int(item.get("allowed_devices") or 1), 1),
+            code_prefix="BAG",
+            code_length=10,
+            product_category_id=str(item["product_category_id"]) if item.get("product_category_id") else None,
+            access_scope=item.get("access_scope") or "ALL_LOCATIONS",
+            allowed_barangay=item.get("allowed_barangay"),
+        ),
+        None,
+    )
+    cur.execute("UPDATE customer_bag_items SET voucher_id = %s, updated_at = now() WHERE id = %s RETURNING *", (voucher["id"], item["id"]))
+    item.update(cur.fetchone())
+    return voucher
+
+
+def activate_customer_bag_item(cur, item: dict, session: dict, request: Request, reason: str = "MANUAL") -> dict:
+    if item.get("status") == "ACTIVE":
+        return {"status": "SUCCESS", "message": "Bag item is already active.", "item": item, "authorization": {"status": "ALREADY_ACTIVE"}}
+    if item.get("status") != "QUEUED":
+        return {"status": "FAILED", "error": "Only queued bag items can be activated."}
+    if session.get("source") not in {"OMADA", "MIKROTIK"}:
+        return {"status": "QUEUED", "message": "Connect to a 3J WiFi AP to activate this item.", "item": item, "authorization": {"status": "WAITING_FOR_3J_AP"}}
+    remaining_seconds = max(int(item.get("remaining_seconds") or item.get("duration_seconds") or 0), 1)
+    active_until = datetime.now(timezone.utc) + timedelta(seconds=remaining_seconds)
+    voucher = ensure_bag_item_voucher(cur, item)
+    portal_payload = payment_fulfillment_payload_from_session(session, voucher["code"])
+    authorization = {"status": "NOT_REQUIRED"}
+    if session["source"] == "OMADA":
+        authorization = attempt_omada_authorization(cur, session, voucher, {"id": item["user_id"]}, remaining_seconds, active_until, portal_payload)
+    elif session["source"] == "MIKROTIK":
+        authorization = attempt_mikrotik_authorization(cur, session, voucher, {"id": item["user_id"]}, remaining_seconds, active_until, portal_payload)
+    if authorization.get("status") not in {"SUCCESS", "NOT_REQUIRED"}:
+        create_customer_bag_event(cur, item["user_id"], item["id"], session["id"], "ACTIVATION_FAILED", authorization.get("error") or "Gateway authorization failed.", metadata={"reason": reason, "authorization": sanitize_summary(authorization)})
+        return {"status": "FAILED", "error": authorization.get("error") or "Gateway authorization failed.", "item": item, "authorization": sanitize_summary(authorization)}
+
+    settings = ensure_customer_bag_settings(cur, item["user_id"])
+    overlap = bag_overlap_seconds()
+    cur.execute(
+        """
+        UPDATE customer_bag_items
+        SET status = 'ACTIVE',
+            portal_session_id = %s,
+            remaining_seconds = %s,
+            activated_at = COALESCE(activated_at, now()),
+            active_until = %s,
+            auto_activate_snapshot = %s,
+            overlap_seconds_snapshot = %s,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (session["id"], remaining_seconds, active_until, bool(settings.get("auto_activate")), overlap, item["id"]),
+    )
+    active_item = cur.fetchone()
+    next_status = "ACCESS_GRANTED" if session["source"] in {"OMADA", "MIKROTIK"} else "VOUCHER_REDEEMED"
+    omada_status = "AUTHORIZED" if session["source"] == "OMADA" else ("MANUAL_TEST" if session["source"] == "MANUAL_TEST" else "NOT_REQUIRED")
+    mikrotik_status = "AUTHORIZED" if session["source"] == "MIKROTIK" else ("MANUAL_TEST" if session["source"] == "MANUAL_TEST" else "NOT_REQUIRED")
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET voucher_id = %s,
+            user_id = %s,
+            status = %s,
+            last_error = NULL,
+            omada_authorization_status = %s,
+            mikrotik_authorization_status = %s,
+            access_granted_at = now(),
+            access_expires_at = %s,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (voucher["id"], item["user_id"], next_status, omada_status, mikrotik_status, active_until, session["id"]),
+    )
+    session.update(cur.fetchone())
+    create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "ITEM_ACTIVATED", "Product item activated.", bool(settings.get("auto_activate")), overlap, {"reason": reason, "authorization": sanitize_summary(authorization)})
+    return {"status": "SUCCESS", "message": "Product item activated.", "item": active_item, "authorization": sanitize_summary(authorization)}
+
+
+def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> dict:
+    if not session or not session.get("user_id"):
+        return {"session": session, "bag": customer_bag_payload(cur, None), "activation": None}
+    settings = ensure_customer_bag_settings(cur, session["user_id"])
+    overlap = bag_overlap_seconds()
+    activation = None
+    cur.execute(
+        """
+        SELECT *
+        FROM customer_bag_items
+        WHERE user_id = %s AND status = 'ACTIVE'
+        ORDER BY active_until DESC NULLS LAST, updated_at DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (session["user_id"],),
+    )
+    active = cur.fetchone()
+    now = datetime.now(timezone.utc)
+    active_remaining = 0
+    if active:
+        active_until = aware_utc(active.get("active_until"))
+        active_remaining = max(int((active_until - now).total_seconds()), 0) if active_until else int(active.get("remaining_seconds") or 0)
+        cur.execute("UPDATE customer_bag_items SET remaining_seconds = %s, updated_at = now() WHERE id = %s", (active_remaining, active["id"]))
+        if active_remaining <= 0:
+            cur.execute(
+                """
+                UPDATE customer_bag_items
+                SET status = 'CONSUMED',
+                    remaining_seconds = 0,
+                    consumed_at = COALESCE(consumed_at, now()),
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (active["id"],),
+            )
+            consumed = cur.fetchone()
+            create_customer_bag_event(cur, session["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item fully consumed.", bool(settings.get("auto_activate")), overlap)
+            active = None
+
+    should_activate_next = bool(settings.get("auto_activate")) and session.get("source") in {"OMADA", "MIKROTIK"}
+    if should_activate_next and (not active or active_remaining <= overlap):
+        cur.execute(
+            """
+            SELECT *
+            FROM customer_bag_items
+            WHERE user_id = %s AND status = 'QUEUED'
+            ORDER BY priority ASC, created_at ASC
+            LIMIT 1
+            FOR UPDATE
+            """,
+            (session["user_id"],),
+        )
+        next_item = cur.fetchone()
+        if next_item:
+            activation = activate_customer_bag_item(cur, next_item, session, request, "AUTO_OVERLAP" if active else "AUTO")
+            if activation.get("status") == "SUCCESS" and active:
+                cur.execute(
+                    """
+                    UPDATE customer_bag_items
+                    SET status = 'CONSUMED',
+                        remaining_seconds = 0,
+                        consumed_at = COALESCE(consumed_at, now()),
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (active["id"],),
+                )
+                consumed = cur.fetchone()
+                create_customer_bag_event(cur, session["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item consumed during seamless auto-activation overlap.", True, overlap, {"next_item_id": str(next_item["id"])})
+                active = activation.get("item")
+            cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
+            session = cur.fetchone()
+    return {"session": session, "bag": customer_bag_payload(cur, session.get("user_id")), "activation": activation}
+
+
+def process_customer_bag_auto_activation_once():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT i.id
+                FROM customer_bag_items i
+                JOIN customer_bag_settings s ON s.user_id = i.user_id
+                WHERE i.status = 'ACTIVE'
+                  AND s.auto_activate = true
+                  AND i.active_until IS NOT NULL
+                  AND i.active_until <= now() + make_interval(secs => %s)
+                ORDER BY i.active_until ASC
+                LIMIT 25
+                """,
+                (bag_overlap_seconds(),),
+            )
+            due_items = cur.fetchall()
+            for due in due_items:
+                cur.execute("SELECT * FROM customer_bag_items WHERE id = %s FOR UPDATE SKIP LOCKED", (due["id"],))
+                active = cur.fetchone()
+                if not active or active.get("status") != "ACTIVE":
+                    continue
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM portal_sessions
+                    WHERE id = %s AND source IN ('OMADA', 'MIKROTIK')
+                    FOR UPDATE
+                    """,
+                    (active.get("portal_session_id"),),
+                )
+                session = cur.fetchone()
+                if not session:
+                    continue
+                overlap = bag_overlap_seconds()
+                active_until = aware_utc(active.get("active_until"))
+                remaining = max(int((active_until - datetime.now(timezone.utc)).total_seconds()), 0) if active_until else 0
+                cur.execute("UPDATE customer_bag_items SET remaining_seconds = %s, updated_at = now() WHERE id = %s", (remaining, active["id"]))
+                if remaining <= 0:
+                    cur.execute(
+                        """
+                        UPDATE customer_bag_items
+                        SET status = 'CONSUMED',
+                            remaining_seconds = 0,
+                            consumed_at = COALESCE(consumed_at, now()),
+                            updated_at = now()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (active["id"],),
+                    )
+                    consumed = cur.fetchone()
+                    create_customer_bag_event(cur, active["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item fully consumed by auto activation worker.", True, overlap)
+                    active = None
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM customer_bag_items
+                    WHERE user_id = %s AND status = 'QUEUED'
+                    ORDER BY priority ASC, created_at ASC
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                    """,
+                    (session["user_id"],),
+                )
+                next_item = cur.fetchone()
+                if not next_item:
+                    continue
+                activation = activate_customer_bag_item(cur, next_item, session, None, "AUTO_BACKGROUND_OVERLAP" if active else "AUTO_BACKGROUND")
+                if activation.get("status") == "SUCCESS" and active:
+                    cur.execute(
+                        """
+                        UPDATE customer_bag_items
+                        SET status = 'CONSUMED',
+                            remaining_seconds = 0,
+                            consumed_at = COALESCE(consumed_at, now()),
+                            updated_at = now()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (active["id"],),
+                    )
+                    consumed = cur.fetchone()
+                    create_customer_bag_event(cur, active["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item consumed during background seamless auto-activation overlap.", True, overlap, {"next_item_id": str(next_item["id"])})
+
+
+def start_customer_bag_auto_activation_worker():
+    global BAG_AUTO_ACTIVATION_THREAD_STARTED
+    if BAG_AUTO_ACTIVATION_THREAD_STARTED:
+        return
+    BAG_AUTO_ACTIVATION_THREAD_STARTED = True
+
+    def worker():
+        while True:
+            try:
+                process_customer_bag_auto_activation_once()
+            except Exception:
+                pass
+            time.sleep(5)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def latest_successful_portal_authorization(cur, session: dict):
@@ -4875,6 +7784,7 @@ def public_captive_portal_settings(row=None):
     row = row or ensure_captive_portal_settings()
     design = fetch_one("SELECT * FROM portal_design_templates ORDER BY updated_at DESC LIMIT 1")
     portal_ssid = captive_portal_ssid_from_ap_configuration()
+    profile_gift = portal_profile_gift_settings(row)
     return {
         "id": row["id"],
         "portal_mode": row["portal_mode"],
@@ -4883,6 +7793,7 @@ def public_captive_portal_settings(row=None):
         "ssid_source": portal_ssid["source"],
         "portal_url_staging": row["portal_url_staging"],
         "portal_url_production": row["portal_url_production"],
+        "current_portal_url": current_captive_portal_url(row),
         "default_access_duration_seconds": row["default_access_duration_seconds"],
         "post_login_redirect_url": row["post_login_redirect_url"],
         "selected_omada_site_id": row["selected_omada_site_id"],
@@ -4898,6 +7809,29 @@ def public_captive_portal_settings(row=None):
         "portal_expired_notification_message": row.get("portal_expired_notification_message") or "Your WiFi voucher time is fully consumed. Enter a new voucher to continue.",
         "portal_reconnect_notification_enabled": bool(row.get("portal_reconnect_notification_enabled")),
         "portal_reconnect_notification_message": row.get("portal_reconnect_notification_message") or "Your WiFi session was restored. Remaining time: <TIME>.",
+        "no_internet_headline": row.get("no_internet_headline") or "No Internet Detected",
+        "no_internet_subtitle": row.get("no_internet_subtitle") or "Connect with a voucher or buy a WiFi package.",
+        "no_internet_avatar_disconnected_url": row.get("no_internet_avatar_disconnected_url"),
+        "no_internet_avatar_connected_url": row.get("no_internet_avatar_connected_url"),
+        "avatar_notes_json": row.get("avatar_notes_json") or {},
+        "marketing_sms_consent_text": row.get("marketing_sms_consent_text") or "I agree to receive Threej Internet & CCTV promos, service updates, and important account messages by SMS. I can ask the operator to stop promotional messages anytime.",
+        "profile_gift_enabled": profile_gift["enabled"],
+        "profile_gift_duration_seconds": profile_gift["duration_seconds"],
+        "profile_gift_title": profile_gift["title"],
+        "profile_gift_available_message": profile_gift["available_message"],
+        "profile_gift_description": profile_gift["description"],
+        "profile_gift_profile_saved_message": profile_gift["profile_saved_message"],
+        "profile_gift_redeemed_message": profile_gift["redeemed_message"],
+        "outside_network_warning_enabled": bool(row.get("outside_network_warning_enabled")),
+        "outside_network_warning_message": row.get("outside_network_warning_message") or "You are not currently connected to a 3J WiFi AP. Your time is visible here, but internet access only works when connected to a 3J WiFi network.",
+        "outside_network_purchase_title": row.get("outside_network_purchase_title") or "You are outside 3J WiFi",
+        "outside_network_purchase_message": row.get("outside_network_purchase_message") or "You can still buy this package, but it will be saved to your bag and will only activate when you connect to a 3J WiFi AP.",
+        "outside_network_purchase_success_message": row.get("outside_network_purchase_success_message") or "Package saved to your bag. Connect to a 3J WiFi AP to use it.",
+        "bag_auto_activate_default": bool(row.get("bag_auto_activate_default")),
+        "bag_activation_overlap_seconds": int(row.get("bag_activation_overlap_seconds") or 10),
+        "portal_sms_sender_id": row.get("portal_sms_sender_id"),
+        "portal_sms_monthly_credit_limit": row.get("portal_sms_monthly_credit_limit"),
+        "portal_sms_monthly_reset_day": int(row.get("portal_sms_monthly_reset_day") or 1),
         "portal_notifications": {
             "enabled": bool(row.get("portal_notifications_enabled")),
             "success_enabled": bool(row.get("portal_success_notification_enabled")),
@@ -4913,9 +7847,253 @@ def public_captive_portal_settings(row=None):
         "status": row["status"],
         "custom_html": design["html_template"] if design else "",
         "custom_css": design["css_template"] if design else "",
+        "product_items": product_item_rows(active_only=True),
+        "product_categories": group_product_items_by_category(product_item_rows(active_only=True), product_category_rows(active_only=True)),
+        "portal_barangays": public_portal_barangays(),
+        "ap_coverage_summary": public_ap_coverage_summary(),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
+
+
+def public_ap_coverage_rows() -> list[dict]:
+    rows = fetch_all(
+        """
+        SELECT DISTINCT ON (a.id)
+            a.id,
+            a.display_name,
+            a.model,
+            a.deployment_status,
+            a.map_latitude,
+            a.map_longitude,
+            s.site_name,
+            s.omada_site_id,
+            s.barangay,
+            s.municipality,
+            s.latitude AS site_latitude,
+            s.longitude AS site_longitude
+        FROM ap_deployments a
+        LEFT JOIN site_deployments s
+               ON (
+                    NULLIF(a.omada_site_id, '') IS NOT NULL
+                    AND NULLIF(s.omada_site_id, '') IS NOT NULL
+                    AND a.omada_site_id = s.omada_site_id
+                  )
+               OR (
+                    NULLIF(a.site_name, '') IS NOT NULL
+                    AND lower(a.site_name) = lower(s.site_name)
+                  )
+        WHERE a.deployment_status <> 'DELETED'
+          AND a.map_latitude IS NOT NULL
+          AND a.map_longitude IS NOT NULL
+        ORDER BY a.id, COALESCE(s.barangay, s.site_name, a.site_name, a.display_name), a.display_name
+        """
+    )
+    public_rows = []
+    for row in rows:
+        latitude = row.get("map_latitude")
+        longitude = row.get("map_longitude")
+        if latitude is None or longitude is None:
+            continue
+        area = normalize_barangay_label(row.get("barangay")) or row.get("site_name") or "Mapped Area"
+        public_rows.append({
+            "id": str(row["id"]),
+            "display_name": row.get("display_name") or "3J WiFi AP",
+            "name": row.get("display_name") or "3J WiFi AP",
+            "model": row.get("model") or "",
+            "status": row.get("deployment_status") or "UNKNOWN",
+            "site_name": row.get("site_name") or "",
+            "site_id": row.get("omada_site_id") or "",
+            "barangay": normalize_barangay_label(row.get("barangay")),
+            "municipality": normalize_payment_text(row.get("municipality"), 120),
+            "area_label": area,
+            "map_latitude": float(latitude),
+            "map_longitude": float(longitude),
+            "site_latitude": float(row["site_latitude"]) if row.get("site_latitude") is not None else None,
+            "site_longitude": float(row["site_longitude"]) if row.get("site_longitude") is not None else None,
+            "mapped": True,
+            "map_health": "NO_CLIENTS",
+            "client_count": 0,
+            "active_client_count": 0,
+        })
+    return public_rows
+
+
+def public_ap_coverage_summary(rows: Optional[list[dict]] = None) -> dict:
+    rows = rows if rows is not None else public_ap_coverage_rows()
+    areas = sorted({
+        barangay_key(row.get("barangay") or row.get("area_label"))
+        for row in rows
+        if row.get("barangay") or row.get("area_label")
+    })
+    labels = []
+    seen = set()
+    for row in rows:
+        label = row.get("barangay") or row.get("area_label")
+        key = barangay_key(label)
+        if label and key and key not in seen:
+            seen.add(key)
+            labels.append(label)
+    return {
+        "ap_count": len(rows),
+        "areas_count": len(areas),
+        "area_labels": labels,
+    }
+
+
+def public_portal_barangays() -> list[str]:
+    rows = fetch_all(
+        """
+        SELECT DISTINCT label
+        FROM (
+            SELECT barangay AS label
+            FROM site_deployments
+            WHERE deployment_status <> 'INACTIVE'
+              AND NULLIF(trim(barangay), '') IS NOT NULL
+            UNION
+            SELECT barangay AS label
+            FROM locations
+            WHERE NULLIF(trim(barangay), '') IS NOT NULL
+        ) source_barangays
+        ORDER BY label ASC
+        """
+    )
+    labels = []
+    seen = set()
+    for row in rows:
+        label = normalize_barangay_label(row.get("label"))
+        key = barangay_key(label)
+        if label and key not in seen:
+            seen.add(key)
+            labels.append(label)
+    return labels
+
+
+@app.get("/api/portal/ap-coverage")
+def portal_ap_coverage():
+    aps = public_ap_coverage_rows()
+    site_centers = []
+    seen_sites = set()
+    for ap in aps:
+        if ap.get("site_latitude") is None or ap.get("site_longitude") is None:
+            continue
+        key = ap.get("site_id") or ap.get("site_name") or ap.get("area_label")
+        if key in seen_sites:
+            continue
+        seen_sites.add(key)
+        site_centers.append({
+            "site_id": ap.get("site_id"),
+            "site_name": ap.get("site_name"),
+            "latitude": ap.get("site_latitude"),
+            "longitude": ap.get("site_longitude"),
+            "barangay": ap.get("barangay"),
+        })
+    return {
+        "aps": aps,
+        "mapped": aps,
+        "site_centers": site_centers,
+        "summary": public_ap_coverage_summary(aps),
+    }
+
+
+@app.get("/api/portal/map-tiles/{z}/{x}/{y}.png")
+def portal_map_tile(z: int, x: int, y: int):
+    """Proxy public map tiles so captive clients only need portal-domain access."""
+    if z < 0 or z > 19:
+        raise HTTPException(status_code=400, detail="Invalid map zoom.")
+    max_tile = 2 ** z
+    if x < 0 or x >= max_tile or y < 0 or y >= max_tile:
+        raise HTTPException(status_code=400, detail="Invalid map tile.")
+
+    tile_url = f"https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    try:
+        tile_response = requests.get(
+            tile_url,
+            headers={
+                "User-Agent": "3JCentralPisowifi/1.0 (AP coverage captive portal map)",
+                "Accept": "image/png,image/*;q=0.8,*/*;q=0.5",
+            },
+            timeout=8,
+        )
+        tile_response.raise_for_status()
+    except requests.RequestException:
+        raise HTTPException(status_code=502, detail="Map tile unavailable.")
+
+    return Response(
+        content=tile_response.content,
+        media_type=tile_response.headers.get("content-type") or "image/png",
+        headers={"Cache-Control": "public, max-age=86400, stale-while-revalidate=604800"},
+    )
+
+
+def portal_validate_coordinate(value, minimum, maximum, label):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"Invalid {label}.")
+    if not math.isfinite(number) or number < minimum or number > maximum:
+        raise HTTPException(status_code=400, detail=f"Invalid {label}.")
+    return number
+
+
+def portal_distance_meters(lat1, lng1, lat2, lng2):
+    radius = 6371000
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lam = math.radians(lng2 - lng1)
+    hav = math.sin(d_phi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(d_lam / 2) ** 2
+    return 2 * radius * math.asin(min(1, math.sqrt(hav)))
+
+
+@app.get("/api/portal/ap-route")
+def portal_ap_route(from_lat: float, from_lng: float, to_lat: float, to_lng: float):
+    start_lat = portal_validate_coordinate(from_lat, -90, 90, "start latitude")
+    start_lng = portal_validate_coordinate(from_lng, -180, 180, "start longitude")
+    end_lat = portal_validate_coordinate(to_lat, -90, 90, "destination latitude")
+    end_lng = portal_validate_coordinate(to_lng, -180, 180, "destination longitude")
+    fallback = {
+        "status": "FALLBACK",
+        "route": [
+            {"latitude": start_lat, "longitude": start_lng},
+            {"latitude": end_lat, "longitude": end_lng},
+        ],
+        "distance_meters": portal_distance_meters(start_lat, start_lng, end_lat, end_lng),
+        "duration_seconds": None,
+        "source": "direct",
+        "warning": "Road route is unavailable, so a direct line was returned.",
+    }
+    route_url = f"https://router.project-osrm.org/route/v1/driving/{start_lng},{start_lat};{end_lng},{end_lat}"
+    try:
+        response = requests.get(
+            route_url,
+            params={"overview": "full", "geometries": "geojson", "steps": "false"},
+            headers={
+                "User-Agent": "3JCentralPisowifi/1.0 (AP coverage captive portal route)",
+                "Accept": "application/json",
+            },
+            timeout=8,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        route = (payload.get("routes") or [None])[0] or {}
+        coordinates = ((route.get("geometry") or {}).get("coordinates") or [])
+        points = [
+            {"latitude": float(lat), "longitude": float(lng)}
+            for lng, lat in coordinates
+            if isinstance(lng, (int, float)) and isinstance(lat, (int, float))
+        ]
+        if len(points) < 2:
+            return fallback
+        return {
+            "status": "OK",
+            "route": points[:800],
+            "distance_meters": route.get("distance"),
+            "duration_seconds": route.get("duration"),
+            "source": "osrm",
+        }
+    except Exception:
+        return fallback
 
 
 OMADA_PORTAL_ENABLE_ACTIONS = (
@@ -5346,8 +8524,8 @@ def attempt_omada_authorization(cur, session, voucher, user, duration_seconds: i
         """,
         (
             session["id"],
-            voucher["id"],
-            user["id"],
+            voucher.get("id") if voucher else None,
+            user.get("id") if user else None,
             client_mac,
             ap_mac,
             gateway_mac,
@@ -5360,12 +8538,16 @@ def attempt_omada_authorization(cur, session, voucher, user, duration_seconds: i
         ),
     )
     authorization = cur.fetchone()
+    error = None
     if not site_id:
         error = "Omada site not selected"
     elif not client_mac:
         error = "Missing client MAC/token from Omada redirect"
-    else:
-        error = None
+    elif voucher:
+        allowed, restriction_error, current_barangay = category_access_allowed_for_site(voucher.get("access_scope") or "ALL_LOCATIONS", voucher.get("allowed_barangay"), site_row)
+        if not allowed:
+            error = restriction_error or "This voucher is not allowed in the current Barangay."
+            request_summary["current_barangay"] = current_barangay
     if error:
         cur.execute(
             """
@@ -5557,6 +8739,11 @@ def attempt_mikrotik_authorization(cur, session, voucher, user, duration_seconds
         error = "MikroTik HotSpot server name was not provided by the portal redirect."
     elif not client_ip and not client_mac:
         error = "MikroTik client IP or MAC was not provided by the portal redirect."
+    elif voucher:
+        allowed, restriction_error, current_barangay = voucher_access_allowed_for_session(voucher, session, payload)
+        if not allowed:
+            error = restriction_error or "This voucher is not allowed in the current Barangay."
+            request_summary["current_barangay"] = current_barangay
     if error:
         return fail_authorization(error)
 
@@ -5786,43 +8973,637 @@ def portal_capport(request: Request):
 def portal_settings():
     branding = public_branding()
     design = fetch_one("SELECT * FROM portal_design_templates ORDER BY updated_at DESC LIMIT 1")
+    portal_settings_row = public_captive_portal_settings()
+    product_items = product_item_rows(active_only=True)
+    product_categories = group_product_items_by_category(product_items, product_category_rows(active_only=True))
     return {
         "portal_title": branding["portal_title"],
         "portal_subtitle": branding["portal_subtitle"] or "Enter your voucher to connect",
+        "current_portal_url": current_captive_portal_url(),
+        "local_portal_url": local_portal_url(),
         "welcome_message": branding["portal_welcome_message"],
         "support_text": branding["portal_support_text"],
         "terms_note": branding["portal_terms_note"],
         "show_powered_by": branding["portal_show_powered_by"],
         "accent_color": branding["accent_color"],
         "company_logo_url": branding["company_logo_url"],
-        "portal_notifications": public_captive_portal_settings().get("portal_notifications", {}),
+        "portal_notifications": portal_settings_row.get("portal_notifications", {}),
+        "no_internet_headline": portal_settings_row.get("no_internet_headline"),
+        "no_internet_subtitle": portal_settings_row.get("no_internet_subtitle"),
+        "no_internet_avatar_disconnected_url": portal_settings_row.get("no_internet_avatar_disconnected_url"),
+        "no_internet_avatar_connected_url": portal_settings_row.get("no_internet_avatar_connected_url"),
+        "avatar_notes_json": portal_settings_row.get("avatar_notes_json") or {},
+        "marketing_sms_consent_text": portal_settings_row.get("marketing_sms_consent_text"),
+        "profile_gift_enabled": portal_settings_row.get("profile_gift_enabled"),
+        "profile_gift_duration_seconds": portal_settings_row.get("profile_gift_duration_seconds"),
+        "profile_gift_title": portal_settings_row.get("profile_gift_title"),
+        "profile_gift_available_message": portal_settings_row.get("profile_gift_available_message"),
+        "profile_gift_description": portal_settings_row.get("profile_gift_description"),
+        "profile_gift_profile_saved_message": portal_settings_row.get("profile_gift_profile_saved_message"),
+        "profile_gift_redeemed_message": portal_settings_row.get("profile_gift_redeemed_message"),
+        "outside_network_warning_enabled": portal_settings_row.get("outside_network_warning_enabled"),
+        "outside_network_warning_message": portal_settings_row.get("outside_network_warning_message"),
+        "outside_network_purchase_title": portal_settings_row.get("outside_network_purchase_title"),
+        "outside_network_purchase_message": portal_settings_row.get("outside_network_purchase_message"),
+        "outside_network_purchase_success_message": portal_settings_row.get("outside_network_purchase_success_message"),
+        "bag_auto_activate_default": portal_settings_row.get("bag_auto_activate_default"),
+        "bag_activation_overlap_seconds": portal_settings_row.get("bag_activation_overlap_seconds"),
         "custom_html": design["html_template"] if design else "",
         "custom_css": design["css_template"] if design else "",
+        "product_items": product_items,
+        "product_categories": product_categories,
+        "portal_barangays": public_portal_barangays(),
+        "ap_coverage_summary": public_ap_coverage_summary(),
+        "payments": public_payment_gateway_portal_status(),
     }
 
 
 @app.post("/api/portal/session")
-def create_or_update_portal_session(payload: PortalSessionRequest, request: Request):
+def create_or_update_portal_session(payload: PortalSessionRequest, request: Request, response: Response):
+    handoff_session_id = parse_portal_handoff_token(payload.handoff)
+    if handoff_session_id:
+        payload = payload.model_copy(update={"portal_session_id": handoff_session_id})
+    if not payload.portal_session_id and request.cookies.get(PORTAL_SESSION_COOKIE):
+        payload = payload.model_copy(update={"portal_session_id": request.cookies.get(PORTAL_SESSION_COOKIE)})
+    if not payload.device_token and request.cookies.get(PORTAL_DEVICE_TOKEN_COOKIE):
+        payload = payload.model_copy(update={"device_token": request.cookies.get(PORTAL_DEVICE_TOKEN_COOKIE)})
     with get_conn() as conn:
         with conn.cursor() as cur:
             session = ensure_portal_session(cur, payload, request)
             create_portal_event(cur, session["id"], "PORTAL_VIEW", request, "Portal viewed", raw_context=payload.model_dump())
             mac_rebind = attempt_portal_device_mac_rebind(cur, session, payload, request)
             device_token = None
+            handoff_url = portal_handoff_url(session["public_session_id"]) if portal_session_has_current_gateway_access(session) else None
             incoming_hash = portal_device_token_hash(payload.device_token)
             if incoming_hash and session.get("device_token_hash") and hmac.compare_digest(str(incoming_hash), str(session["device_token_hash"])):
                 device_token = payload.device_token
+            profile = portal_profile_for_user(cur, session.get("user_id"))
+            network_presence = portal_network_presence(session, request, payload)
+    set_portal_session_cookies(response, session["public_session_id"], device_token)
     return {
         "portal_session_id": session["public_session_id"],
         "device_token": device_token,
         "status": session["status"],
         "source": session["source"],
+        "current_barangay": portal_current_barangay(session, payload),
         "omada_authorization_status": session.get("omada_authorization_status"),
         "mikrotik_authorization_status": session.get("mikrotik_authorization_status"),
         "mac_rebind_status": mac_rebind.get("status"),
         "mac_rebind_message": mac_rebind.get("message"),
+        "portal_handoff_url": handoff_url,
         "device_detected": session["source"] in {"OMADA", "MIKROTIK", "UNKNOWN"},
+        "network_presence": network_presence,
+        "profile": public_portal_profile(profile),
     }
+
+
+@app.post("/api/portal/profile/send-code")
+def portal_profile_send_code(payload: PortalProfileOtpRequest, request: Request):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            ensure_portal_user(cur, session)
+            cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
+            session = cur.fetchone()
+            result = create_portal_contact_verification(cur, session, payload.contact_number, "PROFILE", request)
+    return result
+
+
+@app.post("/api/portal/profile")
+def save_portal_profile(payload: PortalProfileSaveRequest, request: Request, response: Response):
+    if not payload.terms_accepted:
+        raise HTTPException(status_code=400, detail="Accept the terms and customer data consent before saving.")
+    display_name = normalize_payment_text(payload.display_name, 120)
+    if not display_name:
+        raise HTTPException(status_code=400, detail="Name is required.")
+    email = normalize_portal_email(payload.email)
+    normalized_contact, _ = normalize_portal_contact_number(payload.contact_number)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
+            session = cur.fetchone()
+            verify_portal_contact_code(cur, payload.contact_number, "PROFILE", payload.verification_code)
+            cur.execute(
+                """
+                SELECT *
+                FROM portal_customer_profiles
+                WHERE normalized_contact = %s AND user_id <> %s
+                LIMIT 1
+                """,
+                (normalized_contact, user["id"]),
+            )
+            if cur.fetchone():
+                raise HTTPException(status_code=400, detail="This contact number is already verified for another customer profile.")
+            existing_profile = portal_profile_for_user(cur, user["id"])
+            gift_settings = portal_profile_gift_settings()
+            voucher = create_welcome_voucher_if_needed(cur, user, existing_profile, gift_settings) if gift_settings["enabled"] else None
+            gift_created_at = datetime.now(timezone.utc) if voucher else None
+            gift_status = "AVAILABLE" if voucher else "NONE"
+            created_welcome_gift = bool(voucher and not (existing_profile or {}).get("welcome_voucher_id"))
+            cur.execute(
+                """
+                INSERT INTO portal_customer_profiles(
+                    user_id, display_name, email, contact_number, normalized_contact, contact_verified_at,
+                    terms_accepted_at, marketing_sms_consent, welcome_voucher_id, welcome_gift_status,
+                    welcome_gift_created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, now(), now(), %s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE
+                SET display_name = EXCLUDED.display_name,
+                    email = EXCLUDED.email,
+                    contact_number = EXCLUDED.contact_number,
+                    normalized_contact = EXCLUDED.normalized_contact,
+                    contact_verified_at = now(),
+                    terms_accepted_at = now(),
+                    marketing_sms_consent = EXCLUDED.marketing_sms_consent,
+                    welcome_voucher_id = CASE
+                        WHEN EXCLUDED.welcome_voucher_id IS NULL THEN portal_customer_profiles.welcome_voucher_id
+                        ELSE EXCLUDED.welcome_voucher_id
+                    END,
+                    welcome_gift_status = CASE
+                        WHEN portal_customer_profiles.welcome_gift_status = 'REDEEMED' THEN 'REDEEMED'
+                        WHEN EXCLUDED.welcome_voucher_id IS NULL THEN portal_customer_profiles.welcome_gift_status
+                        ELSE 'AVAILABLE'
+                    END,
+                    welcome_gift_created_at = CASE
+                        WHEN EXCLUDED.welcome_voucher_id IS NULL THEN portal_customer_profiles.welcome_gift_created_at
+                        ELSE COALESCE(portal_customer_profiles.welcome_gift_created_at, EXCLUDED.welcome_gift_created_at, now())
+                    END,
+                    updated_at = now()
+                RETURNING *
+                """,
+                (user["id"], display_name, email, normalized_contact, normalized_contact, bool(payload.marketing_sms_consent), voucher["id"] if voucher else None, gift_status, gift_created_at),
+            )
+            profile = cur.fetchone()
+            cur.execute(
+                """
+                UPDATE users
+                SET full_name = %s,
+                    email = %s,
+                    phone_number = %s,
+                    marketing_sms_consent = %s,
+                    terms_accepted_at = now(),
+                    profile_verified_at = now(),
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (display_name, email, normalized_contact, bool(payload.marketing_sms_consent), user["id"]),
+            )
+            cur.execute("UPDATE portal_sessions SET user_id = %s, updated_at = now() WHERE id = %s", (user["id"], session["id"]))
+            create_portal_event(cur, session["id"], "PROFILE_SAVED", request, "Customer profile saved.", raw_context={"marketing_sms_consent": bool(payload.marketing_sms_consent)})
+            if created_welcome_gift:
+                create_portal_event(cur, session["id"], "WELCOME_GIFT_CREATED", request, gift_settings["profile_saved_message"], voucher["code"])
+            device_token = ensure_portal_device_token(cur, session, payload.device_token)
+            response_message = gift_settings["profile_saved_message"] if profile.get("welcome_gift_status") == "AVAILABLE" else "Profile saved."
+    set_portal_session_cookies(response, session["public_session_id"], device_token)
+    return {
+        "status": "SUCCESS",
+        "message": response_message,
+        "portal_session_id": session["public_session_id"],
+        "device_token": device_token,
+        "profile": public_portal_profile(profile),
+    }
+
+
+@app.post("/api/portal/welcome-gift/redeem")
+def redeem_portal_welcome_gift(payload: PortalWelcomeGiftRedeemRequest, request: Request, response: Response):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            cur.execute("SELECT * FROM portal_sessions WHERE id = %s FOR UPDATE", (session["id"],))
+            session = cur.fetchone()
+            profile = portal_profile_for_user(cur, user["id"])
+            if not profile or profile.get("welcome_gift_status") != "AVAILABLE" or not profile.get("welcome_voucher_id"):
+                raise HTTPException(status_code=400, detail="No welcome gift is available for this customer profile.")
+            cur.execute("SELECT * FROM vouchers WHERE id = %s FOR UPDATE", (profile["welcome_voucher_id"],))
+            voucher = cur.fetchone()
+            if not voucher:
+                raise HTTPException(status_code=404, detail="Welcome gift voucher was not found.")
+            if voucher["status"] != "UNUSED":
+                cur.execute(
+                    "UPDATE portal_customer_profiles SET welcome_gift_status = 'REDEEMED', welcome_gift_redeemed_at = COALESCE(welcome_gift_redeemed_at, now()), updated_at = now() WHERE id = %s RETURNING *",
+                    (profile["id"],),
+                )
+                profile = cur.fetchone()
+                raise HTTPException(status_code=400, detail="Welcome gift was already redeemed.")
+            settings = ensure_captive_portal_settings()
+            gift_settings = portal_profile_gift_settings(settings)
+            duration_seconds, access_expires_at = voucher_authorization_duration(voucher, settings)
+            authorization = {"status": "NOT_REQUIRED"}
+            if session["source"] == "OMADA":
+                authorization = attempt_omada_authorization(cur, session, voucher, user, duration_seconds, access_expires_at, payload)
+            elif session["source"] == "MIKROTIK":
+                authorization = attempt_mikrotik_authorization(cur, session, voucher, user, duration_seconds, access_expires_at, payload)
+            if authorization.get("status") not in {"SUCCESS", "NOT_REQUIRED"}:
+                raise HTTPException(status_code=400, detail=authorization.get("error") or "Welcome gift is valid, but the gateway could not authorize this device.")
+            result = redeem_voucher(
+                cur,
+                VoucherRedeemTest(
+                    voucher_code=voucher["code"],
+                    user_id=str(user["id"]),
+                    device_identifier=session.get("omada_client_mac") or session.get("mikrotik_client_mac") or session.get("client_mac") or session["public_session_id"],
+                ),
+                None,
+                request,
+                "SYSTEM",
+            )
+            if result["status"] != "SUCCESS":
+                raise HTTPException(status_code=400, detail=result.get("reason") or "Welcome gift redemption failed.")
+            next_status = "ACCESS_GRANTED" if session["source"] in {"OMADA", "MIKROTIK"} else "VOUCHER_REDEEMED"
+            omada_status = "AUTHORIZED" if session["source"] == "OMADA" else ("MANUAL_TEST" if session["source"] == "MANUAL_TEST" else "NOT_REQUIRED")
+            mikrotik_status = "AUTHORIZED" if session["source"] == "MIKROTIK" else ("MANUAL_TEST" if session["source"] == "MANUAL_TEST" else "NOT_REQUIRED")
+            cur.execute(
+                """
+                UPDATE portal_sessions
+                SET voucher_id = %s,
+                    user_id = %s,
+                    status = %s,
+                    last_error = NULL,
+                    omada_authorization_status = %s,
+                    mikrotik_authorization_status = %s,
+                    access_granted_at = COALESCE(access_granted_at, now()),
+                    access_expires_at = COALESCE(access_expires_at, %s),
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (voucher["id"], user["id"], next_status, omada_status, mikrotik_status, access_expires_at, session["id"]),
+            )
+            session = cur.fetchone()
+            cur.execute(
+                """
+                UPDATE portal_customer_profiles
+                SET welcome_gift_status = 'REDEEMED',
+                    welcome_gift_redeemed_at = now(),
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (profile["id"],),
+            )
+            profile = cur.fetchone()
+            create_portal_event(cur, session["id"], "WELCOME_GIFT_REDEEMED", request, gift_settings["redeemed_message"], voucher["code"], {"authorization": sanitize_summary(authorization)})
+            device_token = ensure_portal_device_token(cur, session, payload.device_token)
+            wallet = portal_wallet_status(cur, session)
+            access_view = portal_access_view(session, wallet)
+    set_portal_session_cookies(response, session["public_session_id"], device_token)
+    return {
+        "status": "SUCCESS",
+        "message": gift_settings["redeemed_message"],
+        "portal_session_id": session["public_session_id"],
+        "device_token": device_token,
+        "profile": public_portal_profile(profile),
+        "remaining_time_seconds": access_view["remaining_time_seconds"],
+        "access_expires_at": access_view["access_expires_at"],
+        "connected": access_view["connected"],
+    }
+
+
+@app.post("/api/portal/missing-time/send-code")
+def portal_missing_time_send_code(payload: PortalMissingTimeOtpRequest, request: Request):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            result = create_portal_contact_verification(cur, session, payload.contact_number, "MISSING_TIME", request)
+    return result
+
+
+@app.post("/api/portal/missing-time/restore")
+def portal_missing_time_restore(payload: PortalMissingTimeRestoreRequest, request: Request, response: Response):
+    normalized_contact, _ = normalize_portal_contact_number(payload.contact_number)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            current_session = ensure_portal_session(cur, payload, request)
+            verify_portal_contact_code(cur, payload.contact_number, "MISSING_TIME", payload.verification_code)
+            cur.execute("SELECT * FROM portal_customer_profiles WHERE normalized_contact = %s", (normalized_contact,))
+            profile = cur.fetchone()
+            if not profile or not profile.get("user_id"):
+                raise HTTPException(status_code=404, detail="No verified customer profile was found for this contact number.")
+            cur.execute("SELECT * FROM users WHERE id = %s", (profile["user_id"],))
+            user = cur.fetchone()
+            if not user:
+                raise HTTPException(status_code=404, detail="Customer account was not found.")
+            cur.execute(
+                """
+                SELECT *
+                FROM portal_sessions
+                WHERE user_id = %s
+                  AND voucher_id IS NOT NULL
+                  AND access_expires_at IS NOT NULL
+                  AND access_expires_at > now()
+                ORDER BY access_expires_at DESC, updated_at DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (user["id"],),
+            )
+            source_session = cur.fetchone()
+            if not source_session:
+                raise HTTPException(status_code=404, detail="No active remaining time was found for this contact number.")
+            cur.execute("SELECT * FROM vouchers WHERE id = %s", (source_session["voucher_id"],))
+            voucher = cur.fetchone()
+            if not voucher:
+                raise HTTPException(status_code=404, detail="The active voucher tied to this contact number was not found.")
+            remaining_seconds = max(int((aware_utc(source_session["access_expires_at"]) - datetime.now(timezone.utc)).total_seconds()), 0)
+            if remaining_seconds <= 0:
+                raise HTTPException(status_code=400, detail="The remaining time for this contact number is already consumed.")
+            authorization = {"status": "NOT_REQUIRED"}
+            if current_session["source"] == "OMADA":
+                authorization = attempt_omada_authorization(cur, current_session, voucher, user, remaining_seconds, source_session["access_expires_at"], payload)
+            elif current_session["source"] == "MIKROTIK":
+                authorization = attempt_mikrotik_authorization(cur, current_session, voucher, user, remaining_seconds, source_session["access_expires_at"], payload)
+            if authorization.get("status") not in {"SUCCESS", "NOT_REQUIRED"}:
+                raise HTTPException(status_code=400, detail=authorization.get("error") or "Remaining time was found, but this device could not be authorized.")
+            if str(source_session["id"]) != str(current_session["id"]) and source_session.get("source") == "OMADA":
+                try:
+                    revoke_omada_authorized_clients(cur, source_session)
+                except Exception:
+                    pass
+            next_status = "ACCESS_GRANTED" if current_session["source"] in {"OMADA", "MIKROTIK"} else "VOUCHER_REDEEMED"
+            omada_status = "AUTHORIZED" if current_session["source"] == "OMADA" else ("MANUAL_TEST" if current_session["source"] == "MANUAL_TEST" else "NOT_REQUIRED")
+            mikrotik_status = "AUTHORIZED" if current_session["source"] == "MIKROTIK" else ("MANUAL_TEST" if current_session["source"] == "MANUAL_TEST" else "NOT_REQUIRED")
+            cur.execute(
+                """
+                UPDATE portal_sessions
+                SET user_id = %s,
+                    voucher_id = %s,
+                    status = %s,
+                    last_error = NULL,
+                    omada_authorization_status = %s,
+                    mikrotik_authorization_status = %s,
+                    access_granted_at = COALESCE(access_granted_at, now()),
+                    access_expires_at = %s,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (user["id"], voucher["id"], next_status, omada_status, mikrotik_status, source_session["access_expires_at"], current_session["id"]),
+            )
+            current_session = cur.fetchone()
+            create_portal_event(cur, current_session["id"], "MISSING_TIME_RESTORED", request, "Remaining time restored by verified contact number.", voucher["code"], {"remaining_seconds": remaining_seconds, "authorization": sanitize_summary(authorization)})
+            device_token = ensure_portal_device_token(cur, current_session, payload.device_token)
+            wallet = portal_wallet_status(cur, current_session)
+            access_view = portal_access_view(current_session, wallet)
+    set_portal_session_cookies(response, current_session["public_session_id"], device_token)
+    return {
+        "status": "SUCCESS",
+        "message": "Remaining time restored to this device.",
+        "portal_session_id": current_session["public_session_id"],
+        "device_token": device_token,
+        "remaining_time_seconds": access_view["remaining_time_seconds"],
+        "access_expires_at": access_view["access_expires_at"],
+        "connected": access_view["connected"],
+    }
+
+
+def public_support_conversation(row: dict, messages: Optional[list[dict]] = None) -> dict:
+    return {
+        "id": str(row["id"]),
+        "public_conversation_id": row["public_conversation_id"],
+        "customer_name": row.get("customer_name") or "Customer",
+        "contact_number": row.get("contact_number"),
+        "email": row.get("email"),
+        "subject": row.get("subject"),
+        "status": row.get("status"),
+        "priority": row.get("priority"),
+        "last_message_at": row.get("last_message_at"),
+        "unread_admin_count": row.get("unread_admin_count") or 0,
+        "unread_customer_count": row.get("unread_customer_count") or 0,
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "messages": messages or [],
+    }
+
+
+def support_messages_for_conversation(conversation_id: str) -> list[dict]:
+    rows = fetch_all(
+        """
+        SELECT m.*, a.username AS admin_username
+        FROM portal_support_messages m
+        LEFT JOIN admins a ON a.id = m.admin_id
+        WHERE m.conversation_id = %s
+        ORDER BY m.created_at ASC
+        """,
+        (conversation_id,),
+    )
+    return [
+        {
+            "id": str(row["id"]),
+            "sender_type": row["sender_type"],
+            "admin_username": row.get("admin_username"),
+            "message_text": row["message_text"],
+            "created_at": row["created_at"],
+            "read_at": row.get("read_at"),
+        }
+        for row in rows
+    ]
+
+
+@app.post("/api/portal/support/conversations")
+def portal_support_create_conversation(payload: PortalSupportConversationCreateRequest, request: Request):
+    message_text = normalize_payment_text(payload.message_text, 2000)
+    if not message_text:
+        raise HTTPException(status_code=400, detail="Message is required.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            profile = portal_profile_for_user(cur, user["id"])
+            public_id = f"SUP-{secrets.token_urlsafe(10).replace('_', '').replace('-', '').upper()[:12]}"
+            cur.execute(
+                """
+                INSERT INTO portal_support_conversations(
+                    public_conversation_id, portal_session_id, user_id, customer_name, contact_number,
+                    email, subject, status, priority, last_message_at, unread_admin_count
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, 'Customer message', 'PENDING_ADMIN', 'NORMAL', now(), 1)
+                RETURNING *
+                """,
+                (
+                    public_id,
+                    session["id"],
+                    user["id"],
+                    (profile or {}).get("display_name") or user.get("full_name") or "Customer",
+                    (profile or {}).get("contact_number") or user.get("phone_number"),
+                    (profile or {}).get("email") or user.get("email"),
+                ),
+            )
+            conversation = cur.fetchone()
+            cur.execute(
+                """
+                INSERT INTO portal_support_messages(conversation_id, sender_type, message_text)
+                VALUES (%s, 'CUSTOMER', %s)
+                """,
+                (conversation["id"], message_text),
+            )
+            create_portal_event(cur, session["id"], "SUPPORT_MESSAGE_CREATED", request, "Customer support conversation created.", raw_context={"conversation": public_id})
+    messages = support_messages_for_conversation(str(conversation["id"]))
+    return public_support_conversation(conversation, messages)
+
+
+@app.get("/api/portal/support/conversations/{public_conversation_id}")
+def portal_support_get_conversation(public_conversation_id: str):
+    conversation = fetch_one("SELECT * FROM portal_support_conversations WHERE public_conversation_id = %s", (normalize_payment_text(public_conversation_id, 80),))
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE portal_support_conversations SET unread_customer_count = 0, updated_at = now() WHERE id = %s RETURNING *",
+                (conversation["id"],),
+            )
+            conversation = cur.fetchone()
+    return public_support_conversation(conversation, support_messages_for_conversation(str(conversation["id"])))
+
+
+@app.post("/api/portal/support/conversations/{public_conversation_id}/messages")
+def portal_support_send_message(public_conversation_id: str, payload: PortalSupportMessageRequest, request: Request):
+    message_text = normalize_payment_text(payload.message_text, 2000)
+    if not message_text:
+        raise HTTPException(status_code=400, detail="Message is required.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            cur.execute("SELECT * FROM portal_support_conversations WHERE public_conversation_id = %s FOR UPDATE", (normalize_payment_text(public_conversation_id, 80),))
+            conversation = cur.fetchone()
+            if not conversation:
+                raise HTTPException(status_code=404, detail="Conversation not found.")
+            cur.execute(
+                """
+                INSERT INTO portal_support_messages(conversation_id, sender_type, message_text)
+                VALUES (%s, 'CUSTOMER', %s)
+                """,
+                (conversation["id"], message_text),
+            )
+            cur.execute(
+                """
+                UPDATE portal_support_conversations
+                SET status = 'PENDING_ADMIN',
+                    last_message_at = now(),
+                    unread_admin_count = unread_admin_count + 1,
+                    portal_session_id = COALESCE(portal_session_id, %s),
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (session["id"], conversation["id"]),
+            )
+            conversation = cur.fetchone()
+            create_portal_event(cur, session["id"], "SUPPORT_MESSAGE_CREATED", request, "Customer support message sent.", raw_context={"conversation": public_conversation_id})
+    return public_support_conversation(conversation, support_messages_for_conversation(str(conversation["id"])))
+
+
+@app.get("/api/support/conversations")
+def admin_support_conversations(status: Optional[str] = None, admin=Depends(current_admin)):
+    where = []
+    params = []
+    requested_status = normalize_payment_text(status, 40).upper() if status else ""
+    if requested_status:
+        allowed_statuses = {"OPEN", "PENDING_ADMIN", "PENDING_CUSTOMER", "CLOSED"}
+        if requested_status not in allowed_statuses:
+            raise HTTPException(status_code=400, detail="Unsupported support conversation status.")
+        where.append("status = %s")
+        params.append(requested_status)
+    clause = f"WHERE {' AND '.join(where)}" if where else ""
+    rows = fetch_all(
+        f"""
+        SELECT *
+        FROM portal_support_conversations
+        {clause}
+        ORDER BY
+          CASE WHEN status = 'PENDING_ADMIN' THEN 0 WHEN status = 'OPEN' THEN 1 WHEN status = 'PENDING_CUSTOMER' THEN 2 ELSE 3 END,
+          COALESCE(last_message_at, created_at) DESC
+        LIMIT 200
+        """,
+        tuple(params),
+    )
+    return {"items": [public_support_conversation(row) for row in rows]}
+
+
+@app.get("/api/support/conversations/{conversation_id}")
+def admin_support_conversation_detail(conversation_id: str, admin=Depends(current_admin)):
+    conversation = fetch_one("SELECT * FROM portal_support_conversations WHERE id = %s", (conversation_id,))
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Support conversation not found.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE portal_support_conversations SET unread_admin_count = 0, updated_at = now() WHERE id = %s RETURNING *",
+                (conversation["id"],),
+            )
+            conversation = cur.fetchone()
+    return public_support_conversation(conversation, support_messages_for_conversation(str(conversation["id"])))
+
+
+@app.post("/api/support/conversations/{conversation_id}/messages")
+def admin_support_conversation_reply(conversation_id: str, payload: SupportConversationReplyPayload, admin=Depends(current_admin)):
+    message_text = normalize_payment_text(payload.message_text, 4000)
+    if not message_text:
+        raise HTTPException(status_code=400, detail="Reply message is required.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM portal_support_conversations WHERE id = %s FOR UPDATE", (conversation_id,))
+            conversation = cur.fetchone()
+            if not conversation:
+                raise HTTPException(status_code=404, detail="Support conversation not found.")
+            cur.execute(
+                """
+                INSERT INTO portal_support_messages(conversation_id, sender_type, admin_id, message_text)
+                VALUES (%s, 'ADMIN', %s, %s)
+                """,
+                (conversation["id"], admin["id"], message_text),
+            )
+            cur.execute(
+                """
+                UPDATE portal_support_conversations
+                SET status = CASE WHEN status = 'CLOSED' THEN 'CLOSED' ELSE 'PENDING_CUSTOMER' END,
+                    last_message_at = now(),
+                    unread_admin_count = 0,
+                    unread_customer_count = unread_customer_count + 1,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (conversation["id"],),
+            )
+            conversation = cur.fetchone()
+            audit(admin["id"], "reply_portal_support_conversation", "portal_support_conversation", str(conversation["id"]), {"public_conversation_id": conversation["public_conversation_id"]})
+    return public_support_conversation(conversation, support_messages_for_conversation(str(conversation["id"])))
+
+
+@app.patch("/api/support/conversations/{conversation_id}")
+def admin_update_support_conversation(conversation_id: str, payload: SupportConversationUpdatePayload, admin=Depends(current_admin)):
+    allowed_statuses = {"OPEN", "PENDING_ADMIN", "PENDING_CUSTOMER", "CLOSED"}
+    allowed_priorities = {"LOW", "NORMAL", "HIGH", "URGENT"}
+    updates = {}
+    if payload.status is not None:
+        status = normalize_payment_text(payload.status, 40).upper()
+        if status not in allowed_statuses:
+            raise HTTPException(status_code=400, detail="Unsupported support conversation status.")
+        updates["status"] = status
+    if payload.priority is not None:
+        priority = normalize_payment_text(payload.priority, 40).upper()
+        if priority not in allowed_priorities:
+            raise HTTPException(status_code=400, detail="Unsupported support conversation priority.")
+        updates["priority"] = priority
+    if not updates:
+        conversation = fetch_one("SELECT * FROM portal_support_conversations WHERE id = %s", (conversation_id,))
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Support conversation not found.")
+        return public_support_conversation(conversation, support_messages_for_conversation(str(conversation["id"])))
+    assignments = ", ".join([f"{key} = %s" for key in updates] + ["updated_at = now()"])
+    params = [*updates.values(), conversation_id]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE portal_support_conversations SET {assignments} WHERE id = %s RETURNING *", tuple(params))
+            conversation = cur.fetchone()
+            if not conversation:
+                raise HTTPException(status_code=404, detail="Support conversation not found.")
+            audit(admin["id"], "update_portal_support_conversation", "portal_support_conversation", str(conversation["id"]), sanitize_summary(updates))
+    return public_support_conversation(conversation, support_messages_for_conversation(str(conversation["id"])))
 
 
 @app.post("/api/portal/redeem")
@@ -5830,6 +9611,25 @@ def portal_redeem(payload: PortalRedeemRequest, request: Request):
     with get_conn() as conn:
         with conn.cursor() as cur:
             session = ensure_portal_session(cur, payload, request)
+            blocked = portal_blocked_device(
+                cur,
+                portal_effective_mac_from_session(session) or payload.client_mac or payload.clientMac or payload.mac,
+                session.get("client_ip") or payload.client_ip or payload.clientIp or payload.clientIP or payload.ip,
+            )
+            if blocked:
+                message = "This device is blocked. Please contact the operator."
+                cur.execute(
+                    """
+                    UPDATE portal_sessions
+                    SET status = 'ACCESS_DENIED',
+                        last_error = %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (message, session["id"]),
+                )
+                create_portal_event(cur, session["id"], "VOUCHER_REDEEM_FAILED", request, message, payload.voucher_code, {"blocked_device_id": str(blocked["id"])})
+                return {"status": "FAILED", "message": message, "portal_session_id": session["public_session_id"]}
             failed_count = fetch_one(
                 """
                 SELECT count(*) AS count
@@ -5901,6 +9701,23 @@ def portal_redeem(payload: PortalRedeemRequest, request: Request):
                     create_portal_event(cur, session["id"], "VOUCHER_REDEEM_FAILED", request, failure, payload.voucher_code, {"result": "FAILED", "phase": "validation"})
                     return {"status": "FAILED", "message": failure or "Something went wrong. Please try again or contact the operator.", "portal_session_id": session["public_session_id"], "authorization_status": session.get("omada_authorization_status")}
 
+                access_allowed, access_error, current_barangay = voucher_access_allowed_for_session(voucher, session, payload)
+                if not access_allowed:
+                    cur.execute(
+                        """
+                        UPDATE portal_sessions
+                        SET status = 'ACCESS_DENIED',
+                            last_error = %s,
+                            updated_at = now()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (access_error, session["id"]),
+                    )
+                    session = cur.fetchone()
+                    create_portal_event(cur, session["id"], "VOUCHER_REDEEM_FAILED", request, access_error, payload.voucher_code, {"result": "FAILED", "phase": "barangay_scope", "current_barangay": current_barangay})
+                    return {"status": "FAILED", "message": access_error or "This voucher is not allowed in the current Barangay.", "portal_session_id": session["public_session_id"], "authorization_status": session.get("omada_authorization_status")}
+
                 portal_settings_row = ensure_captive_portal_settings()
                 duration_seconds, access_expires_at = voucher_authorization_duration(voucher, portal_settings_row)
                 authorization = attempt_omada_authorization(cur, session, voucher, user, duration_seconds, access_expires_at, payload)
@@ -5955,6 +9772,25 @@ def portal_redeem(payload: PortalRedeemRequest, request: Request):
                     session = cur.fetchone()
                     create_portal_event(cur, session["id"], "VOUCHER_REDEEM_FAILED", request, failure, payload.voucher_code, {"result": "FAILED", "phase": "mikrotik_validation"})
                     return {"status": "FAILED", "message": failure or "Something went wrong. Please try again or contact the operator.", "portal_session_id": session["public_session_id"], "authorization_status": session.get("mikrotik_authorization_status")}
+
+                access_allowed, access_error, current_barangay = voucher_access_allowed_for_session(voucher, session, payload)
+                if not access_allowed:
+                    cur.execute(
+                        """
+                        UPDATE portal_sessions
+                        SET status = 'ACCESS_DENIED',
+                            last_error = %s,
+                            mikrotik_authorization_status = 'FAILED',
+                            mikrotik_authorization_error = %s,
+                            updated_at = now()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (access_error, access_error, session["id"]),
+                    )
+                    session = cur.fetchone()
+                    create_portal_event(cur, session["id"], "VOUCHER_REDEEM_FAILED", request, access_error, payload.voucher_code, {"result": "FAILED", "phase": "barangay_scope", "current_barangay": current_barangay, "source": "MIKROTIK"})
+                    return {"status": "FAILED", "message": access_error or "This voucher is not allowed in the current Barangay.", "portal_session_id": session["public_session_id"], "authorization_status": session.get("mikrotik_authorization_status")}
 
                 portal_settings_row = ensure_captive_portal_settings()
                 duration_seconds, access_expires_at = voucher_authorization_duration(voucher, portal_settings_row)
@@ -6052,19 +9888,12 @@ def portal_status(portal_session_id: str, request: Request):
             if not session:
                 return {"status": "NEW", "message": "No portal session yet."}
             create_portal_event(cur, session["id"], "STATUS_VIEW", request, "Status viewed")
+            bag_refresh = refresh_customer_bag_for_session(cur, session, request)
+            session = bag_refresh["session"]
+            bag = bag_refresh["bag"]
             wallet = portal_wallet_status(cur, session)
-            cur.execute(
-                """
-                SELECT r.*, v.code AS voucher_code
-                FROM voucher_redemptions r
-                LEFT JOIN vouchers v ON v.id = r.voucher_id
-                WHERE r.user_id = %s
-                ORDER BY r.created_at DESC
-                LIMIT 1
-                """,
-                (session["user_id"],),
-            )
-            redemption = cur.fetchone() if session.get("user_id") else None
+            redemption = latest_portal_redemption(cur, session)
+            profile = portal_profile_for_user(cur, session.get("user_id"))
             access_view = portal_access_view(session, wallet, redemption)
             if access_view["access_expired"] and session["status"] == "ACCESS_GRANTED":
                 cur.execute(
@@ -6079,6 +9908,31 @@ def portal_status(portal_session_id: str, request: Request):
                     (session["id"],),
                 )
                 session = cur.fetchone()
+            if access_view["access_expired"] and session.get("source") == "OMADA" and session.get("omada_authorization_status") == "AUTHORIZED":
+                revoke_result = revoke_omada_authorized_clients(cur, session)
+                cur.execute(
+                    """
+                    UPDATE portal_sessions
+                    SET omada_authorization_status = 'EXPIRED',
+                        omada_authorization_error = NULL,
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (session["id"],),
+                )
+                session = cur.fetchone()
+                create_portal_event(
+                    cur,
+                    session["id"],
+                    "STATUS_VIEW",
+                    request,
+                    "Expired access synchronized with Omada authorized clients.",
+                    raw_context={"revoke_result": sanitize_summary(revoke_result)},
+                )
+                bag = customer_bag_payload(cur, session.get("user_id"))
+            network_presence = portal_network_presence(session, request)
+            portal_settings_row = public_captive_portal_settings()
     return {
         "status": session["status"],
         "portal_session_id": session["public_session_id"],
@@ -6087,6 +9941,7 @@ def portal_status(portal_session_id: str, request: Request):
         "valid_until": access_view["valid_until"],
         "unlimited": access_view["unlimited"],
         "source": session["source"],
+        "current_barangay": portal_current_barangay(session, None),
         "omada_authorization_status": session.get("omada_authorization_status"),
         "mikrotik_authorization_status": session.get("mikrotik_authorization_status"),
         "authorization_error": session.get("omada_authorization_error"),
@@ -6094,10 +9949,604 @@ def portal_status(portal_session_id: str, request: Request):
         "access_expires_at": access_view["access_expires_at"],
         "access_expired": access_view["access_expired"],
         "connected": access_view["connected"],
+        "network_presence": network_presence,
+        "outside_network_warning": {
+            "enabled": bool(portal_settings_row.get("outside_network_warning_enabled")),
+            "message": portal_settings_row.get("outside_network_warning_message"),
+            "purchase_title": portal_settings_row.get("outside_network_purchase_title"),
+            "purchase_message": portal_settings_row.get("outside_network_purchase_message"),
+            "purchase_success_message": portal_settings_row.get("outside_network_purchase_success_message"),
+        },
+        "bag": bag,
         "redirect_url": session.get("mikrotik_link_orig") or session.get("redirect_url"),
         "last_voucher_redemption": redemption,
+        "profile": public_portal_profile(profile),
         "message": session["last_error"] or access_view["message"],
     }
+
+
+@app.get("/api/portal/bag")
+def get_portal_bag(portal_session_id: str, request: Request):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM portal_sessions WHERE public_session_id = %s", (portal_session_id,))
+            session = cur.fetchone()
+            if not session:
+                return {"status": "NEW", "bag": customer_bag_payload(cur, None)}
+            bag_refresh = refresh_customer_bag_for_session(cur, session, request)
+            return {
+                "status": "SUCCESS",
+                "portal_session_id": session["public_session_id"],
+                "network_presence": portal_network_presence(bag_refresh["session"], request),
+                "bag": bag_refresh["bag"],
+                "activation": sanitize_summary(bag_refresh.get("activation")),
+            }
+
+
+@app.patch("/api/portal/bag/settings")
+def update_portal_bag_settings(payload: PortalBagSettingsRequest, request: Request):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            cur.execute(
+                """
+                INSERT INTO customer_bag_settings(user_id, auto_activate)
+                VALUES (%s, %s)
+                ON CONFLICT (user_id) DO UPDATE
+                SET auto_activate = EXCLUDED.auto_activate,
+                    updated_at = now()
+                RETURNING *
+                """,
+                (user["id"], bool(payload.auto_activate)),
+            )
+            settings = cur.fetchone()
+            create_customer_bag_event(cur, user["id"], None, session["id"], "AUTO_ACTIVATE_UPDATED", "Auto activation setting updated.", bool(settings.get("auto_activate")), bag_overlap_seconds())
+            return {"status": "SUCCESS", "bag": customer_bag_payload(cur, user["id"])}
+
+
+@app.post("/api/portal/bag/reorder")
+def reorder_portal_bag(payload: PortalBagReorderRequest, request: Request):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            clean_ids = []
+            for item_id in payload.item_ids or []:
+                try:
+                    clean_ids.append(str(uuid.UUID(str(item_id))))
+                except (TypeError, ValueError):
+                    continue
+            priority = 100
+            for item_id in clean_ids:
+                cur.execute(
+                    """
+                    UPDATE customer_bag_items
+                    SET priority = %s,
+                        updated_at = now()
+                    WHERE id = %s AND user_id = %s AND status = 'QUEUED'
+                    """,
+                    (priority, item_id, user["id"]),
+                )
+                priority += 100
+            create_customer_bag_event(cur, user["id"], None, session["id"], "QUEUE_REORDERED", "Customer bag queue reordered.", metadata={"item_ids": clean_ids})
+            return {"status": "SUCCESS", "bag": customer_bag_payload(cur, user["id"])}
+
+
+@app.post("/api/portal/bag/items/{item_id}/activate")
+def activate_portal_bag_item(item_id: str, payload: PortalBagActivateRequest, request: Request):
+    try:
+        clean_item_id = str(uuid.UUID(str(item_id)))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid bag item.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            cur.execute("SELECT * FROM customer_bag_items WHERE id = %s AND user_id = %s FOR UPDATE", (clean_item_id, user["id"]))
+            item = cur.fetchone()
+            if not item:
+                raise HTTPException(status_code=404, detail="Bag item not found.")
+            result = activate_customer_bag_item(cur, item, session, request, "MANUAL")
+            if result.get("status") == "FAILED":
+                raise HTTPException(status_code=400, detail=result.get("error") or "Could not activate this bag item.")
+            if result.get("status") == "SUCCESS":
+                cur.execute(
+                    """
+                    UPDATE customer_bag_items
+                    SET status = 'CONSUMED',
+                        remaining_seconds = 0,
+                        consumed_at = COALESCE(consumed_at, now()),
+                        updated_at = now()
+                    WHERE user_id = %s AND status = 'ACTIVE' AND id <> %s
+                    """,
+                    (user["id"], clean_item_id),
+                )
+            return {"status": result.get("status"), "message": result.get("message"), "bag": customer_bag_payload(cur, user["id"])}
+
+
+def payment_checkout_method(store: dict, value: str) -> str:
+    method = normalize_payment_text(value or "gcash", 40).lower()
+    if method not in PAYMENT_METHOD_OPTIONS:
+        raise HTTPException(status_code=400, detail="Unsupported payment method")
+    if method not in (store.get("enabled_payment_methods") or []):
+        raise HTTPException(status_code=400, detail=f"{PAYMENT_METHOD_OPTIONS[method]} is not enabled")
+    return method
+
+
+@app.post("/api/portal/payments/checkout")
+def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, request: Request):
+    store = payment_gateway_store()
+    active_credentials = payment_gateway_active_credentials(store)
+    if not store.get("enabled"):
+        raise HTTPException(status_code=400, detail="Online payments are not enabled")
+    if store.get("provider") != "PAYMONGO":
+        raise HTTPException(status_code=400, detail="Only PayMongo payments are supported")
+    method = payment_checkout_method(store, payload.payment_method)
+    if not active_credentials.get("secret_key"):
+        raise HTTPException(status_code=400, detail=f"PayMongo {active_credentials['mode']} secret key is not configured")
+
+    checkout_error = None
+    response_payload = None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            profile = portal_profile_for_user(cur, user["id"])
+            customer_name = normalize_payment_text((profile or {}).get("display_name") or user.get("full_name"), 120) or None
+            customer_email = normalize_portal_email((profile or {}).get("email") or user.get("email")) or None
+            customer_contact = normalize_payment_text((profile or {}).get("contact_number") or user.get("phone_number"), 32) or None
+            cur.execute(
+                """
+                SELECT p.*,
+                       c.name AS category_name,
+                       c.description AS category_description,
+                       c.access_scope AS category_access_scope,
+                       c.allowed_barangay AS category_allowed_barangay,
+                       c.status AS category_status
+                FROM product_items p
+                LEFT JOIN product_categories c ON c.id = p.category_id
+                WHERE p.id = %s
+                  AND p.status = 'ACTIVE'
+                  AND (c.id IS NULL OR c.status = 'ACTIVE')
+                """,
+                (payload.product_item_id,),
+            )
+            product = cur.fetchone()
+            if not product:
+                raise HTTPException(status_code=404, detail="Product item not found or disabled")
+            product["discounts"] = product_item_discount_rows([str(product["id"])], active_only=True)
+            site_row = site_deployment_for_portal_context(session, payload)
+            current_barangay = normalize_barangay_label((site_row or {}).get("barangay"))
+            category_access_scope = normalize_product_access_scope(product.get("category_access_scope") or "ALL_LOCATIONS")
+            selected_barangay = normalize_barangay_label(payload.selected_barangay)
+            legacy_category_barangay = normalize_barangay_label(product.get("category_allowed_barangay"))
+            category_barangay = None
+            if category_access_scope == "BARANGAY_ONLY":
+                category_barangay = selected_barangay or current_barangay or legacy_category_barangay
+                if not category_barangay:
+                    raise HTTPException(status_code=400, detail="Choose a Barangay for this Barangay-only package.")
+                if current_barangay and barangay_key(category_barangay) != barangay_key(current_barangay):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"You are currently connected in {current_barangay}. Choose {current_barangay} for immediate access.",
+                    )
+            checkout_amount = product_checkout_amount(product, payload.purchase_quantity)
+            amount_centavos = checkout_amount["amount_centavos"]
+            duration_unit = normalize_product_duration_unit(product["duration_unit"])
+            duration_seconds = product_duration_seconds(product["duration_value"], duration_unit) * checkout_amount["quantity"]
+            device_scope = normalize_product_device_scope(product.get("device_scope"))
+            allowed_devices = normalize_product_allowed_devices(device_scope, int(product.get("allowed_devices") or 1))
+            public_order_id = generate_payment_order_public_id()
+            for _ in range(10):
+                cur.execute("SELECT 1 FROM payment_orders WHERE public_order_id = %s", (public_order_id,))
+                if not cur.fetchone():
+                    break
+                public_order_id = generate_payment_order_public_id()
+            cur.execute(
+                """
+                INSERT INTO payment_orders(
+                    public_order_id, provider, provider_mode, product_item_id, portal_session_id, user_id,
+                    status, fulfillment_status, payment_method, amount_centavos, base_amount_centavos,
+                    purchase_quantity, discount_type, discount_value, discount_amount_centavos, currency, product_name,
+                    product_description, duration_seconds, device_scope, allowed_devices, product_category_id,
+                    product_category_name, product_category_access_scope, product_category_barangay, client_mac, client_ip, user_agent,
+                    customer_name, customer_email, customer_contact_number
+                )
+                VALUES (
+                    %s, 'PAYMONGO', %s, %s, %s, %s,
+                    'PENDING', 'PENDING', %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, NULLIF(%s, '')::inet, %s,
+                    %s, %s, %s
+                )
+                RETURNING *
+                """,
+                (
+                    public_order_id,
+                    active_credentials["mode"],
+                    product["id"],
+                    session["id"],
+                    user["id"],
+                    method,
+                    amount_centavos,
+                    checkout_amount["base_amount_centavos"],
+                    checkout_amount["quantity"],
+                    checkout_amount["discount_type"],
+                    checkout_amount["discount_value"],
+                    checkout_amount["discount_amount_centavos"],
+                    store.get("currency"),
+                    product["name"],
+                    product.get("description"),
+                    duration_seconds,
+                    device_scope,
+                    allowed_devices,
+                    product.get("category_id"),
+                    product.get("category_name"),
+                    category_access_scope,
+                    category_barangay,
+                    session.get("client_mac") or session.get("omada_client_mac") or session.get("mikrotik_client_mac"),
+                    str(session.get("client_ip") or public_ip(request) or ""),
+                    request.headers.get("user-agent"),
+                    customer_name,
+                    customer_email,
+                    customer_contact,
+                ),
+            )
+            order = cur.fetchone()
+            try:
+                checkout = paymongo_create_checkout_session(store, active_credentials["secret_key"], order, session, method)
+                checkout_data = checkout.get("data") if isinstance(checkout.get("data"), dict) else {}
+                checkout_attributes = checkout_data.get("attributes") if isinstance(checkout_data.get("attributes"), dict) else {}
+                checkout_session_id = checkout_data.get("id")
+                checkout_url = checkout_attributes.get("checkout_url") or checkout_attributes.get("url")
+                if not checkout_url:
+                    raise HTTPException(status_code=502, detail="PayMongo did not return a checkout URL")
+                cur.execute(
+                    """
+                    UPDATE payment_orders
+                    SET status = 'CHECKOUT_CREATED',
+                        checkout_session_id = %s,
+                        checkout_url = %s,
+                        provider_response_json = %s,
+                        last_error = NULL,
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (checkout_session_id, checkout_url, Json(sanitize_summary(checkout)), order["id"]),
+                )
+                order = cur.fetchone()
+                create_portal_event(cur, session["id"], "PAYMENT_CHECKOUT_CREATED", request, "PayMongo checkout created", raw_context={"payment_order_id": public_order_id, "product_item_id": str(product["id"]), "method": method, "category": product.get("category_name"), "current_barangay": current_barangay})
+                response_payload = {
+                    "status": "CHECKOUT_CREATED",
+                    "payment_order_id": order["public_order_id"],
+                    "checkout_url": order["checkout_url"],
+                    "provider": order["provider"],
+                    "mode": order["provider_mode"],
+                    "payment_method": order["payment_method"],
+                    "amount_centavos": order["amount_centavos"],
+                    "base_amount_centavos": order.get("base_amount_centavos"),
+                    "purchase_quantity": order.get("purchase_quantity") or 1,
+                    "discount_type": order.get("discount_type"),
+                    "discount_value": float(order.get("discount_value") or 0),
+                    "discount_amount_centavos": order.get("discount_amount_centavos") or 0,
+                    "currency": order["currency"],
+                    "product_name": order["product_name"],
+                    "product_category_name": order.get("product_category_name"),
+                    "product_category_access_scope": order.get("product_category_access_scope"),
+                    "product_category_barangay": order.get("product_category_barangay"),
+                    "portal_session_id": session["public_session_id"],
+                }
+            except HTTPException as exc:
+                checkout_error = exc
+                cur.execute(
+                    """
+                    UPDATE payment_orders
+                    SET status = 'FAILED',
+                        fulfillment_status = 'FAILED',
+                        last_error = %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (str(exc.detail), order["id"]),
+                )
+                create_portal_event(cur, session["id"], "PAYMENT_CHECKOUT_FAILED", request, str(exc.detail), raw_context={"payment_order_id": public_order_id, "product_item_id": str(product["id"]), "method": method})
+    if checkout_error:
+        raise checkout_error
+    return response_payload
+
+
+@app.get("/api/portal/payments/{public_order_id}/status")
+def portal_payment_status(public_order_id: str, request: Request, response: Response):
+    normalized_order_id = normalize_payment_text(public_order_id, 120)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM payment_orders WHERE public_order_id = %s FOR UPDATE", (normalized_order_id,))
+            order = cur.fetchone()
+            if order and order.get("portal_session_id"):
+                create_portal_event(cur, order["portal_session_id"], "PAYMENT_STATUS_VIEW", request, "Payment status viewed", raw_context={"payment_order_id": order["public_order_id"]})
+            if order and order.get("status") in {"PENDING", "CHECKOUT_CREATED"}:
+                try:
+                    order = sync_paymongo_checkout_status(cur, order, request)
+                except HTTPException as exc:
+                    cur.execute(
+                        """
+                        UPDATE payment_orders
+                        SET last_error = %s,
+                            updated_at = now()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (str(exc.detail), order["id"]),
+                    )
+                    order = cur.fetchone()
+                except Exception as exc:
+                    cur.execute(
+                        """
+                        UPDATE payment_orders
+                        SET last_error = %s,
+                            updated_at = now()
+                        WHERE id = %s
+                        RETURNING *
+                        """,
+                        (str(exc), order["id"]),
+                    )
+                    order = cur.fetchone()
+            if order and order.get("status") == "PAID" and order.get("fulfillment_status") == "FULFILLED" and order.get("portal_session_id"):
+                device_token = issue_portal_device_token_for_session(cur, order["portal_session_id"])
+                if device_token:
+                    order["_device_token"] = device_token
+                cur.execute("SELECT public_session_id FROM portal_sessions WHERE id = %s", (order["portal_session_id"],))
+                session_row = cur.fetchone()
+                if session_row:
+                    order["_portal_session_public_id"] = session_row["public_session_id"]
+                    order["_portal_handoff_url"] = portal_handoff_url(session_row["public_session_id"])
+                    set_portal_session_cookies(response, session_row["public_session_id"], device_token)
+            if order:
+                order["_bag_item"] = customer_bag_item_for_payment(cur, order["id"])
+    return payment_order_status_payload(order)
+
+
+def payment_fulfillment_payload_from_session(session: dict, voucher_code: str) -> PortalRedeemRequest:
+    raw_params = session.get("raw_query_params") if isinstance(session.get("raw_query_params"), dict) else {}
+    return PortalRedeemRequest(
+        portal_session_id=session.get("public_session_id"),
+        voucher_code=voucher_code,
+        mac=session.get("client_mac"),
+        ip=str(session.get("client_ip") or ""),
+        client_mac=session.get("omada_client_mac") or session.get("mikrotik_client_mac") or session.get("client_mac"),
+        client_ip=str(session.get("mikrotik_client_ip") or session.get("client_ip") or ""),
+        ap_mac=session.get("omada_ap_mac") or session.get("ap_mac"),
+        gateway_mac=session.get("omada_gateway_mac") or session.get("gateway_mac"),
+        vlan_id=session.get("vlan_id"),
+        ssid=session.get("ssid"),
+        site=session.get("omada_site_name") or session.get("site"),
+        site_id=session.get("omada_site_id"),
+        gateway=session.get("gateway"),
+        redirect_url=session.get("omada_redirect_url") or session.get("redirect_url"),
+        nas_id=session.get("nas_id"),
+        server_name=session.get("mikrotik_server_name"),
+        link_login=session.get("mikrotik_link_login"),
+        link_login_only=session.get("mikrotik_link_login_only"),
+        link_orig=session.get("mikrotik_link_orig"),
+        chap_id=session.get("mikrotik_chap_id"),
+        chap_challenge=session.get("mikrotik_chap_challenge"),
+        token=decrypt_secret(session.get("omada_token_encrypted")) if session.get("omada_token_encrypted") else None,
+        authToken=decrypt_secret(session.get("omada_token_encrypted")) if session.get("omada_token_encrypted") else None,
+        raw_query_params=raw_params,
+    )
+
+
+def fulfill_paid_payment_order(cur, order: dict, request: Request):
+    if order.get("fulfillment_status") == "FULFILLED":
+        return {"status": "FULFILLED", "message": "Payment order was already fulfilled.", "order": order, "bag_item": customer_bag_item_for_payment(cur, order.get("id"))}
+    cur.execute("SELECT * FROM portal_sessions WHERE id = %s FOR UPDATE", (order["portal_session_id"],))
+    session = cur.fetchone()
+    if not session:
+        raise RuntimeError("Portal session was not found for this payment order")
+    user = ensure_portal_user(cur, session)
+    bag_item = create_customer_bag_item_from_payment(cur, order, session, user)
+    settings = ensure_customer_bag_settings(cur, user["id"])
+    activation = {"status": "QUEUED", "message": "Payment item saved to customer bag."}
+    cur.execute(
+        """
+        SELECT id
+        FROM customer_bag_items
+        WHERE user_id = %s AND status = 'ACTIVE'
+        LIMIT 1
+        """,
+        (user["id"],),
+    )
+    active_exists = bool(cur.fetchone())
+    if bool(settings.get("auto_activate")) and not active_exists:
+        activation = activate_customer_bag_item(cur, bag_item, session, request, "PAYMENT_FULFILLMENT")
+        if activation.get("status") == "SUCCESS":
+            bag_item = activation["item"]
+        elif activation.get("status") == "FAILED":
+            raise RuntimeError(activation.get("error") or "Payment was received, but gateway authorization failed")
+    voucher_id = (bag_item or {}).get("voucher_id")
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET user_id = %s,
+            last_error = NULL,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (user["id"], session["id"]),
+    )
+    session = cur.fetchone()
+    cur.execute(
+        """
+        UPDATE payment_orders
+        SET voucher_id = %s,
+            user_id = %s,
+            fulfillment_status = 'FULFILLED',
+            fulfilled_at = now(),
+            last_error = NULL,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (voucher_id, user["id"], order["id"]),
+    )
+    fulfilled_order = cur.fetchone()
+    message = "Payment received. Internet access activated." if activation.get("status") == "SUCCESS" else "Payment received. Package saved to your bag."
+    create_portal_event(cur, session["id"], "PAYMENT_FULFILLMENT_SUCCESS", request, message, raw_context={"payment_order_id": order["public_order_id"], "bag_item_id": str(bag_item["id"]), "activation": sanitize_summary(activation)})
+    fulfilled_order["_bag_item"] = bag_item
+    return {"status": "FULFILLED", "order": fulfilled_order, "bag_item": bag_item, "activation": sanitize_summary(activation)}
+
+
+@app.post("/api/payments/paymongo/webhook")
+async def paymongo_webhook(request: Request):
+    raw_body = await request.body()
+    try:
+        verification = verify_paymongo_webhook_signature(raw_body, request.headers.get("Paymongo-Signature") or request.headers.get("paymongo-signature") or "")
+    except HTTPException as exc:
+        return {
+            "received": True,
+            "status": "REJECTED",
+            "message": "Webhook was acknowledged but not processed because signature verification failed.",
+            "detail": str(exc.detail),
+        }
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except ValueError:
+        return {
+            "received": True,
+            "status": "REJECTED",
+            "message": "Webhook was acknowledged but not processed because the JSON body was invalid.",
+        }
+    event_id = paymongo_event_id(payload)
+    event_type = paymongo_event_type(payload)
+    public_order_id = paymongo_payment_reference(payload)
+    provider_payment_id = paymongo_provider_payment_id(payload)
+    event_amount = paymongo_payload_amount(payload)
+    processing_status = "RECEIVED"
+    error_message = None
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                order = None
+                if public_order_id:
+                    cur.execute("SELECT * FROM payment_orders WHERE public_order_id = %s FOR UPDATE", (public_order_id,))
+                    order = cur.fetchone()
+                cur.execute(
+                    """
+                    INSERT INTO payment_webhook_events(provider, provider_mode, provider_event_id, event_type, payment_order_id, processing_status, payload_json)
+                    VALUES ('PAYMONGO', %s, %s, %s, %s, 'RECEIVED', %s)
+                    ON CONFLICT (provider_event_id) DO NOTHING
+                    RETURNING *
+                    """,
+                    (verification["mode"], event_id, event_type, order["id"] if order else None, Json(sanitize_summary(payload))),
+                )
+                webhook_event = cur.fetchone()
+                if not webhook_event:
+                    return {"received": True, "duplicate": True}
+                if order and order.get("portal_session_id"):
+                    create_portal_event(cur, order["portal_session_id"], "PAYMENT_WEBHOOK_RECEIVED", request, "PayMongo webhook received", raw_context={"payment_order_id": order["public_order_id"], "event_type": event_type})
+                try:
+                    if not order:
+                        processing_status = "IGNORED"
+                        error_message = "No local payment order matched this webhook."
+                    elif event_type == "payment.paid":
+                        if event_amount is None:
+                            raise RuntimeError("PayMongo paid webhook did not include a parsable amount.")
+                        if int(event_amount) != int(order["amount_centavos"]):
+                            raise RuntimeError(f"Paid amount mismatch. Expected {order['amount_centavos']} centavos, got {event_amount}.")
+                        cur.execute(
+                            """
+                            UPDATE payment_orders
+                            SET status = 'PAID',
+                                provider_payment_id = COALESCE(%s, provider_payment_id),
+                                provider_event_id = %s,
+                                provider_webhook_json = %s,
+                                paid_at = COALESCE(paid_at, now()),
+                                last_error = NULL,
+                                updated_at = now()
+                            WHERE id = %s
+                            RETURNING *
+                            """,
+                            (provider_payment_id, event_id, Json(sanitize_summary(payload)), order["id"]),
+                        )
+                        order = cur.fetchone()
+                        if order.get("portal_session_id"):
+                            create_portal_event(cur, order["portal_session_id"], "PAYMENT_PAID", request, "PayMongo payment marked paid", raw_context={"payment_order_id": order["public_order_id"], "event_type": event_type})
+                        fulfill_paid_payment_order(cur, order, request)
+                        processing_status = "PROCESSED"
+                    elif event_type == "payment.failed":
+                        cur.execute(
+                            """
+                            UPDATE payment_orders
+                            SET status = 'FAILED',
+                                provider_payment_id = COALESCE(%s, provider_payment_id),
+                                provider_event_id = %s,
+                                provider_webhook_json = %s,
+                                last_error = 'PayMongo reported payment failed.',
+                                updated_at = now()
+                            WHERE id = %s
+                            """,
+                            (provider_payment_id, event_id, Json(sanitize_summary(payload)), order["id"]),
+                        )
+                        if order.get("portal_session_id"):
+                            create_portal_event(cur, order["portal_session_id"], "PAYMENT_FAILED", request, "PayMongo reported payment failed.", raw_context={"payment_order_id": order["public_order_id"], "event_type": event_type})
+                        processing_status = "PROCESSED"
+                    else:
+                        processing_status = "IGNORED"
+                        error_message = f"Event type {event_type or 'unknown'} does not require payment fulfillment."
+                    cur.execute(
+                        """
+                        UPDATE payment_webhook_events
+                        SET processing_status = %s,
+                            error_message = %s,
+                            processed_at = now()
+                        WHERE id = %s
+                        """,
+                        (processing_status, error_message, webhook_event["id"]),
+                    )
+                except Exception as exc:
+                    processing_status = "FAILED"
+                    error_message = str(exc)
+                    if order:
+                        cur.execute(
+                            """
+                            UPDATE payment_orders
+                            SET fulfillment_status = CASE WHEN status = 'PAID' THEN 'FAILED' ELSE fulfillment_status END,
+                                last_error = %s,
+                                updated_at = now()
+                            WHERE id = %s
+                            """,
+                            (error_message, order["id"]),
+                        )
+                        if order.get("portal_session_id"):
+                            create_portal_event(cur, order["portal_session_id"], "PAYMENT_FULFILLMENT_FAILED", request, error_message, raw_context={"payment_order_id": order["public_order_id"], "event_type": event_type})
+                    cur.execute(
+                        """
+                        UPDATE payment_webhook_events
+                        SET processing_status = 'FAILED',
+                            error_message = %s,
+                            processed_at = now()
+                        WHERE id = %s
+                        """,
+                        (error_message, webhook_event["id"]),
+                    )
+    except Exception as exc:
+        return {
+            "received": True,
+            "status": "FAILED",
+            "operator_review_required": True,
+            "message": "Webhook was acknowledged, but local processing failed before it could be recorded.",
+            "detail": str(exc),
+            "event_type": event_type,
+        }
+    response = {"received": True, "status": processing_status, "event_type": event_type}
+    if processing_status == "FAILED":
+        response["operator_review_required"] = True
+        response["message"] = "PayMongo webhook was received, but local fulfillment failed and was recorded for review."
+    return response
 
 
 def read_cpu_ticks():
@@ -6362,6 +10811,11 @@ def create_single_voucher(cur, payload: VoucherCreate, admin_id: str, batch_id=N
     status = (payload.status or "UNUSED").upper()
     if status not in VOUCHER_STATUSES:
         raise HTTPException(status_code=400, detail="Invalid voucher status")
+    access_scope = normalize_product_access_scope(payload.access_scope)
+    allowed_barangay = normalize_barangay_label(payload.allowed_barangay)
+    if access_scope == "BARANGAY_ONLY" and not allowed_barangay:
+        raise HTTPException(status_code=400, detail="Barangay-limited vouchers require an allowed Barangay.")
+    category_id = normalize_product_category_id(payload.product_category_id)
     code = payload.code
     normalized = normalize_voucher_code(code) if code else ""
     for _ in range(50):
@@ -6378,8 +10832,9 @@ def create_single_voucher(cur, payload: VoucherCreate, admin_id: str, batch_id=N
     cur.execute(
         """
         INSERT INTO vouchers(batch_id, code, normalized_code, voucher_type, time_value_seconds, valid_until, is_unlimited,
-                             unlimited_expires_at, status, max_redemptions, expires_at, note, created_by_admin_id)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             unlimited_expires_at, status, max_redemptions, expires_at, note, created_by_admin_id,
+                             product_category_id, access_scope, allowed_barangay)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING *
         """,
         (
@@ -6396,12 +10851,17 @@ def create_single_voucher(cur, payload: VoucherCreate, admin_id: str, batch_id=N
             payload.expires_at,
             payload.note,
             admin_id,
+            category_id,
+            access_scope,
+            allowed_barangay,
         ),
     )
     return cur.fetchone()
 
 
-def voucher_rows(where_sql="", params=()):
+def voucher_rows(where_sql="", params=(), omada_name_by_mac: Optional[dict] = None):
+    if omada_name_by_mac is None:
+        omada_name_by_mac = fetch_omada_client_name_map()
     with get_conn() as conn:
         with conn.cursor() as cur:
             expire_vouchers(cur)
@@ -6409,17 +10869,60 @@ def voucher_rows(where_sql="", params=()):
                 f"""
                 SELECT v.*,
                        u.username AS redeemed_by_username,
-                       b.batch_name
+                       b.batch_name,
+                       latest_redemption.username AS latest_redemption_username,
+                       latest_redemption.device_identifier AS redeemed_device_identifier,
+                       latest_redemption.ip_address::text AS redeemed_ip_address,
+                       latest_redemption.user_agent AS redeemed_user_agent,
+                       latest_redemption.created_at AS latest_redemption_at,
+                       latest_session.public_session_id AS redeemed_portal_session_id,
+                       latest_session.client_mac AS redeemed_client_mac,
+                       latest_session.client_ip::text AS redeemed_client_ip,
+                       latest_session.user_agent AS redeemed_session_user_agent,
+                       latest_session.ssid AS redeemed_ssid,
+                       latest_session.site AS redeemed_site
                 FROM vouchers v
                 LEFT JOIN users u ON u.id = v.redeemed_by_user_id
                 LEFT JOIN voucher_batches b ON b.id = v.batch_id
+                LEFT JOIN LATERAL (
+                    SELECT r.username, r.device_identifier, r.ip_address, r.user_agent, r.created_at
+                    FROM voucher_redemptions r
+                    WHERE r.voucher_id = v.id AND r.result = 'SUCCESS'
+                    ORDER BY r.created_at DESC
+                    LIMIT 1
+                ) latest_redemption ON true
+                LEFT JOIN LATERAL (
+                    SELECT s.public_session_id,
+                           COALESCE(s.omada_client_mac, s.mikrotik_client_mac, s.client_mac) AS client_mac,
+                           s.client_ip,
+                           s.user_agent,
+                           s.ssid,
+                           COALESCE(s.omada_site_name, s.site) AS site,
+                           s.updated_at
+                    FROM portal_sessions s
+                    WHERE s.voucher_id = v.id
+                    ORDER BY s.updated_at DESC
+                    LIMIT 1
+                ) latest_session ON true
                 {where_sql}
                 ORDER BY v.created_at DESC
                 LIMIT 1000
                 """,
                 params,
             )
-            return cur.fetchall()
+            rows = cur.fetchall()
+            for row in rows:
+                mac = normalize_mac_if_valid(row.get("redeemed_client_mac")) or normalize_mac_if_valid(row.get("redeemed_device_identifier"))
+                row["redeemed_client_mac"] = mac
+                row["redeemed_client_mac_masked"] = mask_mac(mac)
+                row["redeemed_device_name"] = (
+                    preferred_device_name(omada_name_by_mac.get(mac) if mac else None)
+                    or preferred_device_name(infer_device_name_from_user_agent(row.get("redeemed_session_user_agent") or row.get("redeemed_user_agent")))
+                    or preferred_device_name(row.get("latest_redemption_username"), row.get("redeemed_by_username"))
+                    or "Unknown device"
+                )
+                row["redeemed_device_ip"] = row.get("redeemed_client_ip") or row.get("redeemed_ip_address")
+            return rows
 
 
 def voucher_summary():
@@ -6440,6 +10943,1572 @@ def voucher_summary():
                 """
             )
             return cur.fetchone()
+
+
+PRODUCT_DURATION_UNITS = {"minutes", "hours", "days"}
+PRODUCT_ITEM_STATUSES = {"ACTIVE", "DISABLED"}
+PRODUCT_DEVICE_SCOPES = {"SINGLE_DEVICE", "MULTI_DEVICE"}
+PRODUCT_DISCOUNT_TYPES = {"PERCENT", "FIXED"}
+PRODUCT_CATEGORY_ACCESS_SCOPES = {"ALL_LOCATIONS", "BARANGAY_ONLY"}
+PRODUCT_CATEGORY_STATUSES = {"ACTIVE", "DISABLED"}
+
+
+def normalize_product_duration_unit(value: Optional[str]) -> str:
+    unit = (value or "hours").strip().lower()
+    aliases = {
+        "minute": "minutes",
+        "min": "minutes",
+        "mins": "minutes",
+        "hour": "hours",
+        "hr": "hours",
+        "hrs": "hours",
+        "day": "days",
+    }
+    unit = aliases.get(unit, unit)
+    if unit not in PRODUCT_DURATION_UNITS:
+        raise HTTPException(status_code=400, detail="Duration unit must be minutes, hours, or days.")
+    return unit
+
+
+def normalize_product_status(value: Optional[str]) -> str:
+    status = (value or "ACTIVE").strip().upper()
+    if status not in PRODUCT_ITEM_STATUSES:
+        raise HTTPException(status_code=400, detail="Product status must be ACTIVE or DISABLED.")
+    return status
+
+
+def normalize_product_category_status(value: Optional[str]) -> str:
+    status = (value or "ACTIVE").strip().upper()
+    if status not in PRODUCT_CATEGORY_STATUSES:
+        raise HTTPException(status_code=400, detail="Category status must be ACTIVE or DISABLED.")
+    return status
+
+
+def normalize_product_access_scope(value: Optional[str]) -> str:
+    scope = (value or "ALL_LOCATIONS").strip().upper()
+    aliases = {
+        "ALL": "ALL_LOCATIONS",
+        "ALL_STATIONS": "ALL_LOCATIONS",
+        "ALL_SITES": "ALL_LOCATIONS",
+        "GLOBAL": "ALL_LOCATIONS",
+        "BARANGAY": "BARANGAY_ONLY",
+        "BARANGAY_LIMITED": "BARANGAY_ONLY",
+    }
+    scope = aliases.get(scope, scope)
+    if scope not in PRODUCT_CATEGORY_ACCESS_SCOPES:
+        raise HTTPException(status_code=400, detail="Category access scope must be All Locations or Barangay Only.")
+    return scope
+
+
+def normalize_barangay_label(value: Optional[str]) -> Optional[str]:
+    label = re.sub(r"\s+", " ", str(value or "").strip())
+    return label or None
+
+
+def barangay_key(value: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def normalize_product_category_id(value: Optional[str]) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return str(uuid.UUID(text))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Product category id is invalid.") from exc
+
+
+def normalize_product_device_scope(value: Optional[str]) -> str:
+    scope = (value or "SINGLE_DEVICE").strip().upper()
+    aliases = {
+        "INDIVIDUAL": "SINGLE_DEVICE",
+        "PERSONAL": "SINGLE_DEVICE",
+        "PERSONAL_PASS": "SINGLE_DEVICE",
+        "SINGLE": "SINGLE_DEVICE",
+        "MULTIPLE": "MULTI_DEVICE",
+        "MULTIPLE_DEVICES": "MULTI_DEVICE",
+        "SHARED": "MULTI_DEVICE",
+        "SHARED_PASS": "MULTI_DEVICE",
+        "GROUP": "MULTI_DEVICE",
+    }
+    scope = aliases.get(scope, scope)
+    if scope not in PRODUCT_DEVICE_SCOPES:
+        raise HTTPException(status_code=400, detail="Product category must be Personal Pass or Shared Device Pass.")
+    return scope
+
+
+def normalize_product_allowed_devices(device_scope: str, allowed_devices: int) -> int:
+    if device_scope == "SINGLE_DEVICE":
+        return 1
+    return max(2, min(int(allowed_devices or 2), 100))
+
+
+def normalize_product_discount_type(value: Optional[str]) -> Optional[str]:
+    discount_type = str(value or "").strip().upper()
+    if not discount_type:
+        return None
+    aliases = {
+        "PERCENTAGE": "PERCENT",
+        "PERCENT_OFF": "PERCENT",
+        "FIXED_AMOUNT": "FIXED",
+        "AMOUNT": "FIXED",
+        "PESO": "FIXED",
+    }
+    discount_type = aliases.get(discount_type, discount_type)
+    if discount_type not in PRODUCT_DISCOUNT_TYPES:
+        raise HTTPException(status_code=400, detail="Discount type must be Percent or Fixed.")
+    return discount_type
+
+
+def normalize_product_discount_config(enabled: bool, min_quantity, discount_type, discount_value) -> dict:
+    is_enabled = bool(enabled)
+    normalized_type = normalize_product_discount_type(discount_type)
+    value = Decimal(str(discount_value or 0))
+    if not is_enabled:
+        return {"discount_enabled": False, "discount_min_quantity": None, "discount_type": None, "discount_value": Decimal("0")}
+    quantity = int(min_quantity or 0)
+    if quantity < 2 or quantity > 365:
+        raise HTTPException(status_code=400, detail="Discount trigger must be between 2 and 365 purchases.")
+    if not normalized_type:
+        raise HTTPException(status_code=400, detail="Choose a discount type.")
+    if value <= 0:
+        raise HTTPException(status_code=400, detail="Discount value must be greater than 0.")
+    if normalized_type == "PERCENT" and value > 100:
+        raise HTTPException(status_code=400, detail="Percent discount cannot be greater than 100.")
+    return {"discount_enabled": True, "discount_min_quantity": quantity, "discount_type": normalized_type, "discount_value": value}
+
+
+def discount_threshold_seconds(threshold_value: int, threshold_unit: str) -> int:
+    unit = normalize_product_duration_unit(threshold_unit)
+    return product_duration_seconds(int(threshold_value or 0), unit)
+
+
+def discount_threshold_label(threshold_value: int, threshold_unit: str, label: Optional[str] = None) -> str:
+    custom_label = re.sub(r"\s+", " ", str(label or "").strip())
+    if custom_label:
+        return custom_label
+    value = int(threshold_value or 0)
+    unit = normalize_product_duration_unit(threshold_unit)
+    if value == 7 and unit == "days":
+        return "1 week"
+    if value == 30 and unit == "days":
+        return "1 month"
+    return product_duration_label(value, unit)
+
+
+def serialize_product_category_discount(row) -> dict:
+    if not row:
+        return {}
+    threshold_unit = normalize_product_duration_unit(row.get("threshold_unit") or "days")
+    threshold_value = int(row.get("threshold_value") or 0)
+    discount_type = normalize_product_discount_type(row.get("discount_type")) or "PERCENT"
+    discount_value = float(row.get("discount_value") or 0)
+    label = row.get("label") or ""
+    return {
+        "id": str(row["id"]) if row.get("id") else None,
+        "category_id": str(row["category_id"]) if row.get("category_id") else None,
+        "label": label,
+        "display_label": discount_threshold_label(threshold_value, threshold_unit, label),
+        "threshold_value": threshold_value,
+        "threshold_unit": threshold_unit,
+        "threshold_seconds": discount_threshold_seconds(threshold_value, threshold_unit),
+        "discount_type": discount_type,
+        "discount_value": discount_value,
+        "enabled": bool(row.get("enabled")),
+        "sort_order": int(row.get("sort_order") or 0),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def normalize_product_category_discount_payload(discount: ProductCategoryDiscountPayload, sort_order: int) -> dict:
+    unit = normalize_product_duration_unit(discount.threshold_unit)
+    threshold_value = int(discount.threshold_value or 0)
+    if threshold_value < 1:
+        raise HTTPException(status_code=400, detail="Discount threshold must be greater than 0.")
+    discount_type = normalize_product_discount_type(discount.discount_type)
+    if not discount_type:
+        raise HTTPException(status_code=400, detail="Choose a category discount type.")
+    value = Decimal(str(discount.discount_value or 0))
+    if value <= 0:
+        raise HTTPException(status_code=400, detail="Category discount value must be greater than 0.")
+    if discount_type == "PERCENT" and value > 100:
+        raise HTTPException(status_code=400, detail="Percent discount cannot be greater than 100.")
+    return {
+        "label": re.sub(r"\s+", " ", str(discount.label or "").strip()) or None,
+        "threshold_value": threshold_value,
+        "threshold_unit": unit,
+        "discount_type": discount_type,
+        "discount_value": value,
+        "enabled": bool(discount.enabled),
+        "sort_order": int(discount.sort_order or sort_order),
+    }
+
+
+def replace_product_category_discounts(cur, category_id: str, discounts: list[ProductCategoryDiscountPayload]) -> None:
+    cur.execute("DELETE FROM product_category_discounts WHERE category_id = %s", (category_id,))
+    normalized_discounts = [
+        normalize_product_category_discount_payload(discount, index)
+        for index, discount in enumerate(discounts[:50], start=1)
+    ]
+    normalized_discounts.sort(
+        key=lambda item: (
+            discount_threshold_seconds(item["threshold_value"], item["threshold_unit"]),
+            str(item.get("label") or ""),
+        )
+    )
+    for index, normalized in enumerate(normalized_discounts, start=1):
+        cur.execute(
+            """
+            INSERT INTO product_category_discounts(
+                category_id, label, threshold_value, threshold_unit, discount_type,
+                discount_value, enabled, sort_order
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                category_id,
+                normalized["label"],
+                normalized["threshold_value"],
+                normalized["threshold_unit"],
+                normalized["discount_type"],
+                normalized["discount_value"],
+                normalized["enabled"],
+                index,
+            ),
+        )
+
+
+def product_category_discount_rows(category_ids: Optional[list[str]] = None, active_only: bool = False) -> list[dict]:
+    params = []
+    where_parts = []
+    if category_ids is not None:
+        ids = [str(category_id) for category_id in category_ids if category_id]
+        if not ids:
+            return []
+        where_parts.append("category_id = ANY(%s::uuid[])")
+        params.append(ids)
+    if active_only:
+        where_parts.append("enabled = TRUE")
+    where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    rows = fetch_all(
+        f"""
+        SELECT *
+        FROM product_category_discounts
+        {where}
+        ORDER BY
+            CASE threshold_unit
+                WHEN 'minutes' THEN threshold_value * 60
+                WHEN 'hours' THEN threshold_value * 3600
+                ELSE threshold_value * 86400
+            END ASC,
+            sort_order ASC,
+            created_at ASC
+        """,
+        tuple(params),
+    )
+    return [serialize_product_category_discount(row) for row in rows]
+
+
+def serialize_product_item_discount(row) -> dict:
+    if not row:
+        return {}
+    threshold_unit = normalize_product_duration_unit(row.get("threshold_unit") or "days")
+    threshold_value = int(row.get("threshold_value") or 0)
+    discount_type = normalize_product_discount_type(row.get("discount_type")) or "PERCENT"
+    discount_value = float(row.get("discount_value") or 0)
+    label = row.get("label") or ""
+    return {
+        "id": str(row["id"]) if row.get("id") else None,
+        "product_item_id": str(row["product_item_id"]) if row.get("product_item_id") else None,
+        "label": label,
+        "display_label": discount_threshold_label(threshold_value, threshold_unit, label),
+        "threshold_value": threshold_value,
+        "threshold_unit": threshold_unit,
+        "threshold_seconds": discount_threshold_seconds(threshold_value, threshold_unit),
+        "discount_type": discount_type,
+        "discount_value": discount_value,
+        "enabled": bool(row.get("enabled")),
+        "sort_order": int(row.get("sort_order") or 0),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def normalize_product_discount_payload(discount: ProductDiscountPayload, sort_order: int) -> dict:
+    unit = normalize_product_duration_unit(discount.threshold_unit)
+    threshold_value = int(discount.threshold_value or 0)
+    if threshold_value < 1:
+        raise HTTPException(status_code=400, detail="Discount threshold must be greater than 0.")
+    discount_type = normalize_product_discount_type(discount.discount_type)
+    if not discount_type:
+        raise HTTPException(status_code=400, detail="Choose a product discount type.")
+    value = Decimal(str(discount.discount_value or 0))
+    if value <= 0:
+        raise HTTPException(status_code=400, detail="Product discount value must be greater than 0.")
+    if discount_type == "PERCENT" and value > 100:
+        raise HTTPException(status_code=400, detail="Percent discount cannot be greater than 100.")
+    return {
+        "label": re.sub(r"\s+", " ", str(discount.label or "").strip()) or None,
+        "threshold_value": threshold_value,
+        "threshold_unit": unit,
+        "discount_type": discount_type,
+        "discount_value": value,
+        "enabled": bool(discount.enabled),
+        "sort_order": int(discount.sort_order or sort_order),
+    }
+
+
+def replace_product_item_discounts(cur, product_item_id: str, discounts: list[ProductDiscountPayload]) -> None:
+    cur.execute("DELETE FROM product_item_discounts WHERE product_item_id = %s", (product_item_id,))
+    normalized_discounts = [
+        normalize_product_discount_payload(discount, index)
+        for index, discount in enumerate(discounts[:50], start=1)
+    ]
+    normalized_discounts.sort(
+        key=lambda item: (
+            discount_threshold_seconds(item["threshold_value"], item["threshold_unit"]),
+            str(item.get("label") or ""),
+        )
+    )
+    for index, normalized in enumerate(normalized_discounts, start=1):
+        cur.execute(
+            """
+            INSERT INTO product_item_discounts(
+                product_item_id, label, threshold_value, threshold_unit, discount_type,
+                discount_value, enabled, sort_order
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                product_item_id,
+                normalized["label"],
+                normalized["threshold_value"],
+                normalized["threshold_unit"],
+                normalized["discount_type"],
+                normalized["discount_value"],
+                normalized["enabled"],
+                index,
+            ),
+        )
+
+
+def product_item_discount_rows(product_item_ids: Optional[list[str]] = None, active_only: bool = False) -> list[dict]:
+    params = []
+    where_parts = []
+    if product_item_ids is not None:
+        ids = [str(product_item_id) for product_item_id in product_item_ids if product_item_id]
+        if not ids:
+            return []
+        where_parts.append("product_item_id = ANY(%s::uuid[])")
+        params.append(ids)
+    if active_only:
+        where_parts.append("enabled = TRUE")
+    where = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    rows = fetch_all(
+        f"""
+        SELECT *
+        FROM product_item_discounts
+        {where}
+        ORDER BY
+            CASE threshold_unit
+                WHEN 'minutes' THEN threshold_value * 60
+                WHEN 'hours' THEN threshold_value * 3600
+                ELSE threshold_value * 86400
+            END ASC,
+            sort_order ASC,
+            created_at ASC
+        """,
+        tuple(params),
+    )
+    return [serialize_product_item_discount(row) for row in rows]
+
+
+def attach_discounts_to_categories(categories: list[dict], active_only: bool = False) -> list[dict]:
+    category_ids = [category["id"] for category in categories if category.get("id")]
+    discounts = product_category_discount_rows(category_ids, active_only=active_only)
+    discount_map: dict[str, list[dict]] = {}
+    for discount in discounts:
+        discount_map.setdefault(discount["category_id"], []).append(discount)
+    for category in categories:
+        category["discounts"] = discount_map.get(category.get("id"), [])
+        category["discount_count"] = len(category["discounts"])
+    return categories
+
+
+def product_category_discounts_for_product(product: dict, active_only: bool = True) -> list[dict]:
+    category_id = product.get("category_id")
+    if not category_id:
+        return []
+    return product_category_discount_rows([str(category_id)], active_only=active_only)
+
+
+def product_applicable_category_discount(product: dict, total_duration_seconds: int) -> Optional[dict]:
+    if product.get("use_category_discounts") is False:
+        return None
+    enabled_discount_ids = product.get("enabled_category_discount_ids")
+    if enabled_discount_ids is not None:
+        enabled_discount_ids = {str(discount_id) for discount_id in enabled_discount_ids if discount_id}
+        if not enabled_discount_ids:
+            return None
+    eligible = []
+    for discount in product.get("category_discounts") or []:
+        if not discount.get("enabled"):
+            continue
+        if enabled_discount_ids is not None and str(discount.get("id")) not in enabled_discount_ids:
+            continue
+        threshold_seconds = int(discount.get("threshold_seconds") or discount_threshold_seconds(discount.get("threshold_value") or 0, discount.get("threshold_unit") or "days"))
+        if total_duration_seconds >= threshold_seconds:
+            eligible.append({**discount, "threshold_seconds": threshold_seconds})
+    if not eligible:
+        return None
+    return sorted(eligible, key=lambda item: (int(item.get("threshold_seconds") or 0), int(item.get("sort_order") or 0)))[-1]
+
+
+def product_applicable_item_discount(product: dict, total_duration_seconds: int) -> Optional[dict]:
+    eligible = []
+    for discount in product.get("discounts") or product.get("product_discounts") or []:
+        if not discount.get("enabled"):
+            continue
+        threshold_seconds = int(discount.get("threshold_seconds") or discount_threshold_seconds(discount.get("threshold_value") or 0, discount.get("threshold_unit") or "days"))
+        if total_duration_seconds >= threshold_seconds:
+            eligible.append({**discount, "threshold_seconds": threshold_seconds})
+    if not eligible:
+        return None
+    return sorted(eligible, key=lambda item: (int(item.get("threshold_seconds") or 0), int(item.get("sort_order") or 0)))[-1]
+
+
+def product_checkout_amount(product: dict, purchase_quantity: int) -> dict:
+    quantity = max(1, min(int(purchase_quantity or 1), 365))
+    unit_amount = payment_amount_centavos(product["price"])
+    base_amount = unit_amount * quantity
+    discount_amount = 0
+    duration_unit = normalize_product_duration_unit(product.get("duration_unit"))
+    total_duration_seconds = product_duration_seconds(product.get("duration_value"), duration_unit) * quantity
+    selected_discount = product_applicable_item_discount(product, total_duration_seconds)
+    discount_type = normalize_product_discount_type((selected_discount or {}).get("discount_type"))
+    discount_value = Decimal(str((selected_discount or {}).get("discount_value") or 0))
+    discount_applied = bool(selected_discount and discount_type and discount_value > 0)
+    if discount_applied:
+        if discount_type == "PERCENT":
+            discount_amount = int((Decimal(base_amount) * (discount_value / Decimal("100"))).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        else:
+            discount_amount = payment_amount_centavos(discount_value)
+        discount_amount = max(0, min(discount_amount, base_amount))
+    return {
+        "quantity": quantity,
+        "unit_amount_centavos": unit_amount,
+        "base_amount_centavos": base_amount,
+        "discount_amount_centavos": discount_amount,
+        "amount_centavos": max(1, base_amount - discount_amount),
+        "discount_type": discount_type if discount_applied else None,
+        "discount_value": discount_value if discount_applied else Decimal("0"),
+        "discount_applied": discount_applied,
+        "discount_tier_id": selected_discount.get("id") if selected_discount else None,
+        "discount_label": selected_discount.get("display_label") if selected_discount else None,
+        "discount_threshold_seconds": selected_discount.get("threshold_seconds") if selected_discount else None,
+    }
+
+
+def product_duration_seconds(duration_value: int, duration_unit: str) -> int:
+    multipliers = {"minutes": 60, "hours": 3600, "days": 86400}
+    return int(duration_value or 0) * multipliers[duration_unit]
+
+
+def product_duration_label(duration_value: int, duration_unit: str) -> str:
+    value = int(duration_value or 0)
+    unit = duration_unit[:-1] if value == 1 and duration_unit.endswith("s") else duration_unit
+    return f"{value} {unit}"
+
+
+def serialize_product_category(row, product_count: Optional[int] = None) -> dict:
+    if not row:
+        return {}
+    access_scope = normalize_product_access_scope(row.get("access_scope"))
+    allowed_barangay = normalize_barangay_label(row.get("allowed_barangay"))
+    discounts = row.get("discounts") if isinstance(row.get("discounts"), list) else []
+    return {
+        "id": str(row["id"]),
+        "name": row["name"],
+        "description": row.get("description") or "",
+        "image_url": row.get("image_url") or "",
+        "more_info_enabled": bool(row.get("more_info_enabled")),
+        "more_info_text": row.get("more_info_text") or "",
+        "access_scope": access_scope,
+        "access_scope_label": "Barangay only" if access_scope == "BARANGAY_ONLY" else "All Locations",
+        "allowed_barangay": allowed_barangay,
+        "restriction_label": "Barangay only" if access_scope == "BARANGAY_ONLY" else "All locations",
+        "status": row["status"],
+        "sort_order": row["sort_order"],
+        "product_count": int(product_count if product_count is not None else row.get("product_count") or 0),
+        "discounts": discounts,
+        "discount_count": len(discounts),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def product_category_rows(active_only: bool = False) -> list[dict]:
+    where = "WHERE c.status = 'ACTIVE'" if active_only else ""
+    rows = fetch_all(
+        f"""
+        SELECT c.*, COALESCE(count(p.id), 0) AS product_count
+        FROM product_categories c
+        LEFT JOIN product_items p ON p.category_id = c.id
+        {where}
+        GROUP BY c.id
+        ORDER BY c.sort_order ASC, c.name ASC, c.created_at DESC
+        """
+    )
+    return attach_discounts_to_categories([serialize_product_category(row) for row in rows], active_only=active_only)
+
+
+def product_category_for_payload(cur, category_id: Optional[str], active_only: bool = False) -> Optional[dict]:
+    normalized_id = normalize_product_category_id(category_id)
+    if not normalized_id:
+        return None
+    status_clause = "AND status = 'ACTIVE'" if active_only else ""
+    cur.execute(f"SELECT * FROM product_categories WHERE id = %s {status_clause}", (normalized_id,))
+    category = cur.fetchone()
+    if not category:
+        raise HTTPException(status_code=400, detail="Product category was not found or is disabled.")
+    return category
+
+
+def serialize_product_item(row) -> dict:
+    if not row:
+        return {}
+    duration_unit = normalize_product_duration_unit(row["duration_unit"])
+    device_scope = normalize_product_device_scope(row.get("device_scope") or ("MULTI_DEVICE" if int(row.get("allowed_devices") or 1) > 1 else "SINGLE_DEVICE"))
+    allowed_devices = normalize_product_allowed_devices(device_scope, int(row.get("allowed_devices") or 1))
+    price = float(row["price"] or 0)
+    category_access_scope = normalize_product_access_scope(row.get("category_access_scope")) if row.get("category_id") or row.get("category_access_scope") else "ALL_LOCATIONS"
+    category_barangay = normalize_barangay_label(row.get("category_allowed_barangay"))
+    category_discounts = row.get("category_discounts") if isinstance(row.get("category_discounts"), list) else []
+    product_discounts = row.get("discounts") if isinstance(row.get("discounts"), list) else []
+    use_category_discounts = row.get("use_category_discounts")
+    if use_category_discounts is None:
+        use_category_discounts = True
+    enabled_category_discount_ids = row.get("enabled_category_discount_ids")
+    if enabled_category_discount_ids is not None and not isinstance(enabled_category_discount_ids, list):
+        enabled_category_discount_ids = []
+    return {
+        "id": str(row["id"]),
+        "category_id": str(row["category_id"]) if row.get("category_id") else None,
+        "category_name": row.get("category_name") or "Uncategorized",
+        "category_description": row.get("category_description") or "",
+        "category_image_url": row.get("category_image_url") or "",
+        "category_access_scope": category_access_scope,
+        "category_access_scope_label": "Barangay only" if category_access_scope == "BARANGAY_ONLY" else "All Locations",
+        "category_allowed_barangay": category_barangay,
+        "category_restriction_label": "Barangay only" if category_access_scope == "BARANGAY_ONLY" else "All locations",
+        "category_restricted": category_access_scope == "BARANGAY_ONLY",
+        "name": row["name"],
+        "description": row.get("description") or "",
+        "price": price,
+        "price_display": f"PHP {price:,.2f}",
+        "duration_value": row["duration_value"],
+        "duration_unit": duration_unit,
+        "duration_seconds": product_duration_seconds(row["duration_value"], duration_unit),
+        "duration_label": product_duration_label(row["duration_value"], duration_unit),
+        "device_scope": device_scope,
+        "device_scope_label": "Shared Device Pass" if device_scope == "MULTI_DEVICE" else "Personal Pass",
+        "allowed_devices": allowed_devices,
+        "allowed_devices_label": f"{allowed_devices} device{'s' if allowed_devices != 1 else ''}",
+        "use_category_discounts": bool(use_category_discounts),
+        "enabled_category_discount_ids": enabled_category_discount_ids,
+        "category_discounts": category_discounts,
+        "discounts": product_discounts,
+        "discount_count": len([discount for discount in product_discounts if discount.get("enabled")]),
+        "discount_enabled": bool(row.get("discount_enabled")),
+        "discount_min_quantity": int(row["discount_min_quantity"]) if row.get("discount_min_quantity") else None,
+        "discount_type": row.get("discount_type"),
+        "discount_value": float(row.get("discount_value") or 0),
+        "status": row["status"],
+        "sort_order": row["sort_order"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def product_item_rows(active_only: bool = False) -> list[dict]:
+    where = "WHERE p.status = 'ACTIVE' AND (c.id IS NULL OR c.status = 'ACTIVE')" if active_only else ""
+    rows = fetch_all(
+        f"""
+        SELECT p.*,
+               c.name AS category_name,
+               c.description AS category_description,
+               c.image_url AS category_image_url,
+               c.access_scope AS category_access_scope,
+               c.allowed_barangay AS category_allowed_barangay,
+               c.status AS category_status,
+               c.sort_order AS category_sort_order
+        FROM product_items p
+        LEFT JOIN product_categories c ON c.id = p.category_id
+        {where}
+        ORDER BY COALESCE(c.sort_order, 999999) ASC, c.name ASC, p.sort_order ASC, p.price ASC, p.created_at DESC
+        """
+    )
+    item_ids = sorted({str(row["id"]) for row in rows if row.get("id")})
+    discount_map: dict[str, list[dict]] = {}
+    for discount in product_item_discount_rows(item_ids, active_only=active_only):
+        discount_map.setdefault(discount["product_item_id"], []).append(discount)
+    serialized = []
+    for row in rows:
+        row["discounts"] = discount_map.get(str(row["id"]), [])
+        row["category_discounts"] = []
+        serialized.append(serialize_product_item(row))
+    return serialized
+
+
+def group_product_items_by_category(items: list[dict], categories: Optional[list[dict]] = None) -> list[dict]:
+    category_map = {}
+    ordered_groups = []
+    for category in categories or []:
+        group = {**category, "items": []}
+        category_map[category["id"]] = group
+        ordered_groups.append(group)
+    uncategorized = {
+        "id": None,
+        "name": "Available Packages",
+        "description": "",
+        "image_url": "",
+        "access_scope": "ALL_LOCATIONS",
+        "access_scope_label": "All Locations",
+        "allowed_barangay": None,
+        "restriction_label": "All locations",
+        "status": "ACTIVE",
+        "sort_order": 999999,
+        "product_count": 0,
+        "items": [],
+    }
+    for item in items:
+        category_id = item.get("category_id")
+        group = category_map.get(category_id)
+        if not group:
+            if category_id:
+                group = {
+                    "id": category_id,
+                    "name": item.get("category_name") or "Category",
+                    "description": item.get("category_description") or "",
+                    "image_url": item.get("category_image_url") or "",
+                    "access_scope": item.get("category_access_scope") or "ALL_LOCATIONS",
+                    "access_scope_label": item.get("category_access_scope_label") or "All Locations",
+                    "allowed_barangay": item.get("category_allowed_barangay"),
+                    "restriction_label": item.get("category_restriction_label") or "All locations",
+                    "status": "ACTIVE",
+                    "sort_order": 0,
+                    "product_count": 0,
+                    "items": [],
+                }
+                category_map[category_id] = group
+                ordered_groups.append(group)
+            else:
+                group = uncategorized
+        group["items"].append(item)
+        group["product_count"] = len(group["items"])
+    if uncategorized["items"]:
+        ordered_groups.append(uncategorized)
+    return [group for group in ordered_groups if group.get("items")]
+
+
+def money_display_from_centavos(value: int, currency: str = "PHP") -> str:
+    amount = (int(value or 0) / 100)
+    return f"{currency} {amount:,.2f}"
+
+
+def serialize_sales_order(row: dict) -> dict:
+    amount_centavos = int(row.get("amount_centavos") or 0)
+    mac = normalize_mac_if_valid(row.get("client_mac"))
+    device_name = (
+        preferred_device_name(row.get("device_name"))
+        or preferred_device_name(row.get("omada_device_name"))
+        or preferred_device_name(infer_device_name_from_user_agent(row.get("user_agent")))
+        or preferred_device_name(mac)
+        or "Unprofiled device"
+    )
+    customer_name = preferred_device_name(row.get("customer_name")) or ""
+    return {
+        "id": str(row["id"]),
+        "public_order_id": row["public_order_id"],
+        "sale_at": row.get("sale_at"),
+        "status": row["status"],
+        "fulfillment_status": row["fulfillment_status"],
+        "payment_method": row["payment_method"],
+        "amount_centavos": amount_centavos,
+        "amount_display": money_display_from_centavos(amount_centavos, row.get("currency") or "PHP"),
+        "currency": row.get("currency") or "PHP",
+        "product_name": row.get("product_name"),
+        "product_category_name": row.get("product_category_name") or "",
+        "product_category_access_scope": row.get("product_category_access_scope") or "ALL_LOCATIONS",
+        "product_category_barangay": row.get("product_category_barangay") or "",
+        "duration_seconds": int(row.get("duration_seconds") or 0),
+        "device_scope": normalize_product_device_scope(row.get("device_scope")),
+        "allowed_devices": int(row.get("allowed_devices") or 1),
+        "site_name": row.get("site_name") or "Unknown Site",
+        "barangay": row.get("barangay") or "Unknown Barangay",
+        "customer_name": customer_name,
+        "device_name": device_name,
+        "customer_display_name": customer_name or device_name,
+        "customer_contact_number": row.get("customer_contact_number") or "",
+        "client_mac": mac or row.get("client_mac") or "",
+        "client_ip": str(row.get("client_ip") or ""),
+    }
+
+
+SALES_REPORTING_DEFAULT_SETTINGS = {
+    "telegram_enabled": False,
+    "telegram_bot_token_encrypted": None,
+    "telegram_chat_id": "",
+    "daily_report_enabled": False,
+    "report_time": "20:00",
+    "include_site_breakdown": True,
+    "include_barangay_breakdown": True,
+    "last_test_status": None,
+    "last_test_at": None,
+    "last_test_error": None,
+}
+
+
+def sales_reporting_store() -> dict:
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'sales_reporting'")
+    value = row["value"] if row and isinstance(row["value"], dict) else {}
+    store = {**SALES_REPORTING_DEFAULT_SETTINGS, **value}
+    store["telegram_enabled"] = bool(store.get("telegram_enabled"))
+    store["daily_report_enabled"] = bool(store.get("daily_report_enabled"))
+    store["telegram_chat_id"] = normalize_payment_text(store.get("telegram_chat_id"), 120)
+    store["report_time"] = normalize_payment_text(store.get("report_time") or "20:00", 20)
+    store["include_site_breakdown"] = bool(store.get("include_site_breakdown", True))
+    store["include_barangay_breakdown"] = bool(store.get("include_barangay_breakdown", True))
+    return store
+
+
+def save_sales_reporting_store(store: dict):
+    existing = sales_reporting_store()
+    token = normalize_payment_text(store.get("telegram_bot_token"), 300)
+    encrypted_token = encrypt_secret(token) if token else existing.get("telegram_bot_token_encrypted")
+    if store.get("clear_telegram_bot_token"):
+        encrypted_token = None
+    clean = {
+        "telegram_enabled": bool(store.get("telegram_enabled")),
+        "telegram_bot_token_encrypted": encrypted_token,
+        "telegram_chat_id": normalize_payment_text(store.get("telegram_chat_id"), 120),
+        "daily_report_enabled": bool(store.get("daily_report_enabled")),
+        "report_time": normalize_payment_text(store.get("report_time") or "20:00", 20),
+        "include_site_breakdown": bool(store.get("include_site_breakdown", True)),
+        "include_barangay_breakdown": bool(store.get("include_barangay_breakdown", True)),
+        "last_test_status": store.get("last_test_status", existing.get("last_test_status")),
+        "last_test_at": store.get("last_test_at", existing.get("last_test_at")),
+        "last_test_error": store.get("last_test_error", existing.get("last_test_error")),
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES ('sales_reporting', %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (Json(clean),),
+            )
+
+
+def public_sales_reporting_settings(store: Optional[dict] = None) -> dict:
+    store = store or sales_reporting_store()
+    token = decrypt_secret(store.get("telegram_bot_token_encrypted"))
+    return {
+        "telegram_enabled": bool(store.get("telegram_enabled")),
+        "telegram_bot_token_configured": bool(token),
+        "telegram_bot_token_hint": mask_payment_secret(token),
+        "telegram_chat_id": store.get("telegram_chat_id") or "",
+        "daily_report_enabled": bool(store.get("daily_report_enabled")),
+        "report_time": store.get("report_time") or "20:00",
+        "include_site_breakdown": bool(store.get("include_site_breakdown", True)),
+        "include_barangay_breakdown": bool(store.get("include_barangay_breakdown", True)),
+        "last_test_status": store.get("last_test_status"),
+        "last_test_at": store.get("last_test_at"),
+        "last_test_error": store.get("last_test_error"),
+    }
+
+
+def sales_telegram_report_text(sales_payload: dict, settings: dict) -> str:
+    kpis = sales_payload.get("kpis") or {}
+    lines = [
+        "3JCentralPisowifi Sales Report",
+        f"Range: last {sales_payload.get('range_days')} days",
+        f"Total sales: {kpis.get('gross_sales_display') or 'PHP 0.00'}",
+        f"Paid orders: {kpis.get('paid_orders') or 0}",
+        f"Today: {kpis.get('today_sales_display') or 'PHP 0.00'}",
+        f"This month: {kpis.get('month_sales_display') or 'PHP 0.00'}",
+    ]
+    if settings.get("include_site_breakdown") and sales_payload.get("sales_by_site"):
+        lines.append("")
+        lines.append("Top sites:")
+        for row in (sales_payload.get("sales_by_site") or [])[:5]:
+            lines.append(f"- {row.get('label')}: {row.get('amount_display')} ({row.get('order_count')} orders)")
+    if settings.get("include_barangay_breakdown") and sales_payload.get("sales_by_barangay"):
+        lines.append("")
+        lines.append("Top barangays:")
+        for row in (sales_payload.get("sales_by_barangay") or [])[:5]:
+            lines.append(f"- {row.get('label')}: {row.get('amount_display')} ({row.get('order_count')} orders)")
+    return "\n".join(lines)
+
+
+def send_sales_telegram_report(store: dict, message: str):
+    token = decrypt_secret(store.get("telegram_bot_token_encrypted"))
+    chat_id = normalize_payment_text(store.get("telegram_chat_id"), 120)
+    if not token or not chat_id:
+        raise HTTPException(status_code=400, detail="Telegram bot token and chat id are required.")
+    response = requests.post(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        json={"chat_id": chat_id, "text": message, "disable_web_page_preview": True},
+        timeout=15,
+    )
+    if response.status_code >= 400:
+        raise HTTPException(status_code=400, detail=f"Telegram send failed: HTTP {response.status_code} {response.text[:300]}")
+    return sanitize_summary(response.json())
+
+
+def build_sales_payload(range_days: int = 30) -> dict:
+    days = max(1, min(int(range_days or 30), 365))
+    params = (days,)
+    base_cte = """
+        WITH sale_rows AS (
+            SELECT
+                po.*,
+                COALESCE(po.paid_at, po.updated_at, po.created_at) AS sale_at,
+                COALESCE(sd.site_name, ps.omada_site_name, ps.site, 'Unknown Site') AS site_name,
+                COALESCE(sd.barangay, loc.barangay, 'Unknown Barangay') AS barangay
+            FROM payment_orders po
+            LEFT JOIN portal_sessions ps ON ps.id = po.portal_session_id
+            LEFT JOIN LATERAL (
+                SELECT sd.*
+                FROM site_deployments sd
+                WHERE (
+                    COALESCE(ps.omada_site_id, '') <> ''
+                    AND COALESCE(sd.omada_site_id, '') = COALESCE(ps.omada_site_id, '')
+                ) OR (
+                    COALESCE(ps.omada_site_name, ps.site, '') <> ''
+                    AND lower(sd.site_name) = lower(COALESCE(ps.omada_site_name, ps.site, ''))
+                )
+                ORDER BY sd.updated_at DESC
+                LIMIT 1
+            ) sd ON true
+            LEFT JOIN locations loc ON loc.id = sd.location_id
+            WHERE po.status = 'PAID'
+              AND COALESCE(po.paid_at, po.updated_at, po.created_at) >= now() - (%s::int * interval '1 day')
+        )
+    """
+    kpi_row = fetch_one(
+        base_cte
+        + """
+        SELECT
+            COALESCE(SUM(amount_centavos), 0)::bigint AS gross_sales_centavos,
+            COUNT(*)::int AS paid_orders,
+            COUNT(*) FILTER (WHERE fulfillment_status = 'FULFILLED')::int AS fulfilled_orders,
+            COUNT(*) FILTER (WHERE fulfillment_status = 'FAILED')::int AS failed_fulfillments,
+            COALESCE(ROUND(AVG(amount_centavos)), 0)::bigint AS average_order_centavos,
+            COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('day', now())), 0)::bigint AS today_sales_centavos,
+            COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('month', now())), 0)::bigint AS month_sales_centavos
+        FROM sale_rows
+        """,
+        params,
+    ) or {}
+    daily_rows = fetch_all(
+        base_cte
+        + """
+        SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS label,
+               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+               COUNT(*)::int AS order_count
+        FROM sale_rows
+        GROUP BY 1
+        ORDER BY 1
+        """,
+        params,
+    )
+    site_rows = fetch_all(
+        base_cte
+        + """
+        SELECT site_name AS label,
+               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+               COUNT(*)::int AS order_count
+        FROM sale_rows
+        GROUP BY 1
+        ORDER BY amount_centavos DESC, order_count DESC, label ASC
+        LIMIT 20
+        """,
+        params,
+    )
+    barangay_rows = fetch_all(
+        base_cte
+        + """
+        SELECT barangay AS label,
+               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+               COUNT(*)::int AS order_count
+        FROM sale_rows
+        GROUP BY 1
+        ORDER BY amount_centavos DESC, order_count DESC, label ASC
+        LIMIT 20
+        """,
+        params,
+    )
+    site_daily_rows = fetch_all(
+        base_cte
+        + """
+        SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS date,
+               site_name AS label,
+               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
+        FROM sale_rows
+        GROUP BY 1, 2
+        ORDER BY 1, 2
+        """,
+        params,
+    )
+    barangay_daily_rows = fetch_all(
+        base_cte
+        + """
+        SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS date,
+               barangay AS label,
+               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
+        FROM sale_rows
+        GROUP BY 1, 2
+        ORDER BY 1, 2
+        """,
+        params,
+    )
+    order_rows = fetch_all(
+        base_cte
+        + """
+        SELECT *
+        FROM sale_rows
+        ORDER BY sale_at DESC
+        LIMIT 200
+        """,
+        params,
+    )
+    omada_name_by_mac = fetch_omada_client_name_map()
+    for row in order_rows:
+        mac = normalize_mac_if_valid(row.get("client_mac"))
+        row["device_name"] = omada_name_by_mac.get(mac) if mac else None
+
+    def series_rows(rows):
+        return [
+            {
+                **dict(row),
+                "amount_centavos": int(row.get("amount_centavos") or 0),
+                "amount_display": money_display_from_centavos(int(row.get("amount_centavos") or 0)),
+            }
+            for row in rows
+        ]
+
+    gross = int(kpi_row.get("gross_sales_centavos") or 0)
+    average = int(kpi_row.get("average_order_centavos") or 0)
+    today = int(kpi_row.get("today_sales_centavos") or 0)
+    month = int(kpi_row.get("month_sales_centavos") or 0)
+    return {
+        "range_days": days,
+        "kpis": {
+            "gross_sales_centavos": gross,
+            "gross_sales_display": money_display_from_centavos(gross),
+            "paid_orders": int(kpi_row.get("paid_orders") or 0),
+            "fulfilled_orders": int(kpi_row.get("fulfilled_orders") or 0),
+            "failed_fulfillments": int(kpi_row.get("failed_fulfillments") or 0),
+            "average_order_centavos": average,
+            "average_order_display": money_display_from_centavos(average),
+            "today_sales_centavos": today,
+            "today_sales_display": money_display_from_centavos(today),
+            "month_sales_centavos": month,
+            "month_sales_display": money_display_from_centavos(month),
+        },
+        "daily_sales": series_rows(daily_rows),
+        "sales_by_site": series_rows(site_rows),
+        "sales_by_barangay": series_rows(barangay_rows),
+        "daily_sales_by_site": series_rows(site_daily_rows),
+        "daily_sales_by_barangay": series_rows(barangay_daily_rows),
+        "orders": [serialize_sales_order(row) for row in order_rows],
+    }
+
+
+@app.get("/api/sales")
+def get_sales(range_days: int = 30, admin=Depends(current_admin)):
+    return build_sales_payload(range_days)
+
+
+@app.get("/api/sales/settings")
+def get_sales_settings(admin=Depends(current_admin)):
+    return public_sales_reporting_settings()
+
+
+@app.put("/api/sales/settings")
+def update_sales_settings(payload: SalesReportingSettingsUpdate, admin=Depends(current_admin)):
+    save_sales_reporting_store(payload.model_dump())
+    audit(admin["id"], "update_sales_reporting_settings", "sales_reporting", None, {"telegram_enabled": payload.telegram_enabled, "daily_report_enabled": payload.daily_report_enabled})
+    return public_sales_reporting_settings()
+
+
+@app.post("/api/sales/telegram-test")
+def test_sales_telegram_report(admin=Depends(current_admin)):
+    store = sales_reporting_store()
+    report = build_sales_payload(30)
+    message = sales_telegram_report_text(report, store)
+    try:
+        result = send_sales_telegram_report(store, message)
+        store["last_test_status"] = "SUCCESS"
+        store["last_test_at"] = datetime.now(timezone.utc).isoformat()
+        store["last_test_error"] = None
+        save_sales_reporting_store(store)
+        audit(admin["id"], "test_sales_telegram_report", "sales_reporting", None, {"status": "SUCCESS"})
+        return {"status": "SUCCESS", "message": "Telegram sales test report sent.", "result": result, "settings": public_sales_reporting_settings()}
+    except HTTPException as exc:
+        store["last_test_status"] = "FAILED"
+        store["last_test_at"] = datetime.now(timezone.utc).isoformat()
+        store["last_test_error"] = str(exc.detail)
+        save_sales_reporting_store(store)
+        raise
+
+
+@app.post("/api/sales/clear")
+def clear_sales(payload: SalesClearRequest, admin=Depends(current_admin)):
+    if (payload.confirmation or "").strip().upper() != "CLEAR SALES":
+        raise HTTPException(status_code=400, detail="Type CLEAR SALES to confirm clearing local sales records.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM payment_orders RETURNING id")
+            deleted_count = cur.rowcount
+    audit(admin["id"], "clear_sales_records", "payment_orders", None, {"deleted_count": deleted_count})
+    return {"status": "CLEARED", "deleted_count": deleted_count}
+
+
+def active_voucher_rows(omada_name_by_mac: Optional[dict] = None):
+    if omada_name_by_mac is None:
+        omada_name_by_mac = fetch_omada_client_name_map()
+    rows = fetch_all(
+        """
+        SELECT DISTINCT ON (s.id)
+               s.id AS portal_session_id,
+               s.public_session_id,
+               s.status AS session_status,
+               s.source AS portal_source,
+               COALESCE(s.omada_client_mac, s.mikrotik_client_mac, s.client_mac) AS client_mac,
+               host(s.client_ip) AS client_ip,
+               COALESCE(s.omada_ap_mac, s.ap_mac) AS ap_mac,
+               s.ssid,
+               COALESCE(s.omada_site_name, s.site) AS site,
+               s.user_agent,
+               s.access_granted_at,
+               s.access_expires_at,
+               GREATEST(EXTRACT(EPOCH FROM (s.access_expires_at - now()))::int, 0) AS remaining_time_seconds,
+               v.id AS voucher_id,
+               v.code AS voucher_code,
+               v.voucher_type,
+               v.status AS voucher_status,
+               v.created_at AS voucher_created_at,
+               v.redeemed_at,
+               u.id AS user_id,
+               u.username,
+               p.id AS customer_profile_id,
+               p.display_name AS customer_name,
+               p.email AS customer_email,
+               p.contact_number AS customer_contact_number
+        FROM portal_sessions s
+        JOIN vouchers v ON v.id = s.voucher_id
+        LEFT JOIN users u ON u.id = s.user_id
+        LEFT JOIN portal_customer_profiles p ON p.user_id = s.user_id
+        WHERE s.voucher_id IS NOT NULL
+          AND s.status IN ('VOUCHER_REDEEMED', 'ACCESS_GRANTED')
+          AND s.access_expires_at IS NOT NULL
+          AND s.access_expires_at > now()
+        ORDER BY s.id, s.access_expires_at DESC
+        LIMIT 500
+        """
+    )
+    for row in rows:
+        row["client_mac"] = normalize_mac_if_valid(row.get("client_mac")) or row.get("client_mac")
+        mac = normalize_mac_if_valid(row.get("client_mac"))
+        row["device_name"] = (
+            preferred_device_name(omada_name_by_mac.get(mac) if mac else None)
+            or preferred_device_name(infer_device_name_from_user_agent(row.get("user_agent")))
+            or preferred_device_name(row.get("username"))
+            or "Unknown device"
+        )
+        row["remaining_time_seconds"] = int(row.get("remaining_time_seconds") or 0)
+    return sorted(rows, key=lambda item: item.get("access_expires_at") or datetime.max.replace(tzinfo=timezone.utc))
+
+
+def portal_previous_mac_values(value) -> list[str]:
+    items = value if isinstance(value, list) else []
+    macs = []
+    for item in items:
+        raw_mac = item.get("mac") if isinstance(item, dict) else item
+        mac = normalize_mac_if_valid(raw_mac)
+        if mac and mac not in macs:
+            macs.append(mac)
+    return macs
+
+
+def portal_device_mac_values(*values) -> list[str]:
+    macs = []
+    for value in values:
+        if isinstance(value, list):
+            for mac in portal_previous_mac_values(value):
+                if mac not in macs:
+                    macs.append(mac)
+            continue
+        mac = normalize_mac_if_valid(value)
+        if mac and mac not in macs:
+            macs.append(mac)
+    return macs
+
+
+def customer_device_group_key(value: Optional[str]) -> str:
+    text = normalize_payment_text(value, 120).lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return text or "unknown-device"
+
+
+def customer_device_verified_mac_links() -> set[tuple[str, str]]:
+    links: set[tuple[str, str]] = set()
+
+    def add_link(mac_a, mac_b):
+        normalized_a = normalize_mac_if_valid(mac_a)
+        normalized_b = normalize_mac_if_valid(mac_b)
+        if not normalized_a or not normalized_b or normalized_a == normalized_b:
+            return
+        links.add((normalized_a, normalized_b))
+        links.add((normalized_b, normalized_a))
+
+    try:
+        for row in fetch_all(
+            """
+            SELECT old_client_mac, new_client_mac
+            FROM portal_mac_rebind_events
+            WHERE status IN ('SUCCESS', 'SKIPPED')
+              AND old_client_mac IS NOT NULL
+              AND new_client_mac IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 2000
+            """
+        ):
+            add_link(row.get("old_client_mac"), row.get("new_client_mac"))
+    except Exception:
+        pass
+
+    return links
+
+
+def customer_device_groups(device_rows: list[dict]) -> dict:
+    customers = {}
+    unprofiled_customers = {}
+    verified_mac_links = customer_device_verified_mac_links()
+
+    def has_verified_mac_link(source_macs: list[str], target_macs: list[str]) -> bool:
+        source_set = {normalize_mac_if_valid(mac) for mac in source_macs or []}
+        target_set = {normalize_mac_if_valid(mac) for mac in target_macs or []}
+        source_set.discard(None)
+        target_set.discard(None)
+        if source_set & target_set:
+            return True
+        return any((source_mac, target_mac) in verified_mac_links for source_mac in source_set for target_mac in target_set)
+
+    def upsert_group(bucket: dict, row: dict):
+        profile_id = row.get("customer_profile_id")
+        user_id = row.get("user_id")
+        has_profile = bool(profile_id)
+        customer_key = f"profile:{profile_id}" if has_profile else (f"user:{user_id}" if user_id else "no-profile")
+        if not has_profile:
+            customer_key = f"{customer_key}:{row.get('device_group_key') or row.get('client_mac') or row.get('client_ip') or row.get('portal_session_id') or row.get('id')}"
+        customer = bucket.setdefault(customer_key, {
+            "customer_key": customer_key,
+            "has_profile": has_profile,
+            "profile_id": str(profile_id) if profile_id else None,
+            "user_id": str(user_id) if user_id else None,
+            "name": row.get("customer_name") or "",
+            "email": row.get("customer_email") or "",
+            "contact_number": row.get("customer_contact_number") or "",
+            "contact_verified_at": row.get("contact_verified_at"),
+            "marketing_sms_consent": bool(row.get("marketing_sms_consent")),
+            "welcome_gift_status": row.get("welcome_gift_status"),
+            "devices": [],
+            "device_count": 0,
+            "mac_count": 0,
+            "active_device_count": 0,
+            "remaining_time_seconds": 0,
+            "latest_seen": None,
+        })
+        for field, key in [
+            ("customer_name", "name"),
+            ("customer_email", "email"),
+            ("customer_contact_number", "contact_number"),
+            ("contact_verified_at", "contact_verified_at"),
+            ("welcome_gift_status", "welcome_gift_status"),
+        ]:
+            if row.get(field) and not customer.get(key):
+                customer[key] = row[field]
+        if row.get("marketing_sms_consent"):
+            customer["marketing_sms_consent"] = True
+
+        device_key = row.get("device_group_key") or customer_device_group_key(row.get("device_name") or row.get("hostname") or row.get("client_mac") or row.get("client_ip"))
+        device = next((item for item in customer["devices"] if item["device_key"] == device_key), None)
+        if not device:
+            device = {
+                "device_key": device_key,
+                "device_name": row.get("device_name") or row.get("hostname") or "Unknown device",
+                "source": row.get("source"),
+                "status": row.get("status"),
+                "active": bool(row.get("active")),
+                "client_ip": row.get("client_ip"),
+                "ap_name": row.get("ap_name"),
+                "ap_mac": row.get("ap_mac"),
+                "ssid": row.get("ssid"),
+                "site": row.get("site"),
+                "last_seen": row.get("last_seen"),
+                "portal_session_id": row.get("portal_session_id"),
+                "public_session_id": row.get("public_session_id"),
+                "voucher_code": row.get("voucher_code"),
+                "remaining_time_seconds": int(row.get("remaining_time_seconds") or 0),
+                "mac_addresses": [],
+                "sessions": [],
+            }
+            customer["devices"].append(device)
+        else:
+            for field in ["device_name", "client_ip", "ap_name", "ap_mac", "ssid", "site", "portal_session_id", "public_session_id", "voucher_code"]:
+                if row.get(field) and not device.get(field):
+                    device[field] = row[field]
+            device["active"] = bool(device.get("active") or row.get("active"))
+            if row.get("status") == "ACTIVE" or device["active"]:
+                device["status"] = "ACTIVE"
+            device["remaining_time_seconds"] = max(int(device.get("remaining_time_seconds") or 0), int(row.get("remaining_time_seconds") or 0))
+            if row.get("last_seen") and (not device.get("last_seen") or str(row["last_seen"]) > str(device["last_seen"])):
+                device["last_seen"] = row["last_seen"]
+
+        for mac in row.get("mac_addresses") or []:
+            if mac not in device["mac_addresses"]:
+                device["mac_addresses"].append(mac)
+        device["sessions"].append({
+            "portal_session_id": row.get("portal_session_id"),
+            "public_session_id": row.get("public_session_id"),
+            "client_mac": row.get("client_mac"),
+            "client_ip": row.get("client_ip"),
+            "last_seen": row.get("last_seen"),
+            "status": row.get("status"),
+            "voucher_code": row.get("voucher_code"),
+        })
+        customer["active_device_count"] += 1 if row.get("active") else 0
+        customer["remaining_time_seconds"] = max(int(customer.get("remaining_time_seconds") or 0), int(row.get("remaining_time_seconds") or 0))
+        if row.get("last_seen") and (not customer.get("latest_seen") or str(row["last_seen"]) > str(customer["latest_seen"])):
+            customer["latest_seen"] = row["last_seen"]
+
+    for row in device_rows:
+        upsert_group(customers if row.get("customer_profile_id") else unprofiled_customers, row)
+
+    profiled_device_index = {}
+    for customer in customers.values():
+        for device in customer.get("devices") or []:
+            profiled_device_index.setdefault(device.get("device_key"), device)
+
+    for customer_key, customer in list(unprofiled_customers.items()):
+        remaining_devices = []
+        for device in customer.get("devices") or []:
+            profiled_device = profiled_device_index.get(device.get("device_key"))
+            is_stale_omada_only = bool(
+                profiled_device
+                and has_verified_mac_link(device.get("mac_addresses") or [], profiled_device.get("mac_addresses") or [])
+                and not device.get("active")
+                and not device.get("portal_session_id")
+                and not device.get("public_session_id")
+                and not device.get("voucher_code")
+                and device.get("source") == "OMADA"
+            )
+            if not is_stale_omada_only:
+                remaining_devices.append(device)
+                continue
+            for mac in device.get("mac_addresses") or []:
+                if mac not in profiled_device["mac_addresses"]:
+                    profiled_device["mac_addresses"].append(mac)
+            for session in device.get("sessions") or []:
+                profiled_device["sessions"].append(session)
+        if remaining_devices:
+            customer["devices"] = remaining_devices
+        else:
+            unprofiled_customers.pop(customer_key, None)
+
+    def finalize(bucket: dict) -> list[dict]:
+        rows = []
+        for customer in bucket.values():
+            for device in customer["devices"]:
+                device["mac_count"] = len(device["mac_addresses"])
+                device["mac_addresses"] = sorted(device["mac_addresses"])
+            customer["devices"] = sorted(customer["devices"], key=lambda item: (not item.get("active"), str(item.get("device_name") or "")))
+            customer["device_count"] = len(customer["devices"])
+            customer["mac_count"] = sum(len(device.get("mac_addresses") or []) for device in customer["devices"])
+            rows.append(customer)
+        return sorted(rows, key=lambda item: (not item.get("active_device_count"), str(item.get("name") or item.get("latest_seen") or "")))
+
+    return {
+        "customers": finalize(customers),
+        "without_profiles": finalize(unprofiled_customers),
+    }
+
+
+def fetch_portal_session_for_admin(cur, session_id: str):
+    cur.execute(
+        """
+        SELECT s.*, v.code AS voucher_code, v.voucher_type, v.time_value_seconds, v.valid_until, v.unlimited_expires_at,
+               u.username
+        FROM portal_sessions s
+        LEFT JOIN vouchers v ON v.id = s.voucher_id
+        LEFT JOIN users u ON u.id = s.user_id
+        WHERE s.id = %s
+        FOR UPDATE OF s
+        """,
+        (session_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Portal session not found")
+    return row
+
+
+def sync_short_omada_expiry(cur, session: dict, admin, seconds: int = 1):
+    if session.get("source") != "OMADA" or not session.get("user_id"):
+        return None
+    voucher = fetch_one("SELECT * FROM vouchers WHERE id = %s", (session["voucher_id"],)) if session.get("voucher_id") else None
+    if not voucher:
+        voucher = {"id": session.get("voucher_id"), "code": session.get("voucher_code") or "ACCESS"}
+    user = {"id": session["user_id"], "username": session.get("username") or "portal"}
+    duration = max(int(seconds), 1)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=duration)
+    cur.execute(
+        """
+        SELECT DISTINCT ON (COALESCE(client_mac, ''), COALESCE(site_id, ''), COALESCE(ssid, ''))
+               *
+        FROM omada_portal_authorizations
+        WHERE portal_session_id = %s
+          AND status = 'SUCCESS'
+          AND COALESCE(client_mac, '') <> ''
+          AND (access_expires_at IS NULL OR access_expires_at > now())
+        ORDER BY COALESCE(client_mac, ''), COALESCE(site_id, ''), COALESCE(ssid, ''), created_at DESC
+        """,
+        (session["id"],),
+    )
+    authorizations = cur.fetchall()
+    if not authorizations:
+        authorizations = [{
+            "client_mac": session.get("omada_client_mac") or session.get("client_mac"),
+            "ap_mac": session.get("omada_ap_mac") or session.get("ap_mac"),
+            "gateway_mac": session.get("omada_gateway_mac") or session.get("gateway_mac"),
+            "ssid": session.get("ssid"),
+            "site_id": session.get("omada_site_id"),
+            "site_name": session.get("omada_site_name") or session.get("site"),
+            "omada_request_summary": {},
+        }]
+
+    results = []
+    for authorization in authorizations:
+        request_summary = authorization.get("omada_request_summary") if isinstance(authorization.get("omada_request_summary"), dict) else {}
+        payload = PortalRedeemRequest(
+            portal_session_id=session.get("public_session_id"),
+            voucher_code=voucher.get("code") or "ADMIN",
+            client_mac=authorization.get("client_mac"),
+            ap_mac=authorization.get("ap_mac"),
+            gateway_mac=authorization.get("gateway_mac"),
+            ssid=authorization.get("ssid"),
+            site_id=authorization.get("site_id"),
+            site=authorization.get("site_name"),
+            radio_id=request_summary.get("radio_id"),
+            raw_query_params={},
+        )
+        if not payload.client_mac:
+            continue
+        result = attempt_omada_authorization(cur, session, voucher, user, duration, expires_at, payload)
+        results.append({
+            "client_mac": mask_mac(payload.client_mac),
+            "ssid": payload.ssid,
+            "site_id": payload.site_id,
+            "status": result.get("status"),
+            "error": result.get("error"),
+        })
+    return {
+        "status": "SUCCESS" if results and all(item.get("status") == "SUCCESS" for item in results) else ("SKIPPED" if not results else "PARTIAL"),
+        "synced_authorization_count": len(results),
+        "results": results,
+    }
+
+
+def revoke_omada_authorized_clients(cur, session: dict, admin=None) -> dict:
+    if session.get("source") != "OMADA":
+        return {"status": "SKIPPED", "message": "Session is not an Omada portal session."}
+    cur.execute(
+        """
+        SELECT DISTINCT ON (COALESCE(site_id, ''), COALESCE(client_mac, ''), COALESCE(ssid, ''))
+               site_id, site_name, client_mac, ssid
+        FROM omada_portal_authorizations
+        WHERE portal_session_id = %s
+          AND status = 'SUCCESS'
+          AND COALESCE(client_mac, '') <> ''
+        ORDER BY COALESCE(site_id, ''), COALESCE(client_mac, ''), COALESCE(ssid, ''), created_at DESC
+        """,
+        (session["id"],),
+    )
+    rows = cur.fetchall()
+    candidates = []
+    for row in rows:
+        candidates.append({
+            "site_id": row.get("site_id"),
+            "site_name": row.get("site_name"),
+            "client_mac": row.get("client_mac"),
+            "ssid": row.get("ssid"),
+        })
+    if session.get("omada_client_mac") or session.get("client_mac"):
+        candidates.append({
+            "site_id": session.get("omada_site_id"),
+            "site_name": session.get("omada_site_name"),
+            "client_mac": session.get("omada_client_mac") or session.get("client_mac"),
+            "ssid": session.get("ssid"),
+        })
+
+    settings = ensure_captive_portal_settings()
+    _, selected_site_id, selected_site_name = omada_selected_site(settings)
+    grouped = {}
+    for item in candidates:
+        site_id = (item.get("site_id") or selected_site_id or "").strip()
+        if not site_id:
+            continue
+        grouped.setdefault(site_id, {"site_id": site_id, "site_name": item.get("site_name") or selected_site_name, "macs": set(), "ssids": set()})
+        if item.get("client_mac"):
+            grouped[site_id]["macs"].add(item["client_mac"])
+        if item.get("ssid"):
+            grouped[site_id]["ssids"].add(item["ssid"])
+
+    if not grouped:
+        return {"status": "SKIPPED", "message": "No Omada client authorization record was found for this session."}
+
+    _, client = omada_api_client_from_settings()
+    results = []
+    for site_id, group in grouped.items():
+        try:
+            result = client.disconnect_hotspot_authorized_clients(
+                site_id,
+                client_macs=sorted(group["macs"]),
+                ssids=sorted(group["ssids"]),
+            )
+            results.append({
+                "site_id": site_id,
+                "site_name": group.get("site_name"),
+                "client_macs": [mask_mac(mac) for mac in sorted(group["macs"])],
+                "status": "SUCCESS" if result.get("error_count") == 0 else "PARTIAL",
+                "matched_count": result.get("matched_count", 0),
+                "disconnected_count": result.get("disconnected_count", 0),
+                "error_count": result.get("error_count", 0),
+                "details": sanitize_summary(result),
+            })
+        except Exception as exc:
+            response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
+            results.append({
+                "site_id": site_id,
+                "site_name": group.get("site_name"),
+                "client_macs": [mask_mac(mac) for mac in sorted(group["macs"])],
+                "status": "FAILED",
+                "error": str(exc),
+                "details": sanitize_summary(response_summary),
+            })
+
+    now = datetime.now(timezone.utc)
+    cur.execute(
+        """
+        UPDATE omada_portal_authorizations
+        SET access_expires_at = %s, updated_at = now()
+        WHERE portal_session_id = %s
+          AND status = 'SUCCESS'
+        """,
+        (now, session["id"]),
+    )
+    disconnected_count = sum(int(item.get("disconnected_count") or 0) for item in results)
+    failed = [item for item in results if item.get("status") == "FAILED" or int(item.get("error_count") or 0) > 0]
+    status = "SUCCESS" if disconnected_count > 0 and not failed else ("PARTIAL" if disconnected_count > 0 else ("FAILED" if failed else "SKIPPED"))
+    log_captive_portal_test(
+        "REVOKE_OMADA_CLIENT",
+        "SUCCESS" if status in {"SUCCESS", "SKIPPED"} else "FAILED",
+        "Omada authorized client revoke completed." if status != "SKIPPED" else "No active Omada authorized client needed revoke.",
+        {"session_id": str(session["id"]), "results": results},
+    )
+    return {
+        "status": status,
+        "disconnected_count": disconnected_count,
+        "results": results,
+    }
+
+
+def adjust_portal_session_time(cur, session_id: str, amount_seconds: int, admin, note: Optional[str] = None):
+    session = fetch_portal_session_for_admin(cur, session_id)
+    if not session.get("voucher_id"):
+        raise HTTPException(status_code=400, detail="This device has no voucher to manage.")
+    now = datetime.now(timezone.utc)
+    current_expiry = aware_utc(session.get("access_expires_at")) or now
+    base = current_expiry if current_expiry > now else now
+    new_expiry = base + timedelta(seconds=int(amount_seconds or 0))
+    expired = new_expiry <= now
+    stored_expiry = now if expired else new_expiry
+    new_status = "EXPIRED" if expired else "ACCESS_GRANTED"
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET access_expires_at = %s,
+            status = %s,
+            last_error = CASE WHEN %s THEN 'Access removed by operator.' ELSE NULL END,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (stored_expiry, new_status, expired, session["id"]),
+    )
+    updated = cur.fetchone()
+    if session.get("user_id"):
+        cur.execute("INSERT INTO wallets(user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (session["user_id"],))
+        cur.execute(
+            """
+            UPDATE wallets
+            SET time_remaining_seconds = GREATEST(time_remaining_seconds + %s, 0),
+                updated_at = now()
+            WHERE user_id = %s
+            """,
+            (int(amount_seconds or 0), session["user_id"]),
+        )
+        cur.execute(
+            """
+            INSERT INTO transactions(user_id, source, type, amount_seconds, reference, note, created_by)
+            VALUES (%s, 'ADMIN', 'PORTAL_TIME_ADJUST', %s, %s, %s, %s)
+            """,
+            (session["user_id"], int(amount_seconds or 0), session.get("voucher_code"), note, admin["id"]),
+        )
+    omada_sync = None
+    if updated.get("source") == "OMADA":
+        try:
+            if expired:
+                omada_sync = revoke_omada_authorized_clients(cur, updated, admin)
+            else:
+                remaining = max(int((aware_utc(updated.get("access_expires_at")) - now).total_seconds()), 1)
+                omada_sync = sync_short_omada_expiry(cur, updated, admin, remaining)
+        except Exception as exc:
+            omada_sync = {"status": "FAILED", "error": str(exc)}
+        if expired:
+            cur.execute(
+                """
+                UPDATE omada_portal_authorizations
+                SET access_expires_at = now(), updated_at = now()
+                WHERE portal_session_id = %s
+                  AND status = 'SUCCESS'
+                  AND (access_expires_at IS NULL OR access_expires_at > now())
+                """,
+                (session["id"],),
+            )
+            cur.execute(
+                "UPDATE portal_sessions SET status = 'EXPIRED', access_expires_at = %s, updated_at = now() WHERE id = %s RETURNING *",
+                (now, session["id"]),
+            )
+            updated = cur.fetchone()
+    return {"status": "ok", "session": updated, "remaining_time_seconds": max(int((aware_utc(updated.get("access_expires_at")) - now).total_seconds()), 0), "omada_sync": sanitize_summary(omada_sync)}
 
 
 def log_failed_redemption(cur, voucher, payload: VoucherRedeemTest, reason: str, source="ADMIN_TEST", request: Request = None):
@@ -6601,6 +12670,339 @@ def redeem_voucher(cur, payload: VoucherRedeemTest, admin_id: str, request: Requ
     }
 
 
+@app.get("/api/product-items")
+def get_product_items(admin=Depends(current_admin)):
+    items = product_item_rows(active_only=False)
+    categories = product_category_rows(active_only=False)
+    return {
+        "items": items,
+        "categories": categories,
+        "category_groups": group_product_items_by_category(items, categories),
+        "summary": {
+            "total": len(items),
+            "active": len([item for item in items if item["status"] == "ACTIVE"]),
+            "disabled": len([item for item in items if item["status"] == "DISABLED"]),
+            "categories": len(categories),
+            "active_categories": len([category for category in categories if category["status"] == "ACTIVE"]),
+            "barangay_limited_categories": len([category for category in categories if category["access_scope"] == "BARANGAY_ONLY"]),
+            "personal_passes": len([item for item in items if item["device_scope"] == "SINGLE_DEVICE"]),
+            "shared_passes": len([item for item in items if item["device_scope"] == "MULTI_DEVICE"]),
+            "lowest_price": min([item["price"] for item in items], default=0),
+            "max_allowed_devices": max([item["allowed_devices"] for item in items], default=1),
+        },
+    }
+
+
+@app.get("/api/portal/product-items")
+def get_public_product_items():
+    items = product_item_rows(active_only=True)
+    categories = product_category_rows(active_only=True)
+    return {"items": items, "categories": group_product_items_by_category(items, categories)}
+
+
+@app.get("/api/product-categories")
+def get_product_categories(admin=Depends(current_admin)):
+    categories = product_category_rows(active_only=False)
+    return {"categories": categories}
+
+
+@app.post("/api/product-categories")
+def create_product_category(payload: ProductCategoryPayload, admin=Depends(current_admin)):
+    access_scope = normalize_product_access_scope(payload.access_scope)
+    status = normalize_product_category_status(payload.status)
+    more_info_text = (payload.more_info_text or "").strip()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO product_categories(
+                    name, description, image_url, more_info_enabled, more_info_text,
+                    access_scope, allowed_barangay, status, sort_order, created_by_admin_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    payload.name.strip(),
+                    (payload.description or "").strip() or None,
+                    normalize_upload_image_url(payload.image_url),
+                    bool(payload.more_info_enabled and more_info_text),
+                    more_info_text or None,
+                    access_scope,
+                    None,
+                    status,
+                    payload.sort_order,
+                    admin["id"],
+                ),
+            )
+            row = cur.fetchone()
+            replace_product_category_discounts(cur, str(row["id"]), payload.discounts)
+    row["discounts"] = product_category_discount_rows([str(row["id"])], active_only=False)
+    audit(admin["id"], "create_product_category", "product_categories", str(row["id"]), {"name": row["name"], "access_scope": row["access_scope"], "allowed_barangay": row.get("allowed_barangay")})
+    return serialize_product_category(row)
+
+
+@app.put("/api/product-categories/reorder")
+def reorder_product_categories(payload: ProductCategoryReorderPayload, admin=Depends(current_admin)):
+    requested_ids = [str(category_id).strip() for category_id in (payload.category_ids or []) if str(category_id).strip()]
+    if len(requested_ids) != len(set(requested_ids)):
+        raise HTTPException(status_code=400, detail="Product category order contains duplicate categories.")
+    existing_rows = fetch_all("SELECT id FROM product_categories ORDER BY sort_order ASC, name ASC, created_at DESC")
+    existing_ids = [str(row["id"]) for row in existing_rows]
+    existing_set = set(existing_ids)
+    missing_ids = [category_id for category_id in requested_ids if category_id not in existing_set]
+    if missing_ids:
+        raise HTTPException(status_code=400, detail="Product category order contains a category that no longer exists.")
+    ordered_ids = requested_ids + [category_id for category_id in existing_ids if category_id not in set(requested_ids)]
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            for index, category_id in enumerate(ordered_ids, start=1):
+                cur.execute(
+                    "UPDATE product_categories SET sort_order = %s, updated_at = now() WHERE id = %s",
+                    (index * 10, category_id),
+                )
+    audit(admin["id"], "reorder_product_categories", "product_categories", "bulk", {"category_ids": ordered_ids})
+    return {"categories": product_category_rows(active_only=False)}
+
+
+@app.patch("/api/product-categories/{category_id}")
+def update_product_category(category_id: str, payload: ProductCategoryPayload, admin=Depends(current_admin)):
+    current = fetch_one("SELECT * FROM product_categories WHERE id = %s", (category_id,))
+    if not current:
+        raise HTTPException(status_code=404, detail="Product category not found")
+    access_scope = normalize_product_access_scope(payload.access_scope)
+    status = normalize_product_category_status(payload.status)
+    more_info_text = (payload.more_info_text or "").strip()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE product_categories
+                SET name = %s,
+                    description = %s,
+                    image_url = %s,
+                    more_info_enabled = %s,
+                    more_info_text = %s,
+                    access_scope = %s,
+                    allowed_barangay = %s,
+                    status = %s,
+                    sort_order = %s,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (
+                    payload.name.strip(),
+                    (payload.description or "").strip() or None,
+                    normalize_upload_image_url(payload.image_url) if payload.image_url is not None else current.get("image_url"),
+                    bool(payload.more_info_enabled and more_info_text),
+                    more_info_text or None,
+                    access_scope,
+                    None,
+                    status,
+                    payload.sort_order,
+                    category_id,
+                ),
+            )
+            row = cur.fetchone()
+            replace_product_category_discounts(cur, str(row["id"]), payload.discounts)
+    row["discounts"] = product_category_discount_rows([str(row["id"])], active_only=False)
+    audit(admin["id"], "update_product_category", "product_categories", category_id, {"name": row["name"], "access_scope": row["access_scope"], "status": row["status"]})
+    return serialize_product_category(row)
+
+
+PRODUCT_CATEGORY_IMAGE_MAX_BYTES = 2 * 1024 * 1024
+PRODUCT_CATEGORY_IMAGE_TYPES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+}
+
+
+def save_product_category_image(file: UploadFile, category_id: str) -> str:
+    suffix = PRODUCT_CATEGORY_IMAGE_TYPES.get(file.content_type or "")
+    if not suffix:
+        filename_suffix = Path(file.filename or "").suffix.lower()
+        if filename_suffix in {".png", ".jpg", ".jpeg", ".webp"}:
+            suffix = ".jpg" if filename_suffix == ".jpeg" else filename_suffix
+    if not suffix:
+        raise HTTPException(status_code=400, detail="Upload a PNG, JPG, or WebP image.")
+
+    key = f"product-category-{category_id}"
+    tmp_path = UPLOAD_DIR / f"{key}.tmp"
+    final_path = UPLOAD_DIR / f"{key}{suffix}"
+    size = 0
+    try:
+        with tmp_path.open("wb") as out:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > PRODUCT_CATEGORY_IMAGE_MAX_BYTES:
+                    raise HTTPException(status_code=400, detail="Image is too large. Use WebP, JPG, or PNG up to 2 MB; under 300 KB is recommended for low-spec phones.")
+                out.write(chunk)
+        for old_path in UPLOAD_DIR.glob(f"{key}.*"):
+            if old_path != tmp_path:
+                old_path.unlink(missing_ok=True)
+        tmp_path.replace(final_path)
+    except HTTPException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+    except Exception as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"Image upload failed: {exc}") from exc
+    return f"/api/uploads/{final_path.name}"
+
+
+@app.post("/api/product-categories/{category_id}/image")
+def upload_product_category_image(category_id: str, category_image: UploadFile = File(...), admin=Depends(current_admin)):
+    current = fetch_one("SELECT * FROM product_categories WHERE id = %s", (category_id,))
+    if not current:
+        raise HTTPException(status_code=404, detail="Product category not found")
+    image_url = save_product_category_image(category_image, category_id)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE product_categories SET image_url = %s, updated_at = now() WHERE id = %s RETURNING *",
+                (image_url, category_id),
+            )
+            row = cur.fetchone()
+    audit(admin["id"], "upload_product_category_image", "product_categories", category_id, {"image_url": image_url})
+    return serialize_product_category(row)
+
+
+@app.delete("/api/product-categories/{category_id}")
+def delete_product_category(category_id: str, admin=Depends(current_admin)):
+    current = fetch_one("SELECT * FROM product_categories WHERE id = %s", (category_id,))
+    if not current:
+        raise HTTPException(status_code=404, detail="Product category not found")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE product_items SET category_id = NULL, updated_at = now() WHERE category_id = %s", (category_id,))
+            cur.execute("DELETE FROM product_categories WHERE id = %s", (category_id,))
+    audit(admin["id"], "delete_product_category", "product_categories", category_id, {"name": current["name"]})
+    return {"status": "DELETED", "id": category_id}
+
+
+@app.post("/api/product-items")
+def create_product_item(payload: ProductItemPayload, admin=Depends(current_admin)):
+    duration_unit = normalize_product_duration_unit(payload.duration_unit)
+    device_scope = normalize_product_device_scope(payload.device_scope)
+    allowed_devices = normalize_product_allowed_devices(device_scope, payload.allowed_devices)
+    status = normalize_product_status(payload.status)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            category = product_category_for_payload(cur, payload.category_id)
+            cur.execute(
+                """
+                INSERT INTO product_items(category_id, name, description, price, duration_value, duration_unit, device_scope, allowed_devices, use_category_discounts, enabled_category_discount_ids, discount_enabled, discount_min_quantity, discount_type, discount_value, status, sort_order, created_by_admin_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL, FALSE, NULL, NULL, 0, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    category["id"] if category else None,
+                    payload.name.strip(),
+                    (payload.description or "").strip() or None,
+                    payload.price,
+                    payload.duration_value,
+                    duration_unit,
+                    device_scope,
+                    allowed_devices,
+                    status,
+                    payload.sort_order,
+                    admin["id"],
+                ),
+            )
+            row = cur.fetchone()
+            replace_product_item_discounts(cur, str(row["id"]), payload.discounts)
+            row["discounts"] = product_item_discount_rows([str(row["id"])], active_only=False)
+            if category:
+                row["category_name"] = category["name"]
+                row["category_description"] = category.get("description")
+                row["category_image_url"] = category.get("image_url")
+                row["category_access_scope"] = category.get("access_scope")
+                row["category_allowed_barangay"] = category.get("allowed_barangay")
+                row["category_discounts"] = []
+    audit(admin["id"], "create_product_item", "product_items", str(row["id"]), {"name": row["name"], "price": float(row["price"]), "duration": product_duration_label(row["duration_value"], row["duration_unit"])})
+    return serialize_product_item(row)
+
+
+@app.patch("/api/product-items/{item_id}")
+def update_product_item(item_id: str, payload: ProductItemPayload, admin=Depends(current_admin)):
+    current = fetch_one("SELECT * FROM product_items WHERE id = %s", (item_id,))
+    if not current:
+        raise HTTPException(status_code=404, detail="Product item not found")
+    duration_unit = normalize_product_duration_unit(payload.duration_unit)
+    device_scope = normalize_product_device_scope(payload.device_scope)
+    allowed_devices = normalize_product_allowed_devices(device_scope, payload.allowed_devices)
+    status = normalize_product_status(payload.status)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            category = product_category_for_payload(cur, payload.category_id)
+            cur.execute(
+                """
+                UPDATE product_items
+                SET category_id = %s,
+                    name = %s,
+                    description = %s,
+                    price = %s,
+                    duration_value = %s,
+                    duration_unit = %s,
+                    device_scope = %s,
+                    allowed_devices = %s,
+                    use_category_discounts = FALSE,
+                    enabled_category_discount_ids = NULL,
+                    discount_enabled = FALSE,
+                    discount_min_quantity = NULL,
+                    discount_type = NULL,
+                    discount_value = 0,
+                    status = %s,
+                    sort_order = %s,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (
+                    category["id"] if category else None,
+                    payload.name.strip(),
+                    (payload.description or "").strip() or None,
+                    payload.price,
+                    payload.duration_value,
+                    duration_unit,
+                    device_scope,
+                    allowed_devices,
+                    status,
+                    payload.sort_order,
+                    item_id,
+                ),
+            )
+            row = cur.fetchone()
+            replace_product_item_discounts(cur, str(row["id"]), payload.discounts)
+            row["discounts"] = product_item_discount_rows([str(row["id"])], active_only=False)
+            if category:
+                row["category_name"] = category["name"]
+                row["category_description"] = category.get("description")
+                row["category_image_url"] = category.get("image_url")
+                row["category_access_scope"] = category.get("access_scope")
+                row["category_allowed_barangay"] = category.get("allowed_barangay")
+                row["category_discounts"] = []
+    audit(admin["id"], "update_product_item", "product_items", item_id, {"name": row["name"], "price": float(row["price"]), "status": row["status"]})
+    return serialize_product_item(row)
+
+
+@app.delete("/api/product-items/{item_id}")
+def delete_product_item(item_id: str, admin=Depends(current_admin)):
+    current = fetch_one("SELECT * FROM product_items WHERE id = %s", (item_id,))
+    if not current:
+        raise HTTPException(status_code=404, detail="Product item not found")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM product_items WHERE id = %s", (item_id,))
+    audit(admin["id"], "delete_product_item", "product_items", item_id, {"name": current["name"], "price": float(current["price"])})
+    return {"status": "DELETED", "id": item_id}
+
+
 @app.get("/api/vouchers")
 def get_vouchers(status: Optional[str] = None, voucher_type: Optional[str] = None, search: Optional[str] = None, batch_id: Optional[str] = None, admin=Depends(current_admin)):
     clauses = []
@@ -6619,6 +13021,11 @@ def get_vouchers(status: Optional[str] = None, voucher_type: Optional[str] = Non
         params.append(batch_id)
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     return {"summary": voucher_summary(), "vouchers": voucher_rows(where, tuple(params))}
+
+
+@app.get("/api/vouchers/active")
+def get_active_vouchers(admin=Depends(current_admin)):
+    return {"active_vouchers": active_voucher_rows()}
 
 
 @app.post("/api/vouchers")
@@ -6719,8 +13126,11 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
     grace = int(os.getenv("ACTIVE_SESSION_GRACE_SECONDS", "180"))
     devices = {}
     omada_error = None
+    omada_name_by_mac = {}
 
     def is_lab_device(device):
+        if device.get("customer_profile_id"):
+            return False
         text = " ".join(str(device.get(key) or "") for key in ["hostname", "username", "session_id", "raw_status", "id"]).lower()
         if device.get("source") == "PORTAL_SESSION":
             return True
@@ -6736,34 +13146,99 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
         existing = devices.get(key, {})
         merged = {**existing, **{k: v for k, v in device.items() if v not in (None, "")}}
         merged["client_mac"] = mac or device.get("client_mac")
+        best_name = (
+            preferred_device_name(device.get("device_name"), existing.get("device_name"))
+            or preferred_device_name(device.get("hostname"), existing.get("hostname"))
+            or preferred_device_name(device.get("username"), existing.get("username"))
+        )
+        if best_name:
+            merged["device_name"] = best_name
+            merged["hostname"] = best_name
         merged["active"] = bool(existing.get("active") or device.get("active"))
         merged["status"] = "ACTIVE" if merged["active"] else "INACTIVE"
         merged["client_mac_masked"] = mask_mac(merged.get("client_mac"))
+        merged["mac_addresses"] = portal_device_mac_values(
+            existing.get("mac_addresses") or [],
+            device.get("mac_addresses") or [],
+            merged.get("client_mac"),
+            device.get("previous_client_macs") or [],
+        )
+        for profile_field in [
+            "customer_profile_id",
+            "customer_name",
+            "customer_email",
+            "customer_contact_number",
+            "normalized_contact",
+            "contact_verified_at",
+            "marketing_sms_consent",
+            "welcome_gift_status",
+            "user_id",
+            "portal_session_id",
+            "public_session_id",
+            "remaining_time_seconds",
+        ]:
+            if device.get(profile_field) not in (None, ""):
+                if profile_field == "user_id" and merged.get("customer_profile_id") and not device.get("customer_profile_id"):
+                    continue
+                merged[profile_field] = device.get(profile_field)
+        merged["device_group_key"] = customer_device_group_key(merged.get("device_name") or merged.get("hostname") or merged.get("client_mac") or merged.get("client_ip"))
         devices[key] = merged
 
     settings = ensure_captive_portal_settings()
     _, site_id, site_name = omada_selected_site(settings)
-    if site_id:
+    site_rows = fetch_all(
+        """
+        SELECT DISTINCT omada_site_id AS site_id, site_name
+        FROM site_deployments
+        WHERE omada_site_id IS NOT NULL AND omada_site_id <> ''
+        UNION
+        SELECT DISTINCT omada_site_id AS site_id, site_name
+        FROM ap_deployments
+        WHERE omada_site_id IS NOT NULL AND omada_site_id <> '' AND deployment_status <> 'DELETED'
+        ORDER BY site_name
+        """
+    )
+    if site_id and not any(str(row.get("site_id") or "") == str(site_id) for row in site_rows):
+        site_rows.insert(0, {"site_id": site_id, "site_name": site_name})
+    omada_errors = []
+    if site_rows:
         try:
             _, client = omada_api_client_from_settings()
-            result = client.get_clients_if_supported(site_id)
-            for item in result.get("clients", []):
-                upsert_device({
-                    "source": "OMADA",
-                    "client_mac": item.get("client_mac"),
-                    "client_ip": item.get("client_ip"),
-                    "hostname": item.get("hostname"),
-                    "ap_mac": item.get("ap_mac"),
-                    "ap_name": item.get("ap_name"),
-                    "ssid": item.get("ssid"),
-                    "site": site_name,
-                    "active": item.get("active"),
-                    "last_seen": item.get("last_seen"),
-                    "uptime_seconds": item.get("uptime_seconds"),
-                    "raw_status": item.get("raw_status"),
-                })
+            for site in site_rows:
+                current_site_id = site.get("site_id")
+                current_site_name = site.get("site_name")
+                if not current_site_id:
+                    continue
+                try:
+                    result = client.get_clients_if_supported(current_site_id, current_site_name)
+                    for item in result.get("clients", []):
+                        client_mac = normalize_mac_if_valid(item.get("client_mac"))
+                        device_name = preferred_device_name(item.get("hostname"))
+                        if client_mac and device_name:
+                            omada_name_by_mac[client_mac] = device_name
+                        upsert_device({
+                            "source": "OMADA",
+                            "client_mac": item.get("client_mac"),
+                            "client_ip": item.get("client_ip"),
+                            "hostname": device_name or item.get("hostname"),
+                            "device_name": device_name,
+                            "ap_mac": item.get("ap_mac"),
+                            "ap_name": item.get("ap_name"),
+                            "ssid": item.get("ssid"),
+                            "site": current_site_name,
+                            "active": item.get("active"),
+                            "last_seen": item.get("last_seen"),
+                            "uptime_seconds": item.get("uptime_seconds"),
+                            "raw_status": item.get("raw_status"),
+                        })
+                except Exception as exc:
+                    omada_errors.append(f"{current_site_name or current_site_id}: {exc}")
         except Exception as exc:
-            omada_error = str(exc)
+            omada_errors.append(str(exc))
+    if omada_errors:
+        omada_error = "; ".join(omada_errors[:3])
+        if len(omada_errors) > 3:
+            omada_error = f"{omada_error}; +{len(omada_errors) - 3} more"
 
     for row in fetch_all(
         """
@@ -6798,23 +13273,40 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
 
     for row in fetch_all(
         """
-        SELECT s.*, u.username, v.code AS voucher_code
+        SELECT s.*, u.username, v.code AS voucher_code,
+               GREATEST(EXTRACT(EPOCH FROM (s.access_expires_at - now()))::int, 0) AS remaining_time_seconds,
+               p.id AS customer_profile_id,
+               p.display_name AS customer_name,
+               p.email AS customer_email,
+               p.contact_number AS customer_contact_number,
+               p.normalized_contact,
+               p.contact_verified_at,
+               p.marketing_sms_consent,
+               p.welcome_gift_status
         FROM portal_sessions s
         LEFT JOIN users u ON u.id = s.user_id
         LEFT JOIN vouchers v ON v.id = s.voucher_id
-        WHERE COALESCE(s.omada_client_mac, s.client_mac) IS NOT NULL
+        LEFT JOIN portal_customer_profiles p ON p.user_id = s.user_id
+        WHERE COALESCE(s.omada_client_mac, s.mikrotik_client_mac, s.client_mac, s.client_ip::text) IS NOT NULL
         ORDER BY s.updated_at DESC
         LIMIT 500
         """
     ):
-        active = row.get("status") in {"VOUCHER_REDEEMED", "ACCESS_GRANTED"} and row.get("updated_at") and row["updated_at"] > datetime.now(timezone.utc) - timedelta(seconds=grace)
+        expires_at = row.get("access_expires_at")
+        active = False
+        if row.get("status") in {"VOUCHER_REDEEMED", "ACCESS_GRANTED"}:
+            if expires_at:
+                active = expires_at > datetime.now(timezone.utc)
+            elif row.get("updated_at"):
+                active = row["updated_at"] > datetime.now(timezone.utc) - timedelta(seconds=grace)
         upsert_device({
             "id": str(row["id"]),
             "source": "PORTAL_SESSION",
             "portal_source": row.get("source"),
-            "client_mac": row.get("omada_client_mac") or row.get("client_mac"),
+            "client_mac": row.get("omada_client_mac") or row.get("mikrotik_client_mac") or row.get("client_mac"),
             "client_ip": row.get("client_ip"),
-            "hostname": row.get("username"),
+            "hostname": preferred_device_name(omada_name_by_mac.get(normalize_mac_if_valid(row.get("omada_client_mac") or row.get("mikrotik_client_mac") or row.get("client_mac")))) or row.get("username"),
+            "device_name": preferred_device_name(omada_name_by_mac.get(normalize_mac_if_valid(row.get("omada_client_mac") or row.get("mikrotik_client_mac") or row.get("client_mac")))),
             "ap_mac": row.get("omada_ap_mac") or row.get("ap_mac"),
             "ssid": row.get("ssid"),
             "site": row.get("omada_site_name") or row.get("site"),
@@ -6824,23 +13316,158 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
             "voucher_code": row.get("voucher_code"),
             "raw_status": row.get("status"),
             "authorization_status": row.get("omada_authorization_status"),
+            "portal_session_id": str(row["id"]),
+            "public_session_id": row.get("public_session_id"),
+            "user_id": str(row["user_id"]) if row.get("user_id") else None,
+            "remaining_time_seconds": int(row.get("remaining_time_seconds") or 0),
+            "previous_client_macs": row.get("previous_client_macs") or [],
+            "customer_profile_id": str(row["customer_profile_id"]) if row.get("customer_profile_id") else None,
+            "customer_name": row.get("customer_name"),
+            "customer_email": row.get("customer_email"),
+            "customer_contact_number": row.get("customer_contact_number"),
+            "normalized_contact": row.get("normalized_contact"),
+            "contact_verified_at": row.get("contact_verified_at"),
+            "marketing_sms_consent": bool(row.get("marketing_sms_consent")),
+            "welcome_gift_status": row.get("welcome_gift_status"),
         })
 
-    rows = sorted(devices.values(), key=lambda item: (not item.get("active"), str(item.get("last_seen") or "")), reverse=False)
+    rows = sorted(devices.values(), key=lambda item: (bool(item.get("active")), str(item.get("last_seen") or "")), reverse=True)
     active_rows = [row for row in rows if row.get("active")]
     inactive_rows = [row for row in rows if not row.get("active")]
+    voucher_rows_active = active_voucher_rows(omada_name_by_mac=omada_name_by_mac)
+    grouped = customer_device_groups(rows)
     return {
         "summary": {
             "total": len(rows),
             "active": len(active_rows),
             "inactive": len(inactive_rows),
+            "with_vouchers": len(voucher_rows_active),
+            "customers": len(grouped["customers"]),
+            "without_profiles": len(grouped["without_profiles"]),
+            "profiled_devices": sum(int(customer.get("device_count") or 0) for customer in grouped["customers"]),
+            "unprofiled_devices": sum(int(customer.get("device_count") or 0) for customer in grouped["without_profiles"]),
             "omada_site_id": site_id,
             "omada_site_name": site_name,
+            "omada_site_count": len(site_rows),
             "omada_error": omada_error,
         },
         "active": active_rows,
         "inactive": inactive_rows,
+        "with_vouchers": voucher_rows_active,
+        "customers": grouped["customers"],
+        "without_profiles": grouped["without_profiles"],
     }
+
+
+@app.get("/api/customer-devices")
+def customer_devices(include_test: bool = False, admin=Depends(current_admin)):
+    return connected_devices(include_test=include_test, admin=admin)
+
+
+@app.delete("/api/customer-devices/customers/{user_id}/profile")
+def reset_customer_device_profile(user_id: str, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT p.*, u.username, u.full_name, u.email AS user_email, u.phone_number
+                FROM portal_customer_profiles p
+                JOIN users u ON u.id = p.user_id
+                WHERE p.user_id = %s
+                FOR UPDATE OF p
+                """,
+                (user_id,),
+            )
+            profile = cur.fetchone()
+            if not profile:
+                raise HTTPException(status_code=404, detail="Customer profile was not found.")
+            cur.execute("SELECT count(*) AS count FROM portal_sessions WHERE user_id = %s", (user_id,))
+            session_count = int((cur.fetchone() or {}).get("count") or 0)
+            if profile.get("welcome_voucher_id") and profile.get("welcome_gift_status") == "AVAILABLE":
+                cur.execute(
+                    """
+                    UPDATE vouchers
+                    SET status = CASE WHEN status = 'UNUSED' THEN 'VOIDED' ELSE status END,
+                        note = COALESCE(NULLIF(note, ''), 'Voided by customer profile reset.'),
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (profile["welcome_voucher_id"],),
+                )
+            cur.execute("DELETE FROM portal_customer_profiles WHERE id = %s", (profile["id"],))
+            cur.execute(
+                """
+                UPDATE users
+                SET full_name = NULL,
+                    email = NULL,
+                    phone_number = NULL,
+                    marketing_sms_consent = false,
+                    terms_accepted_at = NULL,
+                    profile_verified_at = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (user_id,),
+            )
+    audit(admin["id"], "reset_customer_device_profile", "user", user_id, {
+        "profile_id": str(profile["id"]),
+        "display_name": profile.get("display_name"),
+        "contact_number": profile.get("contact_number"),
+        "email": profile.get("email"),
+        "session_count": session_count,
+    })
+    return {
+        "status": "ok",
+        "message": "Customer profile reset. The customer must verify their profile again on the portal.",
+        "reset_profile": {
+            "profile_id": str(profile["id"]),
+            "name": profile.get("display_name"),
+            "contact_number": profile.get("contact_number"),
+            "email": profile.get("email"),
+            "device_session_count": session_count,
+        },
+    }
+
+
+@app.post("/api/connected-devices/{portal_session_id}/time-adjust")
+def adjust_connected_device_time(portal_session_id: str, payload: PortalTimeAdjustRequest, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            result = adjust_portal_session_time(cur, portal_session_id, payload.amount_seconds, admin, payload.note)
+    audit(admin["id"], "adjust_connected_device_time", "portal_session", portal_session_id, {"amount_seconds": payload.amount_seconds, "note": payload.note})
+    return result
+
+
+@app.delete("/api/connected-devices/{portal_session_id}")
+def delete_connected_device(portal_session_id: str, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            result = adjust_portal_session_time(cur, portal_session_id, -315360000, admin, "Device removed by operator")
+    audit(admin["id"], "delete_connected_device", "portal_session", portal_session_id)
+    return {"status": "ok", "message": "Device access removed.", "details": result}
+
+
+@app.post("/api/connected-devices/{portal_session_id}/block")
+def block_connected_device(portal_session_id: str, payload: PortalBlockDeviceRequest, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = fetch_portal_session_for_admin(cur, portal_session_id)
+            mac = normalize_mac_if_valid(portal_effective_mac_from_session(session))
+            ip_value = host_ip(session.get("client_ip") or session.get("mikrotik_client_ip"))
+            if not mac and not ip_value:
+                raise HTTPException(status_code=400, detail="Device has no MAC or IP to block.")
+            existing = portal_blocked_device(cur, mac, ip_value)
+            if not existing:
+                cur.execute(
+                    """
+                    INSERT INTO portal_blocked_devices(normalized_mac, client_ip, reason, blocked_by_admin_id)
+                    VALUES (%s, NULLIF(%s, '')::inet, %s, %s)
+                    """,
+                    (mac, ip_value or "", payload.reason or "Blocked by operator", admin["id"]),
+                )
+            result = adjust_portal_session_time(cur, portal_session_id, -315360000, admin, payload.reason or "Device blocked by operator")
+    audit(admin["id"], "block_connected_device", "portal_session", portal_session_id, {"mac": mac, "ip": ip_value, "reason": payload.reason})
+    return {"status": "ok", "message": "Device blocked and current access removed.", "details": result}
 
 
 @app.get("/api/site-deployments")
@@ -8007,7 +14634,7 @@ def apply_configuration_to_ap(
                     }
                     controller_portal_url = {}
                     try:
-                        controller_portal_url = client.ensure_controller_portal_url_manual_if_supported()
+                        controller_portal_url = client.ensure_controller_portal_url_manual_if_supported(portal_url)
                     except Exception as exc:
                         warnings.append(f"Portal global URL mode: {exc}")
                     results["portal"] = client.configure_external_portal_if_supported(str(ap_row["omada_site_id"]), portal_payload)
@@ -8314,9 +14941,16 @@ def ap_deployment_map(admin=Depends(current_admin)):
         if ap.get("map_error"):
             ap["map_health"] = "ERROR"
         else:
-            ap["map_health"] = "HAS_CLIENTS" if int(ap.get("client_count") or 0) > 0 else "NO_CLIENTS"
+            ap["map_health"] = "HAS_CLIENTS" if int(ap.get("active_client_count") or ap.get("client_count") or 0) > 0 else "NO_CLIENTS"
+    aps, omada_client_errors = enrich_ap_map_clients(aps, admin=admin)
+    for ap in aps:
+        if ap.get("map_error"):
+            ap["map_health"] = "ERROR"
+        else:
+            ap["map_health"] = "HAS_CLIENTS" if int(ap.get("active_client_count") or ap.get("client_count") or 0) > 0 else "NO_CLIENTS"
     mapped = [ap for ap in aps if ap.get("mapped")]
     unmapped = [ap for ap in aps if not ap.get("mapped")]
+    total_clients = sum(max(int(ap.get("active_client_count") or 0), int(ap.get("client_count") or 0)) for ap in aps)
     return {
         "aps": aps,
         "mapped": mapped,
@@ -8326,10 +14960,13 @@ def ap_deployment_map(admin=Depends(current_admin)):
             "total": len(aps),
             "mapped": len(mapped),
             "unmapped": len(unmapped),
-            "with_clients": len([ap for ap in aps if int(ap.get("client_count") or 0) > 0]),
+            "with_clients": len([ap for ap in aps if int(ap.get("active_client_count") or ap.get("client_count") or 0) > 0]),
+            "total_clients": total_clients,
             "errors": len([ap for ap in aps if ap.get("map_error")]),
+            "omada_client_error_count": len(omada_client_errors),
         },
         "omada_error": data.get("omada_error"),
+        "omada_client_errors": omada_client_errors,
     }
 
 
@@ -8356,7 +14993,7 @@ def public_ap_map_client(client: dict, source: str) -> dict:
         "client_mac": normalize_mac(client_mac),
         "client_mac_masked": mask_mac(client_mac),
         "client_ip": client.get("client_ip"),
-        "hostname": client.get("hostname") or client.get("username") or "Unknown device",
+        "hostname": client.get("device_name") or client.get("hostname") or client.get("username") or "Unknown device",
         "device_type": client.get("device_type"),
         "ssid": client.get("ssid"),
         "active": bool(client.get("active")),
@@ -8389,19 +15026,13 @@ def attach_client_to_ap(clients_by_ap: dict, ap_key: Optional[str], client: dict
     bucket[key] = {**existing, **{k: v for k, v in row.items() if v not in (None, "")}}
 
 
-@app.get("/api/ap-client-map")
-def ap_client_map(admin=Depends(current_admin)):
-    data = ap_deployment_map(admin)
-    ssids = ap_client_map_ssids()
-    aps = data.get("aps", [])
+def enrich_ap_map_clients(aps: list[dict], admin=None) -> tuple[list[dict], list[dict]]:
     clients_by_ap: dict[str, dict] = {}
-    ap_lookup = {}
-    ap_name_lookup = {}
+    ap_name_lookup: dict[str, str] = {}
     for ap in aps:
         ap_key = normalize_ap_mac(ap.get("mac"))
         if not ap_key:
             continue
-        ap_lookup[ap_key] = ap
         for value in [ap.get("display_name"), ap.get("name"), ap.get("mac_bound_name"), ap.get("mac"), ap.get("ip")]:
             if value:
                 ap_name_lookup[str(value).strip().lower()] = ap_key
@@ -8448,6 +15079,28 @@ def ap_client_map(admin=Depends(current_admin)):
         ap_client_count = int(ap.get("client_count") or 0)
         enriched_aps.append({
             **ap,
+            "clients": sorted(client_rows, key=lambda row: (not row.get("active"), str(row.get("hostname") or row.get("client_mac") or ""))),
+            "client_count": max(ap_client_count, len(active_clients)),
+            "active_client_count": len(active_clients),
+            "inactive_client_count": len(client_rows) - len(active_clients),
+        })
+    return enriched_aps, omada_client_errors
+
+
+@app.get("/api/ap-client-map")
+def ap_client_map(admin=Depends(current_admin)):
+    data = ap_deployment_map(admin)
+    ssids = ap_client_map_ssids()
+    aps = data.get("aps", [])
+    omada_client_errors = data.get("omada_client_errors") or []
+
+    enriched_aps = []
+    for ap in aps:
+        client_rows = list(ap.get("clients") or [])
+        active_clients = [row for row in client_rows if row.get("active")]
+        ap_client_count = int(ap.get("client_count") or 0)
+        enriched_aps.append({
+            **ap,
             **ssids,
             "clients": sorted(client_rows, key=lambda row: (not row.get("active"), str(row.get("hostname") or row.get("client_mac") or ""))),
             "client_count": max(ap_client_count, len(active_clients)),
@@ -8469,7 +15122,7 @@ def ap_client_map(admin=Depends(current_admin)):
 
     mapped = [ap for ap in enriched_aps if ap.get("mapped")]
     unmapped = [ap for ap in enriched_aps if not ap.get("mapped")]
-    total_clients = sum(int(ap.get("active_client_count") or 0) for ap in enriched_aps)
+    total_clients = sum(max(int(ap.get("active_client_count") or 0), int(ap.get("client_count") or 0)) for ap in enriched_aps)
     return {
         **data,
         "aps": enriched_aps,
@@ -9690,6 +16343,138 @@ def get_captive_portal_settings(admin=Depends(current_admin)):
     return public_captive_portal_settings()
 
 
+@app.get("/api/captive-portal/sms-confirmation-settings")
+def get_portal_sms_confirmation_settings(admin=Depends(current_admin)):
+    return public_portal_sms_confirmation_settings()
+
+
+@app.put("/api/captive-portal/sms-confirmation-settings")
+def save_portal_sms_confirmation_settings(payload: PortalSmsConfirmationSettingsPayload, admin=Depends(current_admin)):
+    current = ensure_captive_portal_settings()
+    sender_options = set(public_portal_sms_confirmation_settings(current).get("sender_options") or [])
+    sender_id = normalize_a2p_text(payload.sender_id, 80)
+    if sender_id and sender_id not in sender_options:
+        raise HTTPException(status_code=400, detail="Choose one of the registered Sender IDs provisioned for the Smart A2P account.")
+    monthly_credit_limit = payload.monthly_credit_limit
+    monthly_reset_day = min(31, max(1, int(payload.monthly_reset_day or 1)))
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE captive_portal_settings
+                SET portal_sms_sender_id = %s,
+                    portal_sms_monthly_credit_limit = %s,
+                    portal_sms_monthly_reset_day = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (sender_id or None, monthly_credit_limit, monthly_reset_day, current["id"]),
+            )
+    audit(
+        admin["id"],
+        "save_portal_sms_confirmation_settings",
+        "captive_portal_settings",
+        str(current["id"]),
+        {"sender_id": sender_id, "monthly_credit_limit": monthly_credit_limit, "monthly_reset_day": monthly_reset_day},
+    )
+    return public_portal_sms_confirmation_settings()
+
+
+@app.post("/api/captive-portal/no-internet-avatar/disconnected")
+def upload_no_internet_disconnected_avatar(no_internet_avatar: UploadFile = File(...), admin=Depends(current_admin)):
+    avatar_url = save_branding_file(no_internet_avatar, "portal-no-internet-disconnected")
+    current = ensure_captive_portal_settings()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE captive_portal_settings SET no_internet_avatar_disconnected_url = %s, updated_at = now() WHERE id = %s",
+                (avatar_url, current["id"]),
+            )
+    audit(admin["id"], "upload_no_internet_disconnected_avatar", "captive_portal_settings", str(current["id"]), {"url": avatar_url})
+    return public_captive_portal_settings()
+
+
+@app.post("/api/captive-portal/no-internet-avatar/connected")
+def upload_no_internet_connected_avatar(no_internet_avatar: UploadFile = File(...), admin=Depends(current_admin)):
+    avatar_url = save_branding_file(no_internet_avatar, "portal-no-internet-connected")
+    current = ensure_captive_portal_settings()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE captive_portal_settings SET no_internet_avatar_connected_url = %s, updated_at = now() WHERE id = %s",
+                (avatar_url, current["id"]),
+            )
+    audit(admin["id"], "upload_no_internet_connected_avatar", "captive_portal_settings", str(current["id"]), {"url": avatar_url})
+    return public_captive_portal_settings()
+
+
+def sync_omada_external_portal_for_bound_stations(admin: dict, portal_url: str, reason: str = "portal_url_changed") -> dict:
+    stations = fetch_all(
+        """
+        SELECT *
+        FROM mikrotik_stations
+        WHERE status <> 'ARCHIVED'
+          AND (
+            NULLIF(TRIM(COALESCE(omada_site_id, '')), '') IS NOT NULL
+            OR NULLIF(TRIM(COALESCE(omada_site_name, '')), '') IS NOT NULL
+          )
+        ORDER BY station_name
+        """
+    )
+    if not stations:
+        return {
+            "status": "SKIPPED",
+            "message": "No MikroTik stations are bound to Omada sites yet.",
+            "portal_url": portal_url,
+            "results": [],
+        }
+
+    results = []
+    for station in stations:
+        try:
+            result = run_station_omada_action(str(station["id"]), "configure_external_portal", admin)
+            results.append({
+                "station_id": str(station["id"]),
+                "station_name": station.get("station_name"),
+                "omada_site_id": station.get("omada_site_id"),
+                "omada_site_name": station.get("omada_site_name"),
+                "status": result.get("status"),
+                "message": result.get("message") or result.get("error"),
+                "details": result.get("result"),
+            })
+        except Exception as exc:
+            response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
+            results.append({
+                "station_id": str(station["id"]),
+                "station_name": station.get("station_name"),
+                "omada_site_id": station.get("omada_site_id"),
+                "omada_site_name": station.get("omada_site_name"),
+                "status": "FAILED",
+                "message": str(exc),
+                "details": sanitize_summary(response_summary),
+            })
+
+    success_count = len([item for item in results if item.get("status") == "SUCCESS"])
+    failed_count = len(results) - success_count
+    status = "SUCCESS" if success_count and failed_count == 0 else "PARTIAL" if success_count else "FAILED"
+    message = f"Omada portal URL sync completed: {success_count} station(s) updated, {failed_count} failed."
+    log_captive_portal_test(
+        "SYNC_OMADA_PORTAL_URL",
+        status,
+        message,
+        {"reason": reason, "portal_url": portal_url, "results": sanitize_summary(results)},
+    )
+    audit(admin["id"], "sync_omada_portal_url", "captive_portal_settings", "global", {"status": status, "portal_url": portal_url, "success": success_count, "failed": failed_count})
+    return {
+        "status": status,
+        "message": message,
+        "portal_url": portal_url,
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "results": sanitize_summary(results),
+    }
+
+
 @app.put("/api/captive-portal/settings")
 def save_captive_portal_settings(payload: CaptivePortalSettingsUpdate, admin=Depends(current_admin)):
     current = ensure_captive_portal_settings()
@@ -9712,18 +16497,66 @@ def save_captive_portal_settings(payload: CaptivePortalSettingsUpdate, admin=Dep
         "portal_expired_notification_message",
         "portal_reconnect_notification_enabled",
         "portal_reconnect_notification_message",
+        "no_internet_headline",
+        "no_internet_subtitle",
+        "no_internet_avatar_disconnected_url",
+        "no_internet_avatar_connected_url",
+        "avatar_notes_json",
+        "marketing_sms_consent_text",
+        "profile_gift_enabled",
+        "profile_gift_duration_seconds",
+        "profile_gift_title",
+        "profile_gift_available_message",
+        "profile_gift_description",
+        "profile_gift_profile_saved_message",
+        "profile_gift_redeemed_message",
+        "outside_network_warning_enabled",
+        "outside_network_warning_message",
+        "outside_network_purchase_title",
+        "outside_network_purchase_message",
+        "outside_network_purchase_success_message",
+        "bag_auto_activate_default",
+        "bag_activation_overlap_seconds",
+        "portal_sms_sender_id",
+        "portal_sms_monthly_credit_limit",
+        "portal_sms_monthly_reset_day",
         "status",
     }
     updates = {key: value for key, value in payload.model_dump(exclude_none=True).items() if key in allowed}
     if not updates:
         return public_captive_portal_settings(current)
     assignments = ", ".join([f"{key} = %s" for key in updates] + ["updated_at = now()"])
-    params = [Json(value) if key == "test_checklist_progress" else value for key, value in updates.items()] + [current["id"]]
+    params = [Json(value) if key in {"test_checklist_progress", "avatar_notes_json"} else value for key, value in updates.items()] + [current["id"]]
+    old_portal_url = current_captive_portal_url(current)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(f"UPDATE captive_portal_settings SET {assignments} WHERE id = %s", tuple(params))
+            if updates.get("portal_url_staging") or updates.get("portal_url_production"):
+                synced_portal_url = updates.get("portal_url_production") or updates.get("portal_url_staging")
+                cur.execute(
+                    """
+                    UPDATE mikrotik_stations
+                    SET portal_url = %s, updated_at = now()
+                    WHERE status <> 'ARCHIVED'
+                    """,
+                    (synced_portal_url,),
+                )
     audit(admin["id"], "save_captive_portal_settings", "captive_portal_settings", str(current["id"]), sanitize_summary(updates))
-    return public_captive_portal_settings()
+    saved = public_captive_portal_settings()
+    new_portal_url = saved.get("current_portal_url")
+    requested_omada_sync = bool(payload.sync_omada_portal)
+    portal_target_changed = bool({"portal_url_staging", "portal_url_production", "selected_omada_site_id", "selected_omada_site_name"} & set(updates.keys()) and new_portal_url and new_portal_url != old_portal_url)
+    if new_portal_url and (requested_omada_sync or portal_target_changed):
+        try:
+            saved["omada_sync"] = sync_omada_external_portal_for_bound_stations(admin, new_portal_url)
+        except Exception as exc:
+            response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
+            saved["omada_sync"] = {
+                "status": "FAILED",
+                "message": f"Portal URL was saved, but Omada sync failed: {exc}",
+                "details": sanitize_summary(response_summary),
+            }
+    return saved
 
 
 @app.get("/api/captive-portal/omada/status")
@@ -12393,7 +19226,7 @@ def run_station_omada_action(station_id: str, action_key: str, admin: dict) -> d
             details = {"ssids": ssid_results, "ssid_names": ssid_names, "vlan_id": vlan_id, "stale_ssid_cleanup": cleanup_details}
             message = f"Open SSID(s) created or already exist for VLAN {vlan_id}."
         elif action_key == "configure_external_portal":
-            controller_portal_url = client.ensure_controller_portal_url_manual_if_supported()
+            controller_portal_url = client.ensure_controller_portal_url_manual_if_supported(portal_url)
             omada_payload = {
                 "name": f"3JCentralPisowifi External Portal - {row['station_name']}",
                 "portalUrl": portal_url,
@@ -20460,7 +27293,7 @@ def get_portal_design(admin=Depends(current_admin)):
     row = fetch_one("SELECT * FROM portal_design_templates ORDER BY updated_at DESC LIMIT 1")
     if not row:
         return {
-            "html_template": '<div class="portal-template-brand">{{brand}}</div>\n{{voucher_form}}\n{{help}}',
+            "html_template": '<div class="portal-template-brand">{{brand}}</div>\n{{product_items}}\n{{voucher_form}}\n{{help}}',
             "css_template": "",
         }
     return {
@@ -20572,10 +27405,11 @@ def captive_portal_configure_external_portal(payload: OmadaPortalConfigureReques
         "externalPortalUrl": portal_url,
         "ssidName": ssid_names[0] if ssid_names else ssid_name,
         "ssidNames": ssid_names,
+        "httpsRedirectEnable": False,
     }
     try:
         _, client = omada_api_client_from_settings()
-        controller_portal_url = client.ensure_controller_portal_url_manual_if_supported()
+        controller_portal_url = client.ensure_controller_portal_url_manual_if_supported(portal_url)
         result = client.configure_external_portal_if_supported(site_id, omada_payload)
         result["controller_portal_url"] = controller_portal_url
         try:
@@ -20870,19 +27704,61 @@ def void_voucher(voucher_id: str, admin=Depends(current_admin)):
     return set_voucher_status(voucher_id, "VOIDED", admin, "void_voucher")
 
 
+@app.post("/api/vouchers/{voucher_id}/time-adjust")
+def adjust_voucher_time(voucher_id: str, payload: PortalTimeAdjustRequest, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id
+                FROM portal_sessions
+                WHERE voucher_id = %s
+                  AND status IN ('VOUCHER_REDEEMED', 'ACCESS_GRANTED')
+                ORDER BY access_expires_at DESC NULLS LAST, updated_at DESC
+                LIMIT 1
+                """,
+                (voucher_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="No active device session was found for this voucher.")
+            result = adjust_portal_session_time(cur, str(row["id"]), payload.amount_seconds, admin, payload.note)
+    audit(admin["id"], "adjust_voucher_time", "voucher", voucher_id, {"amount_seconds": payload.amount_seconds, "note": payload.note})
+    return result
+
+
 @app.delete("/api/vouchers/{voucher_id}")
-def delete_voucher_if_unused(voucher_id: str, admin=Depends(current_admin)):
+def delete_voucher(voucher_id: str, admin=Depends(current_admin)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT status, redemption_count FROM vouchers WHERE id = %s", (voucher_id,))
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=404, detail="Voucher not found")
-            if row["status"] != "UNUSED" or row["redemption_count"] > 0:
-                raise HTTPException(status_code=400, detail="Only unused vouchers with no redemptions can be deleted")
+            cur.execute(
+                """
+                SELECT DISTINCT s.id
+                FROM portal_sessions s
+                LEFT JOIN omada_portal_authorizations a ON a.portal_session_id = s.id AND a.voucher_id = %s
+                WHERE (s.voucher_id = %s OR a.voucher_id = %s)
+                  AND (
+                    s.status IN ('VOUCHER_REDEEMED', 'ACCESS_GRANTED')
+                    OR (
+                        a.status = 'SUCCESS'
+                        AND COALESCE(a.client_mac, '') <> ''
+                        AND (a.access_expires_at IS NULL OR a.access_expires_at > now())
+                    )
+                  )
+                """,
+                (voucher_id, voucher_id, voucher_id),
+            )
+            sessions = cur.fetchall()
+            revoked = []
+            for session in sessions:
+                revoked.append(adjust_portal_session_time(cur, str(session["id"]), -315360000, admin, "Voucher deleted by operator"))
             cur.execute("DELETE FROM vouchers WHERE id = %s", (voucher_id,))
-    audit(admin["id"], "delete_unused_voucher", "voucher", voucher_id)
-    return {"status": "ok"}
+    audit(admin["id"], "delete_voucher", "voucher", voucher_id, {"previous_status": row["status"], "redemption_count": row["redemption_count"], "revoked_sessions": len(revoked)})
+    return {"status": "ok", "revoked_sessions": len(revoked), "revocations": sanitize_summary(revoked)}
 
 
 @app.get("/api/sessions")
@@ -21895,6 +28771,371 @@ def update_system_settings(payload: SystemSettingsUpdate, admin=Depends(current_
             )
     audit(admin["id"], "update_system_settings", "system", "system", merged)
     return system_settings_payload()
+
+
+@app.get("/api/system-settings/public-endpoint")
+def get_public_endpoint_settings(admin=Depends(current_admin)):
+    return public_endpoint_status()
+
+
+@app.patch("/api/system-settings/public-endpoint")
+def update_public_endpoint_settings(payload: PublicEndpointSettingsPayload, admin=Depends(current_admin)):
+    store = public_endpoint_store()
+    data = payload.model_dump(exclude_unset=True)
+    if "enabled" in data and data.get("enabled") is not None:
+        store["enabled"] = bool(data.get("enabled"))
+    if "provider" in data and data.get("provider") is not None:
+        provider = normalize_public_endpoint_text(data.get("provider"), 80).upper()
+        if provider != "CLOUDFLARE_TUNNEL":
+            raise HTTPException(status_code=400, detail="Only Cloudflare Tunnel is supported for Public HTTPS in this phase.")
+        store["provider"] = provider
+    if "domain" in data and data.get("domain") is not None:
+        store["domain"] = normalize_public_endpoint_hostname(data.get("domain"), PUBLIC_ENDPOINT_DEFAULT_SETTINGS["domain"])
+    if "public_hostname" in data and data.get("public_hostname") is not None:
+        store["public_hostname"] = normalize_public_endpoint_hostname(data.get("public_hostname"), PUBLIC_ENDPOINT_DEFAULT_SETTINGS["public_hostname"])
+    if "local_service_url" in data and data.get("local_service_url") is not None:
+        store["local_service_url"] = normalize_public_endpoint_url(data.get("local_service_url"), PUBLIC_ENDPOINT_DEFAULT_SETTINGS["local_service_url"])
+    if "portal_path" in data and data.get("portal_path") is not None:
+        store["portal_path"] = normalize_public_endpoint_path(data.get("portal_path"))
+    if data.get("clear_tunnel_token"):
+        store.pop("tunnel_token_encrypted", None)
+        try:
+            PUBLIC_ENDPOINT_TOKEN_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+    token = extract_cloudflare_tunnel_token(data.get("tunnel_token") or data.get("connector_command"))
+    if token:
+        store["tunnel_token_encrypted"] = encrypt_secret(token)
+        public_endpoint_write_token_file(token)
+    save_public_endpoint_store(store)
+    audit(
+        admin["id"],
+        "system_public_endpoint_settings_updated",
+        "system_public_endpoint",
+        "public_endpoint",
+        {
+            "enabled": bool(store.get("enabled")),
+            "provider": store.get("provider"),
+            "domain": store.get("domain"),
+            "public_hostname": store.get("public_hostname"),
+            "local_service_url": store.get("local_service_url"),
+            "tunnel_token_configured": bool(store.get("tunnel_token_encrypted")),
+        },
+    )
+    return public_endpoint_status()
+
+
+@app.post("/api/system-settings/public-endpoint/cloudflare/start")
+def start_public_endpoint_cloudflare(admin=Depends(current_admin)):
+    result = start_cloudflared_connector()
+    audit(admin["id"], "system_public_endpoint_cloudflared_started", "system_public_endpoint", "public_endpoint", {"running": result.get("cloudflared_running")})
+    return result
+
+
+@app.post("/api/system-settings/public-endpoint/cloudflare/stop")
+def stop_public_endpoint_cloudflare(admin=Depends(current_admin)):
+    result = stop_cloudflared_connector()
+    audit(admin["id"], "system_public_endpoint_cloudflared_stopped", "system_public_endpoint", "public_endpoint", {"running": result.get("cloudflared_running")})
+    return result
+
+
+@app.post("/api/system-settings/public-endpoint/cloudflare/restart")
+def restart_public_endpoint_cloudflare(admin=Depends(current_admin)):
+    result = restart_cloudflared_connector()
+    audit(admin["id"], "system_public_endpoint_cloudflared_restarted", "system_public_endpoint", "public_endpoint", {"running": result.get("cloudflared_running")})
+    return result
+
+
+@app.get("/api/system-settings/payments")
+def get_payment_gateway_settings(admin=Depends(current_admin)):
+    return public_payment_gateway_settings()
+
+
+@app.patch("/api/system-settings/payments")
+def update_payment_gateway_settings(payload: PaymentGatewaySettingsPayload, admin=Depends(current_admin)):
+    store = payment_gateway_store()
+    data = payload.model_dump(exclude_unset=True)
+    credentials = store.get("credentials") or normalize_payment_credentials(store)
+
+    if "enabled" in data and data.get("enabled") is not None:
+        store["enabled"] = bool(data.get("enabled"))
+    if "provider" in data and data.get("provider") is not None:
+        store["provider"] = normalize_payment_provider(data.get("provider"))
+    if "mode" in data and data.get("mode") is not None:
+        store["mode"] = normalize_payment_mode(data.get("mode"))
+    if "api_base_url" in data and data.get("api_base_url") is not None:
+        store["api_base_url"] = normalize_payment_base_url(data.get("api_base_url"))
+    if data.get("clear_public_key"):
+        credentials[normalize_payment_mode(store.get("mode"))].pop("public_key", None)
+    elif "public_key" in data:
+        public_key = normalize_payment_text(data.get("public_key"), 500)
+        if public_key:
+            credentials[normalize_payment_mode(store.get("mode"))]["public_key"] = public_key
+    if data.get("clear_secret_key"):
+        credentials[normalize_payment_mode(store.get("mode"))].pop("secret_key_encrypted", None)
+    elif "secret_key" in data:
+        secret_key = normalize_payment_text(data.get("secret_key"), 500)
+        if secret_key:
+            credentials[normalize_payment_mode(store.get("mode"))]["secret_key_encrypted"] = encrypt_secret(secret_key)
+    if data.get("clear_webhook_secret"):
+        credentials[normalize_payment_mode(store.get("mode"))].pop("webhook_secret_encrypted", None)
+    elif "webhook_secret" in data:
+        webhook_secret = normalize_payment_text(data.get("webhook_secret"), 500)
+        if webhook_secret:
+            credentials[normalize_payment_mode(store.get("mode"))]["webhook_secret_encrypted"] = encrypt_secret(webhook_secret)
+    for mode, prefix in (("TEST", "test"), ("LIVE", "live")):
+        mode_credentials = credentials.setdefault(mode, {})
+        public_field = f"{prefix}_public_key"
+        secret_field = f"{prefix}_secret_key"
+        webhook_field = f"{prefix}_webhook_secret"
+        if data.get(f"clear_{public_field}"):
+            mode_credentials.pop("public_key", None)
+        elif public_field in data:
+            public_key = normalize_payment_text(data.get(public_field), 500)
+            if public_key:
+                mode_credentials["public_key"] = public_key
+        if data.get(f"clear_{secret_field}"):
+            mode_credentials.pop("secret_key_encrypted", None)
+        elif secret_field in data:
+            secret_key = normalize_payment_text(data.get(secret_field), 500)
+            if secret_key:
+                mode_credentials["secret_key_encrypted"] = encrypt_secret(secret_key)
+        if data.get(f"clear_{webhook_field}"):
+            mode_credentials.pop("webhook_secret_encrypted", None)
+        elif webhook_field in data:
+            webhook_secret = normalize_payment_text(data.get(webhook_field), 500)
+            if webhook_secret:
+                mode_credentials["webhook_secret_encrypted"] = encrypt_secret(webhook_secret)
+    store["credentials"] = credentials
+    if "currency" in data and data.get("currency") is not None:
+        store["currency"] = normalize_payment_currency(data.get("currency"))
+    if "enabled_payment_methods" in data and data.get("enabled_payment_methods") is not None:
+        store["enabled_payment_methods"] = normalize_payment_methods(data.get("enabled_payment_methods"))
+    if "success_url" in data and data.get("success_url") is not None:
+        store["success_url"] = normalize_payment_url(data.get("success_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["success_url"])
+    if "cancel_url" in data and data.get("cancel_url") is not None:
+        store["cancel_url"] = normalize_payment_url(data.get("cancel_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["cancel_url"])
+    if "notes" in data and data.get("notes") is not None:
+        store["notes"] = normalize_payment_text(data.get("notes"), 1000)
+
+    save_payment_gateway_store(store)
+    audit(
+        admin["id"],
+        "system_payment_gateway_settings_updated",
+        "system_payment_gateway",
+        "payment_gateway",
+        {
+            "enabled": bool(store.get("enabled")),
+            "provider": store.get("provider"),
+            "mode": store.get("mode"),
+            "test_public_key_configured": bool(credentials.get("TEST", {}).get("public_key")),
+            "test_secret_key_configured": bool(credentials.get("TEST", {}).get("secret_key_encrypted")),
+            "test_webhook_secret_configured": bool(credentials.get("TEST", {}).get("webhook_secret_encrypted")),
+            "live_public_key_configured": bool(credentials.get("LIVE", {}).get("public_key")),
+            "live_secret_key_configured": bool(credentials.get("LIVE", {}).get("secret_key_encrypted")),
+            "live_webhook_secret_configured": bool(credentials.get("LIVE", {}).get("webhook_secret_encrypted")),
+            "enabled_payment_methods": store.get("enabled_payment_methods") or [],
+        },
+    )
+    return public_payment_gateway_settings()
+
+
+@app.get("/api/system-settings/a2p-messaging")
+def get_a2p_messaging_settings(admin=Depends(current_admin)):
+    return public_a2p_messaging_settings()
+
+
+@app.patch("/api/system-settings/a2p-messaging")
+def update_a2p_messaging_settings(payload: A2PMessagingSettingsPayload, admin=Depends(current_admin)):
+    store = a2p_messaging_store()
+    data = payload.model_dump(exclude_unset=True)
+
+    for key in ("enabled", "registered_delivery"):
+        if key in data and data.get(key) is not None:
+            store[key] = bool(data.get(key))
+    for key in ("provider", "api_id", "default_source", "notes"):
+        if key in data and data.get(key) is not None:
+            store[key] = normalize_a2p_text(data.get(key), 1000 if key == "notes" else 200)
+    if "base_url" in data and data.get("base_url") is not None:
+        store["base_url"] = normalize_a2p_base_url(data.get("base_url"))
+    for key in ("send_path", "query_path", "cancel_path", "start_batch_path", "send_batch_path", "credits_path"):
+        if key in data and data.get(key) is not None:
+            store[key] = normalize_a2p_path(data.get(key), A2P_DEFAULT_SETTINGS[key])
+    if "auth_method" in data and data.get("auth_method") is not None:
+        auth_method = normalize_a2p_text(data.get("auth_method"), 40).upper()
+        if auth_method not in A2P_AUTH_METHODS:
+            raise HTTPException(status_code=400, detail="Unsupported A2P authentication method")
+        store["auth_method"] = auth_method
+    if data.get("clear_api_key"):
+        store.pop("api_key_encrypted", None)
+    elif "api_key" in data:
+        api_key = normalize_a2p_text(data.get("api_key"), 500)
+        if api_key:
+            store["api_key_encrypted"] = encrypt_secret(api_key)
+    if "username" in data and data.get("username") is not None:
+        store["username"] = normalize_a2p_text(data.get("username"), 200)
+    if data.get("clear_password"):
+        store.pop("password_encrypted", None)
+    elif "password" in data:
+        password = normalize_a2p_text(data.get("password"), 500)
+        if password:
+            store["password_encrypted"] = encrypt_secret(password)
+    if "monthly_credit_limit" in data:
+        store["monthly_credit_limit"] = data.get("monthly_credit_limit")
+    if "monthly_reset_day" in data and data.get("monthly_reset_day") is not None:
+        store["monthly_reset_day"] = min(31, max(1, int(data.get("monthly_reset_day"))))
+    if "source_addresses" in data and data.get("source_addresses") is not None:
+        store["source_addresses"] = normalize_a2p_source_addresses(data.get("source_addresses"))
+
+    save_a2p_messaging_store(store)
+    audit(
+        admin["id"],
+        "system_a2p_messaging_settings_updated",
+        "system_a2p_messaging",
+        "a2p_messaging",
+        {
+            "enabled": bool(store.get("enabled")),
+            "provider": store.get("provider"),
+            "auth_method": store.get("auth_method"),
+            "api_key_configured": bool(store.get("api_key_encrypted")),
+            "username_configured": bool(normalize_a2p_text(store.get("username"))),
+            "password_configured": bool(store.get("password_encrypted")),
+        },
+    )
+    return public_a2p_messaging_settings()
+
+
+@app.post("/api/system-settings/a2p-messaging/check-credits")
+def check_a2p_messaging_credits(admin=Depends(current_admin)):
+    store = a2p_messaging_store()
+    url = a2p_join_url(store["base_url"], store["credits_path"])
+    username = normalize_a2p_text(store.get("username"), 200)
+    password = decrypt_secret(store.get("password_encrypted"))
+    if not username or not password:
+        raise HTTPException(
+            status_code=400,
+            detail="Smart credits check requires the HTTP API username and password. The credits endpoint is documented with Basic Authentication, even if SMS sending uses API key headers.",
+        )
+    headers = {
+        "Accept": "text/plain",
+        "User-Agent": "3JCentralPisowifi/0.1 a2p-credits-check",
+    }
+    auth = (username, password)
+
+    checked_at = datetime.now(timezone.utc).isoformat()
+    try:
+        response = requests.get(url, headers=headers, auth=auth, timeout=20)
+        text = normalize_a2p_text(response.text, 1000)
+        if response.status_code >= 400:
+            auth_hint = " The Smart credits endpoint is documented for prepaid accounts using Basic Authentication. Verify the saved username/password and confirm credits API access is provisioned on the Smart account."
+            raise HTTPException(status_code=400, detail=f"Smart credits check failed: HTTP {response.status_code} {text[:200]}{auth_hint}")
+        available = parse_a2p_credit_available(text)
+        store["last_credit_check_at"] = checked_at
+        store["last_credit_check_status"] = "SUCCESS"
+        store["last_credit_available"] = available
+        store["last_credit_response"] = text[:500]
+        store["last_credit_error"] = "" if available is not None else f"Could not parse credits response: {text[:200]}"
+        save_a2p_messaging_store(store)
+        audit(
+            admin["id"],
+            "system_a2p_messaging_credits_checked",
+            "system_a2p_messaging",
+            "a2p_messaging",
+            {"status": "SUCCESS", "available": available},
+        )
+        return {
+            **public_a2p_messaging_settings(),
+            "credit_check": {
+                "status": "SUCCESS",
+                "available": available,
+                "response_summary": text[:300],
+                "checked_at": checked_at,
+            },
+        }
+    except HTTPException as exc:
+        store["last_credit_check_at"] = checked_at
+        store["last_credit_check_status"] = "FAILED"
+        store["last_credit_error"] = str(exc.detail)
+        save_a2p_messaging_store(store)
+        raise
+    except Exception as exc:
+        store["last_credit_check_at"] = checked_at
+        store["last_credit_check_status"] = "FAILED"
+        store["last_credit_error"] = str(exc)
+        save_a2p_messaging_store(store)
+        raise HTTPException(status_code=400, detail=f"Smart credits check failed: {exc}")
+
+
+@app.post("/api/system-settings/a2p-messaging/test-send")
+def test_send_a2p_messaging(payload: A2PMessagingTestSendPayload, admin=Depends(current_admin)):
+    store = a2p_messaging_store()
+    destination = normalize_a2p_destination(payload.destination)
+    message_text = normalize_a2p_text(payload.message_text, 500)
+    if not message_text:
+        raise HTTPException(status_code=400, detail="Message text is required")
+    source = normalize_a2p_text(payload.source if payload.source is not None else store.get("default_source"), 80)
+    registered = store.get("registered_delivery") if payload.registered_delivery is None else bool(payload.registered_delivery)
+    url = a2p_join_url(store["base_url"], store["send_path"])
+    headers, auth, extra_params = a2p_auth_parts(store)
+    headers["Accept"] = "text/plain"
+    form_data = {
+        **extra_params,
+        "destination": destination,
+        "text": message_text,
+        "registered": "1" if registered else "0",
+    }
+    if source:
+        form_data["source"] = source
+    sent_at = datetime.now(timezone.utc).isoformat()
+    try:
+        response = requests.post(url, headers=headers, auth=auth, data=form_data, timeout=30)
+        text = normalize_a2p_text(response.text, 1000)
+        if response.status_code >= 400:
+            raise HTTPException(status_code=400, detail=f"Smart test SMS failed: HTTP {response.status_code} {text[:240]}")
+        status = "SUCCESS" if re.match(r"^\s*0\s+\d{3}\s+OK", text, re.IGNORECASE) else "FAILED"
+        message_id_match = re.search(r"Message[- ]ID\s*:\s*([^\s]+)", text, re.IGNORECASE)
+        message_id = message_id_match.group(1) if message_id_match else None
+        store["last_test_send_at"] = sent_at
+        store["last_test_send_status"] = status
+        store["last_test_send_destination"] = mask_a2p_destination(destination)
+        store["last_test_send_message_id"] = message_id
+        store["last_test_send_response"] = text[:500]
+        store["last_test_send_error"] = "" if status == "SUCCESS" else text[:500]
+        save_a2p_messaging_store(store)
+        audit(
+            admin["id"],
+            "system_a2p_messaging_test_sms_sent",
+            "system_a2p_messaging",
+            "a2p_messaging",
+            {
+                "status": status,
+                "destination": mask_a2p_destination(destination),
+                "message_id": message_id,
+            },
+        )
+        if status != "SUCCESS":
+            raise HTTPException(status_code=400, detail=f"Smart test SMS was not accepted: {text[:300]}")
+        return {
+            **public_a2p_messaging_settings(),
+            "test_send": {
+                "status": status,
+                "destination": mask_a2p_destination(destination),
+                "message_id": message_id,
+                "response_summary": text[:300],
+                "sent_at": sent_at,
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        store["last_test_send_at"] = sent_at
+        store["last_test_send_status"] = "FAILED"
+        store["last_test_send_destination"] = mask_a2p_destination(destination)
+        store["last_test_send_message_id"] = None
+        store["last_test_send_response"] = ""
+        store["last_test_send_error"] = str(exc)
+        save_a2p_messaging_store(store)
+        raise HTTPException(status_code=400, detail=f"Smart test SMS failed: {exc}")
 
 
 def raise_ai_feature_removed():
