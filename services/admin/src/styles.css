@@ -6234,6 +6234,39 @@ body.modal-open {
   gap: 0.85rem;
 }
 
+.portal-purchase-heading {
+  align-items: center;
+  display: flex;
+  gap: 0.85rem;
+  justify-content: space-between;
+}
+
+.portal-purchase-title {
+  color: #172033;
+  font-size: 1.08rem;
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+.portal-purchase-subtitle {
+  color: #667085;
+  font-size: 0.84rem;
+  font-weight: 650;
+  margin-top: 0.2rem;
+}
+
+.portal-purchase-step-pill {
+  background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.1);
+  border: 1px solid rgba(var(--portal-brand-rgb, 6, 111, 209), 0.22);
+  border-radius: 999px;
+  color: var(--portal-brand-color, var(--tblr-primary, #066fd1));
+  flex: 0 0 auto;
+  font-size: 0.72rem;
+  font-weight: 900;
+  line-height: 1;
+  padding: 0.4rem 0.58rem;
+}
+
 .portal-purchase-breadcrumbs {
   align-items: center;
   display: flex;
@@ -6397,6 +6430,14 @@ body.modal-open {
   background: #1f2a3d;
   border-color: rgba(255, 255, 255, 0.12);
   color: #dbe7f5;
+}
+
+.portal-tabler-page.is-dark .portal-purchase-title {
+  color: #f8fafc;
+}
+
+.portal-tabler-page.is-dark .portal-purchase-subtitle {
+  color: #9caec5;
 }
 
 .portal-tabler-page.is-dark .portal-choice-card strong,
