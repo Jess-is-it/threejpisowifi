@@ -2671,62 +2671,67 @@ function PortalApp() {
                 </button>
               </li>
             </ul>
-            <button className="btn btn-sm btn-outline-primary portal-bag-claim-toggle" type="button" onClick={() => setBagClaimOpen(true)}>
-              <IconKey size={15} /> Claim voucher
-            </button>
           </div>
-          {bagClaimOpen && (
-            <form className="portal-bag-claim" onSubmit={claimVoucherToBag}>
-              <div className="portal-bag-claim-title">
-                <span><IconKey size={18} /></span>
-                <div>
-                  <strong>Claim voucher</strong>
-                  <small>Add free, refund, or event vouchers to your bag.</small>
-                </div>
-                <button
-                  className="btn btn-icon btn-sm btn-outline-secondary ms-auto"
-                  type="button"
-                  aria-label="Close claim voucher"
-                  onClick={() => {
-                    setBagClaimOpen(false);
-                    setBagClaimMessage(null);
-                  }}
-                >
-                  <IconX size={16} />
-                </button>
-              </div>
-              <div className="portal-bag-claim-row">
-                <input
-                  className="form-control"
-                  value={bagVoucherCode}
-                  onChange={(event) => {
-                    setBagVoucherCode(event.target.value.toUpperCase());
-                    if (bagClaimMessage) setBagClaimMessage(null);
-                  }}
-                  placeholder="Voucher code"
-                  autoComplete="one-time-code"
-                />
-                <button className="btn btn-primary" type="submit" disabled={bagClaiming}>
-                  {bagClaiming ? 'Adding...' : 'Add to Bag'}
-                </button>
-              </div>
-              {bagClaimMessage && (
-                <div className={`alert ${bagClaimMessage.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'} py-2 mb-0`}>
-                  {bagClaimMessage.message}
-                </div>
-              )}
-            </form>
-          )}
           {bagTab === 'LIST' ? (
             <div className="portal-bag-tab-panel">
-              <label className="portal-bag-auto-row">
-                <span>
-                  <strong>Auto activate</strong>
-                </span>
-                <span className="form-check form-switch m-0">
-                  <input className="form-check-input" type="checkbox" checked={autoActivate} disabled={bagSaving} onChange={(event) => saveBagAutoActivate(event.target.checked)} />
-                </span>
-              </label>
+              <div className="portal-bag-controls">
+                <label className="portal-bag-auto-row portal-bag-control-card">
+                  <span>
+                    <strong>Auto activate</strong>
+                  </span>
+                  <span className="form-check form-switch m-0">
+                    <input className="form-check-input" type="checkbox" checked={autoActivate} disabled={bagSaving} onChange={(event) => saveBagAutoActivate(event.target.checked)} />
+                  </span>
+                </label>
+                <button className={`portal-bag-auto-row portal-bag-control-card portal-bag-voucher-button ${bagClaimOpen ? 'is-active' : ''}`} type="button" onClick={() => setBagClaimOpen(true)}>
+                  <span>
+                    <strong>Voucher</strong>
+                  </span>
+                  <span className="portal-bag-voucher-icon"><IconKey size={16} /></span>
+                </button>
+              </div>
+              {bagClaimOpen && (
+                <form className="portal-bag-claim" onSubmit={claimVoucherToBag}>
+                  <div className="portal-bag-claim-title">
+                    <span><IconKey size={18} /></span>
+                    <div>
+                      <strong>Voucher</strong>
+                      <small>Add free, refund, or event vouchers to your bag.</small>
+                    </div>
+                    <button
+                      className="btn btn-icon btn-sm btn-outline-secondary ms-auto"
+                      type="button"
+                      aria-label="Close voucher"
+                      onClick={() => {
+                        setBagClaimOpen(false);
+                        setBagClaimMessage(null);
+                      }}
+                    >
+                      <IconX size={16} />
+                    </button>
+                  </div>
+                  <div className="portal-bag-claim-row">
+                    <input
+                      className="form-control"
+                      value={bagVoucherCode}
+                      onChange={(event) => {
+                        setBagVoucherCode(event.target.value.toUpperCase());
+                        if (bagClaimMessage) setBagClaimMessage(null);
+                      }}
+                      placeholder="Voucher code"
+                      autoComplete="one-time-code"
+                    />
+                    <button className="btn btn-primary" type="submit" disabled={bagClaiming}>
+                      {bagClaiming ? 'Adding...' : 'Add to Bag'}
+                    </button>
+                  </div>
+                  {bagClaimMessage && (
+                    <div className={`alert ${bagClaimMessage.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'} py-2 mb-0`}>
+                      {bagClaimMessage.message}
+                    </div>
+                  )}
+                </form>
+              )}
               <div className="portal-bag-section">
                 <div className="portal-bag-section-title">Active now</div>
                 {activeBagItems.length ? activeBagItems.map((item) => renderItem(item)) : <div className="text-muted small">No active bag item right now.</div>}
