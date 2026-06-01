@@ -6229,6 +6229,192 @@ body.modal-open {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
+.portal-purchase-flow {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.portal-purchase-breadcrumbs {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.portal-purchase-breadcrumbs button {
+  align-items: center;
+  background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.1);
+  border: 1px solid rgba(var(--portal-brand-rgb, 6, 111, 209), 0.2);
+  border-radius: 999px;
+  color: var(--portal-brand-color, var(--tblr-primary, #066fd1));
+  display: inline-flex;
+  font-size: 0.76rem;
+  font-weight: 850;
+  line-height: 1;
+  padding: 0.42rem 0.62rem;
+}
+
+.portal-choice-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.portal-choice-card,
+.portal-store-placeholder {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 0.9rem;
+  display: flex;
+  gap: 0.8rem;
+  min-width: 0;
+  padding: 0.9rem;
+  text-align: left;
+}
+
+.portal-choice-card {
+  cursor: pointer;
+}
+
+.portal-choice-card:hover,
+.portal-choice-card:focus-visible {
+  border-color: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.42);
+  box-shadow: 0 0.55rem 1.35rem rgba(15, 23, 42, 0.08);
+  outline: 0;
+}
+
+.portal-choice-icon {
+  align-items: center;
+  background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.1);
+  border-radius: 0.8rem;
+  color: var(--portal-brand-color, var(--tblr-primary, #066fd1));
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 2.75rem;
+  justify-content: center;
+  width: 2.75rem;
+}
+
+.portal-choice-card strong,
+.portal-store-placeholder strong {
+  color: #172033;
+  display: block;
+  font-weight: 850;
+  line-height: 1.15;
+}
+
+.portal-choice-card small,
+.portal-store-placeholder p {
+  color: #667085;
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  margin-top: 0.2rem;
+}
+
+.portal-payment-logo-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.55rem;
+}
+
+.portal-payment-logo {
+  align-items: center;
+  background: #f3f6fb;
+  border: 1px solid rgba(98, 105, 118, 0.14);
+  border-radius: 0.5rem;
+  color: #172033;
+  display: inline-flex;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0;
+  line-height: 1;
+  min-height: 1.45rem;
+  padding: 0.28rem 0.42rem;
+}
+
+.portal-payment-logo.is-gcash {
+  background: #eaf3ff;
+  color: #0f67d8;
+}
+
+.portal-payment-logo.is-card {
+  background: #fff7e8;
+  color: #9b5b00;
+}
+
+.portal-payment-logo.is-paymaya {
+  background: #eafff3;
+  color: #00864f;
+}
+
+.portal-payment-logo.is-grab_pay {
+  background: #e9fff0;
+  color: #00843d;
+}
+
+.portal-payment-logo.is-qrph {
+  background: #f3eaff;
+  color: #673ab7;
+}
+
+.portal-payment-method-strip {
+  display: flex;
+  gap: 0.45rem;
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
+  scrollbar-width: none;
+}
+
+.portal-payment-method-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.portal-payment-method-pill {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 999px;
+  color: #344054;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  font-weight: 850;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
+}
+
+.portal-payment-method-pill.is-active {
+  border-color: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.42);
+  box-shadow: 0 0 0 2px rgba(var(--portal-brand-rgb, 6, 111, 209), 0.08);
+}
+
+.portal-tabler-page.is-dark .portal-choice-card,
+.portal-tabler-page.is-dark .portal-store-placeholder,
+.portal-tabler-page.is-dark .portal-payment-method-pill {
+  background: #1f2a3d;
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #dbe7f5;
+}
+
+.portal-tabler-page.is-dark .portal-choice-card strong,
+.portal-tabler-page.is-dark .portal-store-placeholder strong {
+  color: #f8fafc;
+}
+
+.portal-tabler-page.is-dark .portal-choice-card small,
+.portal-tabler-page.is-dark .portal-store-placeholder p {
+  color: #9caec5;
+}
+
+.portal-tabler-page.is-dark .portal-payment-logo {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+}
+
 .portal-category-action-row {
   display: grid;
   gap: 0.5rem;
@@ -7800,6 +7986,19 @@ button.portal-bag-control-card {
 }
 
 @media (max-width: 575.98px) {
+  .portal-choice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-choice-card,
+  .portal-store-placeholder {
+    padding: 0.82rem;
+  }
+
+  .portal-payment-method-pill {
+    padding: 0.32rem 0.45rem;
+  }
+
   .portal-category-modal-dialog {
     width: calc(100vw - 1.5rem) !important;
   }

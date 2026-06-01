@@ -2186,7 +2186,7 @@ def public_payment_gateway_portal_status() -> dict:
         store.get("enabled")
         and active.get("public_key")
         and active.get("secret_key")
-        and "gcash" in enabled_methods
+        and enabled_methods
     )
     return {
         "enabled": bool(store.get("enabled")),
@@ -2194,6 +2194,7 @@ def public_payment_gateway_portal_status() -> dict:
         "mode": active["mode"],
         "currency": store.get("currency"),
         "enabled_payment_methods": enabled_methods,
+        "payment_method_options": [{"id": key, "label": label} for key, label in PAYMENT_METHOD_OPTIONS.items()],
         "ready_for_checkout": checkout_ready,
         "ready_for_webhooks": bool(active.get("webhook_secret")),
         "public_key_configured": bool(active.get("public_key")),

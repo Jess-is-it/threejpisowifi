@@ -1491,6 +1491,9 @@ function PortalApp() {
   const [selectedCategoryProductId, setSelectedCategoryProductId] = useState('');
   const [productQuantities, setProductQuantities] = useState({});
   const [selectedCategoryBarangays, setSelectedCategoryBarangays] = useState({});
+  const [purchasePassType, setPurchasePassType] = useState('');
+  const [purchaseChannel, setPurchaseChannel] = useState('');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('gcash');
   const [portalCoverage, setPortalCoverage] = useState(null);
   const [portalCoverageOpen, setPortalCoverageOpen] = useState(false);
   const [portalCoverageLoading, setPortalCoverageLoading] = useState(false);
@@ -1844,7 +1847,7 @@ function PortalApp() {
     }
   }
 
-  async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false) {
+  async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false, paymentMethod = selectedPaymentMethod) {
     setResult(null);
     setPaymentResult(null);
     const safeQuantity = Math.max(1, Math.min(Number(purchaseQuantity || 1), 365));
@@ -1891,7 +1894,7 @@ function PortalApp() {
         method: 'POST',
         body: JSON.stringify(payload({
           product_item_id: item.id,
-          payment_method: 'gcash',
+          payment_method: paymentMethod || selectedPaymentMethod || 'gcash',
           purchase_quantity: safeQuantity,
           selected_barangay: barangayOnly ? selectedBarangay : null,
           outside_network_purchase: outside3jNetwork,
@@ -2269,7 +2272,24 @@ function PortalApp() {
   const productCategories = settings?.product_categories || [];
   const productCategoryGroups = (productCategories || []).filter((category) => category?.id && (category.items || []).length);
   const payments = settings?.payments || {};
-  const canCheckoutWithGcash = Boolean(payments.enabled && payments.ready_for_checkout && (payments.enabled_payment_methods || []).includes('gcash'));
+  const portalPaymentMethodOptions = payments.payment_method_options || [
+    { id: 'gcash', label: 'GCash' },
+    { id: 'qrph', label: 'QR Ph' },
+    { id: 'card', label: 'Card' },
+    { id: 'paymaya', label: 'Maya / PayMaya' },
+    { id: 'grab_pay', label: 'GrabPay' }
+  ];
+  const enabledPaymentMethods = payments.enabled_payment_methods?.length ? payments.enabled_payment_methods : ['gcash'];
+  const onlinePaymentMethods = portalPaymentMethodOptions.filter((method) => enabledPaymentMethods.includes(method.id));
+  const selectedPaymentMethodRow = onlinePaymentMethods.find((method) => method.id === selectedPaymentMethod) || onlinePaymentMethods[0] || null;
+  const canCheckoutOnline = Boolean(payments.enabled && payments.ready_for_checkout && selectedPaymentMethodRow);
+  const canCheckoutWithGcash = canCheckoutOnline;
+  const selectedPassLabel = purchasePassType === 'MULTI_DEVICE' ? t('Multiple Device Pass') : purchasePassType === 'SINGLE_DEVICE' ? t('One Device Pass') : '';
+  const selectedPaymentLabel = selectedPaymentMethodRow?.label || 'Online';
+  const visibleProductCategoryGroups = productCategoryGroups.filter((category) => {
+    if (!purchasePassType) return true;
+    return (category.items || []).some((item) => productPassType(item) === purchasePassType);
+  });
   const paymentSuccessReady = Boolean(paymentResult?.status === 'PAID' && paymentResult?.fulfillment_status === 'FULFILLED');
   const autoPortalDark = (() => {
     const hour = new Date(themeClock).getHours();
@@ -2308,6 +2328,13 @@ function PortalApp() {
   const giftAvailable = profileGiftEnabled && profile?.welcome_gift_status === 'AVAILABLE';
   const avatarNotesSettingsKey = JSON.stringify(settings?.avatar_notes_json || {});
 
+  useEffect(() => {
+    if (!onlinePaymentMethods.length) return;
+    if (!onlinePaymentMethods.some((method) => method.id === selectedPaymentMethod)) {
+      setSelectedPaymentMethod(onlinePaymentMethods[0].id);
+    }
+  }, [payments.enabled_payment_methods?.join(','), payments.payment_method_options?.length, selectedPaymentMethod]);
+
   function togglePortalDarkMode() {
     const nextMode = portalDark ? 'light' : 'dark';
     setPortalDarkOverride(nextMode);
@@ -2318,6 +2345,43 @@ function PortalApp() {
     const nextLanguage = language === 'tl' ? 'tl' : 'en';
     setPortalLanguage(nextLanguage);
     localStorage.setItem('centralwifi_portal_language', nextLanguage);
+  }
+
+  function paymentMethodLogo(method = {}) {
+    const id = String(method.id || '').toLowerCase();
+    if (id === 'gcash') return 'GCash';
+    if (id === 'card') return 'VISA MC';
+    if (id === 'paymaya') return 'Maya';
+    if (id === 'grab_pay') return 'GrabPay';
+    if (id === 'qrph') return 'QR Ph';
+    return method.label || id.toUpperCase();
+  }
+
+  function selectPortalPassType(nextType) {
+    setPurchasePassType(nextType);
+    setPurchaseChannel('');
+    setSelectedProductCategory(null);
+    setSelectedCategoryProductId('');
+    setProductQuantities({});
+  }
+
+  function selectPortalPurchaseChannel(nextChannel) {
+    setPurchaseChannel(nextChannel);
+    setSelectedProductCategory(null);
+    setSelectedCategoryProductId('');
+    setProductQuantities({});
+  }
+
+  function resetPortalPurchaseStep(step) {
+    if (step === 'pass') {
+      setPurchasePassType('');
+      setPurchaseChannel('');
+    } else if (step === 'channel') {
+      setPurchaseChannel('');
+    }
+    setSelectedProductCategory(null);
+    setSelectedCategoryProductId('');
+    setProductQuantities({});
   }
 
   function paymentSuccessCopy(payment) {
@@ -3324,7 +3388,7 @@ function PortalApp() {
 
   function CategoryProductsModal() {
     if (!selectedProductCategory) return null;
-    const categoryItems = selectedProductCategory.items || [];
+    const categoryItems = (selectedProductCategory.items || []).filter((item) => !purchasePassType || productPassType(item) === purchasePassType);
     const selectedItem = selectedCategoryProductId ? categoryItems.find((item) => item.id === selectedCategoryProductId) : null;
     const selectedQuantity = selectedItem ? productQuantity(selectedItem) : 0;
     const selectedAmount = selectedItem ? productLineAmount(selectedItem, selectedQuantity) : { total: 0 };
@@ -3536,7 +3600,7 @@ function PortalApp() {
                 <strong className="portal-selected-total-final">{formatCentavos(selectedAmount.total)}</strong>
               </span>
             </div>
-            <button className="btn btn-primary" type="button" disabled={!canCheckoutWithGcash || !selectedItem || !selectedQuantity || paymentLoading === selectedItem?.id} onClick={() => startProductCheckout(selectedItem, selectedQuantity)}>
+            <button className="btn btn-primary" type="button" disabled={!canCheckoutOnline || !selectedItem || !selectedQuantity || paymentLoading === selectedItem?.id} onClick={() => startProductCheckout(selectedItem, selectedQuantity, false, selectedPaymentMethod)}>
               {paymentLoading === selectedItem?.id ? t('Opening...') : (
                 <>
                   <span>{t('BUY')}</span>
@@ -3747,37 +3811,127 @@ function PortalApp() {
                   : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Waiting for PayMongo payment confirmation.')}
               {paymentResult.payment_order_id && <button className="btn btn-sm btn-outline-secondary ms-2" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id)}>{paymentChecking ? t('Checking...') : t('Check')}</button>}
             </div>}
-            {productCategoryGroups.length ? (
-              <div className="portal-product-category-list">
-                {productCategoryGroups.map((category, groupIndex) => (
-                  <div className="portal-product-category-block" key={category.id || `category-${groupIndex}`}>
-                    <button className="portal-category-image-button" type="button" onClick={() => openProductCategory(category)}>
-                      {category.image_url ? (
-                        <img className="portal-product-category-image" src={category.image_url} alt="" loading="lazy" />
-                      ) : (
-                        <span className="portal-product-category-image portal-category-image-empty"><IconPhoto size={30} /></span>
-                      )}
-                      <span className="portal-category-card-overlay">
-                        <span className="portal-category-card-title">{category.name || t('Available Packages')}</span>
-                        <span className="portal-category-card-scope">
-                          <IconCircleCheck size={14} />
-                          {category.access_scope === 'BARANGAY_ONLY' ? t('Barangay only') : t('All Locations')}
-                        </span>
-                      </span>
+            <div className="portal-purchase-flow">
+              {(purchasePassType || purchaseChannel) && (
+                <div className="portal-purchase-breadcrumbs" aria-label="Purchase choices">
+                  {purchasePassType && (
+                    <button type="button" onClick={() => resetPortalPurchaseStep('pass')}>
+                      {selectedPassLabel}
                     </button>
-                    {category.description && <div className="small text-muted mb-2">{category.description}</div>}
-                    {category.more_info_enabled && category.more_info_text ? (
-                      <div className="portal-category-action-row">
-                        <button className="btn btn-primary portal-category-buy-action" type="button" onClick={() => openProductCategory(category)}>{t('BUY')}</button>
-                        <button className="btn btn-outline-secondary portal-category-more-info-action" type="button" onClick={() => openCategoryMoreInfo(category)}>{t('More Info')}</button>
-                      </div>
-                    ) : (
-                      <button className="btn btn-primary w-100" type="button" onClick={() => openProductCategory(category)}>{t('BUY')}</button>
-                    )}
+                  )}
+                  {purchasePassType && purchaseChannel && <IconChevronRight size={14} />}
+                  {purchaseChannel && (
+                    <button type="button" onClick={() => resetPortalPurchaseStep('channel')}>
+                      {purchaseChannel === 'ONLINE' ? `${t('Online Payment')} · ${selectedPaymentLabel}` : t('Store Payment')}
+                    </button>
+                  )}
+                </div>
+              )}
+              {!purchasePassType ? (
+                <div className="portal-choice-grid">
+                  <button className="portal-choice-card" type="button" onClick={() => selectPortalPassType('SINGLE_DEVICE')}>
+                    <span className="portal-choice-icon"><IconUser size={24} /></span>
+                    <span>
+                      <strong>{t('One Device Pass')}</strong>
+                      <small>{t('Best for one phone or one laptop.')}</small>
+                    </span>
+                  </button>
+                  <button className="portal-choice-card" type="button" onClick={() => selectPortalPassType('MULTI_DEVICE')}>
+                    <span className="portal-choice-icon"><IconUsers size={24} /></span>
+                    <span>
+                      <strong>{t('Multiple Device Pass')}</strong>
+                      <small>{t('Share one purchase with more than one device.')}</small>
+                    </span>
+                  </button>
+                </div>
+              ) : !purchaseChannel ? (
+                <div className="portal-choice-grid">
+                  <button
+                    className="portal-choice-card"
+                    type="button"
+                    onClick={() => {
+                      if (onlinePaymentMethods[0] && !selectedPaymentMethodRow) setSelectedPaymentMethod(onlinePaymentMethods[0].id);
+                      selectPortalPurchaseChannel('ONLINE');
+                    }}
+                  >
+                    <span className="portal-choice-icon"><IconCash size={24} /></span>
+                    <span>
+                      <strong>{t('Online Payment')}</strong>
+                      <small>{t('Pay through available PayMongo methods.')}</small>
+                      <span className="portal-payment-logo-row">
+                        {onlinePaymentMethods.length ? onlinePaymentMethods.map((method) => (
+                          <span className={`portal-payment-logo is-${method.id}`} key={method.id}>{paymentMethodLogo(method)}</span>
+                        )) : <span className="portal-payment-logo">{t('Not configured')}</span>}
+                      </span>
+                    </span>
+                  </button>
+                  <button className="portal-choice-card" type="button" onClick={() => selectPortalPurchaseChannel('STORE')}>
+                    <span className="portal-choice-icon"><IconShoppingBag size={24} /></span>
+                    <span>
+                      <strong>{t('Store Payment')}</strong>
+                      <small>{t('Coming soon. Store-assisted payment details will be added next.')}</small>
+                    </span>
+                  </button>
+                </div>
+              ) : purchaseChannel === 'STORE' ? (
+                <div className="portal-store-placeholder">
+                  <span className="portal-choice-icon"><IconShoppingBag size={24} /></span>
+                  <div>
+                    <strong>{t('Store Payment')}</strong>
+                    <p className="mb-0">{t('Store payment is being prepared. Choose Online Payment for now, or ask the operator for a voucher.')}</p>
                   </div>
-                ))}
-              </div>
-            ) : <div className="alert alert-info mb-0">{t('No packages are available yet. Ask the operator for a voucher.')}</div>}
+                </div>
+              ) : (
+                <>
+                  {onlinePaymentMethods.length ? (
+                    <div className="portal-payment-method-strip">
+                      {onlinePaymentMethods.map((method) => (
+                        <button
+                          className={`portal-payment-method-pill ${selectedPaymentMethod === method.id ? 'is-active' : ''}`}
+                          type="button"
+                          key={method.id}
+                          onClick={() => setSelectedPaymentMethod(method.id)}
+                        >
+                          <span className={`portal-payment-logo is-${method.id}`}>{paymentMethodLogo(method)}</span>
+                          <span>{method.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : <div className="alert alert-warning mb-0">{t('Online payment methods are not configured yet. Ask the operator for a voucher.')}</div>}
+                  {onlinePaymentMethods.length && visibleProductCategoryGroups.length ? (
+                    <div className="portal-product-category-list">
+                      {visibleProductCategoryGroups.map((category, groupIndex) => (
+                        <div className="portal-product-category-block" key={category.id || `category-${groupIndex}`}>
+                          <button className="portal-category-image-button" type="button" onClick={() => openProductCategory(category)}>
+                            {category.image_url ? (
+                              <img className="portal-product-category-image" src={category.image_url} alt="" loading="lazy" />
+                            ) : (
+                              <span className="portal-product-category-image portal-category-image-empty"><IconPhoto size={30} /></span>
+                            )}
+                            <span className="portal-category-card-overlay">
+                              <span className="portal-category-card-title">{category.name || t('Available Packages')}</span>
+                              <span className="portal-category-card-scope">
+                                <IconCircleCheck size={14} />
+                                {category.access_scope === 'BARANGAY_ONLY' ? t('Barangay only') : t('All Locations')}
+                              </span>
+                            </span>
+                          </button>
+                          {category.description && <div className="small text-muted mb-2">{category.description}</div>}
+                          {category.more_info_enabled && category.more_info_text ? (
+                            <div className="portal-category-action-row">
+                              <button className="btn btn-primary portal-category-buy-action" type="button" onClick={() => openProductCategory(category)}>{t('BUY')}</button>
+                              <button className="btn btn-outline-secondary portal-category-more-info-action" type="button" onClick={() => openCategoryMoreInfo(category)}>{t('More Info')}</button>
+                            </div>
+                          ) : (
+                            <button className="btn btn-primary w-100" type="button" onClick={() => openProductCategory(category)}>{t('BUY')}</button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : onlinePaymentMethods.length ? <div className="alert alert-info mb-0">{t('No packages are available yet. Ask the operator for a voucher.')}</div> : null}
+                </>
+              )}
+            </div>
           </div>
           <PortalFooter />
           </>
