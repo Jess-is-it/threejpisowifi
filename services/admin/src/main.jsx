@@ -8,6 +8,8 @@ import {
   IconAlertTriangle,
   IconBan,
   IconBell,
+  IconBuildingStore,
+  IconBrandChrome,
   IconCalendarStats,
   IconChevronRight,
   IconBrandOpenai,
@@ -87,9 +89,16 @@ function cssHexToRgb(value, fallback = '6,111,209') {
   return `${(number >> 16) & 255},${(number >> 8) & 255},${number & 255}`;
 }
 
+function cacheBustedUploadUrl(url, version) {
+  const text = String(url || '').trim();
+  if (!text || !version || !text.startsWith('/api/uploads/')) return text;
+  const separator = text.includes('?') ? '&' : '?';
+  return `${text}${separator}v=${encodeURIComponent(String(version))}`;
+}
+
 const DEFAULT_PORTAL_AVATARS = {
-  disconnected: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><rect width="240" height="240" rx="120" fill="#fff1f2"/><circle cx="120" cy="120" r="92" fill="#fee2e2"/><path d="M68 104c30-26 74-26 104 0" fill="none" stroke="#dc2626" stroke-width="13" stroke-linecap="round"/><path d="M91 130c17-14 41-14 58 0" fill="none" stroke="#dc2626" stroke-width="13" stroke-linecap="round"/><circle cx="120" cy="158" r="10" fill="#dc2626"/><path d="M78 171 162 69" stroke="#991b1b" stroke-width="14" stroke-linecap="round"/></svg>`),
-  connected: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><rect width="240" height="240" rx="120" fill="#ecfdf5"/><circle cx="120" cy="120" r="92" fill="#dcfce7"/><path d="M68 101c30-25 74-25 104 0" fill="none" stroke="#16a34a" stroke-width="13" stroke-linecap="round"/><path d="M91 127c17-14 41-14 58 0" fill="none" stroke="#16a34a" stroke-width="13" stroke-linecap="round"/><circle cx="120" cy="155" r="10" fill="#16a34a"/><path d="m78 169 24 24 61-72" fill="none" stroke="#15803d" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/></svg>`)
+  disconnected: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><path d="M68 104c30-26 74-26 104 0" fill="none" stroke="#dc2626" stroke-width="13" stroke-linecap="round"/><path d="M91 130c17-14 41-14 58 0" fill="none" stroke="#dc2626" stroke-width="13" stroke-linecap="round"/><circle cx="120" cy="158" r="10" fill="#dc2626"/><path d="M78 171 162 69" stroke="#991b1b" stroke-width="14" stroke-linecap="round"/></svg>`),
+  connected: svgDataUrl(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><path d="M68 101c30-25 74-25 104 0" fill="none" stroke="#16a34a" stroke-width="13" stroke-linecap="round"/><path d="M91 127c17-14 41-14 58 0" fill="none" stroke="#16a34a" stroke-width="13" stroke-linecap="round"/><circle cx="120" cy="155" r="10" fill="#16a34a"/><path d="m78 169 24 24 61-72" fill="none" stroke="#15803d" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/></svg>`)
 };
 
 const DEFAULT_PROFILE_GIFT = {
@@ -159,7 +168,7 @@ const PORTAL_TRANSLATIONS = {
     'Powered by 3JCentralPisowifi': 'Pinapagana ng 3JCentralPisowifi',
     'Loading portal...': 'Naglo-load ang portal...',
     'No Internet Detected': 'Walang Internet',
-    'Connect with a voucher or buy a WiFi package.': 'Kumonekta gamit ang voucher o bumili ng WiFi package.',
+    'Buy a WiFi pass or claim an optional voucher.': 'Bumili ng WiFi pass o mag-claim ng optional voucher.',
     'Buy Now': 'Bumili Ngayon',
     'Log In': 'Mag-log In',
     'Help': 'Tulong',
@@ -193,8 +202,19 @@ const PORTAL_TRANSLATIONS = {
     'Selected total': 'Kabuuang napili',
     'Saved {amount}': 'Nakatipid {amount}',
     'Opening...': 'Binubuksan...',
+    'Buy WiFi / IPTV Pass': 'Bumili ng WiFi / IPTV Pass',
+    'Choose how you want to pay first.': 'Piliin muna kung paano magbabayad.',
+    'Online Payment': 'Online Payment',
+    'Store Payment': 'Store Payment',
+    'Pay through available PayMongo methods.': 'Magbayad gamit ang available PayMongo methods.',
+    'Pay through an available store in your connected site.': 'Magbayad sa available store sa connected site mo.',
+    'Choose pass type': 'Pumili ng pass type',
+    'One Device Pass': 'One Device Pass',
+    'Multiple Device Pass': 'Multiple Device Pass',
+    'For one phone or laptop': 'Para sa isang phone o laptop',
+    'For shared device access': 'Para sa shared device access',
     'Available Packages': 'Available Packages',
-    'No packages are available yet. Ask the operator for a voucher.': 'Wala pang available na package. Humingi ng voucher sa operator.',
+    'No packages are available yet. Ask the operator for help.': 'Wala pang available na package. Humingi ng tulong sa operator.',
     'Payment received. Internet access is active.': 'Natanggap ang bayad. Aktibo na ang internet access.',
     'Payment was not completed.': 'Hindi natapos ang bayad.',
     'Checking PayMongo payment confirmation...': 'Tinitingnan ang kumpirmasyon ng PayMongo payment...',
@@ -231,6 +251,30 @@ const PORTAL_TRANSLATIONS = {
     'Contact': 'Contact',
     'Email': 'Email',
     'Promo SMS': 'Promo SMS',
+    '3J WiFi Portal Settings': '3J WiFi Portal Settings',
+    'Notifications': 'Notifications',
+    'Phone Notifications': 'Phone Notifications',
+    'Appearance': 'Hitsura',
+    'Theme': 'Theme',
+    'Auto': 'Auto',
+    'Light': 'Light',
+    'Dark': 'Dark',
+    'Language': 'Wika',
+    'Account': 'Account',
+    'Network': 'Network',
+    'Permission': 'Permission',
+    'Delivery': 'Delivery',
+    'Every': 'Bawat',
+    'Sent': 'Naipadala',
+    'Event-based alerts': 'Event-based alerts',
+    'Show Time in Phone Notification': 'Show Time in Phone Notification',
+    'Open Profile': 'Buksan ang Profile',
+    'Open My WiFi Bag': 'Buksan ang My WiFi Bag',
+    'Unused': 'Hindi pa nagagamit',
+    'Ready to use': 'Handa nang gamitin',
+    'You have a saved WiFi pass ready to use.': 'May naka-save kang WiFi pass na handa nang gamitin.',
+    'Ready pass': 'Handang pass',
+    'Activate now': 'I-activate ngayon',
     'Allowed': 'Pinapayagan',
     'Not allowed': 'Hindi pinapayagan',
     'Close': 'Isara',
@@ -239,7 +283,7 @@ const PORTAL_TRANSLATIONS = {
     'Email (optional)': 'Email (optional)',
     'Contact Number': 'Contact Number',
     'Sending...': 'Nagpapadala...',
-    'Send Again After ({seconds}s)': 'Magpadala ulit pagkatapos ng ({seconds}s)',
+    'Send Again ({seconds}s)': 'Magpadala ulit ({seconds}s)',
     'Send Code': 'Magpadala ng Code',
     '4-character Code': '4-character Code',
     'Cancel': 'Kanselahin',
@@ -460,10 +504,10 @@ const routePages = {
   'location-management': 'Location Management',
   vouchers: 'Vouchers',
   'product-items': 'Product Items',
+  'physical-stores': 'Physical Stores',
   sales: 'Sales',
   'wallet-manual-top-up': 'Wallet / Manual Top-Up',
   'captive-portal': 'Captive Portal',
-  'captive-portal/editor': 'Portal Editor',
   'support-inbox': 'Support Inbox',
   network: 'Network',
   'network/mikrotik/scan-result': 'MikroTik Scan Result',
@@ -486,7 +530,6 @@ function pageFromLocation() {
 function routeForPage(page) {
   if (page === 'Omada Controller') return '/admin/settings/omada-controller';
   if (page === 'AP & Client Map') return '/admin/ap-client-map';
-  if (page === 'Portal Editor') return '/admin/captive-portal/editor';
   if (page === 'MikroTik Scan Result') return '/admin/network/mikrotik/scan-result';
   if (page === 'Customer Devices') return '/admin/customer-devices';
   if (page === 'Sites' || page === 'Sites Deployments') return '/admin/aps-deployment/sites';
@@ -634,16 +677,94 @@ function portalNotificationTemplate(template, values = {}) {
   return Object.entries(replacements).reduce((text, [tag, value]) => text.split(tag).join(value), String(template || '')).trim();
 }
 
-async function showPortalCustomerNotification(title, message) {
+function portalNotificationAssetUrl(value) {
+  if (!value || typeof window === 'undefined') return '';
+  try {
+    const url = new URL(value, window.location.origin);
+    if (window.location.protocol === 'https:' && url.protocol !== 'https:') return '';
+    return url.toString();
+  } catch (_error) {
+    return '';
+  }
+}
+
+function portalNotificationPermissionStatus() {
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
+  if (!window.isSecureContext) return 'insecure';
+  return Notification.permission;
+}
+
+async function portalNotificationRegistration() {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator) || !window.isSecureContext) return null;
+  try {
+    const registration = await navigator.serviceWorker.register('/portal/notifications-sw.js', { scope: '/portal' });
+    const readyRegistration = await portalNotificationTimeout(navigator.serviceWorker.ready, 2500, registration);
+    return readyRegistration || registration;
+  } catch (error) {
+    return { __portal_notification_error: error?.message || 'service_worker_registration_failed' };
+  }
+}
+
+function portalNotificationTimeout(promise, timeoutMs, fallbackValue) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    const timer = window.setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      resolve(fallbackValue);
+    }, timeoutMs);
+    Promise.resolve(promise)
+      .then((value) => {
+        if (resolved) return;
+        resolved = true;
+        window.clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        if (resolved) return;
+        resolved = true;
+        window.clearTimeout(timer);
+        resolve({ __portal_notification_error: error?.message || 'notification_error' });
+      });
+  });
+}
+
+async function showPortalCustomerNotification(title, message, options = {}) {
   if (!message) return { shown: false, reason: 'empty' };
   try {
-    if (!('Notification' in window) || !window.isSecureContext) return { shown: false, reason: 'unsupported' };
+    if (!('Notification' in window) || !window.isSecureContext) return { shown: false, reason: !window.isSecureContext ? 'insecure' : 'unsupported' };
     let permission = Notification.permission;
-    if (permission === 'default') permission = await Notification.requestPermission();
+    if (permission === 'default') {
+      const requestedPermission = await portalNotificationTimeout(Notification.requestPermission(), 4500, 'permission_timeout');
+      permission = typeof requestedPermission === 'string' ? requestedPermission : Notification.permission;
+    }
+    if (permission === 'permission_timeout') return { shown: false, reason: 'permission_timeout' };
     if (permission !== 'granted') return { shown: false, reason: permission };
-    const notification = new Notification(title || '3J WiFi', { body: message, tag: '3j-portal-status', renotify: true });
-    window.setTimeout(() => notification.close(), 8000);
-    return { shown: true };
+    const targetUrl = options.url || `${window.location.origin}/portal`;
+    const safeIcon = portalNotificationAssetUrl(options.icon);
+    const safeBadge = portalNotificationAssetUrl(options.badge || options.icon);
+    const notificationOptions = {
+      body: message,
+      tag: options.tag || '3j-portal-status',
+      renotify: true,
+      data: { url: targetUrl }
+    };
+    if (safeIcon) notificationOptions.icon = safeIcon;
+    if (safeBadge) notificationOptions.badge = safeBadge;
+    const registration = await portalNotificationTimeout(portalNotificationRegistration(), 3500, null);
+    if (registration?.showNotification) {
+      const serviceWorkerResult = await portalNotificationTimeout(
+        registration.showNotification(title || '3J WiFi', notificationOptions).then(() => ({ shown: true })),
+        4500,
+        { shown: false, reason: 'notification_timeout' }
+      );
+      if (serviceWorkerResult?.shown) return { shown: true, mode: 'service_worker' };
+      return {
+        shown: false,
+        reason: serviceWorkerResult?.reason || serviceWorkerResult?.__portal_notification_error || 'service_worker_notification_failed'
+      };
+    }
+    return { shown: false, reason: registration?.__portal_notification_error || 'service_worker_unavailable' };
   } catch (error) {
     return { shown: false, reason: error.message };
   }
@@ -945,7 +1066,79 @@ function portalAvatarLowTimeThresholdSeconds(settings) {
 
 function portalAvatarWordDelayMs(settings) {
   const config = normalizePortalAvatarNotesSettings(settings);
-  return Math.max(40, Number(config.word_delay_ms ?? 180));
+  return Math.max(90, Number(config.word_delay_ms ?? 180));
+}
+
+function PortalAvatarImage({
+  compact = false,
+  avatarConnected = false,
+  avatarNoteVisible = false,
+  avatarNote = '',
+  avatarNoteTone = '',
+  customAvatarUrl = '',
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const isTalking = avatarNoteVisible && Boolean(String(avatarNote || '').trim());
+  const className = [
+    compact ? 'portal-shop-avatar' : 'portal-avatar-ring',
+    avatarConnected ? 'is-connected' : 'is-disconnected',
+    isTalking ? 'is-talking' : '',
+    avatarNoteTone === 'success' ? 'is-success-note' : '',
+  ].filter(Boolean).join(' ');
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [customAvatarUrl]);
+
+  return (
+    <div className={className}>
+      {customAvatarUrl && !imageFailed ? (
+        <img src={customAvatarUrl} alt="" onError={() => setImageFailed(true)} />
+      ) : (
+        <div className={`portal-default-avatar ${avatarConnected ? 'is-connected' : 'is-disconnected'}`}>
+          <IconWifi size={compact ? 48 : 70} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PortalAvatarHeroView({
+  compact = false,
+  avatarNote = '',
+  avatarNoteTone = '',
+  avatarNoteVisible = false,
+  avatarNoteWords = [],
+  avatarNoteSequence = 0,
+  avatarConnected = false,
+  customAvatarUrl = '',
+}) {
+  const noteText = String(avatarNote || '');
+  return (
+    <div className={`portal-avatar-hero ${compact ? 'is-compact' : ''}`}>
+      <div
+        className={`portal-avatar-note ${avatarNoteTone === 'success' ? 'is-success' : ''} ${avatarNoteVisible && noteText ? 'is-visible' : 'is-hidden'}`}
+        aria-live="polite"
+        aria-label={noteText}
+      >
+        <span>
+          {avatarNoteWords.map((word, index) => (
+            <span className="portal-avatar-note-word" key={`${avatarNoteSequence}-${index}-${word}`}>
+              {word}
+            </span>
+          ))}
+        </span>
+      </div>
+      <PortalAvatarImage
+        compact={compact}
+        avatarConnected={avatarConnected}
+        avatarNoteVisible={avatarNoteVisible}
+        avatarNote={noteText}
+        avatarNoteTone={avatarNoteTone}
+        customAvatarUrl={customAvatarUrl}
+      />
+    </div>
+  );
 }
 
 function PortalAppLegacy() {
@@ -970,7 +1163,7 @@ function PortalAppLegacy() {
   const bridgeChecked = params.get('bridge_checked') === '1';
   const rawQueryParams = Object.fromEntries(params.entries());
   const title = settings?.portal_title || '3J WiFi';
-  const subtitle = settings?.portal_subtitle || 'Enter your voucher to connect';
+  const subtitle = settings?.portal_subtitle || 'Buy a WiFi pass to connect';
   const context = {
     portal_session_id: sessionId || null,
     device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || null,
@@ -1010,6 +1203,14 @@ function PortalAppLegacy() {
     return /Android/i.test(ua) && (/\bwv\b/i.test(ua) || /Version\/\d+\.\d+ Chrome/i.test(ua));
   }
 
+  function isGoogleChromeBrowser() {
+    const ua = navigator.userAgent || '';
+    const vendor = navigator.vendor || '';
+    if (/\bwv\b/i.test(ua) || /Edg|OPR|SamsungBrowser|DuckDuckGo/i.test(ua)) return false;
+    if (/CriOS/i.test(ua)) return true;
+    return /Chrome/i.test(ua) && /Google Inc/i.test(vendor || 'Google Inc');
+  }
+
   function localHandoffBridgeUrl(portalSettings) {
     const base = portalSettings?.local_portal_url || 'http://192.168.50.70:8080/portal';
     const target = new URL(base, window.location.href);
@@ -1031,7 +1232,7 @@ function PortalAppLegacy() {
 
   async function emitPortalNotification(portalSettings, type, template, values = {}) {
     const notificationSettings = portalSettings?.portal_notifications || {};
-    if (!notificationSettings.enabled) return;
+    if (!notificationSettings.enabled || !profileNotificationsEnabled) return;
     const message = portalNotificationTemplate(template, {
       brand: portalSettings?.portal_title || title || '3J WiFi',
       ssid: context.ssid || status?.ssid || '',
@@ -1143,11 +1344,13 @@ function PortalAppLegacy() {
     }
   }
 
-  function openPortalStatusUrl(url) {
+  function openPortalStatusUrl(url, options = {}) {
     if (!url) return;
     try {
       const target = new URL(url, window.location.origin);
-      if (isAndroidCaptiveWebView()) {
+      const forceChrome = Boolean(options.forceChrome);
+      const android = /Android/i.test(navigator.userAgent || '');
+      if (isAndroidCaptiveWebView() || (forceChrome && android)) {
         const fallback = encodeURIComponent(target.toString());
         window.location.href = `intent://${target.host}${target.pathname}${target.search}${target.hash}#Intent;scheme=${target.protocol.replace(':', '')};package=com.android.chrome;S.browser_fallback_url=${fallback};end`;
         return;
@@ -1334,7 +1537,7 @@ function PortalAppLegacy() {
         <div className="client-portal-category-list">
           {productCategoryGroups.map((category, groupIndex) => (
             <div className="client-portal-product-category" key={category.id || `category-${groupIndex}`}>
-              {category.image_url && <img className="client-portal-category-image" src={category.image_url} alt="" loading="lazy" />}
+              {category.image_url && <img className="client-portal-category-image" src={cacheBustedUploadUrl(category.image_url, category.updated_at)} alt="" loading="lazy" />}
               <div className="client-portal-category-header">
                 <div>
                   <div className="client-portal-category-title">{category.name || 'Available WiFi Packages'}</div>
@@ -1376,33 +1579,61 @@ function PortalAppLegacy() {
       <div className="mb-3">
         <div className="client-portal-welcome">{settings?.welcome_message || 'Welcome. Please enter your voucher code to start using the internet.'}</div>
       </div>
-      {deviceDetected && <div className="alert alert-info py-2 mb-3">Device detected. Enter your voucher to continue.</div>}
+      {deviceDetected && (
+        <PortalCustomerMessage
+          message="Device detected. Enter your voucher to continue."
+          tone="info"
+          className="py-2 mb-3"
+          timeoutMs={Math.max(1, Number(settings?.portal_message_auto_hide_seconds || 6)) * 1000}
+        />
+      )}
       <label className="form-label">Voucher Code</label>
       <input className="form-control form-control-lg text-center voucher-input" autoComplete="one-time-code" value={voucherCode} onChange={(e) => setVoucherCode(e.target.value.toUpperCase())} placeholder="3J-ABCD-2345" required />
       <button className="btn btn-primary btn-lg w-100 mt-3" disabled={loading}>{loading ? 'Checking...' : 'Redeem / Connect'}</button>
-      {paymentResult && <div className={`alert mt-3 mb-0 ${paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'alert-success' : paymentResult.status === 'FAILED' ? 'alert-danger' : 'alert-info'}`}>
-        {paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
-          ? 'Payment received. Internet access is active.'
-          : paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FAILED'
-            ? `Payment received, but access activation failed: ${paymentResult.last_error || 'Please ask the operator.'}`
-            : paymentResult.status === 'PAID'
-            ? 'Payment received. Waiting for access activation.'
-            : paymentResult.status === 'CHECKOUT_CREATED' || paymentResult.status === 'PENDING'
-              ? paymentChecking ? 'Checking PayMongo payment confirmation...' : 'Waiting for PayMongo payment confirmation.'
-              : paymentResult.last_error || 'Payment was not completed.'}
-        {paymentResult.portal_handoff_url && <button className="btn btn-sm btn-outline-primary ms-2" type="button" onClick={() => openPortalStatusUrl(paymentResult.portal_handoff_url)}>Open Status</button>}
-        {paymentResult.payment_order_id && <button className="btn btn-sm btn-outline-secondary ms-2" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id)}>{paymentChecking ? 'Checking...' : 'Check'}</button>}
-      </div>}
-      {result && !(timerExpired && result.status === 'SUCCESS') && <div className={`alert mt-3 mb-0 ${result.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'}`}>{result.message}</div>}
-      {portalNotice && <div className="alert alert-info py-2 mt-3 mb-0">
-        <div className="d-flex align-items-start gap-2">
-          <IconBell size={18} className="mt-1 flex-shrink-0" />
-          <div>
-            <div>{portalNotice.message}</div>
-            {portalNotice.native_status === 'fallback' && <div className="small text-muted">Phone notification bar support depends on the mobile browser. This message is also shown here.</div>}
-          </div>
-        </div>
-      </div>}
+      {paymentResult && (
+        <PortalCustomerMessage
+          message={paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
+            ? 'Payment received. Internet access is active.'
+            : paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FAILED'
+              ? `Payment received, but access activation failed: ${paymentResult.last_error || 'Please ask the operator.'}`
+              : paymentResult.status === 'PAID'
+                ? 'Payment received. Waiting for access activation.'
+                : paymentResult.status === 'CHECKOUT_CREATED' || paymentResult.status === 'PENDING'
+                  ? paymentChecking ? 'Checking PayMongo payment confirmation...' : 'Waiting for PayMongo payment confirmation.'
+                  : paymentResult.last_error || 'Payment was not completed.'}
+          tone={paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'success' : paymentResult.status === 'FAILED' ? 'danger' : 'info'}
+          className="mt-3"
+          timeoutMs={Math.max(1, Number(settings?.portal_message_auto_hide_seconds || 6)) * 1000}
+          onDismiss={() => setPaymentResult(null)}
+          dismissKey={`${paymentResult.payment_order_id || ''}-${paymentResult.status}-${paymentResult.fulfillment_status || ''}-${paymentChecking ? 'checking' : 'idle'}`}
+          actions={(
+            <>
+              {paymentResult.portal_handoff_url && <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openPortalStatusUrl(paymentResult.portal_handoff_url)}>Open Status</button>}
+              {paymentResult.payment_order_id && <button className="btn btn-sm btn-outline-secondary" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id)}>{paymentChecking ? 'Checking...' : 'Check'}</button>}
+            </>
+          )}
+        />
+      )}
+      {result && !(timerExpired && result.status === 'SUCCESS') && (
+        <PortalCustomerMessage
+          message={result.message}
+          tone={result.status === 'SUCCESS' ? 'success' : 'danger'}
+          className="mt-3"
+          timeoutMs={Math.max(1, Number(settings?.portal_message_auto_hide_seconds || 6)) * 1000}
+          onDismiss={() => setResult(null)}
+          dismissKey={`${result.status}-${result.message}`}
+        />
+      )}
+      {portalNotice && (
+        <PortalCustomerMessage
+          message={portalNotice.message}
+          tone="info"
+          className="py-2 mt-3"
+          timeoutMs={Math.max(1, Number(settings?.portal_message_auto_hide_seconds || 6)) * 1000}
+          onDismiss={() => setPortalNotice(null)}
+          dismissKey={`${portalNotice.type || 'NOTICE'}-${portalNotice.message}`}
+        />
+      )}
       {result?.authorization_status === 'FAILED' && <button className="btn btn-outline-primary w-100 mt-3" type="button" onClick={() => setResult(null)}>Try Again</button>}
       {result?.status === 'SUCCESS' && continueUrl && !timerExpired && <a className="btn btn-success w-100 mt-3" href={continueUrl}>Continue to Internet</a>}
       <button className="btn btn-outline-secondary w-100 mt-2" type="button" onClick={checkStatus} disabled={loading}>Check Status</button>
@@ -1416,7 +1647,14 @@ function PortalAppLegacy() {
           </div>
         </div>
         {validUntil && <div className="client-portal-timer-valid">Valid until {formatPortalDateTime(validUntil)}</div>}
-        {timerExpired && <div className="alert alert-warning py-2 mt-3 mb-0">Your voucher time has been fully consumed. Enter a new voucher to continue.</div>}
+        {timerExpired && (
+          <PortalCustomerMessage
+            message="Your voucher time has been fully consumed. Enter a new voucher to continue."
+            tone="warning"
+            className="py-2 mt-3"
+            timeoutMs={Math.max(1, Number(settings?.portal_message_auto_hide_seconds || 6)) * 1000}
+          />
+        )}
       </div>}
     </form>
   );
@@ -1456,6 +1694,14 @@ function PortalAppLegacy() {
 }
 
 function PortalApp() {
+  function isGoogleChromeBrowser() {
+    const ua = navigator.userAgent || '';
+    const vendor = navigator.vendor || '';
+    if (/\bwv\b/i.test(ua) || /Edg|OPR|SamsungBrowser|DuckDuckGo/i.test(ua)) return false;
+    if (/CriOS/i.test(ua)) return true;
+    return /Chrome/i.test(ua) && /Google Inc/i.test(vendor || 'Google Inc');
+  }
+
   const [settings, setSettings] = useState(null);
   const [sessionId, setSessionId] = useState(() => localStorage.getItem('centralwifi_portal_session') || '');
   const [deviceToken, setDeviceToken] = useState(() => localStorage.getItem('centralwifi_portal_device_token') || '');
@@ -1468,6 +1714,8 @@ function PortalApp() {
   const [paymentLoading, setPaymentLoading] = useState('');
   const [paymentChecking, setPaymentChecking] = useState(false);
   const [paymentResult, setPaymentResult] = useState(null);
+  const [portalNotice, setPortalNotice] = useState(null);
+  const [portalNotificationPermission, setPortalNotificationPermission] = useState(() => portalNotificationPermissionStatus());
   const [portalBooting, setPortalBooting] = useState(true);
   const [bag, setBag] = useState(null);
   const [bagOpen, setBagOpen] = useState(false);
@@ -1485,14 +1733,22 @@ function PortalApp() {
   const bagTagRef = useRef(null);
   const purchaseSuccessKeyRef = useRef('');
   const [outsidePurchaseConfirm, setOutsidePurchaseConfirm] = useState(null);
+  const [checkoutBrowserReminder, setCheckoutBrowserReminder] = useState(null);
   const [portalScreen, setPortalScreen] = useState(() => (new URLSearchParams(window.location.search).get('payment_order_id') ? 'shop' : 'landing'));
   const [selectedProductCategory, setSelectedProductCategory] = useState(null);
   const [moreInfoCategory, setMoreInfoCategory] = useState(null);
   const [selectedCategoryProductId, setSelectedCategoryProductId] = useState('');
   const [productQuantities, setProductQuantities] = useState({});
   const [selectedCategoryBarangays, setSelectedCategoryBarangays] = useState({});
-  const [purchasePassType, setPurchasePassType] = useState('');
+  const [purchasePassType, setPurchasePassType] = useState('SINGLE_DEVICE');
   const [purchaseChannel, setPurchaseChannel] = useState('');
+  const [physicalStores, setPhysicalStores] = useState([]);
+  const [physicalStoresSite, setPhysicalStoresSite] = useState(null);
+  const [physicalStoresLoading, setPhysicalStoresLoading] = useState(false);
+  const [physicalStoresError, setPhysicalStoresError] = useState('');
+  const [physicalStoresLocationMessage, setPhysicalStoresLocationMessage] = useState('');
+  const [selectedPhysicalStore, setSelectedPhysicalStore] = useState(null);
+  const [storeItemMoreInfo, setStoreItemMoreInfo] = useState(null);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('gcash');
   const [portalCoverage, setPortalCoverage] = useState(null);
   const [portalCoverageOpen, setPortalCoverageOpen] = useState(false);
@@ -1508,6 +1764,7 @@ function PortalApp() {
     return ['auto', 'light', 'dark'].includes(stored) ? stored : 'auto';
   });
   const [portalLanguage, setPortalLanguage] = useState(() => localStorage.getItem('centralwifi_portal_language') || 'en');
+  const [chromeReminderHidden, setChromeReminderHidden] = useState(false);
   const [themeClock, setThemeClock] = useState(() => Date.now());
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileViewOpen, setProfileViewOpen] = useState(false);
@@ -1523,7 +1780,12 @@ function PortalApp() {
   const [existingProfileCode, setExistingProfileCode] = useState('');
   const [existingProfileLinking, setExistingProfileLinking] = useState(false);
   const [existingProfileMessage, setExistingProfileMessage] = useState('');
-  const [profileForm, setProfileForm] = useState({ display_name: '', email: '', contact_number: '', verification_code: '', terms_accepted: false, marketing_sms_consent: false });
+  const [profileNotificationsEnabled, setProfileNotificationsEnabled] = useState(() => localStorage.getItem('centralwifi_portal_notifications_enabled') !== '0');
+  const [profileNotificationSentCount, setProfileNotificationSentCount] = useState(() => Number(localStorage.getItem('centralwifi_portal_notification_sent_count') || 0));
+  const [profileNotificationSaving, setProfileNotificationSaving] = useState(false);
+  const [portalSettingsOpen, setPortalSettingsOpen] = useState(false);
+  const [portalNotificationTestResult, setPortalNotificationTestResult] = useState(null);
+  const [profileForm, setProfileForm] = useState({ display_name: '', email: '', contact_number: '', verification_code: '', terms_accepted: false, marketing_sms_consent: false, portal_notifications_enabled: true });
   const [profileSendingCode, setProfileSendingCode] = useState(false);
   const [profileCodeCooldown, setProfileCodeCooldown] = useState(0);
   const [profileSaving, setProfileSaving] = useState(false);
@@ -1543,6 +1805,7 @@ function PortalApp() {
   const [missingTimeRestoring, setMissingTimeRestoring] = useState(false);
   const [missingTimeMessage, setMissingTimeMessage] = useState('');
   const [avatarNote, setAvatarNote] = useState('');
+  const [avatarNoteTone, setAvatarNoteTone] = useState('');
   const [avatarNoteWords, setAvatarNoteWords] = useState([]);
   const [avatarNoteVisible, setAvatarNoteVisible] = useState(false);
   const [avatarNoteSequence, setAvatarNoteSequence] = useState(0);
@@ -1554,6 +1817,10 @@ function PortalApp() {
   const avatarEventNoteRef = useRef(null);
   const lowTimeNoteShownRef = useRef(false);
   const portalDiscountTabRefs = useRef({});
+  const remainingNoticeSentRef = useRef('');
+  const expiredNoticeSentRef = useRef('');
+  const portalOpenedNoticeSentRef = useRef('');
+  const paymentNotificationSentRef = useRef('');
   const [avatarEventNoteSignal, setAvatarEventNoteSignal] = useState(0);
   const params = new URLSearchParams(window.location.search);
   const paymentOrderFromUrl = params.get('payment_order_id') || params.get('payment_order') || params.get('order');
@@ -1562,6 +1829,8 @@ function PortalApp() {
   const rawQueryParams = Object.fromEntries(params.entries());
   const t = (text, values = {}) => portalTranslate(portalLanguage, text, values);
   const title = settings?.portal_title || '3J WiFi';
+  const portalMessageAutoHideSeconds = Math.max(1, Math.min(60, Number(settings?.portal_message_auto_hide_seconds || 6)));
+  const portalMessageAutoHideMs = portalMessageAutoHideSeconds * 1000;
   const profileName = profile?.display_name || 'User';
   const profileTermsText = 'I agree that 3J may store my name, contact number, device/session details, and payment reference to provide WiFi access, prevent abuse, recover missing time, send service notices, and support my account. I understand I should only use the service legally and responsibly.';
   const contactText = settings?.marketing_sms_consent_text || 'I agree to receive Threej Internet & CCTV promos, service updates, and important account messages by SMS. I can ask the operator to stop promotional messages anytime.';
@@ -1638,6 +1907,77 @@ function PortalApp() {
     };
   }
 
+  function portalNotificationUrl(portalSettings = settings) {
+    const rawUrl = portalSettings?.current_portal_url || window.location.href || '/portal';
+    try {
+      return new URL(rawUrl, window.location.origin).toString();
+    } catch (_error) {
+      return `${window.location.origin}/portal`;
+    }
+  }
+
+  function portalNotificationIcon(portalSettings = settings, values = {}) {
+    const hasTime = values.time === 'Unlimited' || Number(values.remaining_time_seconds || 0) > 0;
+    const connectedIcon = portalSettings?.no_internet_avatar_connected_url || settings?.no_internet_avatar_connected_url || '';
+    const disconnectedIcon = portalSettings?.no_internet_avatar_disconnected_url || settings?.no_internet_avatar_disconnected_url || '';
+    return (hasTime ? connectedIcon : disconnectedIcon) || portalSettings?.company_logo_url || settings?.company_logo_url || '';
+  }
+
+  async function emitPortalNotification(portalSettings, type, template, values = {}) {
+    const notificationSettings = portalSettings?.portal_notifications || {};
+    if (!notificationSettings.enabled) return;
+    const message = portalNotificationTemplate(template, {
+      brand: portalSettings?.portal_title || title || '3J WiFi',
+      ssid: context.ssid || status?.ssid || '',
+      status: type,
+      ...values
+    });
+    if (!message) return;
+    const notificationResult = await showPortalCustomerNotification(portalSettings?.portal_title || title || '3J WiFi', message, {
+      url: portalNotificationUrl(portalSettings),
+      icon: portalNotificationIcon(portalSettings, values),
+      tag: `3j-portal-${String(type || 'notice').toLowerCase().replace(/[^a-z0-9-]+/g, '-')}`
+    });
+    setPortalNotificationPermission(portalNotificationPermissionStatus());
+    if (type !== 'PORTAL_OPENED') {
+      setPortalNotice({
+        type,
+        message,
+        native_status: notificationResult.shown ? 'shown' : 'fallback',
+        native_reason: notificationResult.reason || null,
+        native_mode: notificationResult.mode || null
+      });
+    }
+    recordPortalNotificationSent(type, notificationResult);
+  }
+
+  async function enablePortalNotifications() {
+    setPortalNotificationTestResult({ status: 'RUNNING', message: 'Testing notification delivery...' });
+    const currentRemainingSeconds = Math.max(0, Number(status?.remaining_time_seconds ?? result?.remaining_time_seconds ?? timerRemaining ?? 0) || 0);
+    const currentUnlimited = Boolean(status?.unlimited ?? result?.unlimited ?? unlimited);
+    const message = portalNotificationTemplate('Time alerts enabled. Current remaining time: <TIME>.', {
+      remaining_time_seconds: currentUnlimited ? 0 : currentRemainingSeconds,
+      time: currentUnlimited ? 'Unlimited' : formatCountdown(currentRemainingSeconds),
+      brand: title,
+      ssid: context.ssid || status?.ssid || ''
+    });
+    const result = await showPortalCustomerNotification(title || '3J WiFi', message, {
+      url: portalNotificationUrl(),
+      icon: portalNotificationIcon(settings, {
+        remaining_time_seconds: currentUnlimited ? 0 : currentRemainingSeconds,
+        time: currentUnlimited ? 'Unlimited' : formatCountdown(currentRemainingSeconds),
+      }),
+      tag: '3j-portal-test'
+    });
+    setPortalNotificationPermission(portalNotificationPermissionStatus());
+    setPortalNotificationTestResult({
+      status: result.shown ? 'SUCCESS' : 'FALLBACK',
+      message: result.shown
+        ? 'Notification sent. Check your phone notification bar.'
+        : `Native notification was not displayed${result.reason ? ` (${result.reason})` : ''}. Portal fallback alerts will still show inside this page.`,
+    });
+  }
+
   async function refreshStatus(id = sessionId || localStorage.getItem('centralwifi_portal_session')) {
     let statusSessionId = id;
     if (!statusSessionId) {
@@ -1691,7 +2031,14 @@ function PortalApp() {
       window.location.replace(localHandoffBridgeUrl(portalSettings));
       return;
     }
-    if (paymentOrderFromUrl || Number(nextStatus?.remaining_time_seconds || 0) > 0) setPortalScreen('shop');
+    if (session.mac_rebind_status === 'SUCCESS' && portalSettings?.portal_notifications?.reconnect_enabled) {
+      emitPortalNotification(portalSettings, 'RECONNECTED', portalSettings.portal_notifications.reconnect_message, {
+        remaining_time_seconds: nextStatus?.remaining_time_seconds || 0,
+        expires_at: nextStatus?.access_expires_at,
+      });
+    }
+    const hasUnusedBagItems = Array.isArray(nextStatus?.bag?.queued_items) && nextStatus.bag.queued_items.length > 0;
+    if (paymentOrderFromUrl || Number(nextStatus?.remaining_time_seconds || 0) > 0 || hasUnusedBagItems) setPortalScreen('shop');
   }
 
   useEffect(() => {
@@ -1784,6 +2131,12 @@ function PortalApp() {
     if (profileMessageTimerRef.current) window.clearTimeout(profileMessageTimerRef.current);
   }, []);
 
+  useEffect(() => {
+    if (!profileSuccess) return undefined;
+    const timer = window.setTimeout(() => setProfileSuccess(null), portalMessageAutoHideMs);
+    return () => window.clearTimeout(timer);
+  }, [profileSuccess, portalMessageAutoHideMs]);
+
   function normalizePortalContactInput(value) {
     const digits = String(value || '').replace(/\D/g, '');
     if (digits.startsWith('63') && digits.length >= 12 && digits[2] === '9') return `0${digits.slice(2, 12)}`;
@@ -1797,12 +2150,17 @@ function PortalApp() {
 
   function showProfileMessage(message, options = {}) {
     if (profileMessageTimerRef.current) window.clearTimeout(profileMessageTimerRef.current);
+    if (message && options.tone === 'success') {
+      setProfileMessage('');
+      queueAvatarCustomerMessage(message, 'success');
+      return;
+    }
     setProfileMessage(message);
-    if (options.autoHide) {
+    if (message && options.autoHide !== false) {
       profileMessageTimerRef.current = window.setTimeout(() => {
         setProfileMessage('');
         profileMessageTimerRef.current = null;
-      }, 6000);
+      }, portalMessageAutoHideMs);
     }
   }
 
@@ -1817,8 +2175,14 @@ function PortalApp() {
       });
       persistSession(data);
       setResult(data);
-      if (data.status === 'SUCCESS' || Number(data.remaining_time_seconds || 0) > 0) queueAvatarEventNote('PURCHASE_SUCCESS');
-      await refreshStatus(data.portal_session_id || sessionId);
+      const nextStatus = await refreshStatus(data.portal_session_id || sessionId);
+      if (data.status === 'SUCCESS' && settings?.portal_notifications?.success_enabled) {
+        emitPortalNotification(settings, 'SUCCESS', settings.portal_notifications.success_message, {
+          remaining_time_seconds: data.remaining_time_seconds ?? nextStatus?.remaining_time_seconds ?? timerRemaining,
+          expires_at: data.access_expires_at ?? nextStatus?.access_expires_at,
+          voucher_code: voucherCode,
+        });
+      }
     } catch (_err) {
       setResult({ status: 'FAILED', message: 'Something went wrong. Please try again or contact the operator.' });
     } finally {
@@ -1834,8 +2198,15 @@ function PortalApp() {
       setPaymentResult(data);
       persistSession(data);
       if (data.status === 'PAID' && data.fulfillment_status === 'FULFILLED') {
-        queueAvatarEventNote('PURCHASE_SUCCESS');
-        await refreshStatus(data.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session'));
+        const nextStatus = await refreshStatus(data.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session'));
+        const notificationKey = data.payment_order_id || data.checkout_url || `${data.status}-${data.fulfilled_at || ''}`;
+        if (notificationKey && paymentNotificationSentRef.current !== notificationKey && settings?.portal_notifications?.success_enabled) {
+          paymentNotificationSentRef.current = notificationKey;
+          emitPortalNotification(settings, 'SUCCESS', settings.portal_notifications.success_message, {
+            remaining_time_seconds: nextStatus?.remaining_time_seconds ?? timerRemaining,
+            expires_at: nextStatus?.access_expires_at,
+          });
+        }
       }
       return data;
     } catch (err) {
@@ -1847,7 +2218,7 @@ function PortalApp() {
     }
   }
 
-  async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false, paymentMethod = selectedPaymentMethod) {
+  async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false, paymentMethod = selectedPaymentMethod, confirmedBrowserReminder = false) {
     setResult(null);
     setPaymentResult(null);
     const safeQuantity = Math.max(1, Math.min(Number(purchaseQuantity || 1), 365));
@@ -1871,6 +2242,10 @@ function PortalApp() {
     }
     if (outside3jNetwork && !portalProfileConfigured(currentProfile)) {
       setOutsidePurchaseConfirm({ item, quantity: safeQuantity, profileRequired: true });
+      return;
+    }
+    if (!portalProfileConfigured(currentProfile) && !confirmedBrowserReminder) {
+      setCheckoutBrowserReminder({ item, quantity: safeQuantity, paymentMethod: paymentMethod || selectedPaymentMethod || 'gcash' });
       return;
     }
     if (
@@ -1935,7 +2310,6 @@ function PortalApp() {
       setBagVoucherCode('');
       setBagClaimMessage({ status: 'SUCCESS', message: data.message || 'Voucher added to My WiFi Bag.' });
       await refreshStatus(data.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session'));
-      queueAvatarEventNote('PURCHASE_SUCCESS');
     } catch (err) {
       setBagClaimMessage({ status: 'FAILED', message: err.message || 'Could not claim this voucher.' });
     } finally {
@@ -2038,6 +2412,7 @@ function PortalApp() {
       verification_code: '',
       terms_accepted: Boolean(profile?.configured),
       marketing_sms_consent: Boolean(profile?.configured || profile?.marketing_sms_consent),
+      portal_notifications_enabled: profile?.configured ? profile?.portal_notifications_enabled !== false : profileNotificationsEnabled,
     });
     setProfileOpen(true);
   }
@@ -2070,6 +2445,60 @@ function PortalApp() {
       return [];
     } finally {
       setProfileDevicesLoading(false);
+    }
+  }
+
+  async function updatePortalNotificationPreference(enabled, intervalSeconds = profile?.portal_notification_interval_seconds || 10) {
+    const nextEnabled = Boolean(enabled);
+    const nextInterval = Math.max(1, Number(intervalSeconds || 10));
+    setProfileNotificationsEnabled(nextEnabled);
+    setProfileForm((current) => ({ ...current, portal_notifications_enabled: nextEnabled }));
+    localStorage.setItem('centralwifi_portal_notifications_enabled', nextEnabled ? '1' : '0');
+    if (!profile?.configured || !sessionId) return;
+    setProfileNotificationSaving(true);
+    try {
+      const data = await publicApi('/portal/profile/notifications', {
+        method: 'PATCH',
+        body: JSON.stringify(payload({
+          portal_notifications_enabled: nextEnabled,
+          portal_notification_interval_seconds: nextInterval,
+        }))
+      });
+      if (data.profile) {
+        setProfile(data.profile);
+        setProfileNotificationSentCount(Number(data.profile.portal_notification_sent_count || 0));
+      }
+    } catch (err) {
+      setProfileDevicesMessage(err.message || 'Unable to update notification preference.');
+    } finally {
+      setProfileNotificationSaving(false);
+    }
+  }
+
+  async function recordPortalNotificationSent(type, notificationResult = {}) {
+    let nextCount = Number(profileNotificationSentCount || 0) + 1;
+    setProfileNotificationSentCount((current) => {
+      nextCount = Number(current || 0) + 1;
+      localStorage.setItem('centralwifi_portal_notification_sent_count', String(nextCount));
+      return nextCount;
+    });
+    if (!profile?.configured || !sessionId) return;
+    try {
+      const data = await publicApi('/portal/profile/notification-sent', {
+        method: 'POST',
+        body: JSON.stringify(payload({
+          notification_type: type,
+          native_status: notificationResult.shown ? 'shown' : 'fallback',
+          native_mode: notificationResult.mode || '',
+          native_reason: notificationResult.reason || '',
+        }))
+      });
+      if (data.profile) {
+        setProfile(data.profile);
+        setProfileNotificationSentCount(Number(data.profile.portal_notification_sent_count || nextCount));
+      }
+    } catch (_err) {
+      // Local count remains visible even if the backend counter cannot be updated.
     }
   }
 
@@ -2128,14 +2557,14 @@ function PortalApp() {
       return;
     }
     setProfileSendingCode(true);
-    setProfileCodeCooldown(60);
     setProfileForm((current) => ({ ...current, contact_number: localContact }));
     try {
       const data = await publicApi('/portal/profile/send-code', {
         method: 'POST',
         body: JSON.stringify(payload({ contact_number: localContact }))
       });
-      showProfileMessage(data.message || (portalLanguage === 'tl' ? 'Naipadala na ang verification code.' : 'Verification code sent.'), { autoHide: true });
+      setProfileCodeCooldown(60);
+      showProfileMessage(data.message || (portalLanguage === 'tl' ? 'Naipadala na ang verification code.' : 'Verification code sent.'), { autoHide: true, tone: 'success' });
     } catch (err) {
       showProfileMessage(err.message);
     } finally {
@@ -2163,7 +2592,8 @@ function PortalApp() {
       persistSession(data);
       setProfile(data.profile);
       setProfileOpen(false);
-      setProfileSuccess(data.message || settings?.profile_gift_profile_saved_message || (portalLanguage === 'tl' ? 'Na-save ang profile. May LIBRE kang welcome gift.' : 'Profile saved. You have a FREE welcome gift.'));
+      queueAvatarCustomerMessage(data.message || settings?.profile_gift_profile_saved_message || (portalLanguage === 'tl' ? 'Na-save ang profile. May LIBRE kang welcome gift.' : 'Profile saved. You have a FREE welcome gift.'), 'success');
+      setProfileSuccess(null);
       setGiftUnwrapped(false);
       await refreshStatus(data.portal_session_id || sessionId);
     } catch (err) {
@@ -2182,9 +2612,13 @@ function PortalApp() {
         body: JSON.stringify(payload())
       });
       persistSession(data);
-      setResult(data);
-      if (data.status === 'SUCCESS' || Number(data.remaining_time_seconds || 0) > 0) queueAvatarEventNote('PURCHASE_SUCCESS');
+      if (data.profile) setProfile(data.profile);
+      if (data.bag) setBag(data.bag);
+      setResult({ status: data.status || 'SUCCESS', message: data.message || 'Welcome gift added to My WiFi Bag.' });
       setGiftUnwrapped(false);
+      setBagTab('LIST');
+      setBagClaimOpen(false);
+      setBagOpen(true);
       await refreshStatus(data.portal_session_id || sessionId);
     } catch (err) {
       setResult({ status: 'FAILED', message: err.message });
@@ -2284,11 +2718,11 @@ function PortalApp() {
   const selectedPaymentMethodRow = onlinePaymentMethods.find((method) => method.id === selectedPaymentMethod) || onlinePaymentMethods[0] || null;
   const canCheckoutOnline = Boolean(payments.enabled && payments.ready_for_checkout && selectedPaymentMethodRow);
   const canCheckoutWithGcash = canCheckoutOnline;
-  const selectedPassLabel = purchasePassType === 'MULTI_DEVICE' ? t('Multiple Device Pass') : purchasePassType === 'SINGLE_DEVICE' ? t('One Device Pass') : '';
+  const effectivePurchasePassType = purchasePassType || 'SINGLE_DEVICE';
+  const selectedPassLabel = effectivePurchasePassType === 'MULTI_DEVICE' ? t('Multiple Device Pass') : t('One Device Pass');
   const selectedPaymentLabel = selectedPaymentMethodRow?.label || 'Online';
   const visibleProductCategoryGroups = productCategoryGroups.filter((category) => {
-    if (!purchasePassType) return true;
-    return (category.items || []).some((item) => productPassType(item) === purchasePassType);
+    return (category.items || []).some((item) => productPassType(item) === effectivePurchasePassType);
   });
   const paymentSuccessReady = Boolean(paymentResult?.status === 'PAID' && paymentResult?.fulfillment_status === 'FULFILLED');
   const autoPortalDark = (() => {
@@ -2297,16 +2731,24 @@ function PortalApp() {
   })();
   const portalDark = portalDarkOverride === 'auto' ? autoPortalDark : portalDarkOverride === 'dark';
   const unlimited = result?.unlimited ?? status?.unlimited;
+  const accessExpiresAt = result?.access_expires_at ?? status?.access_expires_at;
   const accessExpired = Boolean(result?.access_expired || status?.access_expired || status?.status === 'EXPIRED');
   const hasRemainingAccess = Boolean(!accessExpired && (unlimited || timerRemaining > 0));
   const connected = Boolean((result?.connected ?? status?.connected) && hasRemainingAccess);
   const remainingDisplay = unlimited ? 'Unlimited' : formatCountdown(timerRemaining);
+  const avatarConnected = hasRemainingAccess;
   const networkPresence = status?.network_presence || {};
   const outsideNetwork = networkPresence.connected_to_3j_ap === false;
   const activeBagItems = Array.isArray(bag?.active_items) && bag.active_items.length
     ? bag.active_items
     : (bag?.active_item ? [bag.active_item] : []);
   const queuedBagItems = bag?.queued_items || [];
+  const hasReadyBagItems = queuedBagItems.length > 0;
+  const firstReadyBagItem = queuedBagItems[0] || null;
+  const firstReadyBagDeviceLabel = firstReadyBagItem?.device_scope === 'MULTI_DEVICE'
+    ? `${firstReadyBagItem?.allowed_devices || 1} devices`
+    : '1 device';
+  const firstReadyBagTimeLabel = formatSeconds(firstReadyBagItem?.remaining_seconds || firstReadyBagItem?.duration_seconds || 0);
   const bagItemCount = activeBagItems.length + queuedBagItems.length;
   const activeRemainingCards = activeBagItems.length ? activeBagItems : [null];
   const activeBagItemRemainingSeconds = (item) => {
@@ -2317,9 +2759,10 @@ function PortalApp() {
     }
     return Math.max(0, Number(item.remaining_seconds || 0));
   };
-  const customAvatarUrl = connected
+  const customAvatarUrlRaw = avatarConnected
     ? (settings?.no_internet_avatar_connected_url || settings?.company_logo_url || '')
     : (settings?.no_internet_avatar_disconnected_url || settings?.company_logo_url || '');
+  const customAvatarUrl = cacheBustedUploadUrl(customAvatarUrlRaw, settings?.updated_at);
   const profileGiftEnabled = settings?.profile_gift_enabled !== false;
   const giftTitle = settings?.profile_gift_title || DEFAULT_PROFILE_GIFT.title;
   const giftAvailableMessage = settings?.profile_gift_available_message || DEFAULT_PROFILE_GIFT.available_message;
@@ -2329,17 +2772,99 @@ function PortalApp() {
   const avatarNotesSettingsKey = JSON.stringify(settings?.avatar_notes_json || {});
 
   useEffect(() => {
+    setPortalNotificationPermission(portalNotificationPermissionStatus());
+  }, [settings?.portal_notifications?.enabled]);
+
+  useEffect(() => {
+    if (!profile) return;
+    if (!profile.configured) return;
+    const nextEnabled = profile.portal_notifications_enabled !== false;
+    setProfileNotificationsEnabled(nextEnabled);
+    setProfileForm((current) => ({ ...current, portal_notifications_enabled: nextEnabled }));
+    localStorage.setItem('centralwifi_portal_notifications_enabled', nextEnabled ? '1' : '0');
+    if (profile.portal_notification_sent_count !== undefined && profile.portal_notification_sent_count !== null) {
+      const nextCount = Number(profile.portal_notification_sent_count || 0);
+      setProfileNotificationSentCount(nextCount);
+      localStorage.setItem('centralwifi_portal_notification_sent_count', String(nextCount));
+    }
+  }, [profile?.configured, profile?.portal_notifications_enabled, profile?.portal_notification_sent_count]);
+
+  useEffect(() => {
+    const notificationSettings = settings?.portal_notifications || {};
+    if (!notificationSettings.enabled || !profileNotificationsEnabled || !sessionId || portalBooting || !status) return undefined;
+    const sendKey = `${sessionId}:${settings?.id || 'portal-opened'}`;
+    if (portalOpenedNoticeSentRef.current === sendKey) return undefined;
+    const currentRemainingSeconds = Math.max(0, Number(status?.remaining_time_seconds ?? result?.remaining_time_seconds ?? timerRemaining ?? 0) || 0);
+    const currentUnlimited = Boolean(status?.unlimited ?? result?.unlimited ?? unlimited);
+    const currentAccessExpired = Boolean(status?.access_expired || result?.access_expired || status?.status === 'EXPIRED');
+    const hasTime = Boolean(!currentAccessExpired && (currentUnlimited || currentRemainingSeconds > 0));
+    const template = hasTime
+      ? 'Remaining Time: <TIME>.'
+      : 'No active WiFi time yet.';
+    const timer = window.setTimeout(() => {
+      portalOpenedNoticeSentRef.current = sendKey;
+      emitPortalNotification(settings, 'PORTAL_OPENED', template, {
+        remaining_time_seconds: currentUnlimited ? 0 : currentRemainingSeconds,
+        time: currentUnlimited ? 'Unlimited' : formatCountdown(currentRemainingSeconds),
+        expires_at: status?.access_expires_at || result?.access_expires_at || accessExpiresAt,
+      });
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [settings?.id, settings?.portal_notifications?.enabled, profileNotificationsEnabled, sessionId, portalBooting, status?.remaining_time_seconds, status?.access_expires_at, status?.unlimited, status?.access_expired, status?.status]);
+
+  useEffect(() => {
+    remainingNoticeSentRef.current = '';
+    expiredNoticeSentRef.current = '';
+  }, [accessExpiresAt, sessionId]);
+
+  useEffect(() => {
+    const notificationSettings = settings?.portal_notifications || {};
+    const trigger = Number(notificationSettings.remaining_trigger_seconds || 0);
+    const sendKey = `${sessionId}:${accessExpiresAt}:remaining:${trigger}`;
+    if (!notificationSettings.enabled || !notificationSettings.remaining_enabled || !connected || unlimited || accessExpired) return;
+    if (!trigger || timerRemaining <= 0 || timerRemaining > trigger) return;
+    if (remainingNoticeSentRef.current === sendKey) return;
+    remainingNoticeSentRef.current = sendKey;
+    emitPortalNotification(settings, 'REMAINING_TIME', notificationSettings.remaining_message, {
+      remaining_time_seconds: timerRemaining,
+      expires_at: accessExpiresAt,
+    });
+  }, [timerRemaining, settings, connected, unlimited, accessExpired, sessionId, accessExpiresAt]);
+
+  useEffect(() => {
+    const notificationSettings = settings?.portal_notifications || {};
+    const sendKey = `${sessionId}:${accessExpiresAt}:expired`;
+    if (!notificationSettings.enabled || !notificationSettings.expired_enabled || !accessExpired || !sessionId || hasReadyBagItems) return;
+    if (expiredNoticeSentRef.current === sendKey) return;
+    expiredNoticeSentRef.current = sendKey;
+    emitPortalNotification(settings, 'EXPIRED', notificationSettings.expired_message, {
+      remaining_time_seconds: 0,
+      expires_at: accessExpiresAt,
+    });
+  }, [accessExpired, settings, sessionId, accessExpiresAt, hasReadyBagItems]);
+
+  useEffect(() => {
+    if (hasReadyBagItems && portalNotice?.type === 'EXPIRED') setPortalNotice(null);
+  }, [hasReadyBagItems, portalNotice?.type]);
+
+  useEffect(() => {
     if (!onlinePaymentMethods.length) return;
     if (!onlinePaymentMethods.some((method) => method.id === selectedPaymentMethod)) {
       setSelectedPaymentMethod(onlinePaymentMethods[0].id);
     }
   }, [payments.enabled_payment_methods?.join(','), payments.payment_method_options?.length, selectedPaymentMethod]);
 
-  function togglePortalDarkMode() {
-    const nextMode = portalDark ? 'light' : 'dark';
-    setPortalDarkOverride(nextMode);
-    localStorage.setItem('centralwifi_portal_theme_mode', nextMode);
-  }
+	  function togglePortalDarkMode() {
+	    const nextMode = portalDark ? 'light' : 'dark';
+	    setPortalDarkOverride(nextMode);
+	    localStorage.setItem('centralwifi_portal_theme_mode', nextMode);
+	  }
+
+	  function setPortalThemeMode(mode) {
+	    const nextMode = ['auto', 'light', 'dark'].includes(mode) ? mode : 'auto';
+	    setPortalDarkOverride(nextMode);
+	    localStorage.setItem('centralwifi_portal_theme_mode', nextMode);
+	  }
 
   function setPortalLanguageMode(language) {
     const nextLanguage = language === 'tl' ? 'tl' : 'en';
@@ -2358,23 +2883,28 @@ function PortalApp() {
   }
 
   function selectPortalPassType(nextType) {
-    setPurchasePassType(nextType);
-    setPurchaseChannel('');
+    setPurchasePassType(nextType || 'SINGLE_DEVICE');
     setSelectedProductCategory(null);
     setSelectedCategoryProductId('');
     setProductQuantities({});
   }
 
   function selectPortalPurchaseChannel(nextChannel) {
+    if (!purchasePassType) setPurchasePassType('SINGLE_DEVICE');
     setPurchaseChannel(nextChannel);
     setSelectedProductCategory(null);
     setSelectedCategoryProductId('');
     setProductQuantities({});
+    setSelectedPhysicalStore(null);
+    if (nextChannel === 'STORE') {
+      loadPortalPhysicalStores().catch(() => null);
+      requestStoreCustomerLocation();
+    }
   }
 
   function resetPortalPurchaseStep(step) {
     if (step === 'pass') {
-      setPurchasePassType('');
+      setPurchasePassType('SINGLE_DEVICE');
       setPurchaseChannel('');
     } else if (step === 'channel') {
       setPurchaseChannel('');
@@ -2382,7 +2912,62 @@ function PortalApp() {
     setSelectedProductCategory(null);
     setSelectedCategoryProductId('');
     setProductQuantities({});
+    setSelectedPhysicalStore(null);
   }
+
+  async function loadPortalPhysicalStores(targetSessionId = sessionId, location = portalCustomerLocation) {
+    if (!targetSessionId) return null;
+    setPhysicalStoresLoading(true);
+    setPhysicalStoresError('');
+    try {
+      const params = new URLSearchParams({ portal_session_id: targetSessionId });
+      if (location?.latitude !== undefined && location?.longitude !== undefined) {
+        params.set('customer_lat', String(location.latitude));
+        params.set('customer_lng', String(location.longitude));
+      }
+      const data = await publicRequest(`/portal/physical-stores?${params.toString()}`);
+      setPhysicalStores(data.stores || []);
+      setPhysicalStoresSite(data.site || null);
+      setSelectedPhysicalStore((current) => current ? (data.stores || []).find((store) => store.id === current.id) || null : null);
+      return data;
+    } catch (error) {
+      setPhysicalStores([]);
+      setPhysicalStoresSite(null);
+      setPhysicalStoresError(error.message || 'Store payment locations could not be loaded.');
+      return null;
+    } finally {
+      setPhysicalStoresLoading(false);
+    }
+  }
+
+  function requestStoreCustomerLocation() {
+    if (!navigator.geolocation) {
+      setPhysicalStoresLocationMessage('Location is unavailable in this browser. Store distance will show after location is allowed.');
+      return;
+    }
+    setPhysicalStoresLocationMessage('Detecting your location for store distance...');
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const location = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        };
+        setPortalCustomerLocation(location);
+        setPhysicalStoresLocationMessage('');
+        loadPortalPhysicalStores(sessionId, location).catch(() => null);
+      },
+      () => {
+        setPhysicalStoresLocationMessage('Allow location to show how far each store is from you.');
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
+    );
+  }
+
+  useEffect(() => {
+    if (purchaseChannel !== 'STORE' || !sessionId) return;
+    loadPortalPhysicalStores(sessionId).catch(() => null);
+  }, [purchaseChannel, sessionId]);
 
   function paymentSuccessCopy(payment) {
     const queued = payment?.bag_item_status === 'QUEUED';
@@ -2394,6 +2979,65 @@ function PortalApp() {
         : t('Payment received. Internet access is active.'),
       productName: payment?.product_name || payment?.bag_item?.product_name || t('WiFi package'),
     };
+  }
+
+  function storeDistanceLabel(store) {
+    const meters = Number(store?.distance_meters);
+    if (!Number.isFinite(meters)) return portalLanguage === 'tl' ? 'Allow location para makita ang distance' : 'Allow location to show distance';
+    return formatDistanceMeters(meters);
+  }
+
+  function storeVisibleItems(store) {
+    const items = Array.isArray(store?.items) ? store.items : [];
+    return items.filter((item) => {
+      if (item.status && item.status !== 'ACTIVE') return false;
+      if (productPassType(item) !== effectivePurchasePassType) return false;
+      return true;
+    });
+  }
+
+  function PortalPassTypeTabs() {
+    const tabs = [
+      {
+        key: 'SINGLE_DEVICE',
+        icon: IconUser,
+        label: t('One Device Pass'),
+        hint: t('For one phone or laptop')
+      },
+      {
+        key: 'MULTI_DEVICE',
+        icon: IconUsers,
+        label: t('Multiple Device Pass'),
+        hint: t('For shared device access')
+      }
+    ];
+    return (
+      <div className="portal-pass-tab-panel">
+        <div className="portal-pass-tab-label">{t('Choose pass type')}</div>
+        <div className="portal-pass-tabs" role="tablist" aria-label={t('Choose pass type')}>
+          {tabs.map((tab) => {
+            const TabIcon = tab.icon;
+            const active = effectivePurchasePassType === tab.key;
+            return (
+              <button
+                className={`portal-pass-tab ${active ? 'active' : ''}`}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                key={tab.key}
+                onClick={() => selectPortalPassType(tab.key)}
+              >
+                <TabIcon size={17} />
+                <span>
+                  <strong>{tab.label}</strong>
+                  <small>{tab.hint}</small>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
   }
 
   function triggerBagFlyAnimation() {
@@ -2419,6 +3063,12 @@ function PortalApp() {
     setPaymentResult(null);
     if (shouldAnimateToBag) triggerBagFlyAnimation();
   }
+
+  useEffect(() => {
+    if (!purchaseSuccessModal) return undefined;
+    const timer = window.setTimeout(() => closePurchaseSuccessModal(), portalMessageAutoHideMs);
+    return () => window.clearTimeout(timer);
+  }, [purchaseSuccessModal, portalMessageAutoHideMs]);
 
   function paymentSuccessHandledKey(payment) {
     const key = payment?.payment_order_id || payment?.checkout_url || `${payment?.status || ''}-${payment?.fulfilled_at || ''}`;
@@ -2451,7 +3101,9 @@ function PortalApp() {
     }
     if (handledKey) localStorage.setItem(handledKey, '1');
     clearPaymentOrderFromUrl();
-    setPurchaseSuccessModal(paymentSuccessCopy(paymentResult));
+    const successCopy = paymentSuccessCopy(paymentResult);
+    queueAvatarCustomerMessage(`${successCopy.productName}. ${successCopy.message}`, 'success');
+    setPurchaseSuccessModal(successCopy);
   }, [paymentSuccessReady, paymentResult?.payment_order_id, paymentResult?.fulfilled_at, paymentResult?.bag_item_status, status?.outside_network_warning?.purchase_success_message]);
 
   function queueAvatarEventNote(eventType) {
@@ -2460,6 +3112,7 @@ function PortalApp() {
     if (!note) return;
     avatarEventNoteRef.current = {
       eventType,
+      tone: '',
       text: formatPortalEventNoteText(note.text, profileName, {
         time: formatCountdown(portalAvatarLowTimeThresholdSeconds(noteSettings)),
         remaining: formatCountdown(timerRemaining),
@@ -2468,10 +3121,27 @@ function PortalApp() {
     setAvatarEventNoteSignal((value) => value + 1);
   }
 
+  function queueAvatarCustomerMessage(message, tone = 'success') {
+    const text = String(message || '').trim();
+    if (!text) return;
+    avatarEventNoteRef.current = {
+      eventType: 'CUSTOMER_MESSAGE',
+      tone,
+      displayMs: portalMessageAutoHideMs,
+      text,
+    };
+    setAvatarEventNoteSignal((value) => value + 1);
+  }
+
   useEffect(() => {
     if (!settings) return undefined;
     avatarNoteRunRef.current += 1;
     const runId = avatarNoteRunRef.current;
+    const noteSettings = settings?.avatar_notes_json || {};
+    const initialDelayMs = portalAvatarNoteInitialDelayMs(noteSettings);
+    const nextDelayMs = portalAvatarNextDelayMs(noteSettings);
+    const pauseMs = portalAvatarNotePauseMs(noteSettings);
+    const wordDelayMs = portalAvatarWordDelayMs(noteSettings);
     const clearNoteTimer = () => {
       if (avatarNoteTimerRef.current) {
         window.clearTimeout(avatarNoteTimerRef.current);
@@ -2481,6 +3151,7 @@ function PortalApp() {
     clearNoteTimer();
     setAvatarNoteVisible(false);
     setAvatarNote('');
+    setAvatarNoteTone('');
     setAvatarNoteWords([]);
     const schedule = (callback, delay) => {
       clearNoteTimer();
@@ -2495,25 +3166,25 @@ function PortalApp() {
       schedule(() => {
         if (avatarNoteRunRef.current !== runId) return;
         setAvatarNote('');
+        setAvatarNoteTone('');
         setAvatarNoteWords([]);
-        schedule(rotateNote, portalAvatarNotePauseMs(settings?.avatar_notes_json || {}));
+        schedule(rotateNote, pauseMs);
       }, 260);
     };
-    const revealWordAt = (words, index) => {
+    const revealWordAt = (words, index, displayMs) => {
       if (avatarNoteRunRef.current !== runId) return;
       setAvatarNoteWords(words.slice(0, index + 1));
       if (index + 1 < words.length) {
-        schedule(() => revealWordAt(words, index + 1), portalAvatarWordDelayMs(settings?.avatar_notes_json || {}));
+        schedule(() => revealWordAt(words, index + 1, displayMs), wordDelayMs);
         return;
       }
-      schedule(closeThenRotate, portalAvatarNextDelayMs(settings?.avatar_notes_json || {}));
+      schedule(closeThenRotate, displayMs || nextDelayMs);
     };
     const rotateNote = () => {
       if (avatarNoteRunRef.current !== runId) return;
-      const noteSettings = settings?.avatar_notes_json || {};
       let next = null;
       if (avatarEventNoteRef.current) {
-        next = { text: avatarEventNoteRef.current.text, index: -1 };
+        next = { ...avatarEventNoteRef.current, index: -1 };
         avatarEventNoteRef.current = null;
       } else if (portalScreen !== 'landing' && !mainPageIntroNoteShownRef.current) {
         const introNote = portalAvatarMainPageNote(noteSettings, connected);
@@ -2528,22 +3199,24 @@ function PortalApp() {
         next = { ...next, text: formatPortalAvatarNoteText(next.text, profileName) };
       }
       const words = String(next.text || '').split(/\s+/).filter(Boolean);
+      const displayMs = Math.max(1000, Number(next.displayMs || nextDelayMs));
       setAvatarNote(next.text);
+      setAvatarNoteTone(next.tone || '');
       setAvatarNoteWords(words.length ? [words[0]] : []);
       setAvatarNoteSequence((value) => value + 1);
       window.requestAnimationFrame(() => {
         if (avatarNoteRunRef.current !== runId) return;
         setAvatarNoteVisible(Boolean(next.text));
         if (words.length > 1) {
-          schedule(() => revealWordAt(words, 1), portalAvatarWordDelayMs(noteSettings));
+          schedule(() => revealWordAt(words, 1, displayMs), wordDelayMs);
         } else if (words.length) {
-          schedule(closeThenRotate, portalAvatarNextDelayMs(noteSettings));
+          schedule(closeThenRotate, displayMs);
         } else {
-          schedule(closeThenRotate, portalAvatarNextDelayMs(noteSettings));
+          schedule(closeThenRotate, displayMs);
         }
       });
     };
-    schedule(rotateNote, portalAvatarNoteInitialDelayMs(settings?.avatar_notes_json || {}));
+    schedule(rotateNote, initialDelayMs);
     return () => {
       if (avatarNoteRunRef.current === runId) avatarNoteRunRef.current += 1;
       clearNoteTimer();
@@ -2567,22 +3240,6 @@ function PortalApp() {
     }
   }, [settings?.id, avatarNotesSettingsKey, connected, portalScreen, timerRemaining, profileName]);
 
-  function PortalAvatar({ compact = false }) {
-    const [imageFailed, setImageFailed] = useState(false);
-    const className = `${compact ? 'portal-shop-avatar' : 'portal-avatar-ring'} ${connected ? 'is-connected' : 'is-disconnected'}`;
-    return (
-      <div className={className}>
-        {customAvatarUrl && !imageFailed ? (
-          <img src={customAvatarUrl} alt="" onError={() => setImageFailed(true)} />
-        ) : (
-          <div className={`portal-default-avatar ${connected ? 'is-connected' : 'is-disconnected'}`}>
-            <IconWifi size={compact ? 48 : 70} />
-          </div>
-        )}
-      </div>
-    );
-  }
-
   function GiftPanel() {
     if (!giftAvailable) return null;
     return (
@@ -2600,9 +3257,12 @@ function PortalApp() {
           <div className="portal-gift-opened">
             <div className="d-flex align-items-center gap-2 mb-2"><IconGift size={24} className="text-yellow" /><strong>{giftTitle}</strong></div>
             <div className="small text-muted mb-1">{giftDescription}</div>
-            <div className="badge bg-yellow-lt text-yellow mb-3">{giftDurationLabel}</div>
+            <div className="d-flex gap-2 flex-wrap mb-3">
+              <div className="badge bg-yellow-lt text-yellow">{giftDurationLabel}</div>
+              <div className="badge bg-blue-lt text-blue">Personal use only</div>
+            </div>
             <button className="btn btn-success w-100" type="button" onClick={redeemWelcomeGift} disabled={giftRedeeming}>
-              {giftRedeeming ? t('Redeeming...') : t('Redeem')}
+              {giftRedeeming ? t('Adding...') : t('Add to My WiFi Bag')}
             </button>
           </div>
         )}
@@ -2627,7 +3287,6 @@ function PortalApp() {
           <div>
             <div className="portal-purchase-success-title">{purchaseSuccessModal.title}</div>
             <div className="portal-purchase-success-product">{purchaseSuccessModal.productName}</div>
-            <p className="text-muted mb-0">{purchaseSuccessModal.message}</p>
           </div>
           <button className="btn btn-primary w-100 mt-2" type="button" onClick={closePurchaseSuccessModal}>
             Close
@@ -2644,7 +3303,8 @@ function PortalApp() {
     const autoActivate = bag?.settings?.auto_activate !== false;
     const renderItem = (item, options = {}) => {
       const deviceLabel = item.device_scope === 'MULTI_DEVICE' ? `${item.allowed_devices || 1} devices` : '1 device';
-      const showStatusBadge = Boolean(item.status) && (item.status !== 'QUEUED' || autoActivate);
+      const statusLabel = item.status === 'QUEUED' ? 'UNUSED' : item.status;
+      const showStatusBadge = Boolean(statusLabel);
       return (
         <div
           className={`portal-bag-item ${options.draggable ? 'is-draggable' : ''}`}
@@ -2678,8 +3338,8 @@ function PortalApp() {
               <div className="portal-bag-item-title">{item.product_name || 'WiFi package'}</div>
               <div className="portal-bag-item-actions">
                 {showStatusBadge && (
-                  <span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : item.status === 'QUEUED' ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}>
-                    {item.status}
+                  <span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : item.status === 'QUEUED' ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>
+                    {statusLabel === 'UNUSED' ? t('Unused') : statusLabel}
                   </span>
                 )}
               </div>
@@ -2790,9 +3450,15 @@ function PortalApp() {
                     </button>
                   </div>
                   {bagClaimMessage && (
-                    <div className={`alert ${bagClaimMessage.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'} py-2 mb-0`}>
-                      {bagClaimMessage.message}
-                    </div>
+                    <PortalCustomerMessage
+                      message={bagClaimMessage.message}
+                      tone={bagClaimMessage.status === 'SUCCESS' ? 'success' : 'danger'}
+                      className="py-2"
+                      timeoutMs={portalMessageAutoHideMs}
+                      onSuccessNote={queueAvatarCustomerMessage}
+                      onDismiss={() => setBagClaimMessage(null)}
+                      dismissKey={`${bagClaimMessage.status}-${bagClaimMessage.message}`}
+                    />
                   )}
                 </form>
               )}
@@ -2834,7 +3500,7 @@ function PortalApp() {
               <div>
                 <div className="h3 mb-2">This will start consuming another package.</div>
                 <p className="mb-0">
-                  Once activated, the time will continuously run and it cannot be stopped or paused. Your current active package may be replaced by this selection.
+                  Once activated, the time will continuously run and it cannot be stopped or paused. Your current active package will keep running, and this package will show as a separate remaining-time panel.
                 </p>
               </div>
             </div>
@@ -2895,27 +3561,9 @@ function PortalApp() {
     );
   }
 
-  function AvatarHero({ compact = false }) {
-    const noteText = avatarNote;
-    return (
-      <div className={`portal-avatar-hero ${compact ? 'is-compact' : ''}`}>
-        <div className={`portal-avatar-note ${avatarNoteVisible && noteText ? 'is-visible' : 'is-hidden'}`} aria-live="polite">
-          <span>
-            {avatarNoteWords.map((word, index) => (
-              <span className="portal-avatar-note-word" key={`${avatarNoteSequence}-${index}-${word}`}>
-                {word}
-              </span>
-            ))}
-          </span>
-        </div>
-        <PortalAvatar compact={compact} />
-      </div>
-    );
-  }
-
-  function PortalFooter() {
-    return (
-      <div className="portal-footer-bar">
+	  function PortalFooter() {
+	    return (
+	      <div className="portal-footer-bar">
         <div className="portal-footer-meta">
           {settings?.show_powered_by !== false && <span>{t('Powered by 3JCentralPisowifi')}</span>}
           <button className="portal-theme-toggle" type="button" onClick={togglePortalDarkMode} aria-label={portalDark ? 'Switch to light mode' : 'Switch to dark mode'} title={portalDark ? 'Light mode' : 'Dark mode'}>
@@ -2927,6 +3575,156 @@ function PortalApp() {
           <span aria-hidden="true">|</span>
           <button className={portalLanguage === 'tl' ? 'active' : ''} type="button" onClick={() => setPortalLanguageMode('tl')}>{t('Tagalog')}</button>
         </div>
+	      </div>
+	    );
+	  }
+
+	  function renderPortalSettingsModal() {
+	    if (!portalSettingsOpen) return null;
+	    const networkLabel = networkPresence.connected_to_3j_ap === false
+	      ? t('Outside 3J WiFi')
+	      : networkPresence.connected_to_3j_ap === true
+	        ? t('Connected to 3J WiFi')
+	        : t('Network not detected');
+	    return (
+	      <Modal
+	        title={t('3J WiFi Portal Settings')}
+	        onClose={() => setPortalSettingsOpen(false)}
+	        size="md"
+	        dialogClassName="portal-profile-modal-dialog portal-settings-modal-dialog"
+	        bodyClassName="portal-profile-modal-body portal-settings-modal-body"
+	        contentClassName={`portal-profile-modal-content portal-settings-modal-content ${portalDark ? 'is-dark' : ''}`}
+	        lockPageRefresh
+	      >
+	        <div className="portal-settings-modal">
+	          <div className="portal-settings-section">
+	            <div className="portal-settings-section-title">
+	              <span><IconBell size={18} /></span>
+	              <strong>{t('Notifications')}</strong>
+	            </div>
+	            <label className="portal-settings-row">
+	              <span>
+	                <strong>{t('Phone Notifications')}</strong>
+	                <small>{t('Sent')}: {profileNotificationSentCount} · {t('Event-based alerts')}</small>
+	              </span>
+	              <span className="form-check form-switch m-0">
+	                <input
+	                  className="form-check-input"
+	                  type="checkbox"
+	                  checked={profileNotificationsEnabled}
+	                  disabled={profileNotificationSaving}
+	                  onChange={(e) => updatePortalNotificationPreference(e.target.checked)}
+	                />
+	              </span>
+	            </label>
+		            <button className="btn btn-outline-primary w-100" type="button" onClick={enablePortalNotifications}>
+		              <IconBell size={17} className="me-2" />{t('Show Time in Phone Notification')}
+		            </button>
+		            {portalNotificationTestResult && (
+		              <PortalCustomerMessage
+                    message={portalNotificationTestResult.message}
+                    tone={portalNotificationTestResult.status === 'SUCCESS' ? 'success' : portalNotificationTestResult.status === 'RUNNING' ? 'info' : 'warning'}
+                    className="py-2"
+                    timeoutMs={portalMessageAutoHideMs}
+                    onSuccessNote={queueAvatarCustomerMessage}
+                    onDismiss={() => setPortalNotificationTestResult(null)}
+                    dismissKey={`${portalNotificationTestResult.status}-${portalNotificationTestResult.message}`}
+                  />
+		            )}
+		          </div>
+
+	          <div className="portal-settings-section">
+	            <div className="portal-settings-section-title">
+	              <span><IconSun size={18} /></span>
+	              <strong>{t('Appearance')}</strong>
+	            </div>
+	            <div className="portal-settings-row is-stacked">
+	              <span>
+	                <strong>{t('Theme')}</strong>
+	              </span>
+	              <div className="portal-settings-segmented" role="group" aria-label={t('Theme')}>
+	                {[
+	                  { key: 'auto', label: t('Auto'), icon: IconSettings },
+	                  { key: 'light', label: t('Light'), icon: IconSun },
+	                  { key: 'dark', label: t('Dark'), icon: IconMoon },
+	                ].map((option) => {
+	                  const OptionIcon = option.icon;
+	                  return (
+	                    <button
+	                      className={portalDarkOverride === option.key ? 'is-active' : ''}
+	                      type="button"
+	                      key={option.key}
+	                      onClick={() => setPortalThemeMode(option.key)}
+	                    >
+	                      <OptionIcon size={15} />{option.label}
+	                    </button>
+	                  );
+	                })}
+	              </div>
+	            </div>
+	            <div className="portal-settings-row is-stacked">
+	              <span>
+	                <strong>{t('Language')}</strong>
+	              </span>
+	              <div className="portal-settings-segmented" role="group" aria-label={t('Language')}>
+	                <button className={portalLanguage === 'en' ? 'is-active' : ''} type="button" onClick={() => setPortalLanguageMode('en')}>{t('English')}</button>
+	                <button className={portalLanguage === 'tl' ? 'is-active' : ''} type="button" onClick={() => setPortalLanguageMode('tl')}>{t('Tagalog')}</button>
+	              </div>
+	            </div>
+	          </div>
+
+	          <div className="portal-settings-section">
+	            <div className="portal-settings-section-title">
+	              <span><IconUser size={18} /></span>
+	              <strong>{t('Account')}</strong>
+	            </div>
+	            <div className="portal-settings-row">
+	              <span>
+	                <strong>{portalProfileConfigured() ? profileName : t('Profile not set')}</strong>
+	                <small>{profile?.contact_number || t('No verified contact number')}</small>
+	              </span>
+	              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => { setPortalSettingsOpen(false); portalProfileConfigured() ? openProfileView('PROFILE') : openProfile(); }}>
+	                {portalProfileConfigured() ? t('Open Profile') : t('Set Profile')}
+	              </button>
+	            </div>
+	            <button className="btn btn-outline-secondary w-100" type="button" onClick={() => { setPortalSettingsOpen(false); openBagModal(); }}>
+	              <IconShoppingBag size={17} className="me-2" />{t('Open My WiFi Bag')}
+	            </button>
+	          </div>
+
+	          <div className="portal-settings-section">
+	            <div className="portal-settings-section-title">
+	              <span><IconWifi size={18} /></span>
+	              <strong>{t('Network')}</strong>
+	            </div>
+	            <div className="portal-settings-chip-grid">
+	              <span><IconWifi size={15} />{networkLabel}</span>
+	              <span><IconClock size={15} />{remainingDisplay}</span>
+	              {currentPortalBarangay() && <span><IconMapPin size={15} />{currentPortalBarangay()}</span>}
+	            </div>
+	          </div>
+	        </div>
+	      </Modal>
+	    );
+	  }
+
+  function PortalChromeReminder() {
+    if (chromeReminderHidden || isGoogleChromeBrowser()) return null;
+    return (
+      <div className="portal-chrome-reminder">
+        <span className="portal-chrome-reminder-icon"><IconBrandChrome size={20} /></span>
+        <div>
+          <strong>{t('For better experience')}</strong>
+          <small>{t('Open net.3jhotspot.com in Google Chrome when checking time, buying WiFi, or managing your profile.')}</small>
+        </div>
+        <button
+          className="portal-chrome-reminder-close"
+          type="button"
+          aria-label={t('Close')}
+          onClick={() => setChromeReminderHidden(true)}
+        >
+          <IconX size={16} />
+        </button>
       </div>
     );
   }
@@ -2992,6 +3790,13 @@ function PortalApp() {
     setSelectedProductCategory(null);
     setSelectedCategoryProductId('');
     setProductQuantities({});
+  }
+
+  function continueCheckoutAfterBrowserReminder() {
+    const next = checkoutBrowserReminder;
+    if (!next?.item) return;
+    setCheckoutBrowserReminder(null);
+    startProductCheckout(next.item, next.quantity || 1, false, next.paymentMethod || selectedPaymentMethod, true);
   }
 
   function openProfileFromOutsidePurchase() {
@@ -3319,7 +4124,16 @@ function PortalApp() {
               </button>
             </div>
             <div className="portal-coverage-floating-panel portal-coverage-floating-status">
-              {portalCoverageError && <div className="alert alert-warning py-2 mb-2">{portalCoverageError}</div>}
+              {portalCoverageError && (
+                <PortalCustomerMessage
+                  message={portalCoverageError}
+                  tone="warning"
+                  className="py-2 mb-2"
+                  timeoutMs={portalMessageAutoHideMs}
+                  onSuccessNote={queueAvatarCustomerMessage}
+                  onDismiss={() => setPortalCoverageError('')}
+                />
+              )}
               <div className="portal-coverage-status-main">
                 <div>
                   <div className="fw-semibold">{nearestText}</div>
@@ -3372,7 +4186,7 @@ function PortalApp() {
         contentClassName={`portal-profile-modal-content portal-category-info-modal-content ${portalDark ? 'is-dark' : ''}`}
       >
         <div className="portal-category-info">
-          {moreInfoCategory.image_url && <img className="portal-category-info-image" src={moreInfoCategory.image_url} alt="" loading="lazy" />}
+          {moreInfoCategory.image_url && <img className="portal-category-info-image" src={cacheBustedUploadUrl(moreInfoCategory.image_url, moreInfoCategory.updated_at)} alt="" loading="lazy" />}
           <div>
             <div className="portal-category-info-title">{moreInfoCategory.name || t('Package Info')}</div>
             {moreInfoCategory.description && <div className="text-muted small mt-1">{moreInfoCategory.description}</div>}
@@ -3386,9 +4200,33 @@ function PortalApp() {
     );
   }
 
+  function StoreItemMoreInfoModal() {
+    if (!storeItemMoreInfo) return null;
+    return (
+      <Modal
+        title={t('More Info')}
+        onClose={() => setStoreItemMoreInfo(null)}
+        dialogClassName="portal-profile-modal-dialog portal-category-info-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content portal-category-info-modal-content ${portalDark ? 'is-dark' : ''}`}
+      >
+        <div className="portal-category-info">
+          <div>
+            <div className="portal-category-info-title">{storeItemMoreInfo.name || t('Store Package Info')}</div>
+            <div className="text-muted small mt-1">{storeItemMoreInfo.price_display || `PHP ${Number(storeItemMoreInfo.price || 0).toFixed(2)}`} · {storeItemMoreInfo.duration_label}</div>
+          </div>
+          <div className="portal-category-info-text">{storeItemMoreInfo.more_info_text || t('No additional information is available for this item yet.')}</div>
+          <button className="btn btn-primary w-100" type="button" onClick={() => setStoreItemMoreInfo(null)}>
+            {t('Close')}
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
   function CategoryProductsModal() {
     if (!selectedProductCategory) return null;
-    const categoryItems = (selectedProductCategory.items || []).filter((item) => !purchasePassType || productPassType(item) === purchasePassType);
+    const categoryItems = (selectedProductCategory.items || []).filter((item) => productPassType(item) === effectivePurchasePassType);
     const selectedItem = selectedCategoryProductId ? categoryItems.find((item) => item.id === selectedCategoryProductId) : null;
     const selectedQuantity = selectedItem ? productQuantity(selectedItem) : 0;
     const selectedAmount = selectedItem ? productLineAmount(selectedItem, selectedQuantity) : { total: 0 };
@@ -3411,7 +4249,7 @@ function PortalApp() {
       >
         <div className="portal-category-modal-header">
           {selectedProductCategory.image_url ? (
-            <img className="portal-category-modal-image" src={selectedProductCategory.image_url} alt="" loading="lazy" />
+            <img className="portal-category-modal-image" src={cacheBustedUploadUrl(selectedProductCategory.image_url, selectedProductCategory.updated_at)} alt="" loading="lazy" />
           ) : (
             <span className="portal-category-modal-image portal-category-modal-image-empty"><IconPhoto size={42} /></span>
           )}
@@ -3675,6 +4513,36 @@ function PortalApp() {
     );
   }
 
+  function BrowserReminderCheckoutModal() {
+    if (!checkoutBrowserReminder?.item) return null;
+    const item = checkoutBrowserReminder.item;
+    return (
+      <Modal
+        title={t('Before you continue')}
+        onClose={() => setCheckoutBrowserReminder(null)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+      >
+        <div className="d-flex align-items-start gap-3">
+          <span className="avatar bg-blue-lt text-blue"><IconBrandChrome size={24} /></span>
+          <div>
+            <div className="fw-semibold mb-1">{item.name}</div>
+            <div className="text-muted small">
+              {t('For your next purchase, use Google Chrome and open net.3jhotspot.com. Chrome is better for checking remaining time, receiving phone notifications, and recovering your account if your device changes.')}
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer px-0 pb-0">
+          <button className="btn" type="button" onClick={() => setCheckoutBrowserReminder(null)}>{t('Cancel')}</button>
+          <button className="btn btn-primary" type="button" onClick={continueCheckoutAfterBrowserReminder}>
+            {t('OK, Continue to Payment')}
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
   function PortalBootSkeleton() {
     return (
       <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'}`}>
@@ -3714,10 +4582,10 @@ function PortalApp() {
       {portalScreen !== 'landing' && (
         <header className="portal-sticky-header">
           <div className="portal-sticky-header-inner">
-            <div className="portal-sticky-brand">
-              <span className="portal-sticky-brand-mark">3J</span>
-              <span className="portal-sticky-brand-text">WiFi</span>
-            </div>
+	            <button className="portal-sticky-brand" type="button" onClick={() => setPortalSettingsOpen(true)} aria-label={t('3J WiFi Portal Settings')} title={t('3J WiFi Portal Settings')}>
+	              <span className="portal-sticky-brand-mark">3J</span>
+	              <span className="portal-sticky-brand-text">WiFi</span>
+	            </button>
             <div className="portal-top-actions">
               <ProfileTag />
               <BagTag />
@@ -3747,9 +4615,17 @@ function PortalApp() {
           <>
             <div className="portal-landing-card card">
               <div className="card-body text-center">
-                <AvatarHero />
+                <PortalAvatarHeroView
+                  avatarNote={avatarNote}
+                  avatarNoteTone={avatarNoteTone}
+                  avatarNoteVisible={avatarNoteVisible}
+                  avatarNoteWords={avatarNoteWords}
+                  avatarNoteSequence={avatarNoteSequence}
+                  avatarConnected={avatarConnected}
+                  customAvatarUrl={customAvatarUrl}
+                />
                 <h1 className="mt-4 mb-2">{t(settings.no_internet_headline || 'No Internet Detected')}</h1>
-                <div className="text-muted mb-3">{t(settings.no_internet_subtitle || 'Connect with a voucher or buy a WiFi package.')}</div>
+                <div className="text-muted mb-3">{t(settings.no_internet_subtitle || 'Buy a WiFi pass or claim an optional voucher.')}</div>
                 <GiftPanel />
                 <div className="d-grid gap-2 mt-4">
                   <button className="btn btn-primary btn-lg" type="button" onClick={() => setPortalScreen('shop')}>
@@ -3764,7 +4640,15 @@ function PortalApp() {
         ) : (
           <>
           <div className="portal-shop-avatar-outside text-center mb-3">
-            <AvatarHero />
+            <PortalAvatarHeroView
+              avatarNote={avatarNote}
+              avatarNoteTone={avatarNoteTone}
+              avatarNoteVisible={avatarNoteVisible}
+              avatarNoteWords={avatarNoteWords}
+              avatarNoteSequence={avatarNoteSequence}
+              avatarConnected={avatarConnected}
+              customAvatarUrl={customAvatarUrl}
+            />
           </div>
           <div className="portal-remaining-card-stack mb-3">
             {activeRemainingCards.map((item, index) => {
@@ -3801,98 +4685,259 @@ function PortalApp() {
                 <span>{status?.outside_network_warning?.message || t('You are not currently connected to a 3J WiFi AP. Bought items will be saved to your bag.')}</span>
               </div>
             )}
-            <GiftPanel />
-            {result && <div className={`alert ${result.status === 'SUCCESS' ? 'alert-success' : 'alert-danger'}`}>{result.message}</div>}
-            {paymentResult && !paymentSuccessReady && <div className={`alert ${paymentResult.status === 'FAILED' ? 'alert-danger' : 'alert-info'}`}>
-              {paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
-                ? (paymentResult.bag_item_status === 'QUEUED' ? t(status?.outside_network_warning?.purchase_success_message || 'Payment received. Package saved to your bag.') : t('Payment received. Internet access is active.'))
-                : paymentResult.status === 'FAILED'
-                  ? t(paymentResult.last_error || 'Payment was not completed.')
-                  : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Waiting for PayMongo payment confirmation.')}
-              {paymentResult.payment_order_id && <button className="btn btn-sm btn-outline-secondary ms-2" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id)}>{paymentChecking ? t('Checking...') : t('Check')}</button>}
-            </div>}
-            <div className="portal-purchase-flow">
-              {(purchasePassType || purchaseChannel) && (
-                <div className="portal-purchase-breadcrumbs" aria-label="Purchase choices">
-                  {purchasePassType && (
-                    <button type="button" onClick={() => resetPortalPurchaseStep('pass')}>
-                      {purchasePassType === 'MULTI_DEVICE' ? <IconUsers size={14} /> : <IconUser size={14} />}
-                      {selectedPassLabel}
-                    </button>
-                  )}
-                  {purchasePassType && purchaseChannel && <IconChevronRight size={14} />}
-                  {purchaseChannel && (
-                    <button type="button" onClick={() => resetPortalPurchaseStep('channel')}>
-                      {purchaseChannel === 'ONLINE' ? <IconCash size={14} /> : <IconShoppingBag size={14} />}
-                      {purchaseChannel === 'ONLINE' ? `${t('Online Payment')} · ${selectedPaymentLabel}` : t('Store Payment')}
-                    </button>
+            {!hasRemainingAccess && hasReadyBagItems && (
+              <div className="portal-ready-pass-panel">
+                <div className="portal-ready-pass-header">
+                  <span className="portal-ready-pass-icon"><IconShoppingBag size={20} /></span>
+                  <div>
+                    <div className="portal-ready-pass-eyebrow">{t('Ready to use')}</div>
+                    <div className="portal-ready-pass-title">{t('You have a saved WiFi pass ready to use.')}</div>
+                  </div>
+                </div>
+                <div className="portal-ready-pass-card">
+                  <div className="portal-ready-pass-card-topline">
+                    <div className="portal-ready-pass-product">{firstReadyBagItem?.product_name || t('WiFi package')}</div>
+                    <span className="badge bg-yellow-lt text-yellow">{t('Unused')}</span>
+                  </div>
+                  <div className="portal-ready-pass-meta">
+                    <span><IconClock size={14} /> {firstReadyBagTimeLabel}</span>
+                    <span className="portal-bag-meta-separator">|</span>
+                    <span>{firstReadyBagDeviceLabel}</span>
+                  </div>
+                  {firstReadyBagItem?.product_category_name && (
+                    <div className="portal-ready-pass-category">
+                      {firstReadyBagItem.product_category_name}
+                    </div>
                   )}
                 </div>
+                <button
+                  className="btn btn-success w-100"
+                  type="button"
+                  disabled={bagSaving || !firstReadyBagItem?.id}
+                  onClick={() => firstReadyBagItem && requestBagItemActivation(firstReadyBagItem)}
+                >
+                  {bagSaving ? t('Activating...') : t('Activate now')}
+                </button>
+              </div>
+            )}
+            <GiftPanel />
+            <PortalChromeReminder />
+            {portalNotice && !(portalNotice.type === 'EXPIRED' && hasReadyBagItems) && (
+              <PortalCustomerMessage
+                message={portalNotice.message}
+                tone={portalNotice.native_status === 'shown' ? 'success' : 'info'}
+                className="portal-notification-fallback"
+                timeoutMs={portalMessageAutoHideMs}
+                onSuccessNote={queueAvatarCustomerMessage}
+                onDismiss={() => setPortalNotice(null)}
+                dismissKey={`${portalNotice.type}-${portalNotice.message}`}
+              />
+            )}
+            {result && (
+              <PortalCustomerMessage
+                message={t(result.message)}
+                tone={result.status === 'SUCCESS' ? 'success' : 'danger'}
+                timeoutMs={portalMessageAutoHideMs}
+                onSuccessNote={queueAvatarCustomerMessage}
+                onDismiss={() => setResult(null)}
+                dismissKey={`${result.status}-${result.message}`}
+              />
+            )}
+            {paymentResult && !paymentSuccessReady && (
+              <PortalCustomerMessage
+                message={paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
+                  ? (paymentResult.bag_item_status === 'QUEUED' ? t(status?.outside_network_warning?.purchase_success_message || 'Payment received. Package saved to your bag.') : t('Payment received. Internet access is active.'))
+                  : paymentResult.status === 'FAILED'
+                    ? t(paymentResult.last_error || 'Payment was not completed.')
+                    : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Waiting for PayMongo payment confirmation.')}
+                tone={paymentResult.status === 'FAILED' ? 'danger' : paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'success' : 'info'}
+                timeoutMs={portalMessageAutoHideMs}
+                onSuccessNote={queueAvatarCustomerMessage}
+                onDismiss={() => setPaymentResult(null)}
+                dismissKey={`${paymentResult.payment_order_id || ''}-${paymentResult.status}-${paymentResult.fulfillment_status || ''}-${paymentChecking ? 'checking' : 'idle'}`}
+                actions={paymentResult.payment_order_id && (
+                  <button className="btn btn-sm btn-outline-secondary" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id)}>
+                    {paymentChecking ? t('Checking...') : t('Check')}
+                  </button>
+                )}
+              />
+            )}
+            <div className="portal-purchase-flow">
+              {purchaseChannel && (
+                <div className="portal-purchase-breadcrumbs" aria-label="Purchase choices">
+                  <button type="button" onClick={() => resetPortalPurchaseStep('channel')}>
+                    {purchaseChannel === 'ONLINE' ? <IconCash size={14} /> : <IconShoppingBag size={14} />}
+                    {purchaseChannel === 'ONLINE' ? `${t('Online Payment')} · ${selectedPaymentLabel}` : t('Store Payment')}
+                  </button>
+                  <IconChevronRight size={14} />
+                  <span className="portal-purchase-crumb-static">
+                    {effectivePurchasePassType === 'MULTI_DEVICE' ? <IconUsers size={14} /> : <IconUser size={14} />}
+                    {selectedPassLabel}
+                  </span>
+                </div>
               )}
-              {!purchasePassType ? (
+              {!purchaseChannel ? (
                 <>
                   <div className="portal-purchase-heading">
                     <div>
                       <div className="portal-purchase-title">{t('Buy WiFi / IPTV Pass')}</div>
+                      <div className="portal-purchase-subtitle">{t('Choose how you want to pay first.')}</div>
                     </div>
                   </div>
                   <div className="portal-choice-grid">
-                    <button className="portal-choice-card" type="button" onClick={() => selectPortalPassType('SINGLE_DEVICE')}>
-                      <span className="portal-choice-icon"><IconUser size={24} /></span>
+                    <button
+                      className="portal-choice-card"
+                      type="button"
+                      onClick={() => {
+                        if (onlinePaymentMethods[0] && !selectedPaymentMethodRow) setSelectedPaymentMethod(onlinePaymentMethods[0].id);
+                        selectPortalPurchaseChannel('ONLINE');
+                      }}
+                    >
+                      <span className="portal-choice-icon"><IconCash size={24} /></span>
                       <span>
-                        <strong>{t('One Device Pass')}</strong>
-                        <small>{t('Best for one phone or one laptop.')}</small>
+                        <strong>{t('Online Payment')}</strong>
+                        <small>{t('Pay through available PayMongo methods.')}</small>
+                        <span className="portal-payment-logo-row">
+                          {onlinePaymentMethods.length ? onlinePaymentMethods.map((method) => (
+                            <span className={`portal-payment-logo is-${method.id}`} key={method.id}>{paymentMethodLogo(method)}</span>
+                          )) : <span className="portal-payment-logo">{t('Not configured')}</span>}
+                        </span>
                       </span>
                       <span className="portal-choice-radio" aria-hidden="true" />
                     </button>
-                    <button className="portal-choice-card" type="button" onClick={() => selectPortalPassType('MULTI_DEVICE')}>
-                      <span className="portal-choice-icon"><IconUsers size={24} /></span>
+                    <button className="portal-choice-card" type="button" onClick={() => selectPortalPurchaseChannel('STORE')}>
+                      <span className="portal-choice-icon"><IconShoppingBag size={24} /></span>
                       <span>
-                        <strong>{t('Multiple Device Pass')}</strong>
-                        <small>{t('Share one purchase with more than one device.')}</small>
+                        <strong>{t('Store Payment')}</strong>
+                        <small>{t('Pay through an available store in your connected site.')}</small>
                       </span>
                       <span className="portal-choice-radio" aria-hidden="true" />
                     </button>
                   </div>
                 </>
-              ) : !purchaseChannel ? (
-                <div className="portal-choice-grid">
-                  <button
-                    className="portal-choice-card"
-                    type="button"
-                    onClick={() => {
-                      if (onlinePaymentMethods[0] && !selectedPaymentMethodRow) setSelectedPaymentMethod(onlinePaymentMethods[0].id);
-                      selectPortalPurchaseChannel('ONLINE');
-                    }}
-                  >
-                    <span className="portal-choice-icon"><IconCash size={24} /></span>
-                    <span>
-                      <strong>{t('Online Payment')}</strong>
-                      <small>{t('Pay through available PayMongo methods.')}</small>
-                      <span className="portal-payment-logo-row">
-                        {onlinePaymentMethods.length ? onlinePaymentMethods.map((method) => (
-                          <span className={`portal-payment-logo is-${method.id}`} key={method.id}>{paymentMethodLogo(method)}</span>
-                        )) : <span className="portal-payment-logo">{t('Not configured')}</span>}
-                      </span>
-                    </span>
-                    <span className="portal-choice-radio" aria-hidden="true" />
-                  </button>
-                  <button className="portal-choice-card" type="button" onClick={() => selectPortalPurchaseChannel('STORE')}>
-                    <span className="portal-choice-icon"><IconShoppingBag size={24} /></span>
-                    <span>
-                      <strong>{t('Store Payment')}</strong>
-                      <small>{t('Coming soon. Store-assisted payment details will be added next.')}</small>
-                    </span>
-                    <span className="portal-choice-radio" aria-hidden="true" />
-                  </button>
-                </div>
               ) : purchaseChannel === 'STORE' ? (
-                <div className="portal-store-placeholder">
-                  <span className="portal-choice-icon"><IconShoppingBag size={24} /></span>
-                  <div>
-                    <strong>{t('Store Payment')}</strong>
-                    <p className="mb-0">{t('Store payment is being prepared. Choose Online Payment for now, or ask the operator for a voucher.')}</p>
+                <div className="portal-store-payment-panel">
+                  <div className="portal-store-payment-header">
+                    <span className="portal-choice-icon"><IconBuildingStore size={24} /></span>
+                    <div>
+                      <strong>{t('Store Payment')}</strong>
+                      <small>
+                        {physicalStoresSite?.site_name
+                          ? `Available stores for ${physicalStoresSite.site_name}${physicalStoresSite.barangay ? ` · ${physicalStoresSite.barangay}` : ''}`
+                          : 'Stores are shown only when your connected site is detected.'}
+                      </small>
+                    </div>
                   </div>
+                  <PortalPassTypeTabs />
+                  {physicalStoresLoading ? (
+                    <div className="portal-store-loading">
+                      <span className="spinner-border spinner-border-sm" aria-hidden="true" />
+                      <span>Loading stores...</span>
+                    </div>
+                  ) : physicalStoresError ? (
+                    <PortalCustomerMessage
+                      message={physicalStoresError}
+                      tone="warning"
+                      timeoutMs={portalMessageAutoHideMs}
+                      onSuccessNote={queueAvatarCustomerMessage}
+                      onDismiss={() => setPhysicalStoresError('')}
+                    />
+                  ) : selectedPhysicalStore ? (
+                    <div className="portal-store-detail">
+                      <button className="portal-store-back" type="button" onClick={() => setSelectedPhysicalStore(null)}>
+                        <IconChevronLeft size={16} /> {t('Back to stores')}
+                      </button>
+                      <div className="portal-store-detail-hero">
+                        <div className="portal-store-image">
+                          {selectedPhysicalStore.image_url ? <img src={cacheBustedUploadUrl(selectedPhysicalStore.image_url, selectedPhysicalStore.updated_at)} alt="" /> : <IconBuildingStore size={30} />}
+                        </div>
+                        <div>
+                          <div className="portal-store-card-title">{selectedPhysicalStore.store_name}</div>
+                          <div className="portal-store-card-description">{selectedPhysicalStore.description || 'Choose an item and pay at this store.'}</div>
+                          <div className="portal-store-card-meta">
+                            <span><IconMapPin size={14} /> {storeDistanceLabel(selectedPhysicalStore)}</span>
+                            {selectedPhysicalStore.contact_phone && <span><IconPhone size={14} /> {selectedPhysicalStore.contact_phone}</span>}
+                          </div>
+                        </div>
+                      </div>
+                      {storeVisibleItems(selectedPhysicalStore).length ? (
+                        <div className="portal-store-item-list">
+                          {storeVisibleItems(selectedPhysicalStore).map((item) => (
+                            <div className="portal-store-item-card" key={item.id}>
+                              <div className="portal-store-item-main">
+                                <div>
+                                  <div className="portal-store-item-title">{item.name}</div>
+                                  {item.description && <div className="portal-store-card-description">{item.description}</div>}
+                                </div>
+                                <div className="portal-store-item-price">PHP {Number(item.price || 0).toFixed(2)}</div>
+                              </div>
+                              <div className="portal-product-meta-tags">
+                                <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
+                                <span className={`badge ${productPassType(item) === 'MULTI_DEVICE' ? 'bg-purple-lt text-purple' : 'bg-azure-lt text-azure'}`}>{item.device_scope_label || productPassLabel(item)}</span>
+                                {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple"><IconUsers size={16} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
+                                <span className={`badge ${item.access_scope === 'BARANGAY_ONLY' ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>{item.access_scope === 'BARANGAY_ONLY' ? 'Barangay only' : 'All locations'}</span>
+                              </div>
+                              {item.access_scope === 'BARANGAY_ONLY' && item.allowed_barangay && <div className="small text-muted mt-2">Allowed in {item.allowed_barangay}</div>}
+                              {item.more_info_enabled && item.more_info_text ? (
+                                <button className="btn btn-outline-secondary btn-sm mt-3" type="button" onClick={() => setStoreItemMoreInfo(item)}>
+                                  <IconInfoCircle size={15} className="me-1" />More info
+                                </button>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="portal-store-empty">
+                          <IconShoppingBag size={26} />
+                          <strong>No {effectivePurchasePassType === 'MULTI_DEVICE' ? 'shared device' : 'one device'} items in this store yet.</strong>
+                          <small>Ask the store operator for available packages.</small>
+                        </div>
+                      )}
+                    </div>
+                  ) : physicalStores.length ? (
+                    <>
+                      {physicalStoresLocationMessage && (
+                        <div className="portal-store-location-note">
+                          <IconMapPin size={15} />
+                          <span>{physicalStoresLocationMessage}</span>
+                          <button type="button" onClick={requestStoreCustomerLocation}>Use location</button>
+                        </div>
+                      )}
+                      <div className="portal-store-list">
+                        {physicalStores.map((store) => (
+                        <button className="portal-store-card" key={store.id} type="button" onClick={() => setSelectedPhysicalStore(store)}>
+                          <div className="portal-store-image">
+                            {store.image_url ? <img src={cacheBustedUploadUrl(store.image_url, store.updated_at)} alt="" /> : <IconBuildingStore size={30} />}
+                          </div>
+                          <div className="portal-store-card-body">
+                            <div className="portal-store-card-title">{store.store_name}</div>
+                            {store.description && <div className="portal-store-card-description">{store.description}</div>}
+                            <div className="portal-store-card-meta">
+                              <span><IconMapPin size={14} /> {storeDistanceLabel(store)}</span>
+                              <span><IconMapPin size={14} /> {store.address || [store.barangay, store.municipality].filter(Boolean).join(', ') || 'Ask the operator for directions'}</span>
+                              {store.contact_phone && <span><IconPhone size={14} /> {store.contact_phone}</span>}
+                            </div>
+                            <div className="portal-store-card-meta">
+                              <span><IconShoppingBag size={14} /> {storeVisibleItems(store).length} available item{storeVisibleItems(store).length === 1 ? '' : 's'}</span>
+                              <span>{t('Tap to view')}</span>
+                            </div>
+                            <div className="portal-store-site-badges">
+                              {(store.sites || []).map((site) => (
+                                <span key={site.site_deployment_id}>{site.site_name}</span>
+                              ))}
+                            </div>
+                          </div>
+                        </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="portal-store-empty">
+                      <IconBuildingStore size={26} />
+                      <strong>No store payment location is available in this site yet.</strong>
+                      <small>Choose Online Payment for now, or ask the operator where to pay.</small>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <>
@@ -3910,14 +4955,15 @@ function PortalApp() {
                         </button>
                       ))}
                     </div>
-                  ) : !onlinePaymentMethods.length ? <div className="alert alert-warning mb-0">{t('Online payment methods are not configured yet. Ask the operator for a voucher.')}</div> : null}
+                  ) : !onlinePaymentMethods.length ? <div className="alert alert-warning mb-0">{t('Online payment methods are not configured yet. Ask the operator for help.')}</div> : null}
+                  <PortalPassTypeTabs />
                   {onlinePaymentMethods.length && visibleProductCategoryGroups.length ? (
                     <div className="portal-product-category-list">
                       {visibleProductCategoryGroups.map((category, groupIndex) => (
                         <div className="portal-product-category-block" key={category.id || `category-${groupIndex}`}>
                           <button className="portal-category-image-button" type="button" onClick={() => openProductCategory(category)}>
                             {category.image_url ? (
-                              <img className="portal-product-category-image" src={category.image_url} alt="" loading="lazy" />
+                              <img className="portal-product-category-image" src={cacheBustedUploadUrl(category.image_url, category.updated_at)} alt="" loading="lazy" />
                             ) : (
                               <span className="portal-product-category-image portal-category-image-empty"><IconPhoto size={30} /></span>
                             )}
@@ -3941,7 +4987,7 @@ function PortalApp() {
                         </div>
                       ))}
                     </div>
-                  ) : onlinePaymentMethods.length ? <div className="alert alert-info mb-0">{t('No packages are available yet. Ask the operator for a voucher.')}</div> : null}
+                  ) : onlinePaymentMethods.length ? <div className="alert alert-info mb-0">{t('No packages are available yet. Ask the operator for help.')}</div> : null}
                 </>
               )}
             </div>
@@ -3951,9 +4997,12 @@ function PortalApp() {
         )}
       </div>
       <CategoryMoreInfoModal />
-      <CategoryProductsModal />
-      <BagModal />
-      <OutsidePurchaseModal />
+      <StoreItemMoreInfoModal />
+	      <CategoryProductsModal />
+	      <BagModal />
+		      {renderPortalSettingsModal()}
+		      <OutsidePurchaseModal />
+		      <BrowserReminderCheckoutModal />
       <PortalCoverageModal />
 
       {profileViewOpen && (
@@ -3998,11 +5047,11 @@ function PortalApp() {
                 <span className="text-muted">{t('Email')}</span>
                 <strong>{profile?.email || '-'}</strong>
               </div>
-              <div className="list-group-item d-flex justify-content-between px-0">
-                <span className="text-muted">{t('Promo SMS')}</span>
-                <strong>{profile?.marketing_sms_consent ? t('Allowed') : t('Not allowed')}</strong>
-              </div>
-            </div>
+	              <div className="list-group-item d-flex justify-content-between px-0">
+	                <span className="text-muted">{t('Promo SMS')}</span>
+	                <strong>{profile?.marketing_sms_consent ? t('Allowed') : t('Not allowed')}</strong>
+	              </div>
+	            </div>
           ) : (
             <div className="portal-profile-devices">
               <div className="d-flex justify-content-between align-items-center gap-2 mb-3">
@@ -4014,7 +5063,16 @@ function PortalApp() {
                   <IconPlus size={16} className="me-1" />{t('Add Device')}
                 </button>
               </div>
-              {profileDevicesMessage && <div className="alert alert-info py-2">{profileDevicesMessage}</div>}
+              {profileDevicesMessage && (
+                <PortalCustomerMessage
+                  message={profileDevicesMessage}
+                  tone="info"
+                  className="py-2"
+                  timeoutMs={portalMessageAutoHideMs}
+                  onSuccessNote={queueAvatarCustomerMessage}
+                  onDismiss={() => setProfileDevicesMessage('')}
+                />
+              )}
               {profileDevicesLoading ? (
                 <div className="text-muted small">{t('Loading devices...')}</div>
               ) : profileDevices.length ? (
@@ -4068,11 +5126,17 @@ function PortalApp() {
         >
           {profileChoice === 'CHOICE' ? (
             <div className="portal-profile-choice">
-              <div className="portal-profile-gift-note mb-3">
-                <span className="portal-profile-gift-badge"><IconGift size={18} /></span>
-                <span>{t('Set up your profile and receive a FREE Gift!')}</span>
-              </div>
               <div className="row g-3">
+                <div className="col-md-6">
+                  <button className="portal-profile-choice-card" type="button" onClick={() => setProfileChoice('NEW')}>
+                    <span className="portal-profile-choice-icon-stack">
+                      <span className="portal-profile-choice-icon"><IconUserPlus size={27} /></span>
+                      <span className="portal-profile-choice-gift-icon" aria-hidden="true"><IconGift size={16} /></span>
+                    </span>
+                    <strong>{t('Create new profile')}</strong>
+                    <small>{t('Verify this contact number and receive your welcome gift.')}</small>
+                  </button>
+                </div>
                 <div className="col-md-6">
                   <button className="portal-profile-choice-card" type="button" onClick={() => setProfileChoice('EXISTING')}>
                     <span className="portal-profile-choice-icon"><IconUsers size={28} /></span>
@@ -4080,18 +5144,19 @@ function PortalApp() {
                     <small>{t('Use the add-device code sent from your main phone.')}</small>
                   </button>
                 </div>
-                <div className="col-md-6">
-                  <button className="portal-profile-choice-card" type="button" onClick={() => setProfileChoice('NEW')}>
-                    <span className="portal-profile-choice-icon"><IconUserPlus size={28} /></span>
-                    <strong>{t('Create new profile')}</strong>
-                    <small>{t('Verify this contact number and receive your welcome gift.')}</small>
-                  </button>
-                </div>
               </div>
             </div>
           ) : profileChoice === 'EXISTING' ? (
             <form className="portal-profile-form" onSubmit={confirmExistingProfileLink}>
-              {existingProfileMessage && <div className="alert alert-info">{existingProfileMessage}</div>}
+              {existingProfileMessage && (
+                <PortalCustomerMessage
+                  message={existingProfileMessage}
+                  tone="info"
+                  timeoutMs={portalMessageAutoHideMs}
+                  onSuccessNote={queueAvatarCustomerMessage}
+                  onDismiss={() => setExistingProfileMessage('')}
+                />
+              )}
               <div className="portal-profile-gift-note mb-3">
                 <span className="portal-profile-gift-badge"><IconKey size={18} /></span>
                 <span>{t('Enter the 8-character code sent from your main device.')}</span>
@@ -4118,7 +5183,15 @@ function PortalApp() {
           ) : (
             <form className="portal-profile-form" onSubmit={saveProfile}>
               <div className="portal-profile-scroll">
-                {profileMessage && <div className="alert alert-info">{profileMessage}</div>}
+                {profileMessage && (
+                  <PortalCustomerMessage
+                    message={profileMessage}
+                    tone="info"
+                    timeoutMs={portalMessageAutoHideMs}
+                    onSuccessNote={queueAvatarCustomerMessage}
+                    onDismiss={() => setProfileMessage('')}
+                  />
+                )}
                 <div className="row g-3">
                   {!profile?.configured && (
                     <div className="col-12">
@@ -4141,15 +5214,15 @@ function PortalApp() {
                     <div className="input-group portal-contact-code-group">
                       <input className="form-control" inputMode="numeric" required maxLength={11} value={profileForm.contact_number} onChange={(e) => setProfileForm({ ...profileForm, contact_number: normalizePortalContactInput(e.target.value) })} />
                       <button className="btn btn-outline-primary" type="button" disabled={profileSendingCode || profileCodeCooldown > 0 || !profileForm.contact_number} onClick={sendProfileCode}>
-                        <IconSend size={18} className="me-2" />{profileSendingCode ? t('Sending...') : profileCodeCooldown > 0 ? t('Send Again After ({seconds}s)', { seconds: profileCodeCooldown }) : t('Send Code')}
+                        <IconSend size={18} className="me-2" />{profileSendingCode ? t('Sending...') : profileCodeCooldown > 0 ? t('Send Again ({seconds}s)', { seconds: profileCodeCooldown }) : t('Send Code')}
                       </button>
                     </div>
                   </div>
                   <div className="col-md-6">
                     <label className="form-label">{t('4-character Code')}</label>
-                    <input className="form-control text-uppercase" required value={profileForm.verification_code} onChange={(e) => setProfileForm({ ...profileForm, verification_code: e.target.value.toUpperCase() })} maxLength={12} />
+                      <input className="form-control text-uppercase" required value={profileForm.verification_code} onChange={(e) => setProfileForm({ ...profileForm, verification_code: e.target.value.toUpperCase() })} maxLength={12} />
                   </div>
-                  <div className="col-12">
+	                  <div className="col-12">
                     <div className="form-check portal-profile-consent">
                       <input
                         className="form-check-input"
@@ -4165,7 +5238,6 @@ function PortalApp() {
                 </div>
               </div>
               <div className="modal-footer portal-profile-footer">
-                {!profile?.configured && <button className="btn me-auto" type="button" onClick={() => setProfileChoice('CHOICE')}>{t('Back')}</button>}
                 <button className="btn" type="button" onClick={() => setProfileOpen(false)}>{t('Cancel')}</button>
                 <button className="btn btn-primary" disabled={profileSaving || !profileForm.terms_accepted}>{profileSaving ? t('Saving...') : t('Save Profile')}</button>
               </div>
@@ -4193,9 +5265,18 @@ function PortalApp() {
               <li>{t('On the other phone, connect to 3J WiFi and tap Set Profile.')}</li>
               <li>{t('Choose Existing Profile, then enter the 8-character code.')}</li>
             </ol>
-            {deviceLinkMessage && <div className="alert alert-info py-2">{deviceLinkMessage}</div>}
+            {deviceLinkMessage && (
+              <PortalCustomerMessage
+                message={deviceLinkMessage}
+                tone="info"
+                className="py-2"
+                timeoutMs={portalMessageAutoHideMs}
+                onSuccessNote={queueAvatarCustomerMessage}
+                onDismiss={() => setDeviceLinkMessage('')}
+              />
+            )}
             <button className="btn btn-primary w-100" type="button" disabled={deviceLinkSending || deviceLinkCooldown > 0} onClick={sendDeviceLinkCode}>
-              <IconSend size={18} className="me-2" />{deviceLinkSending ? t('Sending...') : deviceLinkCooldown > 0 ? t('Send Again After ({seconds}s)', { seconds: deviceLinkCooldown }) : t('Send Code')}
+              <IconSend size={18} className="me-2" />{deviceLinkSending ? t('Sending...') : deviceLinkCooldown > 0 ? t('Send Again ({seconds}s)', { seconds: deviceLinkCooldown }) : t('Send Code')}
             </button>
           </div>
         </Modal>
@@ -4267,7 +5348,15 @@ function PortalApp() {
                   </div>
                 )) : <div className="text-muted text-center py-4">{t('No messages yet.')}</div>}
               </div>
-              {supportConversation?.error && <div className="alert alert-danger">{supportConversation.error}</div>}
+              {supportConversation?.error && (
+                <PortalCustomerMessage
+                  message={supportConversation.error}
+                  tone="danger"
+                  timeoutMs={portalMessageAutoHideMs}
+                  onSuccessNote={queueAvatarCustomerMessage}
+                  onDismiss={() => setSupportConversation((current) => current ? { ...current, error: '' } : current)}
+                />
+              )}
               <form className="d-flex gap-2" onSubmit={sendSupportMessage}>
                 <input className="form-control" value={supportMessage} onChange={(e) => setSupportMessage(e.target.value)} placeholder={t('Type your message...')} />
                 <button className="btn btn-primary" disabled={supportLoading || !supportMessage.trim()}><IconSend size={18} /></button>
@@ -4277,15 +5366,29 @@ function PortalApp() {
           )}
           {helpMode === 'missing-time' && (
             <form onSubmit={restoreMissingTime}>
-              <div className="alert alert-info">{t('Use the same verified contact number from your profile. We will send a 4-character code before moving remaining time to this device.')}</div>
-              {missingTimeMessage && <div className="alert alert-secondary">{missingTimeMessage}</div>}
+              <PortalCustomerMessage
+                message={t('Use the same verified contact number from your profile. We will send a 4-character code before moving remaining time to this device.')}
+                tone="info"
+                timeoutMs={portalMessageAutoHideMs}
+                onSuccessNote={queueAvatarCustomerMessage}
+                dismissKey="missing-time-guide"
+              />
+              {missingTimeMessage && (
+                <PortalCustomerMessage
+                  message={missingTimeMessage}
+                  tone="secondary"
+                  timeoutMs={portalMessageAutoHideMs}
+                  onSuccessNote={queueAvatarCustomerMessage}
+                  onDismiss={() => setMissingTimeMessage('')}
+                />
+              )}
               <div className="row g-3">
                 <div className="col-12">
                   <label className="form-label">{t('Contact Number')}</label>
                   <div className="input-group portal-contact-code-group">
                     <input className="form-control" inputMode="numeric" required maxLength={11} value={missingTimeForm.contact_number} onChange={(e) => setMissingTimeForm({ ...missingTimeForm, contact_number: normalizePortalContactInput(e.target.value) })} />
                     <button className="btn btn-outline-primary" type="button" onClick={sendMissingTimeCode} disabled={missingTimeSending || missingTimeCodeCooldown > 0 || !missingTimeForm.contact_number}>
-                      <IconSend size={18} className="me-2" />{missingTimeSending ? t('Sending...') : missingTimeCodeCooldown > 0 ? t('Send Again After ({seconds}s)', { seconds: missingTimeCodeCooldown }) : t('Send Code')}
+                      <IconSend size={18} className="me-2" />{missingTimeSending ? t('Sending...') : missingTimeCodeCooldown > 0 ? t('Send Again ({seconds}s)', { seconds: missingTimeCodeCooldown }) : t('Send Code')}
                     </button>
                   </div>
                 </div>
@@ -4403,6 +5506,65 @@ function ActionBadgeButton({ icon: Icon, label, tone = 'secondary', onClick, dis
   );
 }
 
+function PortalCustomerMessage({ message, children, tone = 'info', onDismiss, timeoutMs = 6000, className = '', actions = null, dismissKey = '', onSuccessNote = null }) {
+  const [visible, setVisible] = useState(Boolean(message || children));
+  const onDismissRef = useRef(onDismiss);
+  const onSuccessNoteRef = useRef(onSuccessNote);
+  const normalizedTone = ['success', 'danger', 'warning', 'info', 'secondary'].includes(tone) ? tone : 'info';
+  const Icon = normalizedTone === 'success'
+    ? IconCircleCheck
+    : normalizedTone === 'danger' || normalizedTone === 'warning'
+      ? IconAlertTriangle
+      : IconInfoCircle;
+  const timeout = Math.max(1000, Number(timeoutMs || 6000));
+  const key = dismissKey || String(message || '');
+
+  useEffect(() => {
+    onDismissRef.current = onDismiss;
+  }, [onDismiss]);
+
+  useEffect(() => {
+    onSuccessNoteRef.current = onSuccessNote;
+  }, [onSuccessNote]);
+
+  useEffect(() => {
+    setVisible(Boolean(message || children));
+  }, [key, message, Boolean(children)]);
+
+  useEffect(() => {
+    if (normalizedTone !== 'success' || !onSuccessNoteRef.current || !(message || children)) return undefined;
+    onSuccessNoteRef.current(message || (typeof children === 'string' ? children : 'Success.'));
+    return undefined;
+  }, [key, normalizedTone, message, Boolean(children)]);
+
+  useEffect(() => {
+    if (!visible || !(message || children)) return undefined;
+    const timer = window.setTimeout(() => {
+      setVisible(false);
+      if (onDismissRef.current) onDismissRef.current();
+    }, timeout);
+    return () => window.clearTimeout(timer);
+  }, [visible, key, timeout, message, Boolean(children)]);
+
+  if (!visible || !(message || children)) return null;
+  if (normalizedTone === 'success' && onSuccessNote) return null;
+  return (
+    <div className={`alert alert-${normalizedTone} portal-customer-message mb-0 ${className}`.trim()}>
+      <Icon size={19} className="portal-customer-message-icon" />
+      <div className="portal-customer-message-body">
+        {children || <div>{message}</div>}
+        {actions && <div className="portal-customer-message-actions">{actions}</div>}
+      </div>
+      {onDismiss && (
+        <button className="btn-close portal-customer-message-close" type="button" aria-label="Close" onClick={() => {
+          setVisible(false);
+          onDismiss();
+        }} />
+      )}
+    </div>
+  );
+}
+
 function AutoDismissAlert({ message, tone = 'success', onDismiss, timeoutMs = 6000 }) {
   useEffect(() => {
     if (!message || !onDismiss) return undefined;
@@ -4463,7 +5625,7 @@ function Dashboard({ data }) {
     <div className="row row-cards">
       <div className="col-12">
         <div className="alert alert-info mb-0">
-          Current build focus: Omada Captive Portal + Voucher access. MikroTik provides station VLAN/DHCP/NAT transport.
+          Current build focus: Omada Captive Portal + WiFi Pass access. MikroTik provides station VLAN/DHCP/NAT transport.
         </div>
       </div>
       <KpiCard icon={IconDatabase} label="System Status" value={health.database ? 'Online' : 'Offline'} tone="green" />
@@ -8253,6 +9415,7 @@ function Modal({ title, children, onClose, size = 'lg', dialogClassName = '', bo
   const bodyRef = useRef(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const scrollTopDark = /\bis-dark\b/.test(contentClassName || '');
+  const settingsLayer = /\bportal-settings-modal-content\b/.test(contentClassName || '');
 
   function modalScrollTop() {
     const bodyTop = bodyRef.current?.scrollTop || 0;
@@ -8308,7 +9471,7 @@ function Modal({ title, children, onClose, size = 'lg', dialogClassName = '', bo
   return createPortal(
     <>
       <div className="modal-backdrop fade show app-modal-backdrop" onClick={onClose} />
-      <div className="modal modal-blur fade show d-block app-modal-layer" tabIndex="-1" role="dialog" ref={layerRef} onScroll={updateModalScrollTopVisibility}>
+      <div className={`modal modal-blur fade show d-block app-modal-layer ${settingsLayer ? 'is-settings-modal-layer' : ''}`} tabIndex="-1" role="dialog" ref={layerRef} onScroll={updateModalScrollTopVisibility}>
         <div className={`modal-dialog modal-${size} modal-dialog-centered ${dialogClassName}`}>
           <div className={`modal-content ${contentClassName}`}>
             <div className="modal-header">
@@ -8814,6 +9977,713 @@ function productPassLabel(item = {}) {
   return productPassType(item) === 'MULTI_DEVICE' ? 'Shared Device Pass' : 'Personal Pass';
 }
 
+function PhysicalStoresPage() {
+  const emptyForm = {
+    store_name: '',
+    location_id: '',
+    description: '',
+    address: '',
+    municipality: '',
+    barangay: '',
+    latitude: '',
+    longitude: '',
+    contact_name: '',
+    contact_phone: '',
+    site_ids: [],
+    status: 'ACTIVE',
+    notes: ''
+  };
+  const emptyItemForm = {
+    name: '',
+    description: '',
+    price: '0',
+    duration_value: '1',
+    duration_unit: 'hours',
+    device_scope: 'SINGLE_DEVICE',
+    allowed_devices: '1',
+    access_scope: 'ALL_LOCATIONS',
+    allowed_barangay: '',
+    more_info_enabled: false,
+    more_info_text: '',
+    status: 'ACTIVE',
+    sort_order: '0'
+  };
+  const [stores, setStores] = useState([]);
+  const [sites, setSites] = useState([]);
+  const [locations, setLocations] = useState([]);
+  const [summary, setSummary] = useState({ total: 0, active: 0, disabled: 0, assigned_sites: 0, with_coordinates: 0 });
+  const [modalMode, setModalMode] = useState('');
+  const [selectedStore, setSelectedStore] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [itemModalStore, setItemModalStore] = useState(null);
+  const [itemModalItems, setItemModalItems] = useState([]);
+  const [itemForm, setItemForm] = useState(emptyItemForm);
+  const [editingItem, setEditingItem] = useState(null);
+  const [itemMessage, setItemMessage] = useState('');
+  const [itemError, setItemError] = useState('');
+  const [locationSearchText, setLocationSearchText] = useState('');
+  const [captureMapOpen, setCaptureMapOpen] = useState(false);
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function load() {
+    const data = await request('/physical-stores');
+    setStores(data.stores || []);
+    setSites(data.sites || []);
+    setLocations(data.locations || []);
+    setSummary(data.summary || {});
+  }
+
+  useEffect(() => { load().catch((err) => setError(err.message)); }, []);
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreview('');
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(imageFile);
+    setImagePreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [imageFile]);
+
+  function siteLabel(site) {
+    return [site.site_name, site.barangay, site.municipality].filter(Boolean).join(' · ');
+  }
+
+  function locationLabel(location) {
+    if (!location) return '';
+    const primary = location.location_name || location.address || 'Unnamed location';
+    const secondary = [location.barangay, location.municipality].filter(Boolean).join(', ');
+    return secondary ? `${primary} - ${secondary}` : primary;
+  }
+
+  function selectedLocation() {
+    return locations.find((location) => location.id === form.location_id) || null;
+  }
+
+  function locationSummary(location) {
+    if (!location) return '';
+    return [location.address, location.barangay, location.municipality, location.province].filter(Boolean).join(' · ');
+  }
+
+  function applyStoreLocation(location) {
+    if (!location) return;
+    setLocationSearchText(locationLabel(location));
+    setForm((current) => ({
+      ...current,
+      location_id: location.id,
+      address: location.address || '',
+      municipality: location.municipality || '',
+      barangay: location.barangay || '',
+      latitude: location.latitude === null || location.latitude === undefined ? '' : String(location.latitude),
+      longitude: location.longitude === null || location.longitude === undefined ? '' : String(location.longitude),
+    }));
+  }
+
+  function handleLocationSearch(value) {
+    setLocationSearchText(value);
+    const normalized = value.trim().toLowerCase();
+    const match = locations.find((location) => locationLabel(location).toLowerCase() === normalized);
+    if (match) {
+      applyStoreLocation(match);
+    } else {
+      setForm((current) => ({ ...current, location_id: '' }));
+    }
+  }
+
+  function mapEmbedUrl() {
+    const lat = Number(form.latitude);
+    const lng = Number(form.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return '';
+    const delta = 0.008;
+    const bbox = [
+      (lng - delta).toFixed(6),
+      (lat - delta).toFixed(6),
+      (lng + delta).toFixed(6),
+      (lat + delta).toFixed(6),
+    ].join(',');
+    return `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik&marker=${encodeURIComponent(`${lat},${lng}`)}`;
+  }
+
+  function openCreate() {
+    setError('');
+    setMessage('');
+    setSelectedStore(null);
+    setForm(emptyForm);
+    setLocationSearchText('');
+    setImageFile(null);
+    setModalMode('create');
+  }
+
+  function openEdit(store) {
+    setError('');
+    setMessage('');
+    setSelectedStore(store);
+    setForm({
+      store_name: store.store_name || '',
+      location_id: store.location_id || '',
+      description: store.description || '',
+      address: store.address || '',
+      municipality: store.municipality || '',
+      barangay: store.barangay || '',
+      latitude: store.latitude === null || store.latitude === undefined ? '' : String(store.latitude),
+      longitude: store.longitude === null || store.longitude === undefined ? '' : String(store.longitude),
+      contact_name: store.contact_name || '',
+      contact_phone: store.contact_phone || '',
+      site_ids: store.site_ids || [],
+      status: store.status || 'ACTIVE',
+      notes: store.notes || ''
+    });
+    setLocationSearchText(store.location_name || store.address ? locationLabel({ location_name: store.location_name || store.address, address: store.address, barangay: store.barangay, municipality: store.municipality }) : '');
+    setImageFile(null);
+    setModalMode('edit');
+  }
+
+  function payload() {
+    return {
+      store_name: form.store_name.trim(),
+      location_id: form.location_id || null,
+      description: form.description.trim() || null,
+      image_url: selectedStore?.image_url || null,
+      address: form.address.trim() || null,
+      municipality: form.municipality.trim() || null,
+      barangay: form.barangay.trim() || null,
+      latitude: form.latitude === '' ? null : Number(form.latitude),
+      longitude: form.longitude === '' ? null : Number(form.longitude),
+      contact_name: form.contact_name.trim() || null,
+      contact_phone: form.contact_phone.trim() || null,
+      site_ids: form.site_ids || [],
+      status: form.status,
+      notes: form.notes.trim() || null
+    };
+  }
+
+  function toggleSite(siteId) {
+    setForm((current) => {
+      const existing = new Set(current.site_ids || []);
+      if (existing.has(siteId)) existing.delete(siteId);
+      else existing.add(siteId);
+      return { ...current, site_ids: Array.from(existing) };
+    });
+  }
+
+  async function save(e) {
+    e.preventDefault();
+    setError('');
+    try {
+      const nextPayload = payload();
+      if (!nextPayload.store_name) throw new Error('Store name is required.');
+      if (!nextPayload.location_id) throw new Error('Select a saved Location Management record for this store.');
+      if (!nextPayload.site_ids.length) throw new Error('Select at least one site where this store is available.');
+      if (imageFile && imageFile.size > 2 * 1024 * 1024) throw new Error('Store image is too large. Upload WebP, JPG, or PNG up to 2 MB.');
+      let saved;
+      if (modalMode === 'edit' && selectedStore) {
+        saved = await request(`/physical-stores/${selectedStore.id}`, { method: 'PATCH', body: JSON.stringify(nextPayload) });
+      } else {
+        saved = await request('/physical-stores', { method: 'POST', body: JSON.stringify(nextPayload) });
+      }
+      if (imageFile && saved?.id) {
+        await uploadRequest(`/physical-stores/${saved.id}/image`, 'store_image', imageFile);
+      }
+      setMessage(modalMode === 'edit' ? `Store updated${imageFile ? ' and image uploaded' : ''}.` : `Store added${imageFile ? ' with image' : ''}.`);
+      setImageFile(null);
+      setModalMode('');
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function remove(store) {
+    if (!window.confirm(`Delete physical store "${store.store_name}"?`)) return;
+    setError('');
+    try {
+      await request(`/physical-stores/${store.id}`, { method: 'DELETE' });
+      setMessage('Physical store deleted.');
+      await load();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function itemPayload() {
+    return {
+      name: itemForm.name.trim(),
+      description: itemForm.description.trim() || null,
+      price: Number(itemForm.price || 0),
+      duration_value: Number(itemForm.duration_value || 1),
+      duration_unit: itemForm.duration_unit,
+      device_scope: itemForm.device_scope,
+      allowed_devices: Number(itemForm.allowed_devices || 1),
+      access_scope: itemForm.access_scope,
+      allowed_barangay: itemForm.access_scope === 'BARANGAY_ONLY' ? itemForm.allowed_barangay.trim() || null : null,
+      more_info_enabled: Boolean(itemForm.more_info_enabled),
+      more_info_text: itemForm.more_info_text.trim() || null,
+      status: itemForm.status,
+      sort_order: Number(itemForm.sort_order || 0)
+    };
+  }
+
+  function openItems(store) {
+    setItemModalStore(store);
+    setItemModalItems(store.items || []);
+    setEditingItem(null);
+    setItemForm(emptyItemForm);
+    setItemMessage('');
+    setItemError('');
+  }
+
+  function editItem(item) {
+    setEditingItem(item);
+    setItemMessage('');
+    setItemError('');
+    setItemForm({
+      name: item.name || '',
+      description: item.description || '',
+      price: item.price === null || item.price === undefined ? '0' : String(item.price),
+      duration_value: item.duration_value === null || item.duration_value === undefined ? '1' : String(item.duration_value),
+      duration_unit: item.duration_unit || 'hours',
+      device_scope: item.device_scope || 'SINGLE_DEVICE',
+      allowed_devices: item.allowed_devices === null || item.allowed_devices === undefined ? '1' : String(item.allowed_devices),
+      access_scope: item.access_scope || 'ALL_LOCATIONS',
+      allowed_barangay: item.allowed_barangay || '',
+      more_info_enabled: Boolean(item.more_info_enabled),
+      more_info_text: item.more_info_text || '',
+      status: item.status || 'ACTIVE',
+      sort_order: item.sort_order === null || item.sort_order === undefined ? '0' : String(item.sort_order)
+    });
+  }
+
+  async function saveItem(e) {
+    e.preventDefault();
+    if (!itemModalStore) return;
+    setItemError('');
+    setItemMessage('');
+    try {
+      const body = JSON.stringify(itemPayload());
+      const saved = editingItem
+        ? await request(`/physical-stores/${itemModalStore.id}/items/${editingItem.id}`, { method: 'PATCH', body })
+        : await request(`/physical-stores/${itemModalStore.id}/items`, { method: 'POST', body });
+      setItemMessage(editingItem ? 'Store item updated.' : 'Store item added.');
+      setItemForm(emptyItemForm);
+      setEditingItem(null);
+      const nextItems = editingItem
+        ? itemModalItems.map((item) => (item.id === saved.id ? saved : item))
+        : [...itemModalItems, saved];
+      setItemModalItems(nextItems);
+      setStores((current) => current.map((store) => (store.id === itemModalStore.id ? { ...store, items: nextItems, item_count: nextItems.length } : store)));
+      await load();
+    } catch (err) {
+      setItemError(err.message);
+    }
+  }
+
+  async function removeItem(item) {
+    if (!itemModalStore || !window.confirm(`Delete store item "${item.name}"?`)) return;
+    setItemError('');
+    setItemMessage('');
+    try {
+      await request(`/physical-stores/${itemModalStore.id}/items/${item.id}`, { method: 'DELETE' });
+      setItemMessage('Store item deleted.');
+      const nextItems = itemModalItems.filter((candidate) => candidate.id !== item.id);
+      setItemModalItems(nextItems);
+      setStores((current) => current.map((store) => (store.id === itemModalStore.id ? { ...store, items: nextItems, item_count: nextItems.length } : store)));
+      await load();
+    } catch (err) {
+      setItemError(err.message);
+    }
+  }
+
+  const previewImage = imagePreview || cacheBustedUploadUrl(selectedStore?.image_url, selectedStore?.updated_at) || '';
+  const selectedStoreLocation = selectedLocation();
+  const mapUrl = mapEmbedUrl();
+
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
+          <div>
+            <h2 className="page-title mb-1">Physical Stores</h2>
+            <div className="text-muted">Create store-assisted payment locations and assign them to Omada sites. Captive portal users see only stores available in their connected site.</div>
+          </div>
+          <button className="btn btn-primary" type="button" onClick={openCreate}><IconPlus size={18} className="me-2" />Add Store</button>
+        </div>
+      </div>
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
+      {error && <div className="col-12"><div className="alert alert-danger mb-0">{error}</div></div>}
+      <KpiCard icon={IconBuildingStore} label="Stores" value={summary.total || 0} tone="blue" />
+      <KpiCard icon={IconCircleCheck} label="Active" value={summary.active || 0} tone="green" />
+      <KpiCard icon={IconBan} label="Disabled" value={summary.disabled || 0} tone="red" />
+      <KpiCard icon={IconMapPin} label="Assigned Sites" value={summary.assigned_sites || 0} tone="cyan" />
+      <KpiCard icon={IconMapPin} label="With Coordinates" value={summary.with_coordinates || 0} tone="purple" />
+      <div className="col-12">
+        <Card title="Store Payment Locations" subtitle="Stores must be assigned to at least one site before customers connected to that site can see them.">
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead>
+                <tr>
+                  <th>Store</th>
+                  <th>Location</th>
+                  <th>Sites</th>
+                  <th>Items</th>
+                  <th>Contact</th>
+                  <th>Status</th>
+                  <th className="text-end">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stores.map((store) => (
+                  <tr key={store.id}>
+                    <td>
+                      <div className="d-flex align-items-center gap-3">
+                        <span className="avatar avatar-md bg-blue-lt text-blue overflow-hidden">
+                          {store.image_url ? <img src={cacheBustedUploadUrl(store.image_url, store.updated_at)} alt="" /> : <IconBuildingStore size={24} />}
+                        </span>
+                        <div>
+                          <div className="fw-semibold">{store.store_name}</div>
+                          {store.description && <div className="text-muted small">{store.description}</div>}
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{store.location_name || store.address || 'n/a'}</div>
+                      <div className="text-muted small">{[store.barangay, store.municipality].filter(Boolean).join(', ') || 'No Barangay/Municipality'}</div>
+                      {store.latitude !== null && store.latitude !== undefined && store.longitude !== null && store.longitude !== undefined && <code className="small">{Number(store.latitude).toFixed(6)}, {Number(store.longitude).toFixed(6)}</code>}
+                    </td>
+                    <td>
+                      <div className="d-flex flex-wrap gap-1">
+                        {(store.sites || []).length ? store.sites.map((site) => (
+                          <span className="badge bg-cyan-lt text-cyan" key={site.site_deployment_id}>{site.site_name}</span>
+                        )) : <span className="badge bg-secondary-lt text-secondary">No site assigned</span>}
+                      </div>
+                    </td>
+                    <td>
+                      <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openItems(store)}>
+                        <IconShoppingBag size={16} className="me-1" />{store.item_count || (store.items || []).length || 0} item{(store.item_count || (store.items || []).length || 0) === 1 ? '' : 's'}
+                      </button>
+                    </td>
+                    <td>{store.contact_name || store.contact_phone ? <><div>{store.contact_name || 'n/a'}</div><div className="text-muted small">{store.contact_phone || ''}</div></> : <span className="text-muted">n/a</span>}</td>
+                    <td><span className={`badge ${store.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{store.status}</span></td>
+                    <td className="text-end">
+                      <ActionBadgeGroup className="justify-content-end">
+                        <ActionBadgeButton icon={IconShoppingBag} label="Manage items" tone="green" onClick={() => openItems(store)} />
+                        <ActionBadgeButton icon={IconEdit} label="Edit store" tone="blue" onClick={() => openEdit(store)} />
+                        <ActionBadgeButton icon={IconTrash} label="Delete store" tone="red" onClick={() => remove(store)} />
+                      </ActionBadgeGroup>
+                    </td>
+                  </tr>
+                ))}
+                {!stores.length && (
+                  <tr><td colSpan={7} className="text-center text-muted py-4">No physical stores yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+
+      {modalMode && (
+        <Modal title={modalMode === 'edit' ? 'Edit Physical Store' : 'Add Physical Store'} onClose={() => setModalMode('')} size="xl">
+          <form onSubmit={save}>
+            <div className="row g-3">
+              <div className="col-lg-5">
+                <div className="card h-100">
+                  <div className="card-body">
+                    <div className="mb-3">
+                      <label className="form-label">Store Picture</label>
+                      <div className="physical-store-image-preview mb-3">
+                        {previewImage ? <img src={previewImage} alt="" /> : <div><IconPhoto size={34} /><span>No image selected</span></div>}
+                      </div>
+                      <input className="form-control" type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => setImageFile(e.target.files?.[0] || null)} />
+                      <div className="form-hint">Use a clear WebP/JPG/PNG image. Keep it below 2 MB; square or 4:3 works best on mobile.</div>
+                    </div>
+                    <div className="mb-3">
+                      <label className="form-label">Status</label>
+                      <select className="form-select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                        <option value="ACTIVE">Active</option>
+                        <option value="DISABLED">Disabled</option>
+                      </select>
+                    </div>
+                    <label className="form-label">Deploy to Sites</label>
+                    <div className="physical-store-site-list">
+                      {sites.map((site) => (
+                        <label className="physical-store-site-choice" key={site.id}>
+                          <input type="checkbox" checked={(form.site_ids || []).includes(site.id)} onChange={() => toggleSite(site.id)} />
+                          <span>
+                            <strong>{site.site_name}</strong>
+                            <small>{siteLabel(site) || 'No address details'}</small>
+                          </span>
+                        </label>
+                      ))}
+                      {!sites.length && <div className="text-muted small">No sites found. Create a site first under APs Deployment - Sites.</div>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="col-lg-7">
+                <div className="row g-3">
+                  <div className="col-12">
+                    <label className="form-label">Store Name</label>
+                    <input className="form-control" value={form.store_name} onChange={(e) => setForm({ ...form, store_name: e.target.value })} required />
+                  </div>
+                  <div className="col-12">
+                    <label className="form-label">Description</label>
+                    <textarea className="form-control" rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                  </div>
+                  <div className="col-12">
+                    <div className="physical-store-location-panel">
+                      <div className="physical-store-panel-header">
+                        <div>
+                          <div className="fw-semibold">Store Location</div>
+                          <div className="text-muted small">Use a saved Location Management record to avoid mismatched Barangay, address, or coordinates.</div>
+                        </div>
+                      </div>
+                      <div className="row g-3">
+                        <div className="col-12">
+                          <label className="form-label">Search Location</label>
+                          <input
+                            className="form-control"
+                            list="physical-store-location-options"
+                            value={locationSearchText}
+                            onChange={(e) => handleLocationSearch(e.target.value)}
+                            placeholder="Search or choose a saved location"
+                          />
+                          <datalist id="physical-store-location-options">
+                            {locations.map((location) => <option key={location.id} value={locationLabel(location)} />)}
+                          </datalist>
+                          <div className="form-hint">Create reusable addresses in Location Management first, then select one here.</div>
+                        </div>
+                        <div className="col-12">
+                          <label className="form-label">Address</label>
+                          <textarea className="form-control" rows={2} value={form.address} readOnly />
+                        </div>
+                        <div className="col-md-6">
+                          <label className="form-label">Municipality</label>
+                          <input className="form-control" value={form.municipality} readOnly />
+                        </div>
+                        <div className="col-md-6">
+                          <label className="form-label">Barangay</label>
+                          <input className="form-control" value={form.barangay} readOnly />
+                        </div>
+                        <div className="col-12">
+                          <label className="form-label">Coordinates</label>
+                          <div className="physical-store-coordinate-group">
+                            <input className="form-control" type="number" step="any" value={form.latitude} onChange={(e) => setForm({ ...form, latitude: e.target.value })} placeholder="Latitude" />
+                            <input className="form-control" type="number" step="any" value={form.longitude} onChange={(e) => setForm({ ...form, longitude: e.target.value })} placeholder="Longitude" />
+                            <button className="btn btn-outline-primary" type="button" disabled={!form.location_id} onClick={() => setCaptureMapOpen(true)}>
+                              <IconMapPin size={17} className="me-1" />Capture
+                            </button>
+                          </div>
+                        </div>
+                        {selectedStoreLocation && (
+                          <div className="col-12">
+                            <div className="physical-store-selected-location">
+                              <IconMapPin size={17} />
+                              <span>{locationSummary(selectedStoreLocation) || locationLabel(selectedStoreLocation)}</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="col-md-6">
+                    <label className="form-label">Contact Name</label>
+                    <input className="form-control" value={form.contact_name} onChange={(e) => setForm({ ...form, contact_name: e.target.value })} />
+                  </div>
+                  <div className="col-md-6">
+                    <label className="form-label">Contact Phone</label>
+                    <input className="form-control" value={form.contact_phone} onChange={(e) => setForm({ ...form, contact_phone: e.target.value })} />
+                  </div>
+                  <div className="col-12">
+                    <label className="form-label">Notes</label>
+                    <textarea className="form-control" rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="d-flex justify-content-end gap-2 mt-4">
+              <button className="btn" type="button" onClick={() => setModalMode('')}>Cancel</button>
+              <button className="btn btn-primary" type="submit">{modalMode === 'edit' ? 'Save Store' : 'Add Store'}</button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {itemModalStore && (
+        <Modal title={`Store Items - ${itemModalStore.store_name}`} onClose={() => setItemModalStore(null)} size="xl">
+          <div className="row g-4">
+            <div className="col-lg-7">
+              {itemMessage && <AutoDismissAlert message={itemMessage} onDismiss={() => setItemMessage('')} />}
+              {itemError && <div className="alert alert-danger">{itemError}</div>}
+              <div className="table-responsive border rounded">
+                <table className="table table-vcenter card-table mb-0">
+                  <thead>
+                    <tr>
+                      <th>Item</th>
+                      <th>Price / Time</th>
+                      <th>Access</th>
+                      <th>Status</th>
+                      <th className="text-end">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {itemModalItems.map((item) => (
+                      <tr key={item.id}>
+                        <td>
+                          <div className="fw-semibold">{item.name}</div>
+                          {item.description && <div className="text-muted small">{item.description}</div>}
+                          {item.more_info_enabled && <span className="badge bg-blue-lt text-blue mt-1">More info enabled</span>}
+                        </td>
+                        <td>
+                          <div className="fw-semibold">{item.price_display}</div>
+                          <div className="text-muted small">{item.duration_label} · {item.device_scope_label}{item.device_scope === 'MULTI_DEVICE' ? ` · ${item.allowed_devices_label}` : ''}</div>
+                        </td>
+                        <td>
+                          <span className={`badge ${item.access_scope === 'BARANGAY_ONLY' ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>{item.access_scope_label}</span>
+                          {item.allowed_barangay && <div className="text-muted small mt-1">{item.allowed_barangay}</div>}
+                        </td>
+                        <td><span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{item.status}</span></td>
+                        <td className="text-end">
+                          <ActionBadgeGroup className="justify-content-end">
+                            <ActionBadgeButton icon={IconEdit} label="Edit item" tone="blue" onClick={() => editItem(item)} />
+                            <ActionBadgeButton icon={IconTrash} label="Delete item" tone="red" onClick={() => removeItem(item)} />
+                          </ActionBadgeGroup>
+                        </td>
+                      </tr>
+                    ))}
+                    {!itemModalItems.length && (
+                      <tr><td colSpan={5} className="text-center text-muted py-4">No store items yet.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div className="col-lg-5">
+              <form className="card" onSubmit={saveItem}>
+                <div className="card-header">
+                  <h3 className="card-title">{editingItem ? 'Edit Store Item' : 'Add Store Item'}</h3>
+                  {editingItem && <button className="btn btn-sm" type="button" onClick={() => { setEditingItem(null); setItemForm(emptyItemForm); }}>New item</button>}
+                </div>
+                <div className="card-body">
+                  <div className="mb-3">
+                    <label className="form-label">Item Name</label>
+                    <input className="form-control" value={itemForm.name} onChange={(e) => setItemForm({ ...itemForm, name: e.target.value })} required />
+                  </div>
+                  <div className="mb-3">
+                    <label className="form-label">Description</label>
+                    <textarea className="form-control" rows={2} value={itemForm.description} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} />
+                  </div>
+                  <div className="row g-3">
+                    <div className="col-md-6">
+                      <label className="form-label">Price</label>
+                      <input className="form-control" type="number" step="0.01" min="0" value={itemForm.price} onChange={(e) => setItemForm({ ...itemForm, price: e.target.value })} />
+                    </div>
+                    <div className="col-md-6">
+                      <label className="form-label">Status</label>
+                      <select className="form-select" value={itemForm.status} onChange={(e) => setItemForm({ ...itemForm, status: e.target.value })}>
+                        <option value="ACTIVE">Active</option>
+                        <option value="DISABLED">Disabled</option>
+                      </select>
+                    </div>
+                    <div className="col-md-6">
+                      <label className="form-label">Time</label>
+                      <input className="form-control" type="number" min="1" value={itemForm.duration_value} onChange={(e) => setItemForm({ ...itemForm, duration_value: e.target.value })} />
+                    </div>
+                    <div className="col-md-6">
+                      <label className="form-label">Unit</label>
+                      <select className="form-select" value={itemForm.duration_unit} onChange={(e) => setItemForm({ ...itemForm, duration_unit: e.target.value })}>
+                        <option value="minutes">Minutes</option>
+                        <option value="hours">Hours</option>
+                        <option value="days">Days</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <label className="form-label">Pass Type</label>
+                    <div className="row g-2">
+                      {PRODUCT_PASS_TYPES.map((type) => {
+                        const Icon = type.icon;
+                        return (
+                          <div className="col-6" key={type.key}>
+                            <label className={`physical-store-item-pass ${itemForm.device_scope === type.key ? 'is-selected' : ''}`}>
+                              <input type="radio" checked={itemForm.device_scope === type.key} onChange={() => setItemForm({ ...itemForm, device_scope: type.key, allowed_devices: type.key === 'SINGLE_DEVICE' ? '1' : itemForm.allowed_devices || '2' })} />
+                              <Icon size={18} />
+                              <span>{type.title}</span>
+                            </label>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  {itemForm.device_scope === 'MULTI_DEVICE' && (
+                    <div className="mt-3">
+                      <label className="form-label">Allowed Devices</label>
+                      <input className="form-control" type="number" min="2" max="100" value={itemForm.allowed_devices} onChange={(e) => setItemForm({ ...itemForm, allowed_devices: e.target.value })} />
+                    </div>
+                  )}
+                  <div className="mt-3">
+                    <label className="form-label">Access Scope</label>
+                    <select className="form-select" value={itemForm.access_scope} onChange={(e) => setItemForm({ ...itemForm, access_scope: e.target.value })}>
+                      <option value="ALL_LOCATIONS">All Locations</option>
+                      <option value="BARANGAY_ONLY">Barangay only</option>
+                    </select>
+                  </div>
+                  {itemForm.access_scope === 'BARANGAY_ONLY' && (
+                    <div className="mt-3">
+                      <label className="form-label">Allowed Barangay</label>
+                      <input className="form-control" value={itemForm.allowed_barangay} onChange={(e) => setItemForm({ ...itemForm, allowed_barangay: e.target.value })} />
+                    </div>
+                  )}
+                  <div className="mt-3">
+                    <label className="form-check form-switch">
+                      <input className="form-check-input" type="checkbox" checked={itemForm.more_info_enabled} onChange={(e) => setItemForm({ ...itemForm, more_info_enabled: e.target.checked })} />
+                      <span className="form-check-label">Show more info in captive portal</span>
+                    </label>
+                  </div>
+                  <div className="mt-3">
+                    <label className="form-label">More Info Text</label>
+                    <textarea className="form-control" rows={4} value={itemForm.more_info_text} onChange={(e) => setItemForm({ ...itemForm, more_info_text: e.target.value })} />
+                  </div>
+                  <div className="mt-3">
+                    <label className="form-label">Sort Order</label>
+                    <input className="form-control" type="number" min="0" value={itemForm.sort_order} onChange={(e) => setItemForm({ ...itemForm, sort_order: e.target.value })} />
+                  </div>
+                </div>
+                <div className="card-footer d-flex justify-content-end">
+                  <button className="btn btn-primary" type="submit">{editingItem ? 'Save Item' : 'Add Item'}</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {captureMapOpen && (
+        <Modal title="Capture Store Location" onClose={() => setCaptureMapOpen(false)} size="xl">
+          <div className="physical-store-map-modal">
+            <div className="physical-store-map-summary">
+              <IconMapPin size={18} />
+              <div>
+                <div className="fw-semibold">{selectedStoreLocation ? locationLabel(selectedStoreLocation) : 'Selected store location'}</div>
+                <div className="text-muted small">{form.latitude && form.longitude ? `${form.latitude}, ${form.longitude}` : 'Coordinates are missing. Add latitude and longitude before checking the map.'}</div>
+              </div>
+            </div>
+            {mapUrl ? (
+              <iframe title="Store location map" src={mapUrl} loading="lazy" />
+            ) : (
+              <div className="physical-store-map-empty">
+                <IconMapPin size={34} />
+                <strong>No coordinates available</strong>
+                <small>Select a Location Management record with coordinates, or enter latitude and longitude manually.</small>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 function ProductItemsPage() {
   const emptyForm = {
     category_id: '',
@@ -9276,7 +11146,7 @@ function ProductItemsPage() {
                     <td>
                       <div className="product-category-cell">
                         {category.image_url ? (
-                          <img className="product-category-thumb" src={category.image_url} alt="" loading="lazy" />
+                          <img className="product-category-thumb" src={cacheBustedUploadUrl(category.image_url, category.updated_at)} alt="" loading="lazy" />
                         ) : (
                           <span className="product-category-thumb product-category-thumb-empty"><IconPhoto size={20} /></span>
                         )}
@@ -9611,7 +11481,7 @@ function ProductItemsPage() {
                 <div className="product-category-image-panel">
                   <div className="product-category-image-preview">
                     {categoryImagePreview || categoryForm.image_url ? (
-                      <img src={categoryImagePreview || categoryForm.image_url} alt="" />
+                      <img src={categoryImagePreview || cacheBustedUploadUrl(categoryForm.image_url, categoryForm.updated_at)} alt="" />
                     ) : (
                       <span><IconPhoto size={28} /></span>
                     )}
@@ -9973,8 +11843,12 @@ function SalesPage() {
     const haystack = [
       order.public_order_id,
       order.product_name,
+      order.profile_display_name,
+      order.profile_contact_number,
+      order.profile_email,
       customer,
       order.customer_contact_number,
+      order.customer_email,
       order.client_mac,
       order.client_ip,
       order.site_name,
@@ -10075,10 +11949,11 @@ function SalesPage() {
             <table className="table table-vcenter card-table">
               <thead>
                 <tr>
-                  <th>Order</th>
-                  <th>Product</th>
-                  <th>Customer</th>
-                  <th>Site</th>
+	                  <th>Order</th>
+	                  <th>Product</th>
+	                  <th>Profile</th>
+	                  <th>Customer</th>
+	                  <th>Site</th>
                   <th>Barangay</th>
                   <th>Amount</th>
                   <th>Status</th>
@@ -10091,14 +11966,25 @@ function SalesPage() {
                   return (
                   <tr key={order.id}>
                     <td><code>{order.public_order_id}</code></td>
-                    <td>
-                      <div className="fw-semibold">{order.product_name}</div>
-                      <div className="text-muted small">{deviceLimitLabel(order.allowed_devices)}</div>
-                    </td>
-                    <td>
-                      <div className="fw-semibold">{customerName}</div>
-                      {order.customer_contact_number && <div className="text-muted small">{order.customer_contact_number}</div>}
-                      {!order.customer_name && order.device_name && <div className="text-muted small">Phone name</div>}
+	                    <td>
+	                      <div className="fw-semibold">{order.product_name}</div>
+	                      <div className="text-muted small">{deviceLimitLabel(order.allowed_devices)}</div>
+	                    </td>
+	                    <td>
+	                      {order.customer_profile_id ? (
+	                        <>
+	                          <div className="fw-semibold">{order.profile_display_name || order.customer_name || 'Customer profile'}</div>
+	                          {order.profile_contact_number && <div className="text-muted small">{order.profile_contact_number}</div>}
+	                          {order.profile_email && <div className="text-muted small">{order.profile_email}</div>}
+	                        </>
+	                      ) : (
+	                        <span className="badge bg-secondary-lt text-secondary">No profile at purchase</span>
+	                      )}
+	                    </td>
+	                    <td>
+	                      <div className="fw-semibold">{customerName}</div>
+	                      {order.customer_contact_number && <div className="text-muted small">{order.customer_contact_number}</div>}
+	                      {!order.customer_name && order.device_name && <div className="text-muted small">Phone name</div>}
                     </td>
                     <td>{order.site_name || 'Unknown Site'}</td>
                     <td>{order.barangay || 'Unknown Barangay'}</td>
@@ -10108,7 +11994,7 @@ function SalesPage() {
                   </tr>
                   );
                 }) : (
-                  <tr><td colSpan={8} className="text-center text-muted py-4">No paid sales yet.</td></tr>
+	                  <tr><td colSpan={9} className="text-center text-muted py-4">No paid sales yet.</td></tr>
                 )}
               </tbody>
             </table>
@@ -10502,87 +12388,6 @@ function VouchersPage() {
   );
 }
 
-function portalPreviewSrcDoc(htmlTemplate = '', cssTemplate = '', productItems = []) {
-  const escapePreviewHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-  const brand = '<div class="client-portal-brand"><div class="client-portal-logo">3J</div><h1>3J WiFi</h1><p>Enter your voucher to connect</p></div>';
-  const previewProducts = productItems.length ? productItems : [
-    { id: 'sample-1', name: '1 Hour WiFi', duration_label: '1 hour', price_display: 'PHP 10.00', device_scope: 'SINGLE_DEVICE', device_scope_label: 'Personal Pass', allowed_devices_label: '1 device', description: '' },
-    { id: 'sample-2', name: 'Family WiFi Day Pass', duration_label: '1 day', price_display: 'PHP 50.00', device_scope: 'MULTI_DEVICE', device_scope_label: 'Shared Pass', allowed_devices_label: '3 devices', description: 'Sample package' }
-  ];
-  const productItemsHtml = `<div class="client-portal-products"><div class="client-portal-products-title">Available WiFi Packages</div><div class="client-portal-product-grid">${previewProducts.map((item) => `<div class="client-portal-product"><div><div class="client-portal-product-name">${escapePreviewHtml(item.name)}</div><div class="client-portal-product-badges"><span class="client-portal-duration-badge">${escapePreviewHtml(item.duration_label || '')}</span><span class="client-portal-duration-badge">${escapePreviewHtml(item.device_scope_label || productPassLabel(item))}</span>${productPassType(item) === 'MULTI_DEVICE' ? `<span class="client-portal-duration-badge">${escapePreviewHtml(item.allowed_devices_label || deviceLimitLabel(item.allowed_devices))}</span>` : ''}</div>${item.description ? `<div class="client-portal-product-desc">${escapePreviewHtml(item.description)}</div>` : ''}</div><div class="client-portal-product-meta"><strong>${escapePreviewHtml(item.price_display || `PHP ${Number(item.price || 0).toFixed(2)}`)}</strong></div></div>`).join('')}</div></div>`;
-  const voucherForm = '<form class="client-portal-card"><div class="client-portal-welcome">Welcome to 3J WiFi. Please enter your voucher code to start using the internet.</div><label class="form-label">Voucher Code</label><input class="form-control form-control-lg text-center voucher-input" value="3J-ABCD-2345" readonly><button class="btn btn-primary btn-lg w-100 mt-3" type="button">Redeem / Connect</button></form>';
-  const help = '<div class="client-portal-help"><p>Need a voucher? Ask the nearest vendo/operator.</p><p>If your voucher is valid but internet does not start, disconnect and reconnect to WiFi.</p><div class="client-portal-powered">Powered by 3JCentralPisowifi</div></div>';
-  const template = String(htmlTemplate || '{{brand}}\n{{product_items}}\n{{voucher_form}}\n{{help}}');
-  let body = template.replaceAll('{{brand}}', brand).replaceAll('{{product_items}}', productItemsHtml).replaceAll('{{voucher_form}}', voucherForm).replaceAll('{{help}}', help);
-  if (!template.includes('{{product_items}}')) body += productItemsHtml;
-  const baseCss = `body{margin:0;font-family:Inter,Arial,sans-serif;background:#eef4fb;color:#1f2937}.client-portal-page{min-height:100vh;display:grid;place-items:center;padding:24px}.client-portal-shell{width:min(420px,100%)}.client-portal-brand{text-align:center;margin-bottom:18px}.client-portal-logo{display:inline-grid;place-items:center;width:64px;height:64px;border-radius:18px;background:#206bc4;color:white;font-weight:800;font-size:26px;margin-bottom:10px}.client-portal-brand h1{margin:0;font-size:30px}.client-portal-brand p{margin:6px 0 0;color:#64748b}.client-portal-products{margin-bottom:14px}.client-portal-products-title{color:#334155;font-size:12px;font-weight:800;letter-spacing:.03em;margin-bottom:8px;text-transform:uppercase}.client-portal-product-grid{display:grid;gap:8px}.client-portal-product{align-items:center;background:#fff;border:1px solid #dbe7f3;border-radius:10px;display:flex;gap:10px;justify-content:space-between;padding:10px 12px}.client-portal-product-name{color:#172033;font-weight:800}.client-portal-product-desc{color:#64748b;font-size:13px}.client-portal-product-meta{align-items:flex-end;display:flex;flex-direction:column;gap:2px;text-align:right;white-space:nowrap}.client-portal-product-meta span{color:#64748b;font-size:12px;font-weight:700}.client-portal-product-meta strong{color:#206bc4;font-size:16px}.client-portal-card{background:white;border:1px solid #dbe3ed;border-radius:14px;box-shadow:0 18px 48px rgba(15,23,42,.12);padding:22px}.client-portal-welcome{color:#475569;margin-bottom:16px}.form-label{display:block;font-weight:700;margin-bottom:8px}.form-control{box-sizing:border-box;width:100%;border:1px solid #cbd5e1;border-radius:10px;padding:13px;font-size:18px}.text-center{text-align:center}.btn{border:0;border-radius:10px;padding:13px 16px;font-weight:800}.btn-primary{background:#206bc4;color:white}.w-100{width:100%}.mt-3{margin-top:16px}.client-portal-help{text-align:center;color:#64748b;font-size:14px;margin-top:16px}.client-portal-powered{font-weight:700;color:#206bc4}`;
-  return `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>${baseCss}${cssTemplate || ''}</style></head><body><div class="client-portal-page"><div class="client-portal-shell">${body}</div></div></body></html>`;
-}
-
-function CaptivePortalEditorPage() {
-  const [design, setDesign] = useState({ html_template: '', css_template: '' });
-  const [productItems, setProductItems] = useState([]);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  async function load() {
-    const [nextDesign, products] = await Promise.all([
-      request('/captive-portal/design'),
-      request('/product-items').catch(() => ({ items: [] }))
-    ]);
-    setDesign(nextDesign);
-    setProductItems(products.items || []);
-  }
-  useEffect(() => { load().catch((err) => setError(err.message)); }, []);
-  async function save(e) {
-    e.preventDefault();
-    setMessage('');
-    setError('');
-    try {
-      const saved = await request('/captive-portal/design', { method: 'PUT', body: JSON.stringify(design) });
-      setDesign(saved);
-      setMessage('Portal design saved.');
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-  function goBack() {
-    window.history.pushState({}, '', '/admin/captive-portal');
-    window.dispatchEvent(new PopStateEvent('popstate'));
-  }
-  return (
-    <div className="row row-cards">
-      <div className="col-12">
-        <div className="d-flex align-items-center justify-content-between gap-2">
-          <div>
-            <h2 className="page-title mb-1">Portal Design Editor</h2>
-            <div className="text-muted">Edit customer portal HTML and CSS. Keep <code>{'{{voucher_form}}'}</code> in the template so voucher redemption remains available.</div>
-          </div>
-          <button className="btn btn-outline-secondary" type="button" onClick={goBack}>Back</button>
-        </div>
-      </div>
-      {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
-      {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
-      <div className="col-lg-6">
-        <form onSubmit={save}>
-          <Card title="HTML Template">
-            <textarea className="form-control portal-code-editor" value={design.html_template || ''} onChange={(e) => setDesign({ ...design, html_template: e.target.value })} spellCheck={false} />
-            <div className="text-muted small mt-2">Placeholders: <code>{'{{brand}}'}</code>, <code>{'{{product_items}}'}</code>, <code>{'{{voucher_form}}'}</code>, <code>{'{{help}}'}</code>.</div>
-          </Card>
-          <Card title="CSS" className="mt-3">
-            <textarea className="form-control portal-code-editor portal-css-editor" value={design.css_template || ''} onChange={(e) => setDesign({ ...design, css_template: e.target.value })} spellCheck={false} />
-            <button className="btn btn-primary mt-3"><IconDeviceFloppy size={18} className="me-2" />Save Design</button>
-          </Card>
-        </form>
-      </div>
-      <div className="col-lg-6">
-        <Card title="Preview">
-          <iframe className="portal-design-preview" title="Portal design preview" srcDoc={portalPreviewSrcDoc(design.html_template, design.css_template, productItems.filter((item) => item.status === 'ACTIVE'))} />
-        </Card>
-      </div>
-    </div>
-  );
-}
-
 function CaptivePortalPage({ mode = 'full' }) {
   const isMikrotikOnly = mode === 'mikrotik-only';
   const [activeTab, setActiveTab] = useState(isMikrotikOnly ? 'MikroTik' : 'Portal');
@@ -10591,15 +12396,13 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [portalDesignTab, setPortalDesignTab] = useState('No Internet Page');
   const [avatarNotesTab, setAvatarNotesTab] = useState('Main Page First');
   const [portalSmsSettings, setPortalSmsSettings] = useState(null);
-  const [portalSmsForm, setPortalSmsForm] = useState({ sender_id: '', monthly_credit_limit: '', monthly_reset_day: 1 });
+  const [portalSmsForm, setPortalSmsForm] = useState({ sender_id: '', monthly_credit_limit: '', monthly_reset_day: 1, welcome_sms_enabled: true, welcome_sms_message: '' });
   const [portalSmsSaving, setPortalSmsSaving] = useState(false);
   const [portalSmsRefreshing, setPortalSmsRefreshing] = useState(false);
   const [mikrotiks, setMikrotiks] = useState([]);
   const [mikrotikRows, setMikrotikRows] = useState([]);
   const [siteDeployments, setSiteDeployments] = useState([]);
   const [portalEvents, setPortalEvents] = useState([]);
-  const [redemptions, setRedemptions] = useState([]);
-  const [voucherSummary, setVoucherSummary] = useState({});
   const [sessions, setSessions] = useState([]);
   const [authorizations, setAuthorizations] = useState([]);
   const [actionResult, setActionResult] = useState(null);
@@ -10775,6 +12578,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     routers: []
   });
   const [stationProgressMap, setStationProgressMap] = useState({});
+  const [portalNotifTest, setPortalNotifTest] = useState(null);
   const stationStepRefs = useRef({});
   const [stationError, setStationError] = useState('');
   const [stationDragIndex, setStationDragIndex] = useState(null);
@@ -10808,7 +12612,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     omada_site_name: '',
     routers: []
   });
-  const tabs = isMikrotikOnly ? ['MikroTik'] : ['Portal', 'Portal Design', 'Portal Notifs', 'Message Defaults', 'Portal Settings', 'Portal Sessions', 'Authorization Logs'];
+  const tabs = isMikrotikOnly ? ['MikroTik'] : ['Portal', 'Portal Design', 'Portal Notifs', 'Welcome SMS', 'Message Defaults', 'Portal Settings', 'Portal Sessions', 'Authorization Logs'];
   useEffect(() => {
     if (!message || !messageAlertRef.current) return;
     window.setTimeout(() => {
@@ -12811,7 +14615,9 @@ function CaptivePortalPage({ mode = 'full' }) {
     setPortalSmsForm({
       sender_id: data?.sender_id || '',
       monthly_credit_limit: data?.monthly_credit_limit ?? '',
-      monthly_reset_day: data?.monthly_reset_day || 1
+      monthly_reset_day: data?.monthly_reset_day || 1,
+      welcome_sms_enabled: data?.welcome_sms_enabled !== false,
+      welcome_sms_message: data?.welcome_sms_message || ''
     });
   }
   async function loadPortalSmsSettings({ quiet = false } = {}) {
@@ -12828,7 +14634,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     }
   }
   async function load() {
-    const [system, portalCfg, portalSmsCfg, omadaPortal, routerRows, stationRows, apManagementRow, siteRows, events, voucherData, voucherLogs, portalSessions, authLogs] = await Promise.all([
+    const [system, portalCfg, portalSmsCfg, omadaPortal, routerRows, stationRows, apManagementRow, siteRows, events, portalSessions, authLogs] = await Promise.all([
       request('/system/settings'),
       request('/captive-portal/settings'),
       request('/captive-portal/sms-confirmation-settings').catch(() => null),
@@ -12838,8 +14644,6 @@ function CaptivePortalPage({ mode = 'full' }) {
       request('/network/mikrotik/ap-management').catch(() => null),
       request('/site-deployments').catch(() => []),
       request('/portal/events'),
-      request('/vouchers'),
-      request('/voucher-redemptions?source=CLIENT_PORTAL'),
       request('/captive-portal/sessions'),
       request('/captive-portal/authorizations')
     ]);
@@ -12862,8 +14666,6 @@ function CaptivePortalPage({ mode = 'full' }) {
     setPreflightRouterId((current) => current || safeRouterRows[0]?.id || '');
     setAiRouterId((current) => safeRouterRows.some((router) => router.id === current) ? current : '');
     setPortalEvents(Array.isArray(events) ? events : []);
-    setVoucherSummary(voucherData?.summary || {});
-    setRedemptions(Array.isArray(voucherLogs) ? voucherLogs : []);
     setSessions(Array.isArray(portalSessions) ? portalSessions : []);
     setAuthorizations(Array.isArray(authLogs) ? authLogs : []);
   }
@@ -12958,12 +14760,6 @@ function CaptivePortalPage({ mode = 'full' }) {
       loadPreflightLatest(preflightView);
     }
   }, [activeTab, mikrotikTab, preflightView]);
-  async function saveBranding(e) {
-    e.preventDefault();
-    await request('/system/settings', { method: 'PATCH', body: JSON.stringify({ branding: settings.branding }) });
-    setMessage('Portal branding saved.');
-    await load();
-  }
   async function savePortalSettings(e) {
     e.preventDefault();
     const saved = await request('/captive-portal/settings', { method: 'PUT', body: JSON.stringify({ ...portalSettings, sync_omada_portal: activeTab === 'Portal Settings' }) });
@@ -12974,6 +14770,29 @@ function CaptivePortalPage({ mode = 'full' }) {
       setOmadaPortalStatus(omadaStatus);
     }
   }
+  async function runPortalNotifBrowserTest() {
+    setPortalNotifTest({ status: 'RUNNING', message: 'Requesting browser notification permission...' });
+    const currentUrl = portalSettings?.current_portal_url || portalSettings?.portal_url_production || portalSettings?.portal_url_staging || `${window.location.origin}/portal`;
+    const testMessage = portalNotificationTemplate(portalSettings?.portal_success_notification_message || 'Time alerts are ready. Remaining time: <TIME>.', {
+      remaining_time_seconds: 3600,
+      expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+      brand: portalSettings?.portal_title || '3J WiFi',
+      status: 'TEST',
+      ssid: '3J-WIFI'
+    });
+    const result = await showPortalCustomerNotification(portalSettings?.portal_title || '3J WiFi', testMessage, {
+      url: currentUrl,
+      icon: portalSettings?.no_internet_avatar_connected_url || '',
+      tag: '3j-portal-admin-test'
+    });
+    setPortalNotifTest({
+      status: result.shown ? 'SUCCESS' : 'FALLBACK',
+      message: result.shown
+        ? `Browser notification sent using ${result.mode === 'service_worker' ? 'service worker' : 'window notification'}.`
+        : `Browser notification was not shown (${result.reason || 'unknown'}). The portal will still show in-page fallback alerts.`,
+      result
+    });
+  }
   async function savePortalSmsSettings(e) {
     e.preventDefault();
     setPortalSmsSaving(true);
@@ -12983,7 +14802,9 @@ function CaptivePortalPage({ mode = 'full' }) {
         body: JSON.stringify({
           sender_id: portalSmsForm.sender_id || null,
           monthly_credit_limit: portalSmsForm.monthly_credit_limit === '' ? null : Number(portalSmsForm.monthly_credit_limit),
-          monthly_reset_day: Number(portalSmsForm.monthly_reset_day) || 1
+          monthly_reset_day: Number(portalSmsForm.monthly_reset_day) || 1,
+          welcome_sms_enabled: portalSmsForm.welcome_sms_enabled !== false,
+          welcome_sms_message: portalSmsForm.welcome_sms_message || null
         })
       });
       hydratePortalSmsForm(saved);
@@ -13809,26 +15630,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     window.history.pushState({ page: 'Sites' }, '', '/admin/aps-deployment/sites?tab=configurations');
     window.dispatchEvent(new PopStateEvent('popstate'));
   }
-  async function toggleChecklist(key) {
-    const progress = { ...(portalSettings?.test_checklist_progress || {}) };
-    progress[key] = !progress[key];
-    const saved = await request('/captive-portal/settings', { method: 'PUT', body: JSON.stringify({ test_checklist_progress: progress }) });
-    setPortalSettings(saved);
-  }
   const reachableMikrotiks = mikrotiks.filter((router) => router.status === 'REACHABLE').length;
-  const portalSsid = portalSettings?.portal_ssid || {
-    primary_ssid: portalSettings?.open_ssid_name || '3J-FreeWiFi',
-    display_ssid: portalSettings?.open_ssid_name || '3J-FreeWiFi',
-    source: 'AP_DEPLOYMENT_CONFIGURATION',
-    use_same_ssid: true,
-    ssid_2g: portalSettings?.open_ssid_name || '3J-FreeWiFi',
-    ssid_5g: portalSettings?.open_ssid_name || '3J-FreeWiFi',
-    security_mode: 'OPEN'
-  };
-  const portalSsidDisplay = portalSsid.display_ssid || portalSsid.primary_ssid || '3J-FreeWiFi';
-  const portalSsidPrimary = portalSsid.primary_ssid || '3J-FreeWiFi';
-  const sanityProgress = portalSettings?.test_checklist_progress || {};
-  const hasPortalUrl = Boolean(portalSettings?.portal_url_staging || portalSettings?.portal_url_production);
   const currentPortalUrl = portalSettings?.current_portal_url || portalSettings?.portal_url_production || portalSettings?.portal_url_staging || 'http://192.168.50.70/portal';
   const avatarNotesConfig = normalizePortalAvatarNotesSettings(portalSettings?.avatar_notes_json || {});
   const profileGiftDuration = profileGiftDurationParts(portalSettings?.profile_gift_duration_seconds || DEFAULT_PROFILE_GIFT.duration_seconds);
@@ -13911,13 +15713,6 @@ function CaptivePortalPage({ mode = 'full' }) {
   function resetAvatarNotes() {
     setPortalSettings((current) => ({ ...current, avatar_notes_json: DEFAULT_PORTAL_AVATAR_NOTES_SETTINGS }));
   }
-  const hasUnusedVouchers = Number(voucherSummary?.unused || 0) > 0;
-  const hasSuccessfulPortalRedemption = redemptions.some((row) => row.result === 'SUCCESS');
-  const hasPortalSession = sessions.length > 0;
-  const hasGatewayAuthorizationSuccess = authorizations.some((row) => row.status === 'SUCCESS');
-  const hasStartedMikrotikSetup = mikrotiks.some((router) => router.last_configuration_review_at || Number(router.configuration_progress?.completed || 0) > 0);
-  const hasAppliedMikrotik = mikrotiks.some((router) => Number(router.configuration_progress?.completed || 0) > 0 || router.last_configuration_apply_at);
-  const mikrotiksWithCustomerVlan = mikrotiks.filter((router) => router.hotspot_vlan_id && router.hotspot_vlan_parent_interface).length;
   const setupMikrotikRow = mikrotikRows.find((router) => router.id === mikrotikPlanRouterId);
   const setupMikrotikOptions = mikrotikOptions[mikrotikPlanRouterId] || {};
   const setupInterfaces = setupMikrotikOptions.interfaces || [];
@@ -14136,14 +15931,14 @@ function CaptivePortalPage({ mode = 'full' }) {
     taggedPortsDownstream: 'Select the port from the previous router and the ports going toward OLTs/APs. In your CRS317 example these were sfp-sfpplus2, sfp-sfpplus3, and the OLT/AP-facing ports. PPPoE interfaces are hidden here.',
     vlanId: 'Customer VLAN used by the open captive portal SSID. In your tested setup this is VLAN 77.',
     vlanInterfaceName: 'RouterOS VLAN interface name created on the root gateway. Example: VLAN77-3J-CLIENTS.',
-    clientNetwork: 'Network used by WiFi voucher clients. In your example this is 10.77.0.0/24.',
+    clientNetwork: 'Network used by WiFi pass clients. In your example this is 10.77.0.0/24.',
     gatewayIp: 'IP address of the root MikroTik on the customer VLAN. In your example this is 10.77.0.1.',
     poolStart: 'First DHCP address given to WiFi clients. In your example this is 10.77.0.2.',
     poolEnd: 'Last DHCP address given to WiFi clients. In your example this is 10.77.0.254.',
     poolName: 'RouterOS IP pool name for customer devices. Example: POOL-3J-CLIENTS-V77.',
-    createDhcpServer: 'Keep this enabled when the root gateway should hand IP addresses to voucher WiFi clients. CRS/trunk routers do not create DHCP servers.',
+    createDhcpServer: 'Keep this enabled when the root gateway should hand IP addresses to WiFi pass clients. CRS/trunk routers do not create DHCP servers.',
     dhcpServerName: 'RouterOS DHCP server name created on the root gateway for this station VLAN. In your example this maps to /ip dhcp-server add using the VLAN interface and pool.',
-    dhcpLeaseTime: 'How long voucher clients keep their DHCP address before renewal. A short value such as 1h is practical during pilot testing.',
+    dhcpLeaseTime: 'How long WiFi pass clients keep their DHCP address before renewal. A short value such as 1h is practical during pilot testing.',
     localInterfaceList: 'Interface list where the new VLAN interface is added so existing LAN/local firewall logic can recognize it. In your example this is LOCAL.',
     dnsServers: 'DNS servers handed to customer devices by DHCP. Omada handles captive portal redirect/enforcement.',
     portalUrl: 'Customer portal URL clients should reach before login. Staging usually uses http://192.168.50.70:8080/portal.',
@@ -14225,20 +16020,20 @@ function CaptivePortalPage({ mode = 'full' }) {
     { label: '4. Review Plan', ready: false, detail: 'Generated commands open after save.' }
   ];
   const mikrotikFieldHints = {
-    vlanId: 'VLAN number for voucher customers. This must match the VLAN configured on the AP SSID.',
+    vlanId: 'VLAN number for WiFi pass customers. This must match the VLAN configured on the AP SSID.',
     vlanParent: 'The MikroTik bridge, trunk, or port where tagged AP customer traffic arrives. Do not choose the WAN or internet interface here.',
     vlanInterfaceName: 'Optional MikroTik VLAN interface label. Leave blank to let the system generate one from your system name and VLAN ID.',
-    clientNetwork: 'Private network for voucher users, for example 10.30.0.0/24. Do not reuse your office LAN, AP management network, or another existing subnet.',
-    gatewayIp: 'MikroTik IP address inside the voucher-user network, for example 10.30.0.1. Keep it outside the client pool.',
-    poolStart: 'First IP address MikroTik can give to voucher users.',
-    poolEnd: 'Last IP address MikroTik can give to voucher users.',
+    clientNetwork: 'Private network for WiFi pass users, for example 10.30.0.0/24. Do not reuse your office LAN, AP management network, or another existing subnet.',
+    gatewayIp: 'MikroTik IP address inside the WiFi pass network, for example 10.30.0.1. Keep it outside the client pool.',
+    poolStart: 'First IP address MikroTik can give to WiFi pass users.',
+    poolEnd: 'Last IP address MikroTik can give to WiFi pass users.',
     poolName: 'Optional MikroTik pool label. Leave blank for a system-generated name.',
     dhcpServerName: 'Optional MikroTik DHCP server label. Leave blank for a system-generated name.',
     leaseTime: 'How long a client keeps its assigned IP address, for example 1h.',
     dnsServers: 'DNS servers sent to clients after they connect, for example 1.1.1.1,8.8.8.8.',
     hotspotDnsName: 'Legacy MikroTik HotSpot DNS name. Current Omada captive portal path does not use this.',
     wanInterface: 'Internet or uplink side of the MikroTik. Used only when NAT masquerade is enabled.',
-    nat: 'Enable this when this MikroTik will send voucher users to the internet directly.'
+    nat: 'Enable this when this MikroTik will send WiFi pass users to the internet directly.'
   };
   function FieldHint({ text }) {
     return (
@@ -14246,34 +16041,6 @@ function CaptivePortalPage({ mode = 'full' }) {
         <IconInfoCircle size={14} />
       </span>
     );
-  }
-  const sanityChecks = [
-    { key: 'portal-page', group: 'Portal', title: 'Portal URL is configured', details: portalSettings?.portal_url_staging || 'Set the staging portal URL first.', mode: 'auto', state: hasPortalUrl ? 'ready' : 'needs_action' },
-    { key: 'portal-design', group: 'Portal', title: 'Portal design is available', details: 'Customer voucher page template and branding can load from Portal Settings.', mode: 'auto', state: settings?.branding ? 'ready' : 'needs_action' },
-    { key: 'ssid-source', group: 'WiFi', title: 'SSID source is APs Deployment', details: `Current SSID: ${portalSsidDisplay}. Edit it in APs Deployment -> Sites -> Configurations.`, mode: 'auto', state: portalSsidPrimary ? 'ready' : 'needs_action' },
-    { key: 'router-added', group: 'MikroTik', title: 'At least one MikroTik router is added', details: `${mikrotiks.length} router record${mikrotiks.length === 1 ? '' : 's'} saved.`, mode: 'auto', state: mikrotiks.length ? 'ready' : 'needs_action' },
-    { key: 'router-vlan', group: 'MikroTik', title: 'MikroTik customer VLAN is assigned', details: `${mikrotiksWithCustomerVlan}/${mikrotiks.length || 0} router${mikrotiks.length === 1 ? '' : 's'} have a customer VLAN ID and VLAN parent interface. This VLAN must also be used on the AP SSID.`, mode: 'auto', state: mikrotiks.length && mikrotiksWithCustomerVlan === mikrotiks.length ? 'ready' : 'needs_action' },
-    { key: 'router-reachable', group: 'MikroTik', title: 'MikroTik API connection works', details: `${reachableMikrotiks}/${mikrotiks.length || 0} router${mikrotiks.length === 1 ? '' : 's'} reachable.`, mode: 'auto', state: reachableMikrotiks > 0 ? 'ready' : 'needs_action' },
-    { key: 'station-plan', group: 'MikroTik', title: 'MikroTik station plan exists', details: `${mikrotikStations.length} station plan${mikrotikStations.length === 1 ? '' : 's'} saved under Network -> MikroTik -> Configuration.`, mode: 'auto', state: mikrotikStations.length ? 'ready' : 'needs_action' },
-    { key: 'router-applied', group: 'MikroTik', title: 'Station transport push', details: 'RouterOS writes are limited to reviewed station transport/AP-management changes. Omada handles captive portal enforcement.', mode: 'auto', state: hasAppliedMikrotik ? 'ready' : 'placeholder' },
-    { key: 'voucher-stock', group: 'Voucher', title: 'Unused voucher exists for testing', details: `${voucherSummary?.unused || 0} unused voucher${Number(voucherSummary?.unused || 0) === 1 ? '' : 's'} available.`, mode: 'auto', state: hasUnusedVouchers ? 'ready' : 'needs_action' },
-    { key: 'portal-redemption', group: 'Voucher', title: 'Portal voucher redemption has succeeded before', details: hasSuccessfulPortalRedemption ? 'At least one CLIENT_PORTAL redemption exists.' : 'Create a test voucher and redeem it from /portal.', mode: 'auto', state: hasSuccessfulPortalRedemption ? 'ready' : 'needs_action' },
-    { key: 'portal-session', group: 'Session', title: 'Portal sessions are being recorded', details: `${sessions.length} portal session${sessions.length === 1 ? '' : 's'} recorded.`, mode: 'auto', state: hasPortalSession ? 'ready' : 'needs_action' },
-    { key: 'gateway-auth', group: 'Gateway', title: 'Gateway authorization has succeeded', details: hasGatewayAuthorizationSuccess ? 'At least one gateway authorization log succeeded.' : 'Omada captive portal authorization will be validated after OCP integration is enabled.', mode: 'auto', state: hasGatewayAuthorizationSuccess ? 'ready' : 'placeholder' },
-    { key: 'phone-redirect', group: 'Field Test', title: 'Phone redirects to the portal from the test SSID', details: 'Manual operator check. Connect a phone to the AP SSID and confirm it opens the voucher portal.', mode: 'manual', state: sanityProgress['phone-redirect'] ? 'ready' : 'manual' },
-    { key: 'internet-after-voucher', group: 'Field Test', title: 'Internet works after a valid voucher', details: 'Manual operator check after Omada captive portal enforcement is wired to the voucher portal.', mode: 'manual', state: sanityProgress['internet-after-voucher'] ? 'ready' : 'placeholder' },
-    { key: 'expired-blocked', group: 'Field Test', title: 'Expired or invalid voucher stays blocked', details: 'Manual operator check after Omada enforcement is active.', mode: 'manual', state: sanityProgress['expired-blocked'] ? 'ready' : 'placeholder' },
-    { key: 'payments', group: 'Future', title: 'Payments integration', details: 'Placeholder only. Payments are not part of the current captive portal phase.', mode: 'placeholder', state: 'placeholder' },
-    { key: 'sms', group: 'Future', title: 'SMS integration', details: 'Placeholder only. SMS is not part of the current captive portal phase.', mode: 'placeholder', state: 'placeholder' },
-    { key: 'coinslot', group: 'Future', title: 'Coinslot / vendo integration', details: 'Placeholder only. Vendo hardware integration is not part of the current captive portal phase.', mode: 'placeholder', state: 'placeholder' }
-  ];
-  const requiredSanityChecks = sanityChecks.filter((item) => item.mode !== 'placeholder' && item.state !== 'placeholder');
-  const readySanityChecks = requiredSanityChecks.filter((item) => item.state === 'ready').length;
-  function sanityBadge(item) {
-    if (item.state === 'ready') return <span className="badge bg-green-lt text-green">Ready</span>;
-    if (item.state === 'manual') return <span className="badge bg-blue-lt text-blue">Manual check</span>;
-    if (item.state === 'placeholder') return <span className="badge bg-yellow-lt text-yellow">Coming soon</span>;
-    return <span className="badge bg-red-lt text-red">Needs action</span>;
   }
   return (
     <div className="row row-cards">
@@ -14315,7 +16082,7 @@ function CaptivePortalPage({ mode = 'full' }) {
             <div className="alert alert-info">
               {isMikrotikOnly
                 ? 'MikroTik is used for station transport: VLAN, DHCP, NAT, AP management transport, and downstream trunk paths. Omada handles captive portal redirect and client authorization.'
-                : 'Captive Portal + Voucher is the primary customer flow. Omada handles open SSID captive portal redirect/enforcement, while MikroTik provides station transport and routing.'}
+                : 'Captive Portal + WiFi Pass is the primary customer flow. Omada handles open SSID captive portal redirect/enforcement, while MikroTik provides station transport and routing.'}
             </div>
             <div className="row row-cards">
       {activeTab === 'Portal' && <>
@@ -14339,6 +16106,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                   {omadaPortalStatus?.controller ? ` · Controller: ${omadaPortalStatus.controller}` : ''}
                 </div>
               </div>
+              <button className="btn btn-outline-primary" type="button" onClick={enableOmadaPortal} disabled={omadaPortalEnabling}>
+                {omadaPortalEnabling ? <span className="spinner-border spinner-border-sm me-2" /> : <IconRefresh size={17} className="me-2" />}
+                Re-sync Omada Portal
+              </button>
             </div>
             <div className="row g-2 mb-3">
               <div className="col-sm-4">
@@ -14361,7 +16132,91 @@ function CaptivePortalPage({ mode = 'full' }) {
               </div>
             </div>
             <div className="alert alert-warning mb-3">
-              If Omada captive portal is down or not enabled on the SSID, clients will pass through the station VLAN/DHCP/NAT like normal WiFi and can get internet without voucher enforcement. The fix is to enable Omada Portal Authentication / External Portal on the open SSID and keep the station VLAN as transport only.
+              If Omada captive portal is down or not enabled on the SSID, clients will pass through the station VLAN/DHCP/NAT like normal WiFi and can get internet without WiFi pass enforcement. The fix is to enable Omada Portal Authentication / External Portal on the open SSID and keep the station VLAN as transport only.
+            </div>
+            <div className="border rounded mb-3">
+              <div className="px-3 py-2 border-bottom d-flex align-items-center justify-content-between gap-2 flex-wrap">
+                <div>
+                  <div className="fw-semibold">Omada Site Readiness Checker</div>
+                  <div className="text-muted small">Checks HTTPS redirect, portal URL, SSID binding, pre-auth access, and AP portal attachment per site.</div>
+                </div>
+                <span className="badge bg-blue-lt text-blue">
+                  <IconShieldLock size={13} className="me-1" />
+                  Long-term checker
+                </span>
+              </div>
+              <div className="table-responsive">
+                <table className="table table-sm card-table mb-0">
+                  <thead>
+                    <tr>
+                      <th>Site</th>
+                      <th>Portal URL</th>
+                      <th>SSIDs</th>
+                      <th>Readiness</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(omadaPortalStatus?.portal_sites || []).length ? (omadaPortalStatus.portal_sites || []).map((site) => {
+                      const checks = site.readiness_checks || [];
+                      const ready = String(site.readiness_status || '').toUpperCase() === 'READY';
+                      const partial = String(site.readiness_status || '').toUpperCase() === 'PARTIAL';
+                      return (
+                        <tr key={site.site_id || site.site_name}>
+                          <td>
+                            <div className="fw-semibold">{site.site_name || site.site_id || 'Omada site'}</div>
+                            <div className="text-muted small">
+                              APs: {site.portal_connected_ap_count ?? 0}/{site.ap_count ?? 0}
+                              {site.vlan_id ? ` · VLAN ${site.vlan_id}` : ''}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="text-break small">{site.portal_url || currentPortalUrl || '-'}</div>
+                            <span className={`badge ${site.portal_url_https ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>
+                              {site.portal_url_https ? <IconCircleCheck size={12} className="me-1" /> : <IconAlertTriangle size={12} className="me-1" />}
+                              HTTPS URL
+                            </span>
+                          </td>
+                          <td>
+                            {(site.desired_ssids || []).length ? (
+                              <div className="d-flex gap-1 flex-wrap">
+                                {(site.desired_ssids || []).map((ssid) => <span className="badge bg-secondary-lt text-secondary" key={ssid}>{ssid}</span>)}
+                              </div>
+                            ) : <span className="text-muted">No SSIDs configured</span>}
+                          </td>
+                          <td>
+                            <div className="d-flex align-items-center gap-2 flex-wrap mb-1">
+                              <span className={`badge ${ready ? 'bg-green-lt text-green' : partial ? 'bg-yellow-lt text-yellow' : 'bg-red-lt text-red'}`}>
+                                {ready ? <IconCircleCheck size={13} className="me-1" /> : <IconAlertTriangle size={13} className="me-1" />}
+                                {ready ? 'Ready' : partial ? 'Partial' : 'Needs Fix'}
+                              </span>
+                              {site.portal_error && <span className="text-red small">{site.portal_error}</span>}
+                              {!site.portal_error && site.pre_auth_error && <span className="text-red small">{site.pre_auth_error}</span>}
+                            </div>
+                            <div className="d-flex gap-1 flex-wrap">
+                              {checks.map((check) => (
+                                <span
+                                  key={check.key}
+                                  className={`badge ${check.passed ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}
+                                  title={check.message || check.label}
+                                >
+                                  {check.passed ? <IconCircleCheck size={11} className="me-1" /> : <IconAlertTriangle size={11} className="me-1" />}
+                                  {check.label}
+                                </span>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    }) : (
+                      <tr>
+                        <td colSpan={4} className="text-muted text-center py-4">
+                          No Omada site readiness data yet. Bind a station to an Omada site and sync the portal.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
             <div className="border rounded">
               <div className="table-responsive">
@@ -14440,7 +16295,7 @@ function CaptivePortalPage({ mode = 'full' }) {
           <div className="card">
             <div className="card-body border-bottom py-2">
               <ul className="nav nav-tabs flex-nowrap overflow-auto" role="tablist">
-                {['No Internet Page', 'Welcome Gift', 'Outside Network & Bag', 'Avatar Notes', 'Customer Consent', 'Preview'].map((tab) => (
+                {['No Internet Page', 'Welcome Gift', 'Outside Network & Bag', 'Avatar Notes', 'Customer Consent'].map((tab) => (
                   <li className="nav-item" role="presentation" key={tab}>
                     <button type="button" className={`nav-link ${portalDesignTab === tab ? 'active' : ''}`} onClick={() => setPortalDesignTab(tab)}>
                       {tab}
@@ -14451,7 +16306,7 @@ function CaptivePortalPage({ mode = 'full' }) {
             </div>
             <div className="card-body">
               {portalDesignTab === 'No Internet Page' && (
-                <Card title="No Internet Page" subtitle="This is the first screen customers see before buying or entering a voucher.">
+                <Card title="No Internet Page" subtitle="This is the first screen customers see before buying a WiFi pass or claiming an optional voucher.">
                   {portalSettings ? <form onSubmit={savePortalSettings}>
                     <div className="row g-3 align-items-start">
                       <div className="col-md-6">
@@ -14461,7 +16316,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                       </div>
                       <div className="col-md-6">
                         <label className="form-label">No Internet Subtitle</label>
-                        <input className="form-control" value={portalSettings.no_internet_subtitle || 'Connect with a voucher or buy a WiFi package.'} onChange={(e) => setPortalSettings({ ...portalSettings, no_internet_subtitle: e.target.value })} />
+                        <input className="form-control" value={portalSettings.no_internet_subtitle || 'Buy a WiFi pass or claim an optional voucher.'} onChange={(e) => setPortalSettings({ ...portalSettings, no_internet_subtitle: e.target.value })} />
                         <div className="form-hint">Shown under the headline before Buy Now and Log In.</div>
                       </div>
                       <div className="col-md-6">
@@ -14510,7 +16365,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                             />
                             <span className="form-check-label fw-semibold">Enable profile welcome gift</span>
                           </label>
-                          <label className="form-label d-flex align-items-center gap-1">Free time <FieldHint text="This is the voucher duration created after the customer saves a verified profile. Existing already-created gift vouchers keep their original time." /></label>
+                          <label className="form-label d-flex align-items-center gap-1">Free time <FieldHint text="This is the free WiFi time created after the customer saves a verified profile. Existing already-created welcome gifts keep their original time." /></label>
                           <div className="input-group">
                             <input
                               className="form-control"
@@ -14558,7 +16413,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                           <div className="col-12">
                             <label className="form-label">Message after redeeming free time</label>
                             <textarea className="form-control" rows={2} value={portalSettings.profile_gift_redeemed_message || DEFAULT_PROFILE_GIFT.redeemed_message} onChange={(e) => setPortalSettings({ ...portalSettings, profile_gift_redeemed_message: e.target.value })} />
-                            <div className="form-hint">Shown after the gift voucher is activated. This does not apply RouterOS changes.</div>
+                            <div className="form-hint">Shown after the welcome gift is activated. This does not apply RouterOS changes.</div>
                           </div>
                         </div>
                       </div>
@@ -14670,7 +16525,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                       </div>
                       <div className="col-md-3 col-xl-2">
                         <label className="form-label d-flex align-items-center gap-1">Word speed <FieldHint text="How fast each word appears. Lower is faster. 180ms feels like a short talking animation." /></label>
-                        <input className="form-control" type="number" min="40" step="10" value={avatarNotesConfig.word_delay_ms ?? 180} onChange={(e) => updateAvatarNotesConfig({ word_delay_ms: Number(e.target.value) })} />
+                        <input className="form-control" type="number" min="90" step="10" value={avatarNotesConfig.word_delay_ms ?? 180} onChange={(e) => updateAvatarNotesConfig({ word_delay_ms: Number(e.target.value) })} />
                       </div>
                     </div>
                     <ul className="nav nav-tabs mb-3 flex-nowrap overflow-auto">
@@ -14772,7 +16627,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                           <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
                             <div>
                               <div className="fw-semibold">After Buy / Redeem Success</div>
-                              <div className="text-muted small">Shown after voucher, welcome gift, or PayMongo time activation succeeds.</div>
+                              <div className="text-muted small">Shown after a paid package, welcome gift, or optional voucher activation succeeds.</div>
                             </div>
                             <button className="btn btn-outline-primary btn-sm" type="button" onClick={() => addAvatarEventNote('PURCHASE_SUCCESS')}><IconPlus size={16} className="me-1" />Add</button>
                           </div>
@@ -14855,15 +16710,6 @@ function CaptivePortalPage({ mode = 'full' }) {
                       <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Consent Text</button>
                     </div>
                   </form> : <div className="empty">Loading customer profile consent...</div>}
-                </Card>
-              )}
-              {portalDesignTab === 'Preview' && (
-                <Card title="Portal Design Preview">
-                  <div className="d-flex align-items-center justify-content-between gap-2 mb-3">
-                    <div className="text-muted">The current live portal uses the Tabler purchase/profile flow. The editor remains available for legacy HTML/CSS preview work.</div>
-                    <button className="btn btn-primary" type="button" onClick={() => { window.history.pushState({}, '', '/admin/captive-portal/editor'); window.dispatchEvent(new PopStateEvent('popstate')); }}><IconEdit size={18} className="me-2" />Open Legacy Editor</button>
-                  </div>
-                  <iframe className="portal-design-preview portal-design-preview-wide" title="Portal design preview" srcDoc={portalPreviewSrcDoc(portalSettings?.custom_html, portalSettings?.custom_css, portalSettings?.product_items || [])} />
                 </Card>
               )}
             </div>
@@ -16668,7 +18514,7 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                                            </div>
 	                                          </div>
 	                                          <div className="alert alert-info mb-0">
-		                                            MikroTik Station setup creates only the customer VLAN gateway, DHCP, NAT, trunk path, and one-device voucher fairness guard. Omada Controller provides the captive portal redirect and enforcement for the SSID.
+		                                            MikroTik Station setup creates only the customer VLAN gateway, DHCP, NAT, trunk path, and one-device WiFi pass fairness guard. Omada Controller provides the captive portal redirect and enforcement for the SSID.
 	                                          </div>
                                         </div>
                                       </div>
@@ -16704,11 +18550,11 @@ function CaptivePortalPage({ mode = 'full' }) {
 		                  <Modal title={`Review Station Plan: ${stationReview.station_name}`} size="xl" onClose={() => setStationReview(null)}>
 		                    <div className="alert alert-warning">
 		                      <div className="fw-semibold mb-1">Preview only</div>
-		                      <div>This is the generated RouterOS transport plan for review. It creates the VLAN gateway, DHCP/NAT path, downstream trunks, and a one-device voucher fairness guard. Omada handles captive portal redirect and enforcement.</div>
+		                      <div>This is the generated RouterOS transport plan for review. It creates the VLAN gateway, DHCP/NAT path, downstream trunks, and a one-device WiFi pass fairness guard. Omada handles captive portal redirect and enforcement.</div>
 		                    </div>
 		                    <div className="alert alert-info">
-		                      <div className="fw-semibold mb-1">Voucher sharing protection</div>
-		                      <div>Push Config includes managed MikroTik TTL guard rules on the root gateway. These rules are designed to stop normal phone-hotspot sharing so one redeemed voucher stays tied to the directly connected device.</div>
+		                      <div className="fw-semibold mb-1">WiFi pass sharing protection</div>
+		                      <div>Push Config includes managed MikroTik TTL guard rules on the root gateway. These rules are designed to stop normal phone-hotspot sharing so one active WiFi pass stays tied to the directly connected device.</div>
 		                    </div>
 	                    <div className="row g-3 mb-3">
 	                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">VLAN</div><div className="h3 mb-0">{stationReview.vlan_id}</div></div></div>
@@ -16962,7 +18808,7 @@ function CaptivePortalPage({ mode = 'full' }) {
 			                    <Modal title={`Push Config: ${stationImplementation.station_name}`} size="xl" onClose={() => { if (!stationImplementing) { stationPushCompleted ? closeStationPushSuccess() : setStationImplementation(null); } }}>
 			                      <div className="alert alert-danger">
 			                        <div className="fw-semibold mb-1">RouterOS write action</div>
-			                        <div>The system checks MikroTik first, hides cleanup steps that are already removed, then pushes only the remaining needed station VLAN transport and one-device voucher fairness steps one at a time. No MikroTik HotSpot server or login.html is created.</div>
+			                        <div>The system checks MikroTik first, hides cleanup steps that are already removed, then pushes only the remaining needed station VLAN transport and one-device WiFi pass fairness steps one at a time. No MikroTik HotSpot server or login.html is created.</div>
 		                      </div>
 		                      {stationImplementationSteps.some((step) => step.phase === 'CLEANUP_OLD') && (
 		                        <div className="alert alert-warning">
@@ -18613,94 +20459,239 @@ function CaptivePortalPage({ mode = 'full' }) {
 	      {activeTab === 'Portal Notifs' && <div className="col-12">
 	        <Card title={<CardHeaderContent><div className="d-flex align-items-center gap-2"><IconBell size={20} /><h3 className="card-title mb-0">Portal Notifs</h3></div></CardHeaderContent>}>
 	          {portalSettings ? <form onSubmit={savePortalSettings}>
-	            <div className="alert alert-info">
-	              Mobile notification-bar support depends on the phone browser and captive portal WebView. The portal will try to show a browser notification where supported, and will always show the same message inside the portal as fallback. The OS-level "Sign in to WiFi network" notification text cannot be customized by this system.
+	            <div className="row g-3 mb-3">
+	              <div className="col-xl-5">
+	                <div className="portal-notif-hero h-100">
+	                  <span className="portal-notif-hero-icon"><IconBell size={30} /></span>
+	                  <div>
+		                    <div className="h3 mb-1">WiFi pass notifications</div>
+		                    <p className="text-muted mb-3">Customers can receive WiFi pass activation, low-time, expired-time, and restored-session notices. Browser notifications use a service worker where supported, include the portal avatar/icon, and open the portal when tapped.</p>
+	                    <div className="d-flex flex-wrap gap-2">
+	                      <span className="badge bg-blue-lt text-blue"><IconCircleCheck size={13} className="me-1" />In-page fallback always shown</span>
+	                      <span className="badge bg-green-lt text-green"><IconBell size={13} className="me-1" />HTTPS browser alerts</span>
+	                      <span className="badge bg-yellow-lt text-yellow"><IconInfoCircle size={13} className="me-1" />OS WiFi sign-in text is not customizable</span>
+	                    </div>
+	                  </div>
+	                </div>
+	              </div>
+	              <div className="col-xl-7">
+	                <div className="row g-3 h-100">
+	                  {[
+	                    { label: 'Notifications', value: portalSettings.portal_notifications_enabled ? 'Enabled' : 'Disabled', icon: IconBell, tone: portalSettings.portal_notifications_enabled ? 'green' : 'secondary', detail: 'Master switch for all portal events.' },
+	                    { label: 'Delivery', value: typeof navigator !== 'undefined' && 'serviceWorker' in navigator ? 'Service worker' : 'Browser fallback', icon: IconShieldLock, tone: 'blue', detail: 'Tapping a notification opens the portal URL.' },
+	                    { label: 'Current URL', value: portalSettings.current_portal_url || portalSettings.portal_url_production || portalSettings.portal_url_staging || '-', icon: IconExternalLink, tone: 'azure', detail: 'Used as the notification click target.' },
+	                    { label: 'Permission', value: portalNotificationPermissionStatus(), icon: IconInfoCircle, tone: portalNotificationPermissionStatus() === 'granted' ? 'green' : 'yellow', detail: 'Permission is per customer browser/device.' },
+	                    { label: 'In-page messages', value: `${Math.max(1, Number(portalSettings.portal_message_auto_hide_seconds || 6))}s`, icon: IconClock, tone: 'indigo', detail: 'Customer portal alerts auto-hide after this delay.' },
+	                  ].map((item) => {
+	                    const KpiIcon = item.icon;
+	                    return (
+	                      <div className="col-md-6" key={`portal-notif-kpi-${item.label}`}>
+	                        <div className="portal-notif-kpi">
+	                          <span className={`portal-notif-kpi-icon bg-${item.tone}-lt text-${item.tone}`}><KpiIcon size={22} /></span>
+	                          <div className="min-width-0">
+	                            <div className="text-muted small">{item.label}</div>
+	                            <div className="fw-semibold text-truncate" title={item.value}>{item.value}</div>
+	                            <div className="small text-muted text-truncate" title={item.detail}>{item.detail}</div>
+	                          </div>
+	                        </div>
+	                      </div>
+	                    );
+	                  })}
+	                </div>
+	              </div>
 	            </div>
-	            <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap border rounded p-3 mb-3">
+
+	            <div className="portal-notif-control-panel mb-3">
 	              <div>
-	                <div className="fw-semibold">Enable portal notifications</div>
-	                <div className="text-muted small">When enabled, voucher success, remaining-time, expired, and restored-session notices can be shown to customers.</div>
+		                <div className="fw-semibold">Enable portal notifications</div>
+		                <div className="text-muted small">Customers must allow notifications from a supported browser. Captive WebViews may block native alerts, so the portal also displays important messages inside the page.</div>
 	              </div>
 	              <label className="form-check form-switch mb-0">
 	                <input className="form-check-input" type="checkbox" checked={portalSettings.portal_notifications_enabled === true} onChange={(e) => setPortalSettings({ ...portalSettings, portal_notifications_enabled: e.target.checked })} />
 	              </label>
 	            </div>
-	            <div className="mb-3">
-	              <div className="text-muted small mb-2">Template tags: <code>{'<TIME>'}</code> <code>{'<REMAINING>'}</code> <code>{'<VOUCHER>'}</code> <code>{'<SSID>'}</code> <code>{'<EXPIRES_AT>'}</code> <code>{'<BRAND>'}</code> <code>{'<STATUS>'}</code></div>
+
+              <div className="portal-notif-control-panel mb-3">
+                <div>
+                  <div className="fw-semibold">Customer message auto-hide</div>
+                  <div className="text-muted small">Success, warning, info, and error messages shown inside the captive portal or customer modals disappear after this delay.</div>
+                </div>
+                <div className="portal-message-timeout-field">
+                  <input
+                    className="form-control"
+                    type="number"
+                    min="1"
+                    max="60"
+                    value={portalSettings.portal_message_auto_hide_seconds ?? 6}
+                    onChange={(e) => setPortalSettings({ ...portalSettings, portal_message_auto_hide_seconds: Math.max(1, Math.min(60, Number(e.target.value) || 6)) })}
+                  />
+                  <span className="text-muted small">seconds</span>
+                </div>
+              </div>
+
+	            <div className="portal-notif-test-panel mb-3">
+	              <div>
+		                <div className="fw-semibold">Browser notification test</div>
+		                <div className="text-muted small">Tests this admin browser only. Customers can enable phone alerts from their portal settings in Chrome or Safari.</div>
+	                {portalNotifTest && <div className={`alert mt-2 mb-0 py-2 ${portalNotifTest.status === 'SUCCESS' ? 'alert-success' : portalNotifTest.status === 'RUNNING' ? 'alert-info' : 'alert-warning'}`}>{portalNotifTest.message}</div>}
+	              </div>
+	              <button className="btn btn-outline-primary" type="button" onClick={runPortalNotifBrowserTest} disabled={portalNotifTest?.status === 'RUNNING'}>
+	                <IconBell size={18} className="me-2" />Run Notification Test
+	              </button>
 	            </div>
+
+	            <div className="portal-notif-tags mb-3">
+	              <span>Template tags</span>
+		              {['<TIME>', '<REMAINING>', '<SSID>', '<EXPIRES_AT>', '<BRAND>', '<STATUS>'].map((tag) => <code key={tag}>{tag}</code>)}
+	            </div>
+
 	            <div className="row g-3">
-	              <div className="col-12">
-	                <div className="border rounded p-3">
-	                  <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
-	                    <label className="form-label mb-0">Voucher success message</label>
-	                    <label className="form-check form-switch mb-0">
+	              <div className="col-lg-6">
+	                <div className="portal-notif-event-card">
+	                  <div className="portal-notif-event-header">
+	                    <span className="portal-notif-event-icon bg-green-lt text-green"><IconCircleCheck size={20} /></span>
+	                    <div>
+		                      <label className="form-label mb-0">Access started / pass activated</label>
+		                      <div className="text-muted small">Shown after a purchased package, welcome gift, or optional voucher authorizes the device.</div>
+	                    </div>
+	                    <label className="form-check form-switch mb-0 ms-auto">
 	                      <input className="form-check-input" type="checkbox" checked={portalSettings.portal_success_notification_enabled !== false} onChange={(e) => setPortalSettings({ ...portalSettings, portal_success_notification_enabled: e.target.checked })} />
 	                    </label>
 	                  </div>
-	                  <textarea className="form-control" rows={3} value={portalSettings.portal_success_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_success_notification_message: e.target.value })} placeholder="Voucher accepted. Remaining time: <TIME>." />
-	                  <div className="form-hint">Shown after a voucher is accepted and Omada authorizes the client.</div>
+		                  <textarea className="form-control" rows={4} value={portalSettings.portal_success_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_success_notification_message: e.target.value })} placeholder="WiFi pass active. Remaining time: <TIME>." />
 	                </div>
 	              </div>
-	              <div className="col-12">
-	                <div className="border rounded p-3">
-	                  <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
-	                    <label className="form-label mb-0">Remaining time reminder</label>
-	                    <label className="form-check form-switch mb-0">
+	              <div className="col-lg-6">
+	                <div className="portal-notif-event-card">
+	                  <div className="portal-notif-event-header">
+	                    <span className="portal-notif-event-icon bg-yellow-lt text-yellow"><IconClock size={20} /></span>
+	                    <div>
+	                      <label className="form-label mb-0">Low remaining time</label>
+	                      <div className="text-muted small">Shown once when the active time reaches the configured threshold.</div>
+	                    </div>
+	                    <label className="form-check form-switch mb-0 ms-auto">
 	                      <input className="form-check-input" type="checkbox" checked={portalSettings.portal_remaining_notification_enabled !== false} onChange={(e) => setPortalSettings({ ...portalSettings, portal_remaining_notification_enabled: e.target.checked })} />
 	                    </label>
 	                  </div>
 	                  <div className="row g-3">
 	                    <div className="col-md-4">
-	                      <label className="form-label">Send when remaining seconds is at or below</label>
+	                      <label className="form-label">Trigger seconds</label>
 	                      <input className="form-control" type="number" min="0" value={portalSettings.portal_remaining_notification_trigger_seconds ?? 300} onChange={(e) => setPortalSettings({ ...portalSettings, portal_remaining_notification_trigger_seconds: Number(e.target.value) })} />
 	                    </div>
 	                    <div className="col-md-8">
 	                      <label className="form-label">Message</label>
-	                      <textarea className="form-control" rows={3} value={portalSettings.portal_remaining_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_remaining_notification_message: e.target.value })} placeholder="Reminder: only <TIME> remaining on your WiFi voucher." />
+		                      <textarea className="form-control" rows={3} value={portalSettings.portal_remaining_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_remaining_notification_message: e.target.value })} placeholder="Reminder: only <TIME> remaining on your active WiFi pass." />
 	                    </div>
 	                  </div>
-	                  <div className="form-hint">Use this for warnings like 5 minutes remaining. Set trigger to 0 to disable timing even if the switch is on.</div>
 	                </div>
 	              </div>
-	              <div className="col-md-6">
-	                <div className="border rounded p-3 h-100">
-	                  <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
-	                    <label className="form-label mb-0">Time fully consumed message</label>
-	                    <label className="form-check form-switch mb-0">
+	              <div className="col-lg-6">
+	                <div className="portal-notif-event-card h-100">
+	                  <div className="portal-notif-event-header">
+	                    <span className="portal-notif-event-icon bg-red-lt text-red"><IconAlertTriangle size={20} /></span>
+	                    <div>
+	                      <label className="form-label mb-0">Time fully consumed</label>
+	                      <div className="text-muted small">Shown when the current access window reaches zero.</div>
+	                    </div>
+	                    <label className="form-check form-switch mb-0 ms-auto">
 	                      <input className="form-check-input" type="checkbox" checked={portalSettings.portal_expired_notification_enabled !== false} onChange={(e) => setPortalSettings({ ...portalSettings, portal_expired_notification_enabled: e.target.checked })} />
 	                    </label>
 	                  </div>
-	                  <textarea className="form-control" rows={4} value={portalSettings.portal_expired_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_expired_notification_message: e.target.value })} placeholder="Your WiFi voucher time is fully consumed. Enter a new voucher to continue." />
+		                  <textarea className="form-control" rows={4} value={portalSettings.portal_expired_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_expired_notification_message: e.target.value })} placeholder="Your WiFi pass time is fully consumed. Buy another package or claim a voucher to continue." />
 	                </div>
 	              </div>
-	              <div className="col-md-6">
-	                <div className="border rounded p-3 h-100">
-	                  <div className="d-flex align-items-center justify-content-between gap-3 mb-2">
-	                    <label className="form-label mb-0">Session restored message</label>
-	                    <label className="form-check form-switch mb-0">
+	              <div className="col-lg-6">
+	                <div className="portal-notif-event-card h-100">
+	                  <div className="portal-notif-event-header">
+	                    <span className="portal-notif-event-icon bg-blue-lt text-blue"><IconRefresh size={20} /></span>
+	                    <div>
+	                      <label className="form-label mb-0">Session restored</label>
+	                      <div className="text-muted small">Shown when random MAC or 2G/5G changes are re-linked with remaining time.</div>
+	                    </div>
+	                    <label className="form-check form-switch mb-0 ms-auto">
 	                      <input className="form-check-input" type="checkbox" checked={portalSettings.portal_reconnect_notification_enabled !== false} onChange={(e) => setPortalSettings({ ...portalSettings, portal_reconnect_notification_enabled: e.target.checked })} />
 	                    </label>
 	                  </div>
 	                  <textarea className="form-control" rows={4} value={portalSettings.portal_reconnect_notification_message || ''} onChange={(e) => setPortalSettings({ ...portalSettings, portal_reconnect_notification_message: e.target.value })} placeholder="Your WiFi session was restored. Remaining time: <TIME>." />
-	                  <div className="form-hint">Shown when a random/private MAC or 2G/5G band change is re-authorized with remaining time.</div>
 	                </div>
 	              </div>
-	              <div className="col-12 d-flex justify-content-end">
-	                <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Portal Notifs</button>
+	              <div className="col-12">
+	                <div className="d-flex justify-content-end">
+	                  <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Portal Notifs</button>
+	                </div>
 	              </div>
 	            </div>
-	          </form> : <div className="empty">Loading portal notifications...</div>}
-	        </Card>
-	      </div>}
-	      {activeTab === 'Message Defaults' && <>
+		          </form> : <div className="empty">Loading portal notifications...</div>}
+		        </Card>
+		      </div>}
+		      {activeTab === 'Welcome SMS' && <>
+		        {portalSmsSettings ? <>
+		          <div className="col-lg-4">
+		            <Card title={<CardHeaderContent><div className="d-flex align-items-center gap-2"><IconBrandChrome size={20} /><h3 className="card-title mb-0">Welcome SMS</h3></div></CardHeaderContent>} subtitle="Sent once after a customer verifies and saves their first profile.">
+		              <div className="d-flex flex-column gap-3">
+		                <div className="border rounded p-3">
+		                  <div className="text-muted small">Status</div>
+		                  <div className="d-flex align-items-center gap-2 mt-1">
+		                    <span className={`badge ${portalSmsSettings.enabled && portalSmsForm.welcome_sms_enabled !== false ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>
+		                      {portalSmsSettings.enabled && portalSmsForm.welcome_sms_enabled !== false ? 'Enabled' : 'Disabled'}
+		                    </span>
+		                    <span className="text-muted small">{portalSmsSettings.a2p_provider || 'Smart Messaging Suite'}</span>
+		                  </div>
+		                  {!portalSmsSettings.a2p_configured && <div className="text-danger small mt-2">Configure Smart A2P credentials in System Settings before welcome SMS can send.</div>}
+		                </div>
+		                <div className="border rounded p-3">
+		                  <div className="text-muted small">Sender ID</div>
+		                  <div className="fw-semibold mt-1">{portalSmsForm.sender_id || 'Smart account default'}</div>
+		                  <div className="text-muted small mt-1">Change this in Message Defaults.</div>
+		                </div>
+		                <div className="border rounded p-3">
+		                  <div className="text-muted small">Sent this period</div>
+		                  <div className="h2 mb-0">{portalSmsSettings.tracking?.welcome_sms_sent ?? 0}</div>
+		                  <div className="text-muted small">Included in local Portal SMS credit tracking.</div>
+		                </div>
+		              </div>
+		            </Card>
+		          </div>
+		          <div className="col-lg-8">
+		            <Card title="First-profile welcome SMS message" subtitle="Use this to remind customers to open net.3jhotspot.com in Chrome after they create a profile.">
+		              <form onSubmit={savePortalSmsSettings}>
+		                <div className="row g-3">
+		                  <div className="col-12">
+		                    <div className="portal-notif-control-panel mb-0">
+		                      <div>
+		                        <div className="fw-semibold">Enable first-profile welcome SMS</div>
+		                        <div className="text-muted small">This sends only after the first successful profile verification, not every time the customer edits their profile.</div>
+		                      </div>
+		                      <label className="form-check form-switch mb-0">
+		                        <input className="form-check-input" type="checkbox" checked={portalSmsForm.welcome_sms_enabled !== false} onChange={(e) => setPortalSmsForm({ ...portalSmsForm, welcome_sms_enabled: e.target.checked })} />
+		                      </label>
+		                    </div>
+		                  </div>
+		                  <div className="col-12">
+		                    <label className="form-label">Message</label>
+		                    <textarea className="form-control" rows={5} value={portalSmsForm.welcome_sms_message || ''} onChange={(e) => setPortalSmsForm({ ...portalSmsForm, welcome_sms_message: e.target.value })} placeholder="Welcome to 3J WiFi, <USER>! For a better experience, open net.3jhotspot.com in Google Chrome." />
+		                    <div className="form-hint">Template tags: <code>{'<USER>'}</code>, <code>{'<PORTAL_URL>'}</code>, <code>{'<BRAND>'}</code></div>
+		                  </div>
+		                  <div className="col-12">
+		                    <div className="d-flex justify-content-end">
+		                      <button className="btn btn-primary" disabled={portalSmsSaving}><IconDeviceFloppy size={18} className="me-2" />{portalSmsSaving ? 'Saving...' : 'Save Welcome SMS'}</button>
+		                    </div>
+		                  </div>
+		                </div>
+		              </form>
+		            </Card>
+		          </div>
+		        </> : <div className="col-12"><div className="empty">Loading welcome SMS settings...</div></div>}
+		      </>}
+		      {activeTab === 'Message Defaults' && <>
 	        {portalSmsSettings ? <>
 	          <div className="col-12">
 	            <div className="row g-3">
-	              {[
-	                { label: 'Portal SMS Used', value: portalSmsSettings.tracking?.used_credits ?? 0, icon: IconBell, tone: 'bg-blue-lt text-blue' },
-	                { label: 'Remaining Local Credits', value: portalSmsSettings.tracking?.remaining_credits ?? 'No limit', icon: IconWallet, tone: 'bg-green-lt text-green' },
-	                { label: 'Profile Codes', value: portalSmsSettings.tracking?.profile_otp_sent ?? 0, icon: IconUser, tone: 'bg-purple-lt text-purple' },
-	                { label: 'Missing-Time Codes', value: portalSmsSettings.tracking?.missing_time_otp_sent ?? 0, icon: IconClock, tone: 'bg-orange-lt text-orange' }
+		              {[
+		                { label: 'Portal SMS Used', value: portalSmsSettings.tracking?.used_credits ?? 0, icon: IconBell, tone: 'bg-blue-lt text-blue' },
+		                { label: 'Remaining Local Credits', value: portalSmsSettings.tracking?.remaining_credits ?? 'No limit', icon: IconWallet, tone: 'bg-green-lt text-green' },
+		                { label: 'Profile Codes', value: portalSmsSettings.tracking?.profile_otp_sent ?? 0, icon: IconUser, tone: 'bg-purple-lt text-purple' },
+		                { label: 'Missing-Time Codes', value: portalSmsSettings.tracking?.missing_time_otp_sent ?? 0, icon: IconClock, tone: 'bg-orange-lt text-orange' }
 	              ].map((item) => {
 	                const KpiIcon = item.icon;
 	                return (
@@ -18718,7 +20709,7 @@ function CaptivePortalPage({ mode = 'full' }) {
 	            </div>
 	          </div>
 	          <div className="col-12">
-	            <Card title={<CardHeaderContent><div className="d-flex align-items-center gap-2"><IconMessageCircle size={20} /><h3 className="card-title mb-0">Portal SMS Confirmation Defaults</h3></div></CardHeaderContent>} subtitle="These settings are only for portal contact verification and missing-time confirmation SMS. They do not change the global Smart A2P API credentials.">
+			            <Card title={<CardHeaderContent><div className="d-flex align-items-center gap-2"><IconMessageCircle size={20} /><h3 className="card-title mb-0">Portal SMS Defaults</h3></div></CardHeaderContent>} subtitle="These settings are only for portal contact verification and missing-time confirmation SMS. They do not change the global Smart A2P API credentials.">
 	              <form onSubmit={savePortalSmsSettings}>
 	                <div className="row g-3">
 	                  <div className="col-md-3">
@@ -18735,8 +20726,8 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                      <option value="">Use Smart account default</option>
 	                      {(portalSmsSettings.sender_options || []).map((sender) => <option value={sender} key={`portal-sms-sender-${sender}`}>{sender}</option>)}
 	                    </select>
-	                    <div className="form-hint">Used for profile verification and Report Missing Time verification codes.</div>
-	                  </div>
+			                    <div className="form-hint">Used for profile verification, Report Missing Time codes, and Welcome SMS.</div>
+			                  </div>
 	                  <div className="col-md-2">
 	                    <label className="form-label">Monthly Limit</label>
 	                    <input className="form-control" type="number" min="0" value={portalSmsForm.monthly_credit_limit} onChange={(e) => setPortalSmsForm({ ...portalSmsForm, monthly_credit_limit: e.target.value })} placeholder="Optional" />
@@ -18745,12 +20736,12 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                    <label className="form-label">Reset Day</label>
 	                    <input className="form-control" type="number" min="1" max="31" value={portalSmsForm.monthly_reset_day} onChange={(e) => setPortalSmsForm({ ...portalSmsForm, monthly_reset_day: e.target.value })} />
 	                  </div>
-	                  <div className="col-12">
-	                    <div className="border rounded p-3 d-flex align-items-start justify-content-between gap-3 flex-wrap">
-	                      <div>
-	                        <div className="fw-semibold">Portal confirmation SMS tracking</div>
-	                        <div className="text-muted small">
-	                          Counts only profile verification and Report Missing Time verification SMS sent by the captive portal. Period: {formatPortalDateTime(portalSmsSettings.tracking?.period_start)} to {formatPortalDateTime(portalSmsSettings.tracking?.period_end)}.
+			                  <div className="col-12">
+			                    <div className="border rounded p-3 d-flex align-items-start justify-content-between gap-3 flex-wrap">
+			                      <div>
+			                        <div className="fw-semibold">Portal confirmation SMS tracking</div>
+			                        <div className="text-muted small">
+			                          Counts portal SMS sent by the captive portal, including profile verification, Welcome SMS, and Report Missing Time. Period: {formatPortalDateTime(portalSmsSettings.tracking?.period_start)} to {formatPortalDateTime(portalSmsSettings.tracking?.period_end)}.
 	                        </div>
 	                        <div className="text-muted small mt-1">{portalSmsSettings.tracking?.unit}</div>
 	                        {portalSmsSettings.tracking?.last_sent_at && <div className="small mt-2">Last portal confirmation SMS: {formatPortalDateTime(portalSmsSettings.tracking.last_sent_at)}</div>}
@@ -18784,22 +20775,6 @@ function CaptivePortalPage({ mode = 'full' }) {
             </form> : <div className="empty">Loading portal settings...</div>}
           </Card>
         </div>
-        <div className="col-12">
-          <Card title="Portal Branding">
-            {settings ? <form onSubmit={saveBranding}>
-              <div className="row g-3">
-                <div className="col-md-4"><label className="form-label">Portal Title</label><input className="form-control" value={settings.branding?.portal_title || '3J WiFi'} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, portal_title: e.target.value } })} /></div>
-                <div className="col-md-4"><label className="form-label">Portal Subtitle</label><input className="form-control" value={settings.branding?.portal_subtitle || 'Enter your voucher to connect'} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, portal_subtitle: e.target.value } })} /></div>
-                <div className="col-md-4"><label className="form-label">Accent Color</label><input className="form-control form-control-color" type="color" value={settings.branding?.accent_color || '#206bc4'} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, accent_color: e.target.value } })} /></div>
-                <div className="col-12"><label className="form-label">Welcome Message</label><input className="form-control" value={settings.branding?.portal_welcome_message || ''} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, portal_welcome_message: e.target.value } })} /></div>
-                <div className="col-md-6"><label className="form-label">Support / Help Text</label><input className="form-control" value={settings.branding?.portal_support_text || ''} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, portal_support_text: e.target.value } })} /></div>
-                <div className="col-md-6"><label className="form-label">Terms Note</label><input className="form-control" value={settings.branding?.portal_terms_note || ''} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, portal_terms_note: e.target.value } })} /></div>
-                <div className="col-md-4"><label className="form-check"><input className="form-check-input" type="checkbox" checked={settings.branding?.portal_show_powered_by !== false} onChange={(e) => setSettings({ ...settings, branding: { ...settings.branding, portal_show_powered_by: e.target.checked } })} /><span className="form-check-label">Show powered-by footer</span></label></div>
-                <div className="col-12"><button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Portal Branding</button></div>
-              </div>
-            </form> : <div className="empty">Loading portal branding...</div>}
-          </Card>
-        </div>
       </>}
       {activeTab === 'Portal Sessions' && <div className="col-12">
         <Card title="Portal Sessions">
@@ -18810,22 +20785,7 @@ function CaptivePortalPage({ mode = 'full' }) {
       {activeTab === 'Authorization Logs' && <>
         <div className="col-12"><Card title="Gateway Authorization Logs"><Table rows={authorizations} columns={['created_at', 'gateway_type', 'client_mac_masked', 'voucher_code_masked', 'username', 'status', 'authorization_duration_seconds', 'access_expires_at', 'error_message']} /></Card></div>
         <div className="col-12"><Card title="Recent Portal Events"><Table rows={portalEvents.slice(0, 20)} columns={['event_type', 'voucher_code_masked', 'message', 'public_session_id', 'ip_address', 'created_at']} /></Card></div>
-        <div className="col-12"><Card title="Recent Portal Redemptions"><Table rows={redemptions.slice(0, 20)} columns={['voucher_code', 'result', 'username', 'source', 'redeemed_time_seconds', 'failure_reason', 'created_at']} /></Card></div>
       </>}
-      {activeTab === 'Manual Setup Guide' && <div className="col-12">
-        <Card title="Manual MikroTik Setup Guide">
-          <ol className="mb-0 manual-guide">
-            <li>Confirm the APs are broadcasting <code>{portalSsidDisplay}</code> from APs Deployment - Sites - Configurations.</li>
-            <li>Open the test MikroTik router and configure HotSpot/captive portal on the correct test interface or VLAN.</li>
-            <li>Use a dedicated full/write RouterOS API account for automation and review the configuration plan before applying.</li>
-            <li>Set staging portal URL to <code>http://192.168.50.70:8080/portal</code>. Production will use <code>http://192.168.50.70/portal</code>.</li>
-            <li>Add walled garden / pre-auth access for <code>192.168.50.70</code>, the portal URL, and DNS.</li>
-            <li>Apply this to one test router/interface only, connect a phone to <code>{portalSsidPrimary}</code>, and redeem a test voucher.</li>
-            <li>Confirm Portal Sessions and Authorization Logs update here before rolling out wider.</li>
-          </ol>
-          <div className="alert alert-warning mt-3 mb-0">Do not roll this out to all substations until one AP test passes.</div>
-        </Card>
-      </div>}
             </div>
           </div>
         </div>
@@ -19137,7 +21097,7 @@ function RadiusTestGuide({ refresh }) {
     <div className="row row-cards">
       <div className="col-12">
         <Card title="Advanced RADIUS Lab" subtitle="Advanced / Lab Testing">
-          <div className="alert alert-warning">This page is for developer and network validation only. Customers will not use this flow. The current customer access direction is Captive Portal + Voucher.</div>
+          <div className="alert alert-warning">This page is for developer and network validation only. Customers will not use this flow. The current customer access direction is Captive Portal + WiFi Pass.</div>
           <div className="text-muted mb-3">These tests validate the source-of-truth checks used by FreeRADIUS: account status, password, manual balance, valid-until, unlimited flag, and single-device active-session rejection.</div>
           <pre className="mb-0"><code>radtest testuser password SERVER-IP:11812 0 shared-secret</code></pre>
         </Card>
@@ -21790,7 +23750,7 @@ function OmadaControllerPage({ refresh }) {
       {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
       <div className="col-12">
         <div className="alert alert-info">
-          Omada Controller is used to manage TP-Link Omada access points, open SSIDs, captive portal redirect, and WiFi settings. Customer access is handled by Captive Portal + Voucher.
+          Omada Controller is used to manage TP-Link Omada access points, open SSIDs, captive portal redirect, and WiFi settings. Customer access is handled by Captive Portal + WiFi Pass.
         </div>
       </div>
 
@@ -21994,7 +23954,7 @@ function OmadaControllerPage({ refresh }) {
 
       {tab === 'Advanced' && <div className="col-12">
         <div className="alert alert-warning">
-          Advanced tools are for engineering and network validation. The operator-facing customer flow is Captive Portal + Voucher.
+          Advanced tools are for engineering and network validation. The operator-facing customer flow is Captive Portal + WiFi Pass.
         </div>
         <ul className="nav nav-pills">
           {['Connection', 'Sites', 'Profile & NAS', 'SSID', 'Fallback', 'RADIUS & AP Test', 'Automation Logs'].map((item) => (
@@ -22095,7 +24055,7 @@ function OmadaControllerPage({ refresh }) {
             <div className="col-md-5"><label className="form-label">SSID Name</label><input className="form-control" value={ssidForm.ssid_name} onChange={(e) => setSsidForm({ ...ssidForm, ssid_name: e.target.value })} /></div>
             <div className="col-md-4"><button className="btn btn-primary" disabled={!!busy} onClick={createTestSsid}><IconRouter size={18} className="me-2" />Create Test WPA2-Enterprise SSID</button></div>
           </div>
-          <div className="alert alert-info mt-3 mb-0">Advanced lab feature only. Captive Portal + Voucher is now the priority customer access path.</div>
+          <div className="alert alert-info mt-3 mb-0">Advanced lab feature only. Captive Portal + WiFi Pass is now the priority customer access path.</div>
           {automationResult && <div className={`alert mt-3 mb-0 ${automationResult.status === 'SUCCESS' ? 'alert-success' : 'alert-warning'}`}>
             <div className="fw-semibold">{automationResult.message || automationResult.status}</div>
             {automationResult.error && <div>{automationResult.error}</div>}
@@ -22357,6 +24317,7 @@ const nav = [
   { page: 'Location Management', icon: IconMapPin, tone: 'green' },
   { page: 'Vouchers', icon: IconKey, tone: 'yellow' },
   { page: 'Product Items', icon: IconListDetails, tone: 'green' },
+  { page: 'Physical Stores', icon: IconBuildingStore, tone: 'orange' },
   { page: 'Sales', icon: IconCalendarStats, tone: 'green' },
   { page: 'Wallet / Manual Top-Up', icon: IconCash, tone: 'green' },
   { page: 'Captive Portal', icon: IconWifi, tone: 'blue' },
@@ -22517,7 +24478,7 @@ function App() {
   const [resources, setResources] = useState(null);
   const [omadaPortalStatus, setOmadaPortalStatus] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [branding, setBranding] = useState({ display_name: '3JCentralPisowifi', portal_subtitle: 'Captive Portal + Voucher Access', accent_color: '#206bc4', company_logo_url: null, browser_logo_url: null });
+  const [branding, setBranding] = useState({ display_name: '3JCentralPisowifi', portal_subtitle: 'Captive Portal + WiFi Pass Access', accent_color: '#206bc4', company_logo_url: null, browser_logo_url: null });
 
   async function refresh() {
     if (localStorage.getItem('centralwifi_token')) {
@@ -22631,11 +24592,11 @@ function App() {
             {page === 'Location Management' && <LocationManagementPage />}
             {page === 'Vouchers' && <VouchersPage />}
             {page === 'Product Items' && <ProductItemsPage />}
+            {page === 'Physical Stores' && <PhysicalStoresPage />}
             {page === 'Sales' && <SalesPage />}
             {page === 'Wallet / Manual Top-Up' && <WalletPage refresh={refresh} />}
             {page === 'Captive Portal' && <CaptivePortalPage />}
             {page === 'Support Inbox' && <SupportInboxPage />}
-            {page === 'Portal Editor' && <CaptivePortalEditorPage />}
             {page === 'Network' && <NetworkPage refresh={refresh} />}
             {page === 'MikroTik Scan Result' && <MikroTikScanResultPage />}
             {page === 'System Settings' && <SystemSettingsPage refresh={refresh} />}

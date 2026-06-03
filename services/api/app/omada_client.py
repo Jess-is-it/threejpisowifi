@@ -1383,7 +1383,7 @@ class OmadaApiClient:
             "ssidList": ssid_ids,
             "networkList": [],
             "authType": 4,
-            "httpsRedirectEnable": False,
+            "httpsRedirectEnable": bool(payload.get("httpsRedirectEnable", True)),
             "landingPage": 1,
             "pageType": 1,
             "externalPortal": {
@@ -1457,7 +1457,20 @@ class OmadaApiClient:
             is_external = bool(portal.get("externalPortal")) or int(portal.get("authType") or 0) == 4
             if not is_external and portal_name is None:
                 continue
-            active_portals.append({"id": portal.get("id"), "name": portal.get("name"), "authType": portal.get("authType")})
+            external = portal.get("externalPortal") if isinstance(portal.get("externalPortal"), dict) else {}
+            scheme = str(external.get("serverUrlScheme") or "").strip().lower()
+            server_url = str(external.get("serverUrl") or "").strip()
+            full_url = f"{scheme}://{server_url}" if scheme and server_url else server_url
+            active_portals.append({
+                "id": portal.get("id"),
+                "name": portal.get("name"),
+                "authType": portal.get("authType"),
+                "enable": portal.get("enable"),
+                "httpsRedirectEnable": bool(portal.get("httpsRedirectEnable")),
+                "serverUrlScheme": scheme or None,
+                "serverUrl": server_url or None,
+                "portalUrl": full_url or None,
+            })
             for key in ("ssidList", "ssidIds", "ssidIdList", "wlanSsidList"):
                 raw = portal.get(key)
                 if not isinstance(raw, list):
@@ -1485,9 +1498,79 @@ class OmadaApiClient:
             "ssids": ssids,
             "all_present": all(item["exists"] for item in ssids) if ssids else False,
             "all_portal_enabled": all(item["portal_enabled"] for item in ssids) if ssids else False,
+            "all_https_redirect_enabled": all(bool(item.get("httpsRedirectEnable")) for item in active_portals) if active_portals else False,
+            "any_https_portal_url": any(str(item.get("serverUrlScheme") or "").lower() == "https" for item in active_portals),
             "active_portals": active_portals,
             "candidate_summary": candidates_summary,
             "portal_summary": portals_summary,
+        }
+
+    def pre_auth_access_status_if_supported(self, site_id: str, portal_url: str) -> dict:
+        self.login()
+        if not self.controller_id:
+            self.discover_controller_id()
+        if not self.controller_id:
+            raise OmadaApiError("Omada controller ID could not be detected.")
+        parsed = urlparse(portal_url if "://" in str(portal_url or "") else f"http://{portal_url or ''}")
+        portal_host = parsed.hostname
+        if not portal_host:
+            raise OmadaApiError("Portal host could not be detected for Omada Pre-Auth Access.")
+        required_url_hosts = []
+        required_ip_hosts = []
+        controller_host = urlparse(self.base_url).hostname
+        for host in (portal_host, controller_host, "checkout.paymongo.com", "api.paymongo.com", "paymongo.com"):
+            clean_host = str(host or "").strip()
+            if not clean_host:
+                continue
+            try:
+                ipaddress.ip_address(clean_host)
+                if clean_host not in required_ip_hosts:
+                    required_ip_hosts.append(clean_host)
+            except ValueError:
+                if clean_host.lower() not in [item.lower() for item in required_url_hosts]:
+                    required_url_hosts.append(clean_host)
+        resolved_portal_ips = []
+        for address in resolve_ipv4_hosts(portal_host):
+            if address not in required_ip_hosts:
+                required_ip_hosts.append(address)
+                resolved_portal_ips.append(address)
+
+        access_path = f"/{self.controller_id}/api/v2/sites/{site_id}/setting/accessControl"
+        current_body, read_summary = self._get_json_candidates([access_path], timeout=20)
+        current = current_body.get("result") if isinstance(current_body, dict) else {}
+        if not isinstance(current, dict):
+            current = {}
+        policies = list(current.get("preAuthAccessPolicies") or [])
+        existing_hosts = {
+            str(item.get("ip") or "")
+            for item in policies
+            if isinstance(item, dict)
+            and int(item.get("type") or 0) == 1
+            and str(item.get("subnetMask") or "") in {"32", "255.255.255.255"}
+        }
+        existing_urls = {
+            str(item.get("url") or "").strip().lower()
+            for item in policies
+            if isinstance(item, dict)
+            and int(item.get("type") or 0) == 2
+            and str(item.get("url") or "").strip()
+        }
+        missing_ip_hosts = [host for host in required_ip_hosts if host not in existing_hosts]
+        missing_url_hosts = [host for host in required_url_hosts if host.lower() not in existing_urls]
+        enabled = bool(current.get("preAuthAccessEnable"))
+        return {
+            "portal_host": portal_host,
+            "controller_host": controller_host,
+            "enabled": enabled,
+            "required_ip_hosts": required_ip_hosts,
+            "required_url_hosts": required_url_hosts,
+            "resolved_portal_ips": resolved_portal_ips,
+            "missing_ip_hosts": missing_ip_hosts,
+            "missing_url_hosts": missing_url_hosts,
+            "missing_hosts": missing_ip_hosts + missing_url_hosts,
+            "ready": bool(enabled and not missing_ip_hosts and not missing_url_hosts),
+            "pre_auth_policy_count": len(policies),
+            "read_summary": read_summary,
         }
 
     def ensure_controller_portal_url_manual_if_supported(self, portal_url: Optional[str] = None) -> dict:
@@ -1507,14 +1590,14 @@ class OmadaApiClient:
             "hostName": controller_host,
             "autoRefresh": False,
             "autoPortalIpEnable": False,
-            "portalHttpsRedirect": False,
+            "portalHttpsRedirect": True,
         })
         response, patch_summary = self._patch_json_candidates([setting_path], {"webPort": web_port}, timeout=25)
         data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
         return {
             "controller_host": controller_host,
             "manual_portal_url": True,
-            "portal_https_redirect": False,
+            "portal_https_redirect": True,
             "web_port": web_port,
             "read_summary": read_summary,
             "response_summary": patch_summary,
