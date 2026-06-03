@@ -6710,6 +6710,59 @@ body.modal-open {
   cursor: default;
 }
 
+.portal-purchase-channel-tabs {
+  align-items: center;
+  background: #f3f6fb;
+  border: 1px solid rgba(98, 105, 118, 0.14);
+  border-radius: 0.95rem;
+  display: grid;
+  gap: 0.3rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  padding: 0.3rem;
+}
+
+.portal-purchase-channel-tab,
+.portal-purchase-cancel {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 0.72rem;
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 900;
+  justify-content: center;
+  line-height: 1;
+}
+
+.portal-purchase-channel-tab {
+  background: transparent;
+  color: #475569;
+  font-size: 0.78rem;
+  gap: 0.35rem;
+  min-height: 2.35rem;
+  padding: 0.55rem 0.7rem;
+}
+
+.portal-purchase-channel-tab.active {
+  background: #ffffff;
+  border-color: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.28);
+  color: var(--portal-brand-color, var(--tblr-primary, #066fd1));
+  box-shadow: 0 0.35rem 0.95rem rgba(15, 23, 42, 0.06);
+}
+
+.portal-purchase-cancel {
+  background: rgba(98, 105, 118, 0.08);
+  color: #64748b;
+  height: 2.35rem;
+  width: 2.35rem;
+}
+
+.portal-purchase-cancel:hover,
+.portal-purchase-cancel:focus-visible {
+  background: rgba(220, 38, 38, 0.1);
+  color: #dc2626;
+  outline: 0;
+}
+
 .portal-pass-tab-panel {
   display: grid;
   gap: 0.45rem;
@@ -6965,6 +7018,32 @@ body.modal-open {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.14);
   color: #dbe7f5;
+}
+
+.portal-tabler-page.is-dark .portal-purchase-channel-tabs {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.portal-tabler-page.is-dark .portal-purchase-channel-tab {
+  color: #9caec5;
+}
+
+.portal-tabler-page.is-dark .portal-purchase-channel-tab.active {
+  background: #1f2a3d;
+  border-color: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.45);
+  color: #f8fafc;
+}
+
+.portal-tabler-page.is-dark .portal-purchase-cancel {
+  background: rgba(255, 255, 255, 0.08);
+  color: #dbe7f5;
+}
+
+.portal-tabler-page.is-dark .portal-purchase-cancel:hover,
+.portal-tabler-page.is-dark .portal-purchase-cancel:focus-visible {
+  background: rgba(248, 113, 113, 0.14);
+  color: #fca5a5;
 }
 
 .portal-tabler-page.is-dark .portal-purchase-title {

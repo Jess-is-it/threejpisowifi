@@ -202,8 +202,13 @@ const PORTAL_TRANSLATIONS = {
     'Selected total': 'Kabuuang napili',
     'Saved {amount}': 'Nakatipid {amount}',
     'Opening...': 'Binubuksan...',
-    'Buy WiFi / IPTV Pass': 'Bumili ng WiFi / IPTV Pass',
-    'Choose how you want to pay first.': 'Piliin muna kung paano magbabayad.',
+    'Buy Online': 'Bumili Online',
+    'Buy in Stores': 'Bumili sa Stores',
+    'Use GCash, Maya, credit card, and other PayMongo options.': 'Gamitin ang GCash, Maya, credit card, at iba pang PayMongo options.',
+    'Pay at a physical store near you.': 'Magbayad sa physical store na malapit sa iyo.',
+    'ONLINE': 'ONLINE',
+    'STORES': 'STORES',
+    'Cancel transaction': 'Kanselahin ang transaction',
     'Online Payment': 'Online Payment',
     'Store Payment': 'Store Payment',
     'Pay through available PayMongo methods.': 'Magbayad gamit ang available PayMongo methods.',
@@ -2890,6 +2895,7 @@ function PortalApp() {
   }
 
   function selectPortalPurchaseChannel(nextChannel) {
+    if (nextChannel === purchaseChannel) return;
     if (!purchasePassType) setPurchasePassType('SINGLE_DEVICE');
     setPurchaseChannel(nextChannel);
     setSelectedProductCategory(null);
@@ -4764,57 +4770,59 @@ function PortalApp() {
             )}
             <div className="portal-purchase-flow">
               {purchaseChannel && (
-                <div className="portal-purchase-breadcrumbs" aria-label="Purchase choices">
-                  <button type="button" onClick={() => resetPortalPurchaseStep('channel')}>
-                    {purchaseChannel === 'ONLINE' ? <IconCash size={14} /> : <IconShoppingBag size={14} />}
-                    {purchaseChannel === 'ONLINE' ? `${t('Online Payment')} · ${selectedPaymentLabel}` : t('Store Payment')}
+                <div className="portal-purchase-channel-tabs" aria-label="Purchase channel">
+                  <button
+                    className={`portal-purchase-channel-tab ${purchaseChannel === 'ONLINE' ? 'active' : ''}`}
+                    type="button"
+                    onClick={() => selectPortalPurchaseChannel('ONLINE')}
+                  >
+                    <IconCash size={16} />
+                    {t('ONLINE')}
                   </button>
-                  <IconChevronRight size={14} />
-                  <span className="portal-purchase-crumb-static">
-                    {effectivePurchasePassType === 'MULTI_DEVICE' ? <IconUsers size={14} /> : <IconUser size={14} />}
-                    {selectedPassLabel}
-                  </span>
+                  <button
+                    className={`portal-purchase-channel-tab ${purchaseChannel === 'STORE' ? 'active' : ''}`}
+                    type="button"
+                    onClick={() => selectPortalPurchaseChannel('STORE')}
+                  >
+                    <IconShoppingBag size={16} />
+                    {t('STORES')}
+                  </button>
+                  <button className="portal-purchase-cancel" type="button" aria-label={t('Cancel transaction')} onClick={() => resetPortalPurchaseStep('channel')}>
+                    <IconX size={17} />
+                  </button>
                 </div>
               )}
               {!purchaseChannel ? (
-                <>
-                  <div className="portal-purchase-heading">
-                    <div>
-                      <div className="portal-purchase-title">{t('Buy WiFi / IPTV Pass')}</div>
-                      <div className="portal-purchase-subtitle">{t('Choose how you want to pay first.')}</div>
-                    </div>
-                  </div>
-                  <div className="portal-choice-grid">
-                    <button
-                      className="portal-choice-card"
-                      type="button"
-                      onClick={() => {
-                        if (onlinePaymentMethods[0] && !selectedPaymentMethodRow) setSelectedPaymentMethod(onlinePaymentMethods[0].id);
-                        selectPortalPurchaseChannel('ONLINE');
-                      }}
-                    >
-                      <span className="portal-choice-icon"><IconCash size={24} /></span>
-                      <span>
-                        <strong>{t('Online Payment')}</strong>
-                        <small>{t('Pay through available PayMongo methods.')}</small>
-                        <span className="portal-payment-logo-row">
-                          {onlinePaymentMethods.length ? onlinePaymentMethods.map((method) => (
-                            <span className={`portal-payment-logo is-${method.id}`} key={method.id}>{paymentMethodLogo(method)}</span>
-                          )) : <span className="portal-payment-logo">{t('Not configured')}</span>}
-                        </span>
+                <div className="portal-choice-grid">
+                  <button
+                    className="portal-choice-card"
+                    type="button"
+                    onClick={() => {
+                      if (onlinePaymentMethods[0] && !selectedPaymentMethodRow) setSelectedPaymentMethod(onlinePaymentMethods[0].id);
+                      selectPortalPurchaseChannel('ONLINE');
+                    }}
+                  >
+                    <span className="portal-choice-icon"><IconCash size={24} /></span>
+                    <span>
+                      <strong>{t('Buy Online')}</strong>
+                      <small>{t('Use GCash, Maya, credit card, and other PayMongo options.')}</small>
+                      <span className="portal-payment-logo-row">
+                        {onlinePaymentMethods.length ? onlinePaymentMethods.map((method) => (
+                          <span className={`portal-payment-logo is-${method.id}`} key={method.id}>{paymentMethodLogo(method)}</span>
+                        )) : <span className="portal-payment-logo">{t('Not configured')}</span>}
                       </span>
-                      <span className="portal-choice-radio" aria-hidden="true" />
-                    </button>
-                    <button className="portal-choice-card" type="button" onClick={() => selectPortalPurchaseChannel('STORE')}>
-                      <span className="portal-choice-icon"><IconShoppingBag size={24} /></span>
-                      <span>
-                        <strong>{t('Store Payment')}</strong>
-                        <small>{t('Pay through an available store in your connected site.')}</small>
-                      </span>
-                      <span className="portal-choice-radio" aria-hidden="true" />
-                    </button>
-                  </div>
-                </>
+                    </span>
+                    <span className="portal-choice-radio" aria-hidden="true" />
+                  </button>
+                  <button className="portal-choice-card" type="button" onClick={() => selectPortalPurchaseChannel('STORE')}>
+                    <span className="portal-choice-icon"><IconShoppingBag size={24} /></span>
+                    <span>
+                      <strong>{t('Buy in Stores')}</strong>
+                      <small>{t('Pay at a physical store near you.')}</small>
+                    </span>
+                    <span className="portal-choice-radio" aria-hidden="true" />
+                  </button>
+                </div>
               ) : purchaseChannel === 'STORE' ? (
                 <div className="portal-store-payment-panel">
                   <div className="portal-store-payment-header">
