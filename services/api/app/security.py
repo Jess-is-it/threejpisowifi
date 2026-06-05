@@ -21,7 +21,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def create_token(admin: dict) -> str:
-    expires = datetime.now(timezone.utc) + timedelta(minutes=int(os.getenv("JWT_EXPIRE_MINUTES", "720")))
+    expires = datetime.now(timezone.utc) + timedelta(minutes=int(os.getenv("JWT_EXPIRE_MINUTES", "240")))
     payload = {"sub": str(admin["id"]), "username": admin["username"], "role": admin["role"], "exp": expires}
     return jwt.encode(payload, os.environ["JWT_SECRET"], algorithm="HS256")
 

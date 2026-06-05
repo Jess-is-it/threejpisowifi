@@ -3,12 +3,14 @@ import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import '@tabler/core/dist/css/tabler.min.css';
 import ApexCharts from 'apexcharts';
+import QRCode from 'qrcode';
 import {
   IconActivity,
   IconAlertTriangle,
   IconBan,
   IconBell,
   IconBuildingStore,
+  IconCamera,
   IconBrandChrome,
   IconCalendarStats,
   IconChevronRight,
@@ -37,6 +39,7 @@ import {
   IconLock,
   IconLogout,
   IconMapPin,
+  IconMenu2,
   IconMinus,
   IconArchive,
   IconMail,
@@ -50,6 +53,7 @@ import {
   IconPlayerStop,
   IconPlus,
   IconSend,
+  IconQrcode,
   IconRefresh,
   IconRouter,
   IconRobot,
@@ -202,6 +206,8 @@ const PORTAL_TRANSLATIONS = {
     'Selected total': 'Kabuuang napili',
     'Saved {amount}': 'Nakatipid {amount}',
     'Opening...': 'Binubuksan...',
+    'Back to categories': 'Balik sa categories',
+    'Back to stores': 'Balik sa stores',
     'Buy Online': 'Bumili Online',
     'Buy in Stores': 'Bumili sa Stores',
     'Use GCash, Maya, credit card, and other PayMongo options.': 'Gamitin ang GCash, Maya, credit card, at iba pang PayMongo options.',
@@ -211,11 +217,16 @@ const PORTAL_TRANSLATIONS = {
     'Cancel transaction': 'Kanselahin ang transaction',
     'Online Payment': 'Online Payment',
     'Store Payment': 'Store Payment',
+    'Choose': 'Piliin',
+    'Location not set': 'Walang lokasyon',
+    'Store map': 'Mapa ng stores',
+    'View all stores on map': 'Tingnan lahat ng stores sa mapa',
+    'Find every available store location in one map view.': 'Tingnan lahat ng available store location sa isang mapa.',
     'Pay through available PayMongo methods.': 'Magbayad gamit ang available PayMongo methods.',
     'Pay through an available store in your connected site.': 'Magbayad sa available store sa connected site mo.',
     'Choose pass type': 'Pumili ng pass type',
-    'One Device Pass': 'One Device Pass',
-    'Multiple Device Pass': 'Multiple Device Pass',
+    'Single Pass': 'Single Pass',
+    'Multi-Pass': 'Multi-Pass',
     'For one phone or laptop': 'Para sa isang phone o laptop',
     'For shared device access': 'Para sa shared device access',
     'Available Packages': 'Available Packages',
@@ -405,6 +416,30 @@ function publicApi(path, options = {}) {
   });
 }
 
+function storeOwnerRequest(path, options = {}) {
+  const token = localStorage.getItem('centralwifi_store_owner_token');
+  return fetch(`${API}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {})
+    }
+  }).then(async (res) => {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'Request failed');
+    return data;
+  });
+}
+
+function storeOwnerDeviceToken() {
+  const existing = localStorage.getItem('centralwifi_store_owner_device_token');
+  if (existing) return existing;
+  const token = `sod_${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`}`;
+  localStorage.setItem('centralwifi_store_owner_device_token', token);
+  return token;
+}
+
 function uploadRequest(path, field, file) {
   const token = localStorage.getItem('centralwifi_token');
   const body = new FormData();
@@ -510,6 +545,8 @@ const routePages = {
   vouchers: 'Vouchers',
   'product-items': 'Product Items',
   'physical-stores': 'Physical Stores',
+  'physical-stores/store-map': 'Store Map',
+  'store-map': 'Store Map',
   sales: 'Sales',
   'wallet-manual-top-up': 'Wallet / Manual Top-Up',
   'captive-portal': 'Captive Portal',
@@ -540,6 +577,7 @@ function routeForPage(page) {
   if (page === 'Sites' || page === 'Sites Deployments') return '/admin/aps-deployment/sites';
   if (page === 'List of APs') return '/admin/aps-deployment/list-of-aps';
   if (page === 'Long Lat') return '/admin/aps-deployment/long-lat';
+  if (page === 'Store Map') return '/admin/physical-stores/store-map';
   return `/admin/${slugify(page)}`;
 }
 
@@ -924,6 +962,20 @@ function apMapStatusText(ap) {
   return 'AP status unknown';
 }
 
+function storeMapTone(store) {
+  const status = String(store?.status || store?.state || '').trim().toUpperCase();
+  if (status === 'ACTIVE') return 'green';
+  if (status === 'DISABLED') return 'red';
+  return store?.mapped ? 'green' : 'red';
+}
+
+function storeMapStatusText(store) {
+  const status = String(store?.status || store?.state || '').trim();
+  if (status === 'ACTIVE') return 'Store is active';
+  if (status === 'DISABLED') return 'Store is disabled';
+  return status || 'Store status unknown';
+}
+
 function streetViewEmbedUrl(ap) {
   const latitude = Number(ap?.map_latitude);
   const longitude = Number(ap?.map_longitude);
@@ -1146,9 +1198,18 @@ function PortalAvatarHeroView({
   );
 }
 
+const STORE_MAP_RETURN_MAX_AGE_MS = 5000;
+
+function shouldRestoreStorePaymentFromMap(params = new URLSearchParams(window.location.search)) {
+  if (params.get('purchase_channel') !== 'STORE') return false;
+  const returnedAt = Number(params.get('store_map_returned_at') || 0);
+  if (!returnedAt) return false;
+  return Date.now() - returnedAt <= STORE_MAP_RETURN_MAX_AGE_MS;
+}
+
 function PortalAppLegacy() {
   const [settings, setSettings] = useState(null);
-  const [sessionId, setSessionId] = useState(() => localStorage.getItem('centralwifi_portal_session') || '');
+  const [sessionId, setSessionId] = useState(() => new URLSearchParams(window.location.search).get('portal_session_id') || localStorage.getItem('centralwifi_portal_session') || '');
   const [deviceToken, setDeviceToken] = useState(() => localStorage.getItem('centralwifi_portal_device_token') || '');
   const [voucherCode, setVoucherCode] = useState('');
   const [result, setResult] = useState(null);
@@ -1708,7 +1769,7 @@ function PortalApp() {
   }
 
   const [settings, setSettings] = useState(null);
-  const [sessionId, setSessionId] = useState(() => localStorage.getItem('centralwifi_portal_session') || '');
+  const [sessionId, setSessionId] = useState(() => new URLSearchParams(window.location.search).get('portal_session_id') || localStorage.getItem('centralwifi_portal_session') || '');
   const [deviceToken, setDeviceToken] = useState(() => localStorage.getItem('centralwifi_portal_device_token') || '');
   const [profile, setProfile] = useState(null);
   const [status, setStatus] = useState(null);
@@ -1719,6 +1780,7 @@ function PortalApp() {
   const [paymentLoading, setPaymentLoading] = useState('');
   const [paymentChecking, setPaymentChecking] = useState(false);
   const [paymentResult, setPaymentResult] = useState(null);
+  const [dismissedPaymentNoticeKey, setDismissedPaymentNoticeKey] = useState('');
   const [portalNotice, setPortalNotice] = useState(null);
   const [portalNotificationPermission, setPortalNotificationPermission] = useState(() => portalNotificationPermissionStatus());
   const [portalBooting, setPortalBooting] = useState(true);
@@ -1739,21 +1801,44 @@ function PortalApp() {
   const purchaseSuccessKeyRef = useRef('');
   const [outsidePurchaseConfirm, setOutsidePurchaseConfirm] = useState(null);
   const [checkoutBrowserReminder, setCheckoutBrowserReminder] = useState(null);
-  const [portalScreen, setPortalScreen] = useState(() => (new URLSearchParams(window.location.search).get('payment_order_id') ? 'shop' : 'landing'));
+  const [portalScreen, setPortalScreen] = useState(() => {
+    const initialParams = new URLSearchParams(window.location.search);
+    return initialParams.get('payment_order_id') || initialParams.get('screen') === 'shop' || initialParams.get('purchase_channel')
+      ? 'shop'
+      : 'landing';
+  });
   const [selectedProductCategory, setSelectedProductCategory] = useState(null);
   const [moreInfoCategory, setMoreInfoCategory] = useState(null);
   const [selectedCategoryProductId, setSelectedCategoryProductId] = useState('');
   const [productQuantities, setProductQuantities] = useState({});
   const [selectedCategoryBarangays, setSelectedCategoryBarangays] = useState({});
+  const [barangayPickerOpen, setBarangayPickerOpen] = useState(false);
+  const [passTypeHelpOpen, setPassTypeHelpOpen] = useState(false);
   const [purchasePassType, setPurchasePassType] = useState('SINGLE_DEVICE');
-  const [purchaseChannel, setPurchaseChannel] = useState('');
+  const [purchaseChannel, setPurchaseChannel] = useState(() => {
+    const initialParams = new URLSearchParams(window.location.search);
+    return shouldRestoreStorePaymentFromMap(initialParams) ? 'STORE' : '';
+  });
   const [physicalStores, setPhysicalStores] = useState([]);
   const [physicalStoresSite, setPhysicalStoresSite] = useState(null);
   const [physicalStoresLoading, setPhysicalStoresLoading] = useState(false);
   const [physicalStoresError, setPhysicalStoresError] = useState('');
-  const [physicalStoresLocationMessage, setPhysicalStoresLocationMessage] = useState('');
   const [selectedPhysicalStore, setSelectedPhysicalStore] = useState(null);
   const [storeItemMoreInfo, setStoreItemMoreInfo] = useState(null);
+  const [storeItemQuantities, setStoreItemQuantities] = useState({});
+  const [storePurchaseMessage, setStorePurchaseMessage] = useState(null);
+  const [storePurchaseOption, setStorePurchaseOption] = useState(null);
+  const [storePurchaseCreating, setStorePurchaseCreating] = useState('');
+  const [storePurchaseResult, setStorePurchaseResult] = useState(null);
+  const [storePurchaseAutoActivate, setStorePurchaseAutoActivate] = useState(false);
+  const [storePurchaseQrDataUrl, setStorePurchaseQrDataUrl] = useState('');
+  const [storeOutsidePurchaseConfirm, setStoreOutsidePurchaseConfirm] = useState(null);
+  const [storePendingRequests, setStorePendingRequests] = useState([]);
+  const [storePendingLoading, setStorePendingLoading] = useState(false);
+  const [storePendingMessage, setStorePendingMessage] = useState(null);
+  const [storeRequestModal, setStoreRequestModal] = useState(null);
+  const [storeRequestQrDataUrl, setStoreRequestQrDataUrl] = useState('');
+  const [storeRequestFilter, setStoreRequestFilter] = useState('ALL');
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('gcash');
   const [portalCoverage, setPortalCoverage] = useState(null);
   const [portalCoverageOpen, setPortalCoverageOpen] = useState(false);
@@ -1817,6 +1902,8 @@ function PortalApp() {
   const avatarNoteTimerRef = useRef(null);
   const avatarNoteRunRef = useRef(0);
   const avatarNoteIndexRef = useRef(-1);
+  const physicalStoresRequestRef = useRef(0);
+  const physicalStoresDistanceLoadedRef = useRef(false);
   const mainPageIntroNoteShownRef = useRef(false);
   const profileMessageTimerRef = useRef(null);
   const avatarEventNoteRef = useRef(null);
@@ -1826,12 +1913,42 @@ function PortalApp() {
   const expiredNoticeSentRef = useRef('');
   const portalOpenedNoticeSentRef = useRef('');
   const paymentNotificationSentRef = useRef('');
+  const paymentResultRef = useRef(null);
+  const dismissedPaymentNoticeKeyRef = useRef('');
+  const cancelledPaymentOrdersRef = useRef(new Set());
+  const handledStoreApprovalRef = useRef(new Set());
+  const storeRequestStatusRef = useRef(new Map());
   const [avatarEventNoteSignal, setAvatarEventNoteSignal] = useState(0);
   const params = new URLSearchParams(window.location.search);
   const paymentOrderFromUrl = params.get('payment_order_id') || params.get('payment_order') || params.get('order');
   const handoffBridge = params.get('handoff_bridge') === '1';
   const bridgeChecked = params.get('bridge_checked') === '1';
   const rawQueryParams = Object.fromEntries(params.entries());
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (query.get('purchase_channel') !== 'STORE' || shouldRestoreStorePaymentFromMap(query)) return;
+    query.delete('purchase_channel');
+    query.delete('store_map_returned_at');
+    const nextQuery = query.toString();
+    window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash || ''}`);
+  }, []);
+  useEffect(() => {
+    paymentResultRef.current = paymentResult;
+  }, [paymentResult]);
+  useEffect(() => {
+    const handlePageShow = (event) => {
+      if (!event.persisted) return;
+      const restoredParams = new URLSearchParams(window.location.search);
+      const restoredPaymentOrder = restoredParams.get('payment_order_id') || restoredParams.get('payment_order') || restoredParams.get('order');
+      if (restoredPaymentOrder) return;
+      const restoredPayment = paymentResultRef.current;
+      if (restoredPayment && !paymentResultIsTerminal(restoredPayment)) dismissPaymentNotice(restoredPayment);
+      setPaymentChecking(false);
+      setPaymentLoading('');
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, []);
   const t = (text, values = {}) => portalTranslate(portalLanguage, text, values);
   const title = settings?.portal_title || '3J WiFi';
   const portalMessageAutoHideSeconds = Math.max(1, Math.min(60, Number(settings?.portal_message_auto_hide_seconds || 6)));
@@ -1910,6 +2027,87 @@ function PortalApp() {
       device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || context.device_token,
       ...extra,
     };
+  }
+
+  function currentBlockedDevice() {
+    if (status?.blocked_device?.blocked) return status.blocked_device;
+    if (result?.blocked_device?.blocked) return result.blocked_device;
+    return null;
+  }
+
+  function portalBlockedMessage(blocked = currentBlockedDevice()) {
+    return blocked?.message || t('This device is blocked. Please contact the operator.');
+  }
+
+  function guardPortalBlockedAction() {
+    const blocked = currentBlockedDevice();
+    if (!blocked) return false;
+    setPaymentLoading('');
+    setStorePurchaseCreating('');
+    setPaymentResult(null);
+    setStorePurchaseMessage(null);
+    setBagClaimMessage(null);
+    setResult({ status: 'FAILED', message: portalBlockedMessage(blocked), blocked_device: blocked });
+    return true;
+  }
+
+  function paymentNoticeKey(payment = null) {
+    if (!payment) return '';
+    return payment.payment_order_id || payment.checkout_url || `${payment.status || ''}-${payment.fulfilled_at || payment.fulfillment_status || payment.last_error || ''}`;
+  }
+
+  function paymentResultIsTerminal(payment = null) {
+    if (!payment) return false;
+    if (['FAILED', 'CANCELLED', 'EXPIRED', 'NOT_FOUND'].includes(payment.status)) return true;
+    return payment.status === 'PAID' && ['FULFILLED', 'FAILED'].includes(payment.fulfillment_status);
+  }
+
+  function showPaymentResult(payment, options = {}) {
+    if (!payment) {
+      setPaymentResult(null);
+      return;
+    }
+    const key = paymentNoticeKey(payment);
+    const terminal = paymentResultIsTerminal(payment);
+    if (!options.force && key && dismissedPaymentNoticeKeyRef.current === key && !terminal) return;
+    if (terminal && key && dismissedPaymentNoticeKeyRef.current === key) {
+      dismissedPaymentNoticeKeyRef.current = '';
+      setDismissedPaymentNoticeKey('');
+    }
+    setPaymentResult(payment);
+  }
+
+  function dismissPaymentNotice(payment = paymentResultRef.current) {
+    const key = paymentNoticeKey(payment);
+    if (key && !paymentResultIsTerminal(payment)) {
+      dismissedPaymentNoticeKeyRef.current = key;
+      setDismissedPaymentNoticeKey(key);
+    }
+    setPaymentResult(null);
+  }
+
+  async function cancelPaymentCheckout(payment = paymentResultRef.current) {
+    const orderId = payment?.payment_order_id;
+    if (orderId) cancelledPaymentOrdersRef.current.add(orderId);
+    dismissPaymentNotice(payment);
+    setPaymentChecking(false);
+    setPaymentLoading('');
+    clearPaymentOrderFromUrl();
+    if (!orderId || paymentResultIsTerminal(payment)) return;
+    try {
+      await publicApi(`/portal/payments/${encodeURIComponent(orderId)}/cancel`, {
+        method: 'POST',
+        body: JSON.stringify(payload())
+      });
+    } catch {
+      // Local cancellation still hides the stale pending panel; backend cancellation is best effort.
+    }
+  }
+
+  function openBlockedContactAdmin() {
+    setHelpOpen(true);
+    setHelpMode('chat');
+    loadSupportConversation();
   }
 
   function portalNotificationUrl(portalSettings = settings) {
@@ -2003,6 +2201,14 @@ function PortalApp() {
     setStatus(nextStatus);
     if (nextStatus.profile) setProfile(nextStatus.profile);
     if (nextStatus.bag) setBag(nextStatus.bag);
+    if (nextStatus?.blocked_device?.blocked) {
+      setPaymentResult(null);
+      setSelectedProductCategory(null);
+      setSelectedPhysicalStore(null);
+      setStorePurchaseOption(null);
+      setStorePurchaseResult(null);
+      setPortalScreen('shop');
+    }
     return nextStatus;
   }
 
@@ -2017,6 +2223,12 @@ function PortalApp() {
       setResult({ status: 'FAILED', message: session.mac_rebind_message || 'We found your old session, but could not reconnect this device automatically.' });
     }
     const nextStatus = await refreshStatus(session.portal_session_id);
+    if (session?.blocked_device?.blocked || nextStatus?.blocked_device?.blocked) {
+      const blockedMessage = session?.blocked_device?.message || nextStatus?.blocked_device?.message || 'This device is blocked. Please contact the operator.';
+      setResult({ status: 'FAILED', message: blockedMessage });
+      setPortalScreen('shop');
+      return;
+    }
     if (handoffBridge) {
       if (session.portal_handoff_url) {
         window.location.replace(session.portal_handoff_url);
@@ -2059,7 +2271,7 @@ function PortalApp() {
   }, [settings]);
 
   useEffect(() => {
-    const sourceRemaining = Math.max(0, Number(result?.remaining_time_seconds ?? status?.remaining_time_seconds ?? 0) || 0);
+    const sourceRemaining = Math.max(0, Number(status?.remaining_time_seconds ?? result?.remaining_time_seconds ?? 0) || 0);
     setTimerRemaining(sourceRemaining);
   }, [result?.remaining_time_seconds, status?.remaining_time_seconds, result?.access_expires_at, status?.access_expires_at]);
 
@@ -2077,9 +2289,10 @@ function PortalApp() {
     let timerId;
     let attempts = 0;
     const poll = async () => {
+      if (cancelledPaymentOrdersRef.current.has(paymentOrderFromUrl)) return;
       attempts += 1;
       const data = await checkPaymentStatus(paymentOrderFromUrl);
-      const terminal = data?.status === 'FAILED' || (data?.status === 'PAID' && ['FULFILLED', 'FAILED'].includes(data?.fulfillment_status));
+      const terminal = paymentResultIsTerminal(data);
       if (!stopped && !terminal && attempts < 24) timerId = window.setTimeout(poll, 3000);
     };
     poll();
@@ -2195,12 +2408,12 @@ function PortalApp() {
     }
   }
 
-  async function checkPaymentStatus(orderId = paymentOrderFromUrl) {
+  async function checkPaymentStatus(orderId = paymentOrderFromUrl, options = {}) {
     if (!orderId) return null;
     setPaymentChecking(true);
     try {
       const data = await publicRequest(`/portal/payments/${encodeURIComponent(orderId)}/status`);
-      setPaymentResult(data);
+      showPaymentResult(data, { force: Boolean(options.force) });
       persistSession(data);
       if (data.status === 'PAID' && data.fulfillment_status === 'FULFILLED') {
         const nextStatus = await refreshStatus(data.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session'));
@@ -2216,7 +2429,7 @@ function PortalApp() {
       return data;
     } catch (err) {
       const failedResult = { status: 'FAILED', last_error: err.message };
-      setPaymentResult(failedResult);
+      showPaymentResult(failedResult, { force: true });
       return failedResult;
     } finally {
       setPaymentChecking(false);
@@ -2226,14 +2439,13 @@ function PortalApp() {
   async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false, paymentMethod = selectedPaymentMethod, confirmedBrowserReminder = false) {
     setResult(null);
     setPaymentResult(null);
+    if (guardPortalBlockedAction()) return;
     const safeQuantity = Math.max(1, Math.min(Number(purchaseQuantity || 1), 365));
     let currentStatus = status;
-    if (!currentStatus?.network_presence) {
-      try {
-        currentStatus = await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session')) || currentStatus;
-      } catch {
-        currentStatus = status;
-      }
+    try {
+      currentStatus = await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session')) || currentStatus;
+    } catch {
+      currentStatus = status;
     }
     const outside3jNetwork = currentStatus?.network_presence?.connected_to_3j_ap === false;
     let currentProfile = profile;
@@ -2255,7 +2467,6 @@ function PortalApp() {
     }
     if (
       !confirmedOutside
-      && status?.outside_network_warning?.enabled
       && outside3jNetwork
     ) {
       setOutsidePurchaseConfirm({ item, quantity: safeQuantity, confirmed: false });
@@ -2265,7 +2476,7 @@ function PortalApp() {
     const barangayOnly = isBarangayOnlyProduct(selectedProductCategory || item) || isBarangayOnlyProduct(item);
     const selectedBarangay = barangayOnly ? selectedBarangayForCategory(selectedProductCategory || item) : '';
     if (barangayOnly && !selectedBarangay) {
-      setPaymentResult({ status: 'FAILED', last_error: t('Choose a Barangay before buying this package.') });
+      showPaymentResult({ status: 'FAILED', last_error: t('Choose a Barangay before buying this package.') }, { force: true });
       return;
     }
     setPaymentLoading(item.id);
@@ -2281,9 +2492,10 @@ function PortalApp() {
         }))
       });
       if (!data.checkout_url) throw new Error('PayMongo did not return a checkout link.');
+      setPaymentLoading('');
       window.location.href = data.checkout_url;
     } catch (err) {
-      setPaymentResult({ status: 'FAILED', last_error: err.message });
+      showPaymentResult({ status: 'FAILED', last_error: err.message }, { force: true });
       setPaymentLoading('');
     }
   }
@@ -2298,6 +2510,7 @@ function PortalApp() {
 
   async function claimVoucherToBag(event) {
     event.preventDefault();
+    if (guardPortalBlockedAction()) return;
     const code = bagVoucherCode.trim();
     if (!code) {
       setBagClaimMessage({ status: 'FAILED', message: 'Enter a voucher code.' });
@@ -2323,6 +2536,7 @@ function PortalApp() {
   }
 
   async function saveBagAutoActivate(enabled) {
+    if (guardPortalBlockedAction()) return;
     setBagSaving(true);
     try {
       const data = await publicApi('/portal/bag/settings', {
@@ -2338,6 +2552,7 @@ function PortalApp() {
   }
 
   async function reorderBagItems(nextItems) {
+    if (guardPortalBlockedAction()) return;
     setBag((current) => current ? { ...current, queued_items: nextItems } : current);
     try {
       const data = await publicApi('/portal/bag/reorder', {
@@ -2352,6 +2567,7 @@ function PortalApp() {
   }
 
   async function activateBagItem(itemId) {
+    if (guardPortalBlockedAction()) return;
     setBagSaving(true);
     try {
       const data = await publicApi(`/portal/bag/items/${encodeURIComponent(itemId)}/activate`, {
@@ -2609,6 +2825,7 @@ function PortalApp() {
   }
 
   async function redeemWelcomeGift() {
+    if (guardPortalBlockedAction()) return;
     setGiftRedeeming(true);
     setResult(null);
     try {
@@ -2724,37 +2941,48 @@ function PortalApp() {
   const canCheckoutOnline = Boolean(payments.enabled && payments.ready_for_checkout && selectedPaymentMethodRow);
   const canCheckoutWithGcash = canCheckoutOnline;
   const effectivePurchasePassType = purchasePassType || 'SINGLE_DEVICE';
-  const selectedPassLabel = effectivePurchasePassType === 'MULTI_DEVICE' ? t('Multiple Device Pass') : t('One Device Pass');
+  const selectedPassLabel = effectivePurchasePassType === 'MULTI_DEVICE' ? t('Multi-Pass') : t('Single Pass');
   const selectedPaymentLabel = selectedPaymentMethodRow?.label || 'Online';
-  const visibleProductCategoryGroups = productCategoryGroups.filter((category) => {
-    return (category.items || []).some((item) => productPassType(item) === effectivePurchasePassType);
-  });
+  const visibleProductCategoryGroups = productCategoryGroups;
   const paymentSuccessReady = Boolean(paymentResult?.status === 'PAID' && paymentResult?.fulfillment_status === 'FULFILLED');
+  const paymentResultNoticeKey = paymentNoticeKey(paymentResult);
+  const paymentResultDismissed = Boolean(
+    paymentResult
+    && paymentResultNoticeKey
+    && dismissedPaymentNoticeKey === paymentResultNoticeKey
+    && !paymentResultIsTerminal(paymentResult)
+  );
   const autoPortalDark = (() => {
     const hour = new Date(themeClock).getHours();
     return hour >= 18 || hour < 6;
   })();
   const portalDark = portalDarkOverride === 'auto' ? autoPortalDark : portalDarkOverride === 'dark';
-  const unlimited = result?.unlimited ?? status?.unlimited;
-  const accessExpiresAt = result?.access_expires_at ?? status?.access_expires_at;
-  const accessExpired = Boolean(result?.access_expired || status?.access_expired || status?.status === 'EXPIRED');
-  const hasRemainingAccess = Boolean(!accessExpired && (unlimited || timerRemaining > 0));
-  const connected = Boolean((result?.connected ?? status?.connected) && hasRemainingAccess);
+  const unlimited = status?.unlimited ?? result?.unlimited;
+  const accessExpiresAt = status?.access_expires_at ?? result?.access_expires_at;
+  const blockedDevice = currentBlockedDevice();
+  const portalBlocked = Boolean(blockedDevice?.blocked);
+  const effectiveHelpMode = portalBlocked ? 'chat' : helpMode;
+  const accessExpired = status
+    ? Boolean(portalBlocked || status.access_expired || status.status === 'EXPIRED')
+    : Boolean(result?.access_expired);
+  const hasRemainingAccess = Boolean(!portalBlocked && !accessExpired && (unlimited || timerRemaining > 0));
+  const connected = Boolean((status?.connected ?? result?.connected) && hasRemainingAccess);
   const remainingDisplay = unlimited ? 'Unlimited' : formatCountdown(timerRemaining);
-  const avatarConnected = hasRemainingAccess;
+  const avatarConnected = hasRemainingAccess && !portalBlocked;
   const networkPresence = status?.network_presence || {};
   const outsideNetwork = networkPresence.connected_to_3j_ap === false;
   const activeBagItems = Array.isArray(bag?.active_items) && bag.active_items.length
     ? bag.active_items
     : (bag?.active_item ? [bag.active_item] : []);
   const queuedBagItems = bag?.queued_items || [];
+  const pendingStoreRequestCount = (storePendingRequests || []).filter((request) => request.status === 'PENDING').length;
   const hasReadyBagItems = queuedBagItems.length > 0;
   const firstReadyBagItem = queuedBagItems[0] || null;
   const firstReadyBagDeviceLabel = firstReadyBagItem?.device_scope === 'MULTI_DEVICE'
     ? `${firstReadyBagItem?.allowed_devices || 1} devices`
     : '1 device';
   const firstReadyBagTimeLabel = formatSeconds(firstReadyBagItem?.remaining_seconds || firstReadyBagItem?.duration_seconds || 0);
-  const bagItemCount = activeBagItems.length + queuedBagItems.length;
+  const bagItemCount = activeBagItems.length + queuedBagItems.length + pendingStoreRequestCount;
   const activeRemainingCards = activeBagItems.length ? activeBagItems : [null];
   const activeBagItemRemainingSeconds = (item) => {
     if (!item) return timerRemaining;
@@ -2889,9 +3117,15 @@ function PortalApp() {
 
   function selectPortalPassType(nextType) {
     setPurchasePassType(nextType || 'SINGLE_DEVICE');
-    setSelectedProductCategory(null);
     setSelectedCategoryProductId('');
     setProductQuantities({});
+    setStoreItemQuantities({});
+    setStorePurchaseMessage(null);
+    setStorePurchaseOption(null);
+    setStorePurchaseResult(null);
+    setStorePurchaseQrDataUrl('');
+    setBarangayPickerOpen(false);
+    setPassTypeHelpOpen(false);
   }
 
   function selectPortalPurchaseChannel(nextChannel) {
@@ -2901,10 +3135,16 @@ function PortalApp() {
     setSelectedProductCategory(null);
     setSelectedCategoryProductId('');
     setProductQuantities({});
+    setStoreItemQuantities({});
+    setStorePurchaseMessage(null);
+    setStorePurchaseOption(null);
+    setStorePurchaseResult(null);
+    setStorePurchaseQrDataUrl('');
+    setBarangayPickerOpen(false);
     setSelectedPhysicalStore(null);
-    if (nextChannel === 'STORE') {
-      loadPortalPhysicalStores().catch(() => null);
-      requestStoreCustomerLocation();
+    if (nextChannel !== 'STORE') {
+      setPortalCustomerLocation(null);
+      physicalStoresDistanceLoadedRef.current = false;
     }
   }
 
@@ -2918,40 +3158,113 @@ function PortalApp() {
     setSelectedProductCategory(null);
     setSelectedCategoryProductId('');
     setProductQuantities({});
+    setStoreItemQuantities({});
+    setStorePurchaseMessage(null);
+    setStorePurchaseOption(null);
+    setStorePurchaseResult(null);
+    setStorePurchaseQrDataUrl('');
+    setBarangayPickerOpen(false);
     setSelectedPhysicalStore(null);
   }
 
-  async function loadPortalPhysicalStores(targetSessionId = sessionId, location = portalCustomerLocation) {
+  async function loadPortalPhysicalStores(targetSessionId = sessionId, location = portalCustomerLocation, options = {}) {
     if (!targetSessionId) return null;
-    setPhysicalStoresLoading(true);
+    const requestId = physicalStoresRequestRef.current + 1;
+    physicalStoresRequestRef.current = requestId;
+    const background = Boolean(options.background);
+    const hasExistingStores = physicalStores.length > 0;
+    if (!background || !hasExistingStores) setPhysicalStoresLoading(true);
     setPhysicalStoresError('');
     try {
       const params = new URLSearchParams({ portal_session_id: targetSessionId });
-      if (location?.latitude !== undefined && location?.longitude !== undefined) {
+      const requestHasLocation = isGoogleChromeBrowser() && location?.latitude !== undefined && location?.longitude !== undefined;
+      if (requestHasLocation) {
         params.set('customer_lat', String(location.latitude));
         params.set('customer_lng', String(location.longitude));
       }
       const data = await publicRequest(`/portal/physical-stores?${params.toString()}`);
+      if (!requestHasLocation && physicalStoresDistanceLoadedRef.current) return data;
+      if (requestHasLocation) physicalStoresDistanceLoadedRef.current = true;
       setPhysicalStores(data.stores || []);
       setPhysicalStoresSite(data.site || null);
       setSelectedPhysicalStore((current) => current ? (data.stores || []).find((store) => store.id === current.id) || null : null);
+      setPhysicalStoresLoading(false);
       return data;
     } catch (error) {
-      setPhysicalStores([]);
-      setPhysicalStoresSite(null);
-      setPhysicalStoresError(error.message || 'Store payment locations could not be loaded.');
+      if (requestId !== physicalStoresRequestRef.current) return null;
+      if (!background || !hasExistingStores) {
+        setPhysicalStores([]);
+        setPhysicalStoresSite(null);
+        setPhysicalStoresError(error.message || 'Store payment locations could not be loaded.');
+      }
       return null;
     } finally {
-      setPhysicalStoresLoading(false);
+      if (requestId === physicalStoresRequestRef.current) setPhysicalStoresLoading(false);
     }
   }
 
-  function requestStoreCustomerLocation() {
-    if (!navigator.geolocation) {
-      setPhysicalStoresLocationMessage('Location is unavailable in this browser. Store distance will show after location is allowed.');
+  async function loadStorePendingRequests(targetSessionId = sessionId, options = {}) {
+    const publicSessionId = targetSessionId || localStorage.getItem('centralwifi_portal_session') || '';
+    if (!publicSessionId) return null;
+    const background = Boolean(options.background);
+    if (!background) setStorePendingLoading(true);
+    try {
+      const params = new URLSearchParams({ portal_session_id: publicSessionId });
+      params.set('status', options.status || 'ALL');
+      const currentDeviceToken = deviceToken || localStorage.getItem('centralwifi_portal_device_token') || '';
+      if (currentDeviceToken) params.set('device_token', currentDeviceToken);
+      const data = await publicRequest(`/portal/store-purchase-requests?${params.toString()}`);
+      setStorePendingRequests(data.requests || []);
+      if (!background) setStorePendingMessage(null);
+      return data;
+    } catch (error) {
+      if (!background) setStorePendingMessage({ status: 'ERROR', message: error.message || 'Store purchase requests could not be loaded.' });
+      return null;
+    } finally {
+      if (!background) setStorePendingLoading(false);
+    }
+  }
+
+  async function refreshAfterStoreApproval(requestRow) {
+    if (!requestRow?.public_id || handledStoreApprovalRef.current.has(requestRow.public_id)) return;
+    handledStoreApprovalRef.current.add(requestRow.public_id);
+    setStorePurchaseResult(null);
+    setStorePurchaseOption(null);
+    setStorePurchaseQrDataUrl('');
+    setStorePendingMessage(null);
+    if (storeRequestModal?.public_id === requestRow.public_id) setStoreRequestModal(null);
+    queueAvatarCustomerMessage('Store purchase approved. Your WiFi time is being activated.', 'success');
+    const publicSessionId = sessionId || localStorage.getItem('centralwifi_portal_session');
+    const delays = [0, 1200, 3000, 6000];
+    let latestStatus = null;
+    for (const delayMs of delays) {
+      if (delayMs) {
+        await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      }
+      try {
+        latestStatus = await refreshStatus(publicSessionId);
+        if (latestStatus?.bag) setBag(latestStatus.bag);
+        const hasTime = Number(latestStatus?.remaining_time_seconds || 0) > 0 || latestStatus?.unlimited;
+        const gatewayOk = latestStatus?.connected || latestStatus?.omada_authorization_status === 'AUTHORIZED' || latestStatus?.mikrotik_authorization_status === 'AUTHORIZED';
+        if (hasTime && gatewayOk) break;
+      } catch (_error) {
+        // Keep retrying briefly; Omada can take a few seconds to apply authorization.
+      }
+    }
+    if (latestStatus?.authorization_error) {
+      setResult({ status: 'FAILED', message: `Store purchase was approved, but gateway authorization is delayed: ${latestStatus.authorization_error}` });
+    }
+  }
+
+  function requestStoreCustomerLocation(options = {}) {
+    const targetSessionId = options.sessionId || sessionId || localStorage.getItem('centralwifi_portal_session') || '';
+    if (!isGoogleChromeBrowser()) {
+      setPortalCustomerLocation(null);
       return;
     }
-    setPhysicalStoresLocationMessage('Detecting your location for store distance...');
+    if (!navigator.geolocation) {
+      return;
+    }
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const location = {
@@ -2960,20 +3273,102 @@ function PortalApp() {
           accuracy: position.coords.accuracy,
         };
         setPortalCustomerLocation(location);
-        setPhysicalStoresLocationMessage('');
-        loadPortalPhysicalStores(sessionId, location).catch(() => null);
+        loadPortalPhysicalStores(targetSessionId, location, { background: true }).catch(() => null);
       },
-      () => {
-        setPhysicalStoresLocationMessage('Allow location to show how far each store is from you.');
-      },
+      () => null,
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
     );
   }
 
   useEffect(() => {
     if (purchaseChannel !== 'STORE' || !sessionId) return;
-    loadPortalPhysicalStores(sessionId).catch(() => null);
+    if (!portalCustomerLocation) physicalStoresDistanceLoadedRef.current = false;
+    loadPortalPhysicalStores(sessionId, portalCustomerLocation, { background: physicalStores.length > 0 }).catch(() => null);
+    loadStorePendingRequests(sessionId, { background: true }).catch(() => null);
+    if (isGoogleChromeBrowser() && !portalCustomerLocation) {
+      requestStoreCustomerLocation({ sessionId });
+    }
   }, [purchaseChannel, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId) return undefined;
+    loadStorePendingRequests(sessionId, { background: true }).catch(() => null);
+    const timer = window.setInterval(() => {
+      const hasOpenStoreRequest = Boolean(storePurchaseResult?.request?.public_id || storeRequestModal?.public_id);
+      const hasPending = (storePendingRequests || []).some((request) => request.status === 'PENDING');
+      if (hasOpenStoreRequest || hasPending) loadStorePendingRequests(sessionId, { background: true }).catch(() => null);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [sessionId, storePendingRequests, storePurchaseResult?.request?.public_id, storeRequestModal?.public_id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setStorePurchaseQrDataUrl('');
+    const payloadText = storePurchaseResult?.request?.qr_payload;
+    if (!payloadText) return undefined;
+    QRCode.toDataURL(payloadText, { margin: 1, width: 220 })
+      .then((url) => {
+        if (!cancelled) setStorePurchaseQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setStorePurchaseQrDataUrl('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [storePurchaseResult?.request?.qr_payload]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setStoreRequestQrDataUrl('');
+    const payloadText = storeRequestModal?.qr_payload;
+    if (!payloadText) return undefined;
+    QRCode.toDataURL(payloadText, { margin: 1, width: 220 })
+      .then((url) => {
+        if (!cancelled) setStoreRequestQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setStoreRequestQrDataUrl('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [storeRequestModal?.qr_payload]);
+
+  useEffect(() => {
+    if (!storePurchaseResult?.request?.public_id) return;
+    const updated = (storePendingRequests || []).find((request) => request.public_id === storePurchaseResult.request.public_id);
+    if (!updated || updated.status === 'PENDING') return;
+    setStorePurchaseResult(null);
+    setStorePurchaseOption(null);
+    setStorePurchaseQrDataUrl('');
+    if (updated.status === 'REJECTED') {
+      setStorePendingMessage({ status: 'ERROR', message: storeRequestRejectedMessage(updated) });
+    } else if (updated.status === 'APPROVED') {
+      refreshAfterStoreApproval(updated).catch(() => null);
+    }
+  }, [storePendingRequests, storePurchaseResult?.request?.public_id]);
+
+  useEffect(() => {
+    const previousStatuses = storeRequestStatusRef.current;
+    const nextStatuses = new Map();
+    (storePendingRequests || []).forEach((requestRow) => {
+      if (!requestRow?.public_id) return;
+      const nextStatus = String(requestRow.status || '').toUpperCase();
+      const previousStatus = previousStatuses.get(requestRow.public_id);
+      nextStatuses.set(requestRow.public_id, nextStatus);
+      if (previousStatus === 'PENDING' && nextStatus === 'APPROVED') {
+        refreshAfterStoreApproval(requestRow).catch(() => null);
+      }
+    });
+    storeRequestStatusRef.current = nextStatuses;
+  }, [storePendingRequests]);
+
+  useEffect(() => {
+    if (!storeRequestModal?.public_id) return;
+    const updated = (storePendingRequests || []).find((request) => request.public_id === storeRequestModal.public_id);
+    if (updated) setStoreRequestModal(updated);
+  }, [storePendingRequests, storeRequestModal?.public_id]);
 
   function paymentSuccessCopy(payment) {
     const queued = payment?.bag_item_status === 'QUEUED';
@@ -2987,19 +3382,266 @@ function PortalApp() {
     };
   }
 
-  function storeDistanceLabel(store) {
+  function storeDistanceMeta(store) {
+    if (!isGoogleChromeBrowser()) return '';
     const meters = Number(store?.distance_meters);
-    if (!Number.isFinite(meters)) return portalLanguage === 'tl' ? 'Allow location para makita ang distance' : 'Allow location to show distance';
+    if (!Number.isFinite(meters)) return '';
     return formatDistanceMeters(meters);
   }
 
-  function storeVisibleItems(store) {
+  function storePortalLocationLabel(store = {}) {
+    return [store.barangay, store.municipality].map((value) => String(value || '').trim()).filter(Boolean).join(', ') || t('Location not set');
+  }
+
+  function openPortalStoreMap(store) {
+    const params = new URLSearchParams();
+    if (store?.id) params.set('store_id', store.id);
+    if (sessionId) params.set('portal_session_id', sessionId);
+    window.location.assign(`/portal/store-map?${params.toString()}`);
+  }
+
+  function storeAvailableItems(store) {
     const items = Array.isArray(store?.items) ? store.items : [];
     return items.filter((item) => {
       if (item.status && item.status !== 'ACTIVE') return false;
+      return true;
+    });
+  }
+
+  function storeVisibleItems(store) {
+    return storeAvailableItems(store).filter((item) => {
       if (productPassType(item) !== effectivePurchasePassType) return false;
       return true;
     });
+  }
+
+  function storeItemQuantity(item) {
+    return Math.max(0, Math.min(Number(storeItemQuantities[item.id] || 0), 365));
+  }
+
+  function updateStoreItemQuantity(item, nextQuantity) {
+    const quantity = Math.max(0, Math.min(Number(nextQuantity || 0), 365));
+    setStorePurchaseMessage(null);
+    setStoreItemQuantities((current) => {
+      const next = { ...current };
+      if (quantity > 0) next[item.id] = quantity;
+      else delete next[item.id];
+      return next;
+    });
+  }
+
+  function storeSelectedItems(items = []) {
+    return items
+      .map((item) => ({ item, quantity: storeItemQuantity(item) }))
+      .filter((entry) => entry.quantity > 0);
+  }
+
+  function storeSelectionAmount(items = []) {
+    return storeSelectedItems(items).reduce((summary, entry) => {
+      const amount = Math.round(Number(entry.item.price || 0) * 100) * entry.quantity;
+      summary.total += amount;
+      summary.quantity += entry.quantity;
+      return summary;
+    }, { total: 0, quantity: 0 });
+  }
+
+  function storeSelectionDurationLabel(items = []) {
+    const seconds = storeSelectedItems(items).reduce((total, entry) => {
+      return total + productDurationSecondsForQuantity(entry.item, entry.quantity);
+    }, 0);
+    return seconds > 0 ? compactDurationLabel(seconds) : '';
+  }
+
+  function confirmStoreSelection(store, items = []) {
+    const selected = storeSelectedItems(items);
+    if (!selected.length) return;
+    const hasActiveTime = Boolean(hasRemainingAccess || activeBagItems.length);
+    setStorePurchaseOption({
+      store,
+      items: selected,
+      amount: storeSelectionAmount(items),
+      duration_label: storeSelectionDurationLabel(items),
+    });
+    setStorePurchaseResult(null);
+    setStorePurchaseMessage(null);
+    setStorePurchaseAutoActivate(!hasActiveTime);
+    setStorePurchaseQrDataUrl('');
+  }
+
+  function storePurchaseApiItems(option = storePurchaseOption) {
+    return (option?.items || []).map(({ item, quantity }) => ({
+      item_id: item.id,
+      quantity,
+    }));
+  }
+
+  function storePurchaseElapsedLabel(request) {
+    const created = new Date(request?.created_at || Date.now()).getTime();
+    const seconds = Math.max(0, Math.floor((Date.now() - created) / 1000));
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+  }
+
+  function requestItemsLabel(items = []) {
+    if (!items.length) return t('Store purchase');
+    if (items.length === 1) {
+      const item = items[0];
+      return `${item.quantity || 1} x ${item.item_name || t('Store item')}`;
+    }
+    return `${items.length} items`;
+  }
+
+  function storeRequestStatusClass(status) {
+    const normalized = String(status || '').toUpperCase();
+    if (normalized === 'APPROVED') return 'bg-green-lt text-green';
+    if (normalized === 'REJECTED') return 'bg-red-lt text-red';
+    if (normalized === 'EXPIRED' || normalized === 'CANCELLED') return 'bg-secondary-lt text-secondary';
+    return 'bg-yellow-lt text-yellow';
+  }
+
+  function storeRequestStatusCopy(requestRow) {
+    const status = String(requestRow?.status || 'PENDING').toUpperCase();
+    if (status === 'PENDING') return 'Pending approval';
+    if (status === 'APPROVED') return 'Approved';
+    if (status === 'REJECTED') return 'Rejected';
+    if (status === 'EXPIRED') return 'Expired';
+    if (status === 'CANCELLED') return 'Cancelled';
+    return status;
+  }
+
+  function storeRequestRejectedMessage(requestRow) {
+    return `Purchase rejected. ${requestRow?.rejection_reason || 'Ask the store owner for more details.'}${requestRow?.rejection_reason ? ' You can ask the owner for more details.' : ''}`;
+  }
+
+  function openStoreRequestModal(requestRow) {
+    if (!requestRow) return;
+    setStoreRequestModal(requestRow);
+  }
+
+  function renderStoreRequestRow(requestRow, options = {}) {
+    const pending = requestRow.status === 'PENDING';
+    return (
+      <div className={`portal-store-pending-row ${requestRow.status === 'REJECTED' ? 'is-rejected' : ''}`} key={requestRow.public_id}>
+        <div>
+          <div className="portal-store-pending-title">{requestRow.store_name || t('Store')}</div>
+          <div className="portal-store-pending-meta">
+            <span>{requestItemsLabel(requestRow.items)}</span>
+            <span>{requestRow.amount_display}</span>
+            <span>{storePurchaseElapsedLabel(requestRow)}</span>
+            <span className={`badge ${storeRequestStatusClass(requestRow.status)}`}>{storeRequestStatusCopy(requestRow)}</span>
+          </div>
+          {requestRow.status === 'REJECTED' && requestRow.rejection_reason && (
+            <div className="portal-store-rejection-reason">{requestRow.rejection_reason}</div>
+          )}
+        </div>
+        <div className="portal-store-request-actions">
+          <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openStoreRequestModal(requestRow)}>
+            <IconEye size={15} className="me-1" />View
+          </button>
+          {pending && (
+            <button
+              className="btn btn-sm btn-outline-danger"
+              type="button"
+              disabled={storePendingLoading}
+              onClick={() => cancelStorePurchaseRequest(requestRow)}
+            >
+              <IconTrash size={15} className="me-1" />Cancel
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  async function createStorePurchaseRequest(method, confirmedOutside = false) {
+    if (!storePurchaseOption?.store?.id) return;
+    if (guardPortalBlockedAction()) return;
+    let currentStatus = status;
+    try {
+      currentStatus = await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session')) || currentStatus;
+    } catch {
+      currentStatus = status;
+    }
+    const outside3jNetwork = currentStatus?.network_presence?.connected_to_3j_ap === false;
+    if (!confirmedOutside && outside3jNetwork) {
+      setStoreOutsidePurchaseConfirm({ method });
+      return;
+    }
+    setStoreOutsidePurchaseConfirm(null);
+    setStorePurchaseCreating(method);
+    setStorePurchaseMessage(null);
+    try {
+      const data = await publicApi('/portal/store-purchase-requests', {
+        method: 'POST',
+        body: JSON.stringify(payload({
+          store_id: storePurchaseOption.store.id,
+          request_method: method,
+          items: storePurchaseApiItems(storePurchaseOption),
+          auto_activate_if_no_time: Boolean(storePurchaseAutoActivate && !hasRemainingAccess && !activeBagItems.length),
+          outside_network_purchase: outside3jNetwork,
+        })),
+      });
+      setStorePurchaseResult(data);
+      setStorePendingRequests((current) => {
+        const nextRequest = data.request;
+        if (!nextRequest?.public_id) return current;
+        return [nextRequest, ...current.filter((request) => request.public_id !== nextRequest.public_id)];
+      });
+      loadStorePendingRequests(sessionId, { background: true }).catch(() => null);
+    } catch (error) {
+      setStorePurchaseMessage({ status: 'ERROR', message: error.message || 'Store purchase request failed.' });
+    } finally {
+      setStorePurchaseCreating('');
+    }
+  }
+
+  async function cancelStorePurchaseRequest(requestRow) {
+    if (!requestRow?.public_id) return;
+    if (!window.confirm('Cancel this pending store purchase request?')) return;
+    setStorePendingLoading(true);
+    setStorePendingMessage(null);
+    try {
+      await publicApi(`/portal/store-purchase-requests/${encodeURIComponent(requestRow.public_id)}`, {
+        method: 'DELETE',
+        body: JSON.stringify(payload({})),
+      });
+      setStorePendingRequests((current) => current.filter((request) => request.public_id !== requestRow.public_id));
+      if (storeRequestModal?.public_id === requestRow.public_id) setStoreRequestModal(null);
+      setStorePendingMessage({ status: 'SUCCESS', message: 'Pending store purchase request cancelled.' });
+    } catch (error) {
+      setStorePendingMessage({ status: 'ERROR', message: error.message || 'Could not cancel store purchase request.' });
+    } finally {
+      setStorePendingLoading(false);
+    }
+  }
+
+  function StorePendingRequestsPanel() {
+    const pendingRows = (storePendingRequests || []).filter((request) => request.status === 'PENDING');
+    if (!pendingRows.length) return null;
+    return (
+      <div className="portal-store-pending-panel">
+        <div className="portal-store-pending-header">
+          <span><IconClock size={17} /></span>
+          <div>
+            <strong>{pendingRows.length} pending store request{pendingRows.length === 1 ? '' : 's'}</strong>
+            <small>Pay now in store. The pass is added to My WiFi Bag after owner approval.</small>
+          </div>
+        </div>
+        {storePendingMessage && (
+          <PortalCustomerMessage
+            message={storePendingMessage.message}
+            tone={storePendingMessage.status === 'ERROR' ? 'danger' : 'success'}
+            timeoutMs={portalMessageAutoHideMs}
+            onSuccessNote={queueAvatarCustomerMessage}
+            onDismiss={() => setStorePendingMessage(null)}
+            dismissKey={`${storePendingMessage.status}-${storePendingMessage.message}`}
+          />
+        )}
+        {pendingRows.map((requestRow) => renderStoreRequestRow(requestRow))}
+      </div>
+    );
   }
 
   function PortalPassTypeTabs() {
@@ -3007,19 +3649,43 @@ function PortalApp() {
       {
         key: 'SINGLE_DEVICE',
         icon: IconUser,
-        label: t('One Device Pass'),
+        label: t('Single Pass'),
         hint: t('For one phone or laptop')
       },
       {
         key: 'MULTI_DEVICE',
         icon: IconUsers,
-        label: t('Multiple Device Pass'),
+        label: t('Multi-Pass'),
         hint: t('For shared device access')
       }
     ];
     return (
       <div className="portal-pass-tab-panel">
-        <div className="portal-pass-tab-label">{t('Choose pass type')}</div>
+        <div className="portal-pass-tab-label-row">
+          <div className="portal-pass-tab-label">{t('Choose pass type')}</div>
+          <div className="portal-pass-help">
+            <button
+              className="portal-pass-help-button"
+              type="button"
+              aria-label={t('Choose pass type')}
+              aria-expanded={passTypeHelpOpen}
+              onClick={() => setPassTypeHelpOpen((open) => !open)}
+              onBlur={() => window.setTimeout(() => setPassTypeHelpOpen(false), 120)}
+            >
+              <IconInfoCircle size={15} />
+            </button>
+            {passTypeHelpOpen && (
+              <div className="portal-pass-help-tooltip" role="tooltip">
+                {tabs.map((tab) => (
+                  <div className="portal-pass-help-row" key={tab.key}>
+                    <strong>{tab.label}</strong>
+                    <span>{tab.hint}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
         <div className="portal-pass-tabs" role="tablist" aria-label={t('Choose pass type')}>
           {tabs.map((tab) => {
             const TabIcon = tab.icon;
@@ -3036,7 +3702,6 @@ function PortalApp() {
                 <TabIcon size={17} />
                 <span>
                   <strong>{tab.label}</strong>
-                  <small>{tab.hint}</small>
                 </span>
               </button>
             );
@@ -3307,6 +3972,12 @@ function PortalApp() {
     const queuedItems = bag?.queued_items || [];
     const historyItems = bag?.history_items || [];
     const autoActivate = bag?.settings?.auto_activate !== false;
+    const storeRequestCounts = (storePendingRequests || []).reduce((counts, request) => {
+      const status = String(request.status || 'PENDING').toUpperCase();
+      counts.ALL += 1;
+      counts[status] = (counts[status] || 0) + 1;
+      return counts;
+    }, { ALL: 0, PENDING: 0, APPROVED: 0, REJECTED: 0, EXPIRED: 0 });
     const renderItem = (item, options = {}) => {
       const deviceLabel = item.device_scope === 'MULTI_DEVICE' ? `${item.allowed_devices || 1} devices` : '1 device';
       const statusLabel = item.status === 'QUEUED' ? 'UNUSED' : item.status;
@@ -3400,6 +4071,12 @@ function PortalApp() {
                   <IconHistory size={16} /> History
                 </button>
               </li>
+              <li className="nav-item">
+                <button className={`nav-link ${bagTab === 'STORES' ? 'active' : ''}`} type="button" onClick={() => setBagTab('STORES')}>
+                  <IconBuildingStore size={16} /> Stores
+                  {pendingStoreRequestCount > 0 && <span className="badge bg-yellow-lt text-yellow ms-1">{pendingStoreRequestCount}</span>}
+                </button>
+              </li>
             </ul>
           </div>
           {bagTab === 'LIST' ? (
@@ -3476,17 +4153,45 @@ function PortalApp() {
                 {queuedItems.length ? queuedItems.map((item) => renderItem(item, { draggable: true, canActivate: true })) : <div className="text-muted small">No saved products. Bought packages will appear here.</div>}
               </div>
             </div>
+          ) : bagTab === 'STORES' ? (
+            <div className="portal-bag-tab-panel">
+              <div className="portal-store-request-filter">
+                {['ALL', 'PENDING', 'APPROVED', 'REJECTED', 'EXPIRED'].map((status) => (
+                  <button
+                    className={`btn btn-sm ${storeRequestFilter === status ? 'btn-primary' : 'btn-outline-secondary'}`}
+                    type="button"
+                    key={status}
+                    onClick={() => setStoreRequestFilter(status)}
+                  >
+                    <span>{status}</span>
+                    <span className={`badge ms-1 ${storeRequestFilter === status ? 'bg-white text-primary' : 'bg-secondary-lt text-secondary'}`}>{storeRequestCounts[status] || 0}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="portal-bag-section">
+                <div className="portal-bag-section-title">Store requests</div>
+                {(storePendingRequests || []).filter((request) => storeRequestFilter === 'ALL' || request.status === storeRequestFilter).length ? (
+                  (storePendingRequests || [])
+                    .filter((request) => storeRequestFilter === 'ALL' || request.status === storeRequestFilter)
+                    .map((requestRow) => renderStoreRequestRow(requestRow))
+                ) : (
+                  <div className="text-muted small">No store requests in this filter.</div>
+                )}
+              </div>
+            </div>
           ) : (
             <div className="portal-bag-tab-panel">
               <div className="portal-bag-section">
                 <div className="portal-bag-section-title">History</div>
-                {historyItems.length ? historyItems.map((item) => (
-                  <div className="portal-bag-history-row" key={item.id}>
-                    <span>{item.product_name}</span>
-                    <small>{item.auto_activate_snapshot ? 'Auto activation was enabled' : 'Auto activation was disabled'}</small>
-                    <span className="badge bg-secondary-lt text-secondary">{item.status}</span>
-                  </div>
-                )) : <div className="text-muted small">No consumed items yet.</div>}
+	                {historyItems.length ? historyItems.map((item) => (
+	                  <div className="portal-bag-history-row" key={item.id}>
+	                    <div className="portal-bag-history-main">
+	                      <span className="portal-bag-history-name">{item.product_name}</span>
+	                      <span className="badge bg-secondary-lt text-secondary">{item.status}</span>
+	                    </div>
+	                    <small className="portal-bag-history-date">{item.consumed_at ? `Consumed ${formatPortalDateTime(item.consumed_at)}` : 'Consumed time not recorded'}</small>
+	                  </div>
+	                )) : <div className="text-muted small">No consumed items yet.</div>}
               </div>
             </div>
           )}
@@ -3783,6 +4488,7 @@ function PortalApp() {
   function openProductCategory(category) {
     setProductQuantities({});
     setSelectedCategoryProductId('');
+    setBarangayPickerOpen(false);
     if (isBarangayOnlyProduct(category)) {
       const defaultBarangay = selectedBarangayForCategory(category) || portalBarangayOptions()[0] || '';
       if (defaultBarangay) {
@@ -3796,6 +4502,8 @@ function PortalApp() {
     setSelectedProductCategory(null);
     setSelectedCategoryProductId('');
     setProductQuantities({});
+    setBarangayPickerOpen(false);
+    setPassTypeHelpOpen(false);
   }
 
   function continueCheckoutAfterBrowserReminder() {
@@ -4051,19 +4759,28 @@ function PortalApp() {
 
   function compactDurationLabel(seconds) {
     const safeSeconds = Math.max(0, Number(seconds || 0));
-    if (safeSeconds >= 86400 && safeSeconds % 86400 === 0) {
-      const days = safeSeconds / 86400;
-      return `${days} day${days === 1 ? '' : 's'}`;
+    const daySeconds = 86400;
+    const hourSeconds = 3600;
+    const minuteSeconds = 60;
+    const parts = [];
+    let remaining = safeSeconds;
+    const days = Math.floor(remaining / daySeconds);
+    if (days) {
+      parts.push(`${days} day${days === 1 ? '' : 's'}`);
+      remaining -= days * daySeconds;
     }
-    if (safeSeconds >= 3600 && safeSeconds % 3600 === 0) {
-      const hours = safeSeconds / 3600;
-      return `${hours} hour${hours === 1 ? '' : 's'}`;
+    const hours = Math.floor(remaining / hourSeconds);
+    if (hours) {
+      parts.push(`${hours} hour${hours === 1 ? '' : 's'}`);
+      remaining -= hours * hourSeconds;
     }
-    if (safeSeconds >= 60) {
-      const minutes = Math.ceil(safeSeconds / 60);
-      return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+    const minutes = Math.ceil(remaining / minuteSeconds);
+    if (!parts.length && minutes) parts.push(`${minutes} minute${minutes === 1 ? '' : 's'}`);
+    if (!parts.length) {
+      const secondsRounded = Math.ceil(safeSeconds);
+      return `${secondsRounded} second${secondsRounded === 1 ? '' : 's'}`;
     }
-    return `${Math.ceil(safeSeconds)} second${Math.ceil(safeSeconds) === 1 ? '' : 's'}`;
+    return parts.slice(0, 2).join(' ');
   }
 
   function productNextDiscountNudge(item, quantity) {
@@ -4094,13 +4811,14 @@ function PortalApp() {
       ? `Shortest AP is ${formatDistanceMeters(nearest.distance)} away.`
       : t('Allow location access to find the nearest AP.');
     return (
-      <Modal
-        title=""
-        onClose={() => setPortalCoverageOpen(false)}
-        dialogClassName="portal-coverage-modal-dialog"
-        bodyClassName="portal-coverage-modal-body"
-        contentClassName={`portal-coverage-modal-content ${portalDark ? 'is-dark' : ''}`}
-      >
+	      <Modal
+	        title=""
+	        onClose={() => setPortalCoverageOpen(false)}
+	        dialogClassName="portal-coverage-modal-dialog"
+	        bodyClassName="portal-coverage-modal-body"
+	        contentClassName={`portal-coverage-modal-content ${portalDark ? 'is-dark' : ''}`}
+	        lockPageRefresh
+	      >
         {portalCoverageLoading ? (
           <div className="portal-coverage-loading">{t('Loading coverage map...')}</div>
         ) : aps.length ? (
@@ -4184,13 +4902,14 @@ function PortalApp() {
   function CategoryMoreInfoModal() {
     if (!moreInfoCategory) return null;
     return (
-      <Modal
-        title={t('More Info')}
-        onClose={() => setMoreInfoCategory(null)}
-        dialogClassName="portal-profile-modal-dialog portal-category-info-modal-dialog"
-        bodyClassName="portal-profile-modal-body"
-        contentClassName={`portal-profile-modal-content portal-category-info-modal-content ${portalDark ? 'is-dark' : ''}`}
-      >
+	      <Modal
+	        title={t('More Info')}
+	        onClose={() => setMoreInfoCategory(null)}
+	        dialogClassName="portal-profile-modal-dialog portal-category-info-modal-dialog"
+	        bodyClassName="portal-profile-modal-body"
+	        contentClassName={`portal-profile-modal-content portal-category-info-modal-content ${portalDark ? 'is-dark' : ''}`}
+	        lockPageRefresh
+	      >
         <div className="portal-category-info">
           {moreInfoCategory.image_url && <img className="portal-category-info-image" src={cacheBustedUploadUrl(moreInfoCategory.image_url, moreInfoCategory.updated_at)} alt="" loading="lazy" />}
           <div>
@@ -4209,13 +4928,14 @@ function PortalApp() {
   function StoreItemMoreInfoModal() {
     if (!storeItemMoreInfo) return null;
     return (
-      <Modal
-        title={t('More Info')}
-        onClose={() => setStoreItemMoreInfo(null)}
-        dialogClassName="portal-profile-modal-dialog portal-category-info-modal-dialog"
-        bodyClassName="portal-profile-modal-body"
-        contentClassName={`portal-profile-modal-content portal-category-info-modal-content ${portalDark ? 'is-dark' : ''}`}
-      >
+	      <Modal
+	        title={t('More Info')}
+	        onClose={() => setStoreItemMoreInfo(null)}
+	        dialogClassName="portal-profile-modal-dialog portal-category-info-modal-dialog"
+	        bodyClassName="portal-profile-modal-body"
+	        contentClassName={`portal-profile-modal-content portal-category-info-modal-content ${portalDark ? 'is-dark' : ''}`}
+	        lockPageRefresh
+	      >
         <div className="portal-category-info">
           <div>
             <div className="portal-category-info-title">{storeItemMoreInfo.name || t('Store Package Info')}</div>
@@ -4230,7 +4950,435 @@ function PortalApp() {
     );
   }
 
-  function CategoryProductsModal() {
+  function StorePurchaseOptionsModal() {
+    if (!storePurchaseOption) return null;
+    const request = storePurchaseResult?.request || null;
+    const hasActiveTime = Boolean(hasRemainingAccess || activeBagItems.length);
+    const canSubmitRequest = portalProfileConfigured(profile);
+    const selectedItems = storePurchaseOption.items || [];
+    const methodLabel = request?.request_method === 'QR' ? 'QR approval' : request?.request_method === 'CODE' ? 'Store code' : 'Purchase request';
+    const closeAll = () => {
+      setStorePurchaseOption(null);
+      setStorePurchaseResult(null);
+      setStorePurchaseMessage(null);
+      setStorePurchaseQrDataUrl('');
+      setStoreOutsidePurchaseConfirm(null);
+      setSelectedPhysicalStore(null);
+      setStoreItemQuantities({});
+    };
+    return (
+      <Modal
+        title={storePurchaseOption.store?.store_name || t('Store payment')}
+        onClose={() => {
+          setStorePurchaseOption(null);
+          setStorePurchaseResult(null);
+          setStorePurchaseMessage(null);
+          setStorePurchaseQrDataUrl('');
+          setStoreOutsidePurchaseConfirm(null);
+        }}
+        dialogClassName="portal-profile-modal-dialog portal-store-purchase-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content portal-store-purchase-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className="portal-store-purchase">
+          <div className="portal-store-purchase-heading">
+            <span className="portal-store-purchase-icon"><IconBuildingStore size={24} /></span>
+            <div>
+              <div className="portal-store-purchase-title">{t('Purchase summary')}</div>
+              <div className="portal-store-purchase-subtitle">{formatCentavos(storePurchaseOption.amount?.total || 0)} · {storePurchaseOption.duration_label || t('WiFi time')}</div>
+            </div>
+          </div>
+
+          <div className="portal-store-purchase-items">
+            {selectedItems.map(({ item, quantity }) => (
+              <div className="portal-store-purchase-item" key={item.id}>
+                <span>{quantity} x {item.name}</span>
+                <strong>{formatCentavos(Math.round(Number(item.price || 0) * 100) * quantity)}</strong>
+              </div>
+            ))}
+          </div>
+
+          {storePurchaseMessage && (
+            <PortalCustomerMessage
+              message={storePurchaseMessage.message}
+              tone={storePurchaseMessage.status === 'ERROR' ? 'danger' : 'success'}
+              timeoutMs={portalMessageAutoHideMs}
+              onSuccessNote={queueAvatarCustomerMessage}
+              onDismiss={() => setStorePurchaseMessage(null)}
+              dismissKey={`${storePurchaseMessage.status}-${storePurchaseMessage.message}`}
+            />
+          )}
+
+          {request ? (
+            <div className="portal-store-purchase-success">
+              <span className="portal-store-purchase-success-icon"><IconCircleCheck size={42} /></span>
+              <div>
+                <div className="portal-store-purchase-success-title">{methodLabel} created</div>
+                <p>
+                  {request.request_method === 'SUBMITTED'
+                    ? t('Your purchase request is awaiting store owner approval. Pay now in store to get approved.')
+                    : request.request_method === 'QR'
+                      ? t('Show this QR code to the store owner so they can approve your purchase.')
+                      : t('Show this code to the store owner so they can approve your purchase.')}
+                </p>
+              </div>
+              {request.request_method === 'QR' && (
+                <div className="portal-store-qr-box">
+                  {storePurchaseQrDataUrl ? <img src={storePurchaseQrDataUrl} alt="Store approval QR" /> : <span className="spinner-border spinner-border-sm" aria-hidden="true" />}
+                  <code>{request.display_code}</code>
+                </div>
+              )}
+              {request.request_method === 'CODE' && (
+                <button
+                  className="portal-store-code-box"
+                  type="button"
+                  onClick={() => navigator.clipboard?.writeText(request.display_code || '').catch(() => null)}
+                >
+                  <IconCopy size={18} />
+                  <strong>{request.display_code}</strong>
+                </button>
+              )}
+              {request.auto_activate_if_no_time ? (
+                <div className="portal-store-purchase-note">
+                  <IconPlayerPlay size={16} />
+                  This pass will try to activate automatically after approval because this device has no current time.
+                </div>
+              ) : (
+                <div className="portal-store-purchase-note">
+                  <IconShoppingBag size={16} />
+                  Approval adds the pass to My WiFi Bag. Activate it there when you are ready.
+                </div>
+              )}
+              <button className="btn btn-primary w-100" type="button" onClick={closeAll}>
+                {t('Close')}
+              </button>
+            </div>
+          ) : (
+            <>
+              {!hasActiveTime && (
+                <label className="portal-store-auto-card">
+                  <span className="portal-store-auto-content">
+                    <span className="portal-store-auto-title-row">
+                      <strong>Activate automatically after approval</strong>
+                      <span className="form-check form-switch m-0">
+                        <input className="form-check-input" type="checkbox" checked={storePurchaseAutoActivate} onChange={(event) => setStorePurchaseAutoActivate(event.target.checked)} />
+                      </span>
+                    </span>
+                    <small>Use this when you have no current WiFi time. If unchecked, the approved pass stays in My WiFi Bag.</small>
+                  </span>
+                </label>
+              )}
+              {hasActiveTime && (
+                <div className="portal-store-purchase-note">
+                  <IconShoppingBag size={16} />
+                  You already have active time. Store purchases will be added to My WiFi Bag for manual activation.
+                </div>
+              )}
+              <div className="portal-store-purchase-option-grid">
+                <button
+                  className="portal-store-purchase-option"
+                  type="button"
+                  disabled={storePurchaseCreating === 'SUBMITTED' || !canSubmitRequest}
+                  onClick={() => createStorePurchaseRequest('SUBMITTED')}
+                >
+                  <span><IconSend size={20} /></span>
+                  <strong>{storePurchaseCreating === 'SUBMITTED' ? 'Submitting...' : 'Submit request'}</strong>
+                  <small>{canSubmitRequest ? 'Pay at the store. The owner approves it in the store portal.' : 'Set your profile first before submitting a request.'}</small>
+                </button>
+                <button
+                  className="portal-store-purchase-option"
+                  type="button"
+                  disabled={storePurchaseCreating === 'QR'}
+                  onClick={() => createStorePurchaseRequest('QR')}
+                >
+                  <span><IconId size={20} /></span>
+                  <strong>{storePurchaseCreating === 'QR' ? 'Creating...' : 'Generate QR'}</strong>
+                  <small>Fast approval by showing a QR to the store owner.</small>
+                </button>
+                <button
+                  className="portal-store-purchase-option"
+                  type="button"
+                  disabled={storePurchaseCreating === 'CODE'}
+                  onClick={() => createStorePurchaseRequest('CODE')}
+                >
+                  <span><IconKey size={20} /></span>
+                  <strong>{storePurchaseCreating === 'CODE' ? 'Creating...' : 'Generate Code'}</strong>
+                  <small>Give the generated code to the store owner for approval.</small>
+                </button>
+              </div>
+              {!canSubmitRequest && (
+                <button
+                  className="btn btn-outline-primary w-100"
+                  type="button"
+                  onClick={() => {
+                    setProfileChoice('CHOICE');
+                    setProfileOpen(true);
+                  }}
+                >
+                  <IconUserPlus size={17} className="me-1" /> Set profile
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </Modal>
+    );
+  }
+
+  function StoreRequestStatusModal() {
+    if (!storeRequestModal) return null;
+    const request = storeRequestModal;
+    const pending = request.status === 'PENDING';
+    const rejected = request.status === 'REJECTED';
+    const approved = request.status === 'APPROVED';
+    const title = request.store_name || t('Store payment');
+    return (
+      <Modal
+        title=""
+        onClose={() => setStoreRequestModal(null)}
+        dialogClassName="portal-profile-modal-dialog portal-store-purchase-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content portal-store-purchase-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className="portal-store-purchase">
+          <div className="portal-store-purchase-heading">
+            <span className={`portal-store-purchase-icon ${rejected ? 'is-danger' : approved ? 'is-success' : ''}`}>
+              {rejected ? <IconX size={24} /> : approved ? <IconCircleCheck size={24} /> : <IconBuildingStore size={24} />}
+            </span>
+            <div>
+              <div className="portal-store-purchase-title">{title}</div>
+              <div className="portal-store-purchase-subtitle">{request.amount_display} · {formatSeconds(request.total_duration_seconds || 0)}</div>
+            </div>
+          </div>
+
+          <div className="portal-store-purchase-items">
+            {(request.items || []).map((item) => (
+              <div className="portal-store-purchase-item" key={item.id}>
+                <span>{item.quantity || 1} x {item.item_name}</span>
+                <strong>{item.price_display}</strong>
+              </div>
+            ))}
+          </div>
+
+          <div className={`portal-store-purchase-note ${rejected ? 'is-danger' : approved ? 'is-success' : ''}`}>
+            {rejected ? <IconX size={16} /> : approved ? <IconCircleCheck size={16} /> : <IconClock size={16} />}
+            {rejected
+              ? storeRequestRejectedMessage(request)
+              : approved
+                ? 'This store purchase was approved. Check My WiFi Bag for the added pass.'
+                : 'This purchase is waiting for store owner approval.'}
+          </div>
+
+          {pending && request.request_method === 'QR' && (
+            <div className="portal-store-qr-box">
+              {storeRequestQrDataUrl ? <img src={storeRequestQrDataUrl} alt="Store approval QR" /> : <span className="spinner-border spinner-border-sm" aria-hidden="true" />}
+              <code>{request.display_code}</code>
+            </div>
+          )}
+          {pending && request.request_method === 'CODE' && (
+            <button
+              className="portal-store-code-box"
+              type="button"
+              onClick={() => navigator.clipboard?.writeText(request.display_code || '').catch(() => null)}
+            >
+              <IconCopy size={18} />
+              <strong>{request.display_code}</strong>
+            </button>
+          )}
+          {pending && request.request_method === 'SUBMITTED' && (
+            <div className="portal-store-purchase-note">
+              <IconSend size={16} />
+              Pay at the store. The owner can approve this request from their store portal.
+            </div>
+          )}
+          <div className="d-grid gap-2">
+            {pending && (
+              <button className="btn btn-outline-danger w-100" type="button" disabled={storePendingLoading} onClick={() => cancelStorePurchaseRequest(request)}>
+                <IconTrash size={16} className="me-1" />Delete request
+              </button>
+            )}
+            <button className="btn btn-primary w-100" type="button" onClick={() => setStoreRequestModal(null)}>
+              {t('Close')}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  function closePhysicalStorePage() {
+    setSelectedPhysicalStore(null);
+    setPassTypeHelpOpen(false);
+    setStoreItemQuantities({});
+    setStorePurchaseMessage(null);
+    setStorePurchaseOption(null);
+    setStorePurchaseResult(null);
+    setStorePurchaseQrDataUrl('');
+  }
+
+  function PhysicalStoreItemsPage() {
+    if (!selectedPhysicalStore) return null;
+    const items = storeVisibleItems(selectedPhysicalStore);
+    const distance = storeDistanceMeta(selectedPhysicalStore);
+    const selectedStoreSummary = storeSelectionAmount(items);
+    const selectedStoreDurationLabel = storeSelectionDurationLabel(items);
+    return (
+      <div className="portal-store-items-page">
+        <div className="portal-items-page-topbar">
+          <button className="portal-store-page-back" type="button" onClick={closePhysicalStorePage}>
+            <IconChevronLeft size={17} />
+            <span>{t('Back to stores')}</span>
+          </button>
+        </div>
+        <div className={`portal-store-detail portal-store-page-detail ${portalDark ? 'is-dark' : ''}`}>
+          <div className="portal-category-modal-header portal-store-page-header">
+            {selectedPhysicalStore.image_url ? (
+              <img className="portal-category-modal-image portal-store-page-image" src={cacheBustedUploadUrl(selectedPhysicalStore.image_url, selectedPhysicalStore.updated_at)} alt="" loading="lazy" />
+            ) : (
+              <span className="portal-category-modal-image portal-category-modal-image-empty portal-store-page-image"><IconBuildingStore size={34} /></span>
+            )}
+            <div className="portal-category-modal-title-stack portal-store-page-title-stack">
+              <div className="portal-category-modal-title">{selectedPhysicalStore.store_name}</div>
+              <div className="portal-store-location-stack">
+                <span className="portal-category-modal-scope portal-store-location-badge">
+                  <IconMapPin size={14} />
+                  {storePortalLocationLabel(selectedPhysicalStore)}
+                </span>
+                {distance && (
+                  <span className="portal-category-modal-scope portal-store-distance-badge">
+                    <IconMapPin size={14} />
+                    {distance} away from store
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="portal-store-page-body">
+            {(selectedPhysicalStore.description || selectedPhysicalStore.contact_phone) && (
+              <div className="portal-store-modal-summary">
+                {selectedPhysicalStore.description && <div className="portal-store-card-description">{selectedPhysicalStore.description}</div>}
+                {selectedPhysicalStore.contact_phone && (
+                  <div className="portal-store-card-meta">
+                    <span><IconPhone size={14} /> {selectedPhysicalStore.contact_phone}</span>
+                  </div>
+                )}
+              </div>
+            )}
+            <PortalPassTypeTabs />
+            {storePurchaseMessage && (
+              <PortalCustomerMessage
+                message={storePurchaseMessage.message}
+                tone="success"
+                timeoutMs={portalMessageAutoHideMs}
+                onSuccessNote={queueAvatarCustomerMessage}
+                onDismiss={() => setStorePurchaseMessage(null)}
+                dismissKey={storePurchaseMessage.message}
+              />
+            )}
+            {items.length ? (
+              <div className="portal-store-item-list">
+                {items.map((item) => {
+                  const quantity = storeItemQuantity(item);
+                  return (
+                    <div
+                      className={`portal-store-item-card portal-product-card ${quantity > 0 ? 'is-selected' : ''}`}
+                      key={item.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => updateStoreItemQuantity(item, quantity + 1)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          updateStoreItemQuantity(item, quantity + 1);
+                        }
+                      }}
+                    >
+                      <div className="card-body">
+                        <div className="portal-product-card-top">
+                          <div>
+                            <div className="portal-store-item-title">{item.name}</div>
+                            {item.description && <div className="portal-store-card-description">{item.description}</div>}
+                          </div>
+                          {quantity > 0 && (
+                            <div className="portal-product-quantity-row">
+                              <button className="portal-qty-button" type="button" onClick={(event) => { event.stopPropagation(); updateStoreItemQuantity(item, quantity - 1); }} aria-label={`Decrease ${item.name}`}>
+                                <IconMinus size={15} />
+                              </button>
+                              <input
+                                className="portal-qty-input"
+                                type="number"
+                                min="0"
+                                max="365"
+                                value={quantity}
+                                onChange={(event) => updateStoreItemQuantity(item, event.target.value)}
+                                onClick={(event) => event.stopPropagation()}
+                                onKeyDown={(event) => event.stopPropagation()}
+                                onFocus={(event) => scrollPortalQuantityInputIntoView(event.currentTarget)}
+                                inputMode="numeric"
+                                aria-label={`${item.name} quantity`}
+                              />
+                              <button className="portal-qty-button" type="button" onClick={(event) => { event.stopPropagation(); updateStoreItemQuantity(item, quantity + 1); }} aria-label={`Increase ${item.name}`}>
+                                <IconPlus size={15} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        <div className="portal-product-meta-tags">
+                          <span className="badge bg-green-lt text-green"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
+                          <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
+                          {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple"><IconUsers size={16} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
+                          <span className={`badge ${item.access_scope === 'BARANGAY_ONLY' ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>{item.access_scope === 'BARANGAY_ONLY' ? 'Barangay only' : 'All locations'}</span>
+                        </div>
+                        {item.access_scope === 'BARANGAY_ONLY' && item.allowed_barangay && <div className="small text-muted mt-2">Allowed in {item.allowed_barangay}</div>}
+                        {item.more_info_enabled && item.more_info_text ? (
+                          <button className="btn btn-outline-secondary btn-sm mt-3" type="button" onClick={(event) => { event.stopPropagation(); setStoreItemMoreInfo(item); }}>
+                            <IconInfoCircle size={15} className="me-1" />More info
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="portal-store-empty">
+                <IconShoppingBag size={26} />
+                <strong>No {effectivePurchasePassType === 'MULTI_DEVICE' ? 'shared device' : 'one device'} items in this store yet.</strong>
+                <small>Ask the store operator for available packages.</small>
+              </div>
+            )}
+          </div>
+          {items.length ? (
+            <div className="portal-category-modal-footer portal-store-page-footer">
+              <div className="portal-selected-total">
+                <span className="portal-selected-total-icon"><IconCash size={20} /></span>
+                <span className="portal-selected-total-copy">
+                  <div className="small text-muted">{t('Selected total')}</div>
+                  <span className="small text-muted">{selectedStoreSummary.quantity} selected</span>
+                </span>
+                <span className="portal-selected-total-final-wrap">
+                  <strong className="portal-selected-total-final">{formatCentavos(selectedStoreSummary.total)}</strong>
+                </span>
+              </div>
+              <button
+                className="btn btn-primary"
+                type="button"
+                disabled={!selectedStoreSummary.quantity}
+                onClick={() => confirmStoreSelection(selectedPhysicalStore, items)}
+              >
+                <span>{t('BUY')}</span>
+                {selectedStoreDurationLabel ? <span className="portal-buy-duration"><IconClock size={15} />{selectedStoreDurationLabel}</span> : null}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  function ProductCategoryItemsPage() {
     if (!selectedProductCategory) return null;
     const categoryItems = (selectedProductCategory.items || []).filter((item) => productPassType(item) === effectivePurchasePassType);
     const selectedItem = selectedCategoryProductId ? categoryItems.find((item) => item.id === selectedCategoryProductId) : null;
@@ -4243,37 +5391,46 @@ function PortalApp() {
     const activeDiscountTab = selectedItem ? productApplicableDiscount(selectedItem, selectedQuantity) : null;
     const selectCategoryProduct = (item) => {
       setSelectedCategoryProductId(item.id);
+      setBarangayPickerOpen(false);
       updateProductQuantity(item, productQuantity(item) || 1);
     };
-    return (
-      <Modal
-        title=""
-        onClose={closeProductCategoryModal}
-        dialogClassName="portal-profile-modal-dialog portal-category-modal-dialog"
-        bodyClassName="portal-profile-modal-body portal-category-modal-body"
-        contentClassName={`portal-profile-modal-content portal-category-modal-content ${portalDark ? 'is-dark' : ''}`}
-      >
-        <div className="portal-category-modal-header">
+	    return (
+      <div className="portal-store-items-page portal-category-items-page">
+        <div className="portal-items-page-topbar">
+          <button
+            className="portal-store-page-back"
+            type="button"
+            onClick={() => {
+              if (selectedItem) {
+                setSelectedCategoryProductId('');
+                setProductQuantities({});
+                return;
+              }
+              closeProductCategoryModal();
+            }}
+          >
+            <IconChevronLeft size={17} />
+            <span>{selectedItem ? t('Back to packages') : t('Back to categories')}</span>
+          </button>
+        </div>
+        <div className={`portal-store-detail portal-store-page-detail portal-category-page-detail ${portalDark ? 'is-dark' : ''}`}>
+        <div className="portal-category-modal-header portal-store-page-header">
           {selectedProductCategory.image_url ? (
-            <img className="portal-category-modal-image" src={cacheBustedUploadUrl(selectedProductCategory.image_url, selectedProductCategory.updated_at)} alt="" loading="lazy" />
+            <img className="portal-category-modal-image portal-store-page-image" src={cacheBustedUploadUrl(selectedProductCategory.image_url, selectedProductCategory.updated_at)} alt="" loading="lazy" />
           ) : (
-            <span className="portal-category-modal-image portal-category-modal-image-empty"><IconPhoto size={42} /></span>
+            <span className="portal-category-modal-image portal-category-modal-image-empty portal-store-page-image"><IconPhoto size={34} /></span>
           )}
-          <div className="portal-category-modal-title-stack">
+          <div className="portal-category-modal-title-stack portal-store-page-title-stack">
             <div className="portal-category-modal-title">{selectedProductCategory.name || t('WiFi Packages')}</div>
             <div className="portal-category-modal-scope">
               <IconCircleCheck size={14} />
               {selectedProductCategory.access_scope === 'BARANGAY_ONLY' ? t('Barangay only') : t('All Locations')}
             </div>
           </div>
-          {selectedItem && (
-            <button className="portal-category-image-back" type="button" onClick={() => { setSelectedCategoryProductId(''); setProductQuantities({}); }}>
-              <IconChevronLeft size={16} />
-              <span>{t('Back to packages')}</span>
-            </button>
-          )}
-          {selectedProductCategory.description && <div className="text-muted small mt-2">{selectedProductCategory.description}</div>}
-        </div>
+	        </div>
+	        <div className="portal-store-page-body portal-category-page-body">
+	        {selectedProductCategory.description && <div className="text-muted small">{selectedProductCategory.description}</div>}
+        <PortalPassTypeTabs />
         {!selectedItem ? (
           <div className="portal-category-product-picker">
             {categoryItems.length ? categoryItems.map((item) => (
@@ -4299,7 +5456,7 @@ function PortalApp() {
                 </div>
                 <div className="portal-product-meta-tags">
                   <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
-                  <span className={`badge ${productPassType(item) === 'MULTI_DEVICE' ? 'bg-purple-lt text-purple' : 'bg-azure-lt text-azure'}`}>{item.device_scope_label || productPassLabel(item)}</span>
+                  {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple">{item.device_scope_label || productPassLabel(item)}</span>}
                   {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple"><IconUsers size={16} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
                   {productPassType(item) !== 'MULTI_DEVICE' && <span className="badge bg-azure-lt text-azure"><IconUser size={16} className="me-1" />1 device</span>}
                 </div>
@@ -4319,21 +5476,56 @@ function PortalApp() {
                   <span><IconMapPin size={17} /> {t('Barangay:')} <strong>{selectedBarangayForCategory(selectedProductCategory) || t('Choose Barangay')}</strong></span>
                 </div>
                 {portalBarangayOptions().length ? (
-                  <select
-                    className="form-select"
-                    value={selectedBarangayForCategory(selectedProductCategory)}
-                    onChange={(event) => updateSelectedCategoryBarangay(selectedProductCategory, event.target.value)}
+                  <div
+                    className="portal-barangay-picker"
+                    onClick={(event) => event.stopPropagation()}
+                    onMouseDown={(event) => event.stopPropagation()}
                   >
-                    <option value="">{t('Choose Barangay')}</option>
-                    {portalBarangayOptions().map((barangay) => (
-                      <option key={barangay} value={barangay}>{barangay}</option>
-                    ))}
-                  </select>
+                    <button
+                      className="portal-barangay-picker-button"
+                      type="button"
+                      aria-expanded={barangayPickerOpen}
+                      onClick={() => setBarangayPickerOpen((open) => !open)}
+                    >
+                      <span>{selectedBarangayForCategory(selectedProductCategory) || t('Choose Barangay')}</span>
+                      <IconChevronDown size={17} />
+                    </button>
+                    {barangayPickerOpen && (
+                      <div className="portal-barangay-option-list" role="listbox">
+                        <button
+                          className={`portal-barangay-option ${!selectedBarangayForCategory(selectedProductCategory) ? 'is-active' : ''}`}
+                          type="button"
+                          onClick={() => {
+                            updateSelectedCategoryBarangay(selectedProductCategory, '');
+                            setBarangayPickerOpen(false);
+                          }}
+                        >
+                          {t('Choose Barangay')}
+                        </button>
+                        {portalBarangayOptions().map((barangay) => (
+                          <button
+                            className={`portal-barangay-option ${selectedBarangayForCategory(selectedProductCategory) === barangay ? 'is-active' : ''}`}
+                            key={barangay}
+                            type="button"
+                            onClick={() => {
+                              updateSelectedCategoryBarangay(selectedProductCategory, barangay);
+                              setBarangayPickerOpen(false);
+                            }}
+                          >
+                            {barangay}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 ) : (
                   <input
                     className="form-control"
                     value={selectedBarangayForCategory(selectedProductCategory)}
-                    onChange={(event) => updateSelectedCategoryBarangay(selectedProductCategory, event.target.value)}
+                    onChange={(event) => {
+                      updateSelectedCategoryBarangay(selectedProductCategory, event.target.value);
+                      setBarangayPickerOpen(false);
+                    }}
                     placeholder={t('Enter Barangay')}
                   />
                 )}
@@ -4378,10 +5570,19 @@ function PortalApp() {
                 const quantity = productQuantity(item);
                 const discountNudge = productNextDiscountNudge(item, quantity);
                 return (
-                  <div
-                    className={`card portal-product-card ${quantity > 0 ? 'is-selected' : ''}`}
-                    key={item.id}
-                  >
+	                  <div
+	                    className={`card portal-product-card ${quantity > 0 ? 'is-selected' : ''}`}
+	                    key={item.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => updateProductQuantity(item, quantity + 1)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          updateProductQuantity(item, quantity + 1);
+                        }
+                      }}
+	                  >
                     <div className="card-body">
                       <div className="portal-product-card-top">
                         <div>
@@ -4389,30 +5590,31 @@ function PortalApp() {
                           {item.description && <div className="small text-muted mt-1">{item.description}</div>}
                         </div>
                         <div className="portal-product-quantity-row">
-                          <button className="portal-qty-button" type="button" onClick={() => updateProductQuantity(item, quantity - 1)} aria-label={`Decrease ${item.name}`}>
-                            <IconMinus size={15} />
-                          </button>
+	                          <button className="portal-qty-button" type="button" onClick={(event) => { event.stopPropagation(); updateProductQuantity(item, quantity - 1); }} aria-label={`Decrease ${item.name}`}>
+	                            <IconMinus size={15} />
+	                          </button>
                           <input
                             className="portal-qty-input"
                             type="number"
                             min="0"
                             max="365"
                             value={quantity}
-                            onChange={(e) => updateProductQuantity(item, e.target.value)}
-                            onFocus={(e) => scrollPortalQuantityInputIntoView(e.currentTarget)}
-                            onClick={(e) => scrollPortalQuantityInputIntoView(e.currentTarget)}
-                            inputMode="numeric"
-                            aria-label={`${item.name} quantity`}
-                          />
-                          <button className="portal-qty-button" type="button" onClick={() => updateProductQuantity(item, quantity + 1)} aria-label={`Increase ${item.name}`}>
-                            <IconPlus size={15} />
-                          </button>
+	                            onChange={(e) => updateProductQuantity(item, e.target.value)}
+	                            onFocus={(e) => scrollPortalQuantityInputIntoView(e.currentTarget)}
+	                            onClick={(e) => { e.stopPropagation(); scrollPortalQuantityInputIntoView(e.currentTarget); }}
+                              onKeyDown={(e) => e.stopPropagation()}
+	                            inputMode="numeric"
+	                            aria-label={`${item.name} quantity`}
+	                          />
+	                          <button className="portal-qty-button" type="button" onClick={(event) => { event.stopPropagation(); updateProductQuantity(item, quantity + 1); }} aria-label={`Increase ${item.name}`}>
+	                            <IconPlus size={15} />
+	                          </button>
                         </div>
                       </div>
                       <div className="portal-product-meta-tags">
                         <span className="badge bg-green-lt text-green"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
                         <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
-                        <span className={`badge ${productPassType(item) === 'MULTI_DEVICE' ? 'bg-purple-lt text-purple' : 'bg-azure-lt text-azure'}`}>{item.device_scope_label || productPassLabel(item)}</span>
+                        {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple">{item.device_scope_label || productPassLabel(item)}</span>}
                         {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple"><IconUsers size={16} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
                       </div>
                       {discountNudge && (
@@ -4427,8 +5629,9 @@ function PortalApp() {
             </div>
           </>
         )}
-        {selectedItem ? (
-          <div className="portal-category-modal-footer">
+        </div>
+	        {selectedItem ? (
+	          <div className="portal-category-modal-footer portal-store-page-footer">
             <div className="portal-selected-total">
               <span className="portal-selected-total-icon"><IconCash size={20} /></span>
               <span className="portal-selected-total-copy">
@@ -4453,23 +5656,25 @@ function PortalApp() {
               )}
             </button>
           </div>
-        ) : null}
-      </Modal>
-    );
-  }
+	        ) : null}
+        </div>
+      </div>
+	    );
+	  }
 
   function OutsidePurchaseModal() {
     if (!outsidePurchaseConfirm?.item) return null;
     const item = outsidePurchaseConfirm.item;
     if (outsidePurchaseConfirm.profileRequired) {
       return (
-        <Modal
-          title={t('Set profile before buying')}
-          onClose={() => setOutsidePurchaseConfirm(null)}
-          dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
-          bodyClassName="portal-profile-modal-body"
-          contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
-        >
+	        <Modal
+	          title={t('Set profile before buying')}
+	          onClose={() => setOutsidePurchaseConfirm(null)}
+	          dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+	          bodyClassName="portal-profile-modal-body"
+	          contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+	          lockPageRefresh
+	        >
           <div className="d-flex align-items-start gap-3">
             <span className="avatar bg-yellow-lt text-yellow"><IconGift size={24} /></span>
             <div>
@@ -4479,10 +5684,14 @@ function PortalApp() {
               </div>
             </div>
           </div>
-          <div className="modal-footer px-0 pb-0">
-            <button className="btn" type="button" onClick={() => setOutsidePurchaseConfirm(null)}>{t('Cancel')}</button>
+          <div className="portal-store-purchase-note mt-3">
+            <IconWifi size={16} />
+            {t('Your current connection looks like mobile data or another WiFi network, not a 3J WiFi AP.')}
+          </div>
+          <div className="modal-footer portal-outside-modal-footer px-0 pb-0">
+            <button className="btn portal-outside-modal-cancel" type="button" onClick={() => setOutsidePurchaseConfirm(null)}>{t('Cancel')}</button>
             <button
-              className="btn btn-primary"
+              className="btn btn-primary portal-outside-modal-primary"
               type="button"
               onClick={openProfileFromOutsidePurchase}
             >
@@ -4493,13 +5702,14 @@ function PortalApp() {
       );
     }
     return (
-      <Modal
-        title={status?.outside_network_warning?.purchase_title || t('You are outside 3J WiFi')}
-        onClose={() => setOutsidePurchaseConfirm(null)}
-        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
-        bodyClassName="portal-profile-modal-body"
-        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
-      >
+	      <Modal
+	        title={status?.outside_network_warning?.purchase_title || t('You are outside 3J WiFi')}
+	        onClose={() => setOutsidePurchaseConfirm(null)}
+	        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+	        bodyClassName="portal-profile-modal-body"
+	        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+	        lockPageRefresh
+	      >
         <div className="d-flex align-items-start gap-3">
           <span className="avatar bg-yellow-lt text-yellow"><IconAlertTriangle size={24} /></span>
           <div>
@@ -4509,10 +5719,54 @@ function PortalApp() {
             </div>
           </div>
         </div>
-        <div className="modal-footer px-0 pb-0">
-          <button className="btn" type="button" onClick={() => setOutsidePurchaseConfirm(null)}>{t('Cancel')}</button>
-          <button className="btn btn-primary" type="button" onClick={() => startProductCheckout(item, outsidePurchaseConfirm.quantity || 1, true)}>
+        <div className="portal-store-purchase-note mt-3">
+          <IconWifi size={16} />
+          {t('Your current connection looks like mobile data or another WiFi network, not a 3J WiFi AP.')}
+        </div>
+        <div className="modal-footer portal-outside-modal-footer px-0 pb-0">
+          <button className="btn portal-outside-modal-cancel" type="button" onClick={() => setOutsidePurchaseConfirm(null)}>{t('Cancel')}</button>
+          <button className="btn btn-primary portal-outside-modal-primary" type="button" onClick={() => startProductCheckout(item, outsidePurchaseConfirm.quantity || 1, true)}>
             {t('Continue')}
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
+  function StoreOutsidePurchaseModal() {
+    if (!storeOutsidePurchaseConfirm || !storePurchaseOption) return null;
+    const method = storeOutsidePurchaseConfirm.method || 'SUBMITTED';
+    const methodCopy = method === 'QR'
+      ? t('Generate QR')
+      : method === 'CODE'
+        ? t('Generate Code')
+        : t('Submit request');
+    return (
+      <Modal
+        title={status?.outside_network_warning?.purchase_title || t('You are outside 3J WiFi')}
+        onClose={() => setStoreOutsidePurchaseConfirm(null)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className="d-flex align-items-start gap-3">
+          <span className="avatar bg-yellow-lt text-yellow"><IconAlertTriangle size={24} /></span>
+          <div>
+            <div className="fw-semibold mb-1">{storePurchaseOption.store?.store_name || t('Store payment')}</div>
+            <div className="text-muted small">
+              {t('You can still create this store purchase, but the approved pass will only work when this device connects to a 3J WiFi AP.')}
+            </div>
+          </div>
+        </div>
+        <div className="portal-store-purchase-note mt-3">
+          <IconWifi size={16} />
+          {t('Your current connection looks like mobile data or another WiFi network, not a 3J WiFi AP.')}
+        </div>
+        <div className="modal-footer portal-outside-modal-footer px-0 pb-0">
+          <button className="btn portal-outside-modal-cancel" type="button" onClick={() => setStoreOutsidePurchaseConfirm(null)}>{t('Cancel')}</button>
+          <button className="btn btn-primary portal-outside-modal-primary" type="button" onClick={() => createStorePurchaseRequest(method, true)}>
+            {methodCopy}
           </button>
         </div>
       </Modal>
@@ -4523,13 +5777,14 @@ function PortalApp() {
     if (!checkoutBrowserReminder?.item) return null;
     const item = checkoutBrowserReminder.item;
     return (
-      <Modal
-        title={t('Before you continue')}
-        onClose={() => setCheckoutBrowserReminder(null)}
-        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
-        bodyClassName="portal-profile-modal-body"
-        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
-      >
+	      <Modal
+	        title={t('Before you continue')}
+	        onClose={() => setCheckoutBrowserReminder(null)}
+	        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+	        bodyClassName="portal-profile-modal-body"
+	        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+	        lockPageRefresh
+	      >
         <div className="d-flex align-items-start gap-3">
           <span className="avatar bg-blue-lt text-blue"><IconBrandChrome size={24} /></span>
           <div>
@@ -4577,6 +5832,36 @@ function PortalApp() {
     );
   }
 
+  function BlockedPortalContent() {
+    return (
+      <>
+        <div className="portal-blocked-card card">
+          <div className="card-body text-center">
+            <PortalAvatarHeroView
+              avatarNote={avatarNote}
+              avatarNoteTone={avatarNoteTone}
+              avatarNoteVisible={avatarNoteVisible}
+              avatarNoteWords={avatarNoteWords}
+              avatarNoteSequence={avatarNoteSequence}
+              avatarConnected={false}
+              customAvatarUrl={customAvatarUrl}
+            />
+            <div className="portal-blocked-icon mx-auto mt-4">
+              <IconBan size={34} />
+            </div>
+            <h1 className="mt-3 mb-2">{t('Device Blocked')}</h1>
+            <p className="portal-blocked-message mb-2">{t('This device cannot buy or use WiFi passes right now.')}</p>
+            <p className="portal-blocked-reason mb-4">{t('Please contact admin so the operator can review this device.')}</p>
+            <button className="btn btn-primary btn-lg w-100" type="button" onClick={openBlockedContactAdmin}>
+              <IconMessageCircle size={20} className="me-2" />{t('Contact Admin')}
+            </button>
+          </div>
+        </div>
+        <PortalFooter />
+      </>
+    );
+  }
+
   if (!settings || portalBooting) {
     return (
       <PortalBootSkeleton />
@@ -4584,8 +5869,8 @@ function PortalApp() {
   }
 
   return (
-    <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'} ${portalScreen !== 'landing' ? 'has-portal-header' : ''}`}>
-      {portalScreen !== 'landing' && (
+    <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'} ${portalScreen !== 'landing' && !portalBlocked ? 'has-portal-header' : ''}`}>
+      {portalScreen !== 'landing' && !portalBlocked && (
         <header className="portal-sticky-header">
           <div className="portal-sticky-header-inner">
 	            <button className="portal-sticky-brand" type="button" onClick={() => setPortalSettingsOpen(true)} aria-label={t('3J WiFi Portal Settings')} title={t('3J WiFi Portal Settings')}>
@@ -4599,12 +5884,12 @@ function PortalApp() {
           </div>
         </header>
       )}
-      <div className="portal-float-actions">
-        <button className="btn btn-primary btn-icon portal-help-fab" type="button" onClick={() => { setHelpOpen(true); setHelpMode('menu'); loadSupportConversation(); }} title={t('Help')} aria-label={t('Help')}>
-          <IconHelp size={26} />
-        </button>
-      </div>
-      <PurchaseSuccessModal />
+	      <div className="portal-float-actions">
+	        <button className="btn btn-primary btn-icon portal-help-fab" type="button" onClick={() => { setHelpOpen(true); setHelpMode(portalBlocked ? 'chat' : 'menu'); loadSupportConversation(); }} title={portalBlocked ? t('Contact Admin') : t('Help')} aria-label={portalBlocked ? t('Contact Admin') : t('Help')}>
+	          <IconHelp size={26} />
+	        </button>
+	      </div>
+	      {PurchaseSuccessModal()}
       {bagFlyAnimation && (
         <div
           className="portal-bag-fly-item"
@@ -4617,7 +5902,9 @@ function PortalApp() {
         </div>
       )}
       <div className="client-portal-shell">
-        {portalScreen === 'landing' ? (
+        {portalBlocked ? (
+          <BlockedPortalContent />
+        ) : portalScreen === 'landing' ? (
           <>
             <div className="portal-landing-card card">
               <div className="card-body text-center">
@@ -4643,9 +5930,19 @@ function PortalApp() {
             </div>
             <PortalFooter />
           </>
-        ) : (
-          <>
-          <div className="portal-shop-avatar-outside text-center mb-3">
+	        ) : selectedPhysicalStore ? (
+	          <>
+	            {PhysicalStoreItemsPage()}
+	            <PortalFooter />
+	          </>
+	        ) : selectedProductCategory ? (
+	          <>
+	            {ProductCategoryItemsPage()}
+	            <PortalFooter />
+	          </>
+	        ) : (
+	          <>
+	          <div className="portal-shop-avatar-outside text-center mb-3">
             <PortalAvatarHeroView
               avatarNote={avatarNote}
               avatarNoteTone={avatarNoteTone}
@@ -4749,7 +6046,7 @@ function PortalApp() {
                 dismissKey={`${result.status}-${result.message}`}
               />
             )}
-            {paymentResult && !paymentSuccessReady && (
+            {paymentResult && !paymentSuccessReady && !paymentResultDismissed && (
               <PortalCustomerMessage
                 message={paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
                   ? (paymentResult.bag_item_status === 'QUEUED' ? t(status?.outside_network_warning?.purchase_success_message || 'Payment received. Package saved to your bag.') : t('Payment received. Internet access is active.'))
@@ -4758,40 +6055,25 @@ function PortalApp() {
                     : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Waiting for PayMongo payment confirmation.')}
                 tone={paymentResult.status === 'FAILED' ? 'danger' : paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'success' : 'info'}
                 timeoutMs={portalMessageAutoHideMs}
+                autoDismiss={paymentResultIsTerminal(paymentResult)}
                 onSuccessNote={queueAvatarCustomerMessage}
-                onDismiss={() => setPaymentResult(null)}
+                onDismiss={() => cancelPaymentCheckout(paymentResult)}
                 dismissKey={`${paymentResult.payment_order_id || ''}-${paymentResult.status}-${paymentResult.fulfillment_status || ''}-${paymentChecking ? 'checking' : 'idle'}`}
                 actions={paymentResult.payment_order_id && (
-                  <button className="btn btn-sm btn-outline-secondary" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id)}>
-                    {paymentChecking ? t('Checking...') : t('Check')}
-                  </button>
+                  <>
+                    <button className="btn btn-sm btn-outline-secondary" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id, { force: true })}>
+                      {paymentChecking ? t('Checking...') : t('Check')}
+                    </button>
+                    {!paymentResultIsTerminal(paymentResult) && (
+                      <button className="btn btn-sm btn-outline-danger" type="button" disabled={paymentChecking} onClick={() => cancelPaymentCheckout(paymentResult)}>
+                        {t('Cancel')}
+                      </button>
+                    )}
+                  </>
                 )}
               />
             )}
             <div className="portal-purchase-flow">
-              {purchaseChannel && (
-                <div className="portal-purchase-channel-tabs" aria-label="Purchase channel">
-                  <button
-                    className={`portal-purchase-channel-tab ${purchaseChannel === 'ONLINE' ? 'active' : ''}`}
-                    type="button"
-                    onClick={() => selectPortalPurchaseChannel('ONLINE')}
-                  >
-                    <IconCash size={16} />
-                    {t('ONLINE')}
-                  </button>
-                  <button
-                    className={`portal-purchase-channel-tab ${purchaseChannel === 'STORE' ? 'active' : ''}`}
-                    type="button"
-                    onClick={() => selectPortalPurchaseChannel('STORE')}
-                  >
-                    <IconShoppingBag size={16} />
-                    {t('STORES')}
-                  </button>
-                  <button className="portal-purchase-cancel" type="button" aria-label={t('Cancel transaction')} onClick={() => resetPortalPurchaseStep('channel')}>
-                    <IconX size={17} />
-                  </button>
-                </div>
-              )}
               {!purchaseChannel ? (
                 <div className="portal-choice-grid">
                   <button
@@ -4806,16 +6088,11 @@ function PortalApp() {
                     <span>
                       <strong>{t('Buy Online')}</strong>
                       <small>{t('Use GCash, Maya, credit card, and other PayMongo options.')}</small>
-                      <span className="portal-payment-logo-row">
-                        {onlinePaymentMethods.length ? onlinePaymentMethods.map((method) => (
-                          <span className={`portal-payment-logo is-${method.id}`} key={method.id}>{paymentMethodLogo(method)}</span>
-                        )) : <span className="portal-payment-logo">{t('Not configured')}</span>}
-                      </span>
                     </span>
                     <span className="portal-choice-radio" aria-hidden="true" />
                   </button>
                   <button className="portal-choice-card" type="button" onClick={() => selectPortalPurchaseChannel('STORE')}>
-                    <span className="portal-choice-icon"><IconShoppingBag size={24} /></span>
+                    <span className="portal-choice-icon"><IconBuildingStore size={24} /></span>
                     <span>
                       <strong>{t('Buy in Stores')}</strong>
                       <small>{t('Pay at a physical store near you.')}</small>
@@ -4823,195 +6100,182 @@ function PortalApp() {
                     <span className="portal-choice-radio" aria-hidden="true" />
                   </button>
                 </div>
-              ) : purchaseChannel === 'STORE' ? (
-                <div className="portal-store-payment-panel">
-                  <div className="portal-store-payment-header">
-                    <span className="portal-choice-icon"><IconBuildingStore size={24} /></span>
-                    <div>
-                      <strong>{t('Store Payment')}</strong>
-                      <small>
-                        {physicalStoresSite?.site_name
-                          ? `Available stores for ${physicalStoresSite.site_name}${physicalStoresSite.barangay ? ` · ${physicalStoresSite.barangay}` : ''}`
-                          : 'Stores are shown only when your connected site is detected.'}
-                      </small>
-                    </div>
+              ) : (
+                <div className="portal-purchase-tab-shell">
+                  <div className="portal-purchase-tabbar">
+                    <ul className="nav nav-tabs portal-profile-tabs portal-purchase-tabs" role="tablist" aria-label="Purchase channel">
+                      <li className="nav-item" role="presentation">
+                        <button className={`nav-link ${purchaseChannel === 'ONLINE' ? 'active' : ''}`} type="button" role="tab" aria-selected={purchaseChannel === 'ONLINE'} onClick={() => selectPortalPurchaseChannel('ONLINE')}>
+                          <IconCash size={16} /> {t('ONLINE')}
+                        </button>
+                      </li>
+                      <li className="nav-item" role="presentation">
+                        <button className={`nav-link ${purchaseChannel === 'STORE' ? 'active' : ''}`} type="button" role="tab" aria-selected={purchaseChannel === 'STORE'} onClick={() => selectPortalPurchaseChannel('STORE')}>
+                          <IconBuildingStore size={16} /> {t('STORES')}
+                        </button>
+                      </li>
+                    </ul>
+                    <button className="portal-purchase-cancel" type="button" aria-label={t('Cancel transaction')} onClick={() => resetPortalPurchaseStep('channel')}>
+                      <IconX size={17} />
+                    </button>
                   </div>
-                  <PortalPassTypeTabs />
-                  {physicalStoresLoading ? (
-                    <div className="portal-store-loading">
-                      <span className="spinner-border spinner-border-sm" aria-hidden="true" />
-                      <span>Loading stores...</span>
-                    </div>
-                  ) : physicalStoresError ? (
-                    <PortalCustomerMessage
-                      message={physicalStoresError}
-                      tone="warning"
-                      timeoutMs={portalMessageAutoHideMs}
-                      onSuccessNote={queueAvatarCustomerMessage}
-                      onDismiss={() => setPhysicalStoresError('')}
-                    />
-                  ) : selectedPhysicalStore ? (
-                    <div className="portal-store-detail">
-                      <button className="portal-store-back" type="button" onClick={() => setSelectedPhysicalStore(null)}>
-                        <IconChevronLeft size={16} /> {t('Back to stores')}
-                      </button>
-                      <div className="portal-store-detail-hero">
-                        <div className="portal-store-image">
-                          {selectedPhysicalStore.image_url ? <img src={cacheBustedUploadUrl(selectedPhysicalStore.image_url, selectedPhysicalStore.updated_at)} alt="" /> : <IconBuildingStore size={30} />}
-                        </div>
-                        <div>
-                          <div className="portal-store-card-title">{selectedPhysicalStore.store_name}</div>
-                          <div className="portal-store-card-description">{selectedPhysicalStore.description || 'Choose an item and pay at this store.'}</div>
-                          <div className="portal-store-card-meta">
-                            <span><IconMapPin size={14} /> {storeDistanceLabel(selectedPhysicalStore)}</span>
-                            {selectedPhysicalStore.contact_phone && <span><IconPhone size={14} /> {selectedPhysicalStore.contact_phone}</span>}
+                  <div className="portal-purchase-tab-content">
+                    {purchaseChannel === 'STORE' ? (
+                      <div className="portal-store-payment-panel">
+                        <div className="portal-store-payment-header">
+                          <span className="portal-choice-icon"><IconBuildingStore size={24} /></span>
+                          <div>
+                            <strong>{t('Store Payment')}</strong>
+                            <small>
+                              {physicalStoresSite?.site_name
+                                ? `Available stores for ${physicalStoresSite.site_name}${physicalStoresSite.barangay ? ` · ${physicalStoresSite.barangay}` : ''}`
+                                : 'Stores are shown only when your connected site is detected.'}
+                            </small>
                           </div>
                         </div>
-                      </div>
-                      {storeVisibleItems(selectedPhysicalStore).length ? (
-                        <div className="portal-store-item-list">
-                          {storeVisibleItems(selectedPhysicalStore).map((item) => (
-                            <div className="portal-store-item-card" key={item.id}>
-                              <div className="portal-store-item-main">
-                                <div>
-                                  <div className="portal-store-item-title">{item.name}</div>
-                                  {item.description && <div className="portal-store-card-description">{item.description}</div>}
-                                </div>
-                                <div className="portal-store-item-price">PHP {Number(item.price || 0).toFixed(2)}</div>
-                              </div>
-                              <div className="portal-product-meta-tags">
-                                <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
-                                <span className={`badge ${productPassType(item) === 'MULTI_DEVICE' ? 'bg-purple-lt text-purple' : 'bg-azure-lt text-azure'}`}>{item.device_scope_label || productPassLabel(item)}</span>
-                                {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple"><IconUsers size={16} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
-                                <span className={`badge ${item.access_scope === 'BARANGAY_ONLY' ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>{item.access_scope === 'BARANGAY_ONLY' ? 'Barangay only' : 'All locations'}</span>
-                              </div>
-                              {item.access_scope === 'BARANGAY_ONLY' && item.allowed_barangay && <div className="small text-muted mt-2">Allowed in {item.allowed_barangay}</div>}
-                              {item.more_info_enabled && item.more_info_text ? (
-                                <button className="btn btn-outline-secondary btn-sm mt-3" type="button" onClick={() => setStoreItemMoreInfo(item)}>
-                                  <IconInfoCircle size={15} className="me-1" />More info
+                        <StorePendingRequestsPanel />
+                        {physicalStoresLoading && !physicalStores.length ? (
+                          <div className="portal-store-loading">
+                            <span className="spinner-border spinner-border-sm" aria-hidden="true" />
+                            <span>Loading stores...</span>
+                          </div>
+                        ) : physicalStoresError ? (
+                          <PortalCustomerMessage
+                            message={physicalStoresError}
+                            tone="warning"
+                            timeoutMs={portalMessageAutoHideMs}
+                            onSuccessNote={queueAvatarCustomerMessage}
+                            onDismiss={() => setPhysicalStoresError('')}
+                          />
+                        ) : physicalStores.length ? (
+                          <>
+                            <div className="portal-store-list">
+                              {physicalStores.map((store) => (
+                                <button
+                                  className="portal-store-card"
+                                  key={store.id}
+                                  type="button"
+	                                  onClick={() => {
+	                                    setStoreItemQuantities({});
+	                                    setStorePurchaseMessage(null);
+	                                    setSelectedPhysicalStore(store);
+	                                  }}
+                                >
+                                  <div className="portal-store-card-media">
+                                    <div className="portal-store-image">
+                                      {store.image_url ? <img src={cacheBustedUploadUrl(store.image_url, store.updated_at)} alt="" /> : <IconBuildingStore size={30} />}
+                                    </div>
+                                    <span className="portal-store-choose-button">{t('Choose')}</span>
+                                  </div>
+                                  <div className="portal-store-card-body">
+                                    <div className="portal-store-card-title">{store.store_name}</div>
+                                    {store.description && <div className="portal-store-card-description">{store.description}</div>}
+                                    <div className="portal-store-card-meta">
+                                      <span>
+                                        <IconMapPin size={14} /> {storePortalLocationLabel(store)}
+                                      </span>
+                                      {storeDistanceMeta(store) && <span><IconMapPin size={14} /> {storeDistanceMeta(store)}</span>}
+                                      {store.contact_phone && <span><IconPhone size={14} /> {store.contact_phone}</span>}
+                                    </div>
+                                    <div className="portal-store-card-meta">
+                                      <span><IconShoppingBag size={14} /> {storeAvailableItems(store).length} available item{storeAvailableItems(store).length === 1 ? '' : 's'}</span>
+                                    </div>
+                                  </div>
                                 </button>
-                              ) : null}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="portal-store-empty">
-                          <IconShoppingBag size={26} />
-                          <strong>No {effectivePurchasePassType === 'MULTI_DEVICE' ? 'shared device' : 'one device'} items in this store yet.</strong>
-                          <small>Ask the store operator for available packages.</small>
-                        </div>
-                      )}
-                    </div>
-                  ) : physicalStores.length ? (
-                    <>
-                      {physicalStoresLocationMessage && (
-                        <div className="portal-store-location-note">
-                          <IconMapPin size={15} />
-                          <span>{physicalStoresLocationMessage}</span>
-                          <button type="button" onClick={requestStoreCustomerLocation}>Use location</button>
-                        </div>
-                      )}
-                      <div className="portal-store-list">
-                        {physicalStores.map((store) => (
-                        <button className="portal-store-card" key={store.id} type="button" onClick={() => setSelectedPhysicalStore(store)}>
-                          <div className="portal-store-image">
-                            {store.image_url ? <img src={cacheBustedUploadUrl(store.image_url, store.updated_at)} alt="" /> : <IconBuildingStore size={30} />}
-                          </div>
-                          <div className="portal-store-card-body">
-                            <div className="portal-store-card-title">{store.store_name}</div>
-                            {store.description && <div className="portal-store-card-description">{store.description}</div>}
-                            <div className="portal-store-card-meta">
-                              <span><IconMapPin size={14} /> {storeDistanceLabel(store)}</span>
-                              <span><IconMapPin size={14} /> {store.address || [store.barangay, store.municipality].filter(Boolean).join(', ') || 'Ask the operator for directions'}</span>
-                              {store.contact_phone && <span><IconPhone size={14} /> {store.contact_phone}</span>}
-                            </div>
-                            <div className="portal-store-card-meta">
-                              <span><IconShoppingBag size={14} /> {storeVisibleItems(store).length} available item{storeVisibleItems(store).length === 1 ? '' : 's'}</span>
-                              <span>{t('Tap to view')}</span>
-                            </div>
-                            <div className="portal-store-site-badges">
-                              {(store.sites || []).map((site) => (
-                                <span key={site.site_deployment_id}>{site.site_name}</span>
                               ))}
                             </div>
-                          </div>
-                        </button>
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="portal-store-empty">
-                      <IconBuildingStore size={26} />
-                      <strong>No store payment location is available in this site yet.</strong>
-                      <small>Choose Online Payment for now, or ask the operator where to pay.</small>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <>
-                  {onlinePaymentMethods.length > 1 ? (
-                    <div className="portal-payment-method-strip">
-                      {onlinePaymentMethods.map((method) => (
-                        <button
-                          className={`portal-payment-method-pill ${selectedPaymentMethod === method.id ? 'is-active' : ''}`}
-                          type="button"
-                          key={method.id}
-                          onClick={() => setSelectedPaymentMethod(method.id)}
-                        >
-                          <span className={`portal-payment-logo is-${method.id}`}>{paymentMethodLogo(method)}</span>
-                          <span>{method.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : !onlinePaymentMethods.length ? <div className="alert alert-warning mb-0">{t('Online payment methods are not configured yet. Ask the operator for help.')}</div> : null}
-                  <PortalPassTypeTabs />
-                  {onlinePaymentMethods.length && visibleProductCategoryGroups.length ? (
-                    <div className="portal-product-category-list">
-                      {visibleProductCategoryGroups.map((category, groupIndex) => (
-                        <div className="portal-product-category-block" key={category.id || `category-${groupIndex}`}>
-                          <button className="portal-category-image-button" type="button" onClick={() => openProductCategory(category)}>
-                            {category.image_url ? (
-                              <img className="portal-product-category-image" src={cacheBustedUploadUrl(category.image_url, category.updated_at)} alt="" loading="lazy" />
-                            ) : (
-                              <span className="portal-product-category-image portal-category-image-empty"><IconPhoto size={30} /></span>
-                            )}
-                            <span className="portal-category-card-overlay">
-                              <span className="portal-category-card-title">{category.name || t('Available Packages')}</span>
-                              <span className="portal-category-card-scope">
-                                <IconCircleCheck size={14} />
-                                {category.access_scope === 'BARANGAY_ONLY' ? t('Barangay only') : t('All Locations')}
-                              </span>
-                            </span>
-                          </button>
-                          {category.description && <div className="small text-muted mb-2">{category.description}</div>}
-                          {category.more_info_enabled && category.more_info_text ? (
-                            <div className="portal-category-action-row">
-                              <button className="btn btn-primary portal-category-buy-action" type="button" onClick={() => openProductCategory(category)}>{t('BUY')}</button>
-                              <button className="btn btn-outline-secondary portal-category-more-info-action" type="button" onClick={() => openCategoryMoreInfo(category)}>{t('More Info')}</button>
+                            <div className="portal-store-map-cta">
+                              <div className="portal-store-map-cta-art" aria-hidden="true">
+                                <span className="portal-store-map-road portal-store-map-road-one" />
+                                <span className="portal-store-map-road portal-store-map-road-two" />
+                                <span className="portal-store-map-pin"><IconMapPin size={17} /></span>
+                              </div>
+                              <div className="portal-store-map-cta-copy">
+                                <strong>{t('Store map')}</strong>
+                                <small>{t('Find every available store location in one map view.')}</small>
+                              </div>
+                              <button className="portal-store-map-cta-button" type="button" onClick={() => openPortalStoreMap()}>
+                                {t('View all stores on map')}
+                              </button>
                             </div>
-                          ) : (
-                            <button className="btn btn-primary w-100" type="button" onClick={() => openProductCategory(category)}>{t('BUY')}</button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  ) : onlinePaymentMethods.length ? <div className="alert alert-info mb-0">{t('No packages are available yet. Ask the operator for help.')}</div> : null}
-                </>
+                          </>
+                        ) : (
+                          <div className="portal-store-empty">
+                            <IconBuildingStore size={26} />
+                            <strong>No store payment location is available in this site yet.</strong>
+                            <small>Choose Online Payment for now, or ask the operator where to pay.</small>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="portal-online-payment-panel">
+                        {onlinePaymentMethods.length > 1 ? (
+                          <div className="portal-payment-method-strip">
+                            {onlinePaymentMethods.map((method) => (
+                              <button
+                                className={`portal-payment-method-pill ${selectedPaymentMethod === method.id ? 'is-active' : ''}`}
+                                type="button"
+                                key={method.id}
+                                onClick={() => setSelectedPaymentMethod(method.id)}
+                              >
+                                <span className={`portal-payment-logo is-${method.id}`}>{paymentMethodLogo(method)}</span>
+                                <span>{method.label}</span>
+                              </button>
+                            ))}
+                          </div>
+                        ) : !onlinePaymentMethods.length ? <div className="alert alert-warning mb-0">{t('Online payment methods are not configured yet. Ask the operator for help.')}</div> : null}
+                        {onlinePaymentMethods.length && visibleProductCategoryGroups.length ? (
+                          <div className="portal-product-category-list">
+                            {visibleProductCategoryGroups.map((category, groupIndex) => (
+                              <div className="portal-product-category-block" key={category.id || `category-${groupIndex}`}>
+                                <button className="portal-category-image-button" type="button" onClick={() => openProductCategory(category)}>
+                                  {category.image_url ? (
+                                    <img className="portal-product-category-image" src={cacheBustedUploadUrl(category.image_url, category.updated_at)} alt="" loading="lazy" />
+                                  ) : (
+                                    <span className="portal-product-category-image portal-category-image-empty"><IconPhoto size={30} /></span>
+                                  )}
+                                  <span className="portal-category-card-overlay">
+                                    <span className="portal-category-card-title">{category.name || t('Available Packages')}</span>
+                                    <span className="portal-category-card-scope">
+                                      <IconCircleCheck size={14} />
+                                      {category.access_scope === 'BARANGAY_ONLY' ? t('Barangay only') : t('All Locations')}
+                                    </span>
+                                  </span>
+                                </button>
+                                {category.description && <div className="small text-muted mb-2">{category.description}</div>}
+                                {category.more_info_enabled && category.more_info_text ? (
+                                  <div className="portal-category-action-row">
+                                    <button className="btn btn-primary portal-category-buy-action" type="button" onClick={() => openProductCategory(category)}>{t('BUY')}</button>
+                                    <button className="btn btn-outline-secondary portal-category-more-info-action" type="button" onClick={() => openCategoryMoreInfo(category)}>{t('More Info')}</button>
+                                  </div>
+                                ) : (
+                                  <button className="btn btn-primary w-100" type="button" onClick={() => openProductCategory(category)}>{t('BUY')}</button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : onlinePaymentMethods.length ? <div className="alert alert-info mb-0">{t('No packages are available yet. Ask the operator for help.')}</div> : null}
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           </div>
           <PortalFooter />
           </>
         )}
-      </div>
-      <CategoryMoreInfoModal />
-      <StoreItemMoreInfoModal />
-	      <CategoryProductsModal />
-	      <BagModal />
-		      {renderPortalSettingsModal()}
-		      <OutsidePurchaseModal />
-		      <BrowserReminderCheckoutModal />
-      <PortalCoverageModal />
+	      </div>
+	      {CategoryMoreInfoModal()}
+	      {StorePurchaseOptionsModal()}
+	      {StoreOutsidePurchaseModal()}
+	      {StoreRequestStatusModal()}
+	      {StoreItemMoreInfoModal()}
+	      {BagModal()}
+	      {renderPortalSettingsModal()}
+	      {OutsidePurchaseModal()}
+	      {BrowserReminderCheckoutModal()}
+	      {PortalCoverageModal()}
 
       {profileViewOpen && (
         <Modal
@@ -5309,15 +6573,26 @@ function PortalApp() {
 
       {helpOpen && (
         <Modal
-          title={helpMode === 'chat' ? t('Message Admin') : helpMode === 'missing-time' ? t('Report Missing Time') : t('Help')}
+          title={effectiveHelpMode === 'chat' ? t('Message Admin') : effectiveHelpMode === 'missing-time' ? t('Report Missing Time') : (portalBlocked ? t('Contact Admin') : t('Help'))}
           onClose={() => setHelpOpen(false)}
           dialogClassName="portal-profile-modal-dialog"
           bodyClassName="portal-profile-modal-body"
           contentClassName="portal-profile-modal-content"
         >
-          {helpMode === 'menu' && (
+          {effectiveHelpMode === 'menu' && (
             <div className="row g-3">
-              <div className="col-md-6">
+              {portalBlocked && (
+                <div className="col-12">
+                  <PortalCustomerMessage
+                    message={portalBlockedMessage(blockedDevice)}
+                    tone="danger"
+                    timeoutMs={portalMessageAutoHideMs}
+                    onSuccessNote={queueAvatarCustomerMessage}
+                    dismissKey="blocked-help-guide"
+                  />
+                </div>
+              )}
+              <div className={portalBlocked ? 'col-12' : 'col-md-6'}>
                 <button className="card card-link w-100 text-start" type="button" onClick={() => { setHelpMode('chat'); loadSupportConversation(); }}>
                   <div className="card-body">
                     <IconMessageCircle size={26} className="text-blue mb-2" />
@@ -5326,6 +6601,7 @@ function PortalApp() {
                   </div>
                 </button>
               </div>
+              {!portalBlocked && (
               <div className="col-md-6">
                 <button className="card card-link w-100 text-start" type="button" onClick={() => setHelpMode('missing-time')}>
                   <div className="card-body">
@@ -5335,6 +6611,8 @@ function PortalApp() {
                   </div>
                 </button>
               </div>
+              )}
+              {!portalBlocked && (
               <div className="col-md-6">
                 <button className="card card-link w-100 text-start" type="button" onClick={openPortalCoverageExternal}>
                   <div className="card-body">
@@ -5344,9 +6622,10 @@ function PortalApp() {
                   </div>
                 </button>
               </div>
+              )}
             </div>
           )}
-          {helpMode === 'chat' && (
+          {effectiveHelpMode === 'chat' && (
             <div>
               <div className="portal-chat-thread mb-3">
                 {(supportConversation?.messages || []).length ? supportConversation.messages.map((message) => (
@@ -5369,10 +6648,10 @@ function PortalApp() {
                 <input className="form-control" value={supportMessage} onChange={(e) => setSupportMessage(e.target.value)} placeholder={t('Type your message...')} />
                 <button className="btn btn-primary" disabled={supportLoading || !supportMessage.trim()}><IconSend size={18} /></button>
               </form>
-              <button className="btn btn-link mt-2 px-0" type="button" onClick={() => setHelpMode('menu')}>{t('Back')}</button>
+              {!portalBlocked && <button className="btn btn-link mt-2 px-0" type="button" onClick={() => setHelpMode('menu')}>{t('Back')}</button>}
             </div>
           )}
-          {helpMode === 'missing-time' && (
+          {effectiveHelpMode === 'missing-time' && !portalBlocked && (
             <form onSubmit={restoreMissingTime}>
               <PortalCustomerMessage
                 message={t('Use the same verified contact number from your profile. We will send a 4-character code before moving remaining time to this device.')}
@@ -5514,7 +6793,7 @@ function ActionBadgeButton({ icon: Icon, label, tone = 'secondary', onClick, dis
   );
 }
 
-function PortalCustomerMessage({ message, children, tone = 'info', onDismiss, timeoutMs = 6000, className = '', actions = null, dismissKey = '', onSuccessNote = null }) {
+function PortalCustomerMessage({ message, children, tone = 'info', onDismiss, timeoutMs = 6000, className = '', actions = null, dismissKey = '', onSuccessNote = null, autoDismiss = true }) {
   const [visible, setVisible] = useState(Boolean(message || children));
   const onDismissRef = useRef(onDismiss);
   const onSuccessNoteRef = useRef(onSuccessNote);
@@ -5546,13 +6825,13 @@ function PortalCustomerMessage({ message, children, tone = 'info', onDismiss, ti
   }, [key, normalizedTone, message, Boolean(children)]);
 
   useEffect(() => {
-    if (!visible || !(message || children)) return undefined;
+    if (!autoDismiss || !visible || !(message || children)) return undefined;
     const timer = window.setTimeout(() => {
       setVisible(false);
       if (onDismissRef.current) onDismissRef.current();
     }, timeout);
     return () => window.clearTimeout(timer);
-  }, [visible, key, timeout, message, Boolean(children)]);
+  }, [autoDismiss, visible, key, timeout, message, Boolean(children)]);
 
   if (!visible || !(message || children)) return null;
   if (normalizedTone === 'success' && onSuccessNote) return null;
@@ -5839,21 +7118,28 @@ function UsersPage({ refresh }) {
 }
 
 function CustomerDevicesPage() {
-  const [data, setData] = useState({ summary: {}, customers: [], without_profiles: [], active: [], inactive: [], active_access: [], with_vouchers: [] });
+  const [data, setData] = useState({ summary: {}, customers: [], without_profiles: [], active: [], inactive: [], active_access: [], with_vouchers: [], blocked: [], time_adjustment_history: [] });
   const [tab, setTab] = useState('customers');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [timeTarget, setTimeTarget] = useState(null);
-  const [timeForm, setTimeForm] = useState({ mode: 'add', minutes: 5, note: '' });
+  const [timeForm, setTimeForm] = useState({ mode: 'add', amount: 5, unit: 'minutes', note: '' });
   const [resetTarget, setResetTarget] = useState(null);
   const [deviceDetailsTarget, setDeviceDetailsTarget] = useState(null);
+  const [customerDetailsTab, setCustomerDetailsTab] = useState('devices');
+  const [customerBagTab, setCustomerBagTab] = useState('active');
+  const [customerBagDetails, setCustomerBagDetails] = useState({ userId: null, loading: false, error: '', bag: null });
+  const [bagItemTarget, setBagItemTarget] = useState(null);
+  const [bagItemForm, setBagItemForm] = useState({ item_name: '', time_value: 1, time_unit: 'hours', expires_at: '' });
   const tabs = [
     ['customers', 'Profiled Customers', data.summary?.customers || 0, 'green'],
     ['without_profiles', 'No Profile Yet', data.summary?.without_profiles || 0, 'yellow'],
     ['active', 'Active Devices', data.summary?.active || 0, 'blue'],
-    ['active_access', 'Active Access', data.summary?.active_access || 0, 'purple']
+    ['active_access', 'Active Access', data.summary?.active_access || 0, 'purple'],
+    ['blocked', 'Blocked Devices', data.summary?.blocked || 0, 'red'],
+    ['time_adjustment_history', 'Time History', data.summary?.time_adjustments || 0, 'cyan']
   ];
   async function load() {
     setLoading(true);
@@ -5868,6 +7154,13 @@ function CustomerDevicesPage() {
     }
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (deviceDetailsTarget?.user_id) {
+      loadCustomerBag(deviceDetailsTarget.user_id).catch(() => {});
+    } else {
+      setCustomerBagDetails({ userId: null, loading: false, error: '', bag: null });
+    }
+  }, [deviceDetailsTarget?.user_id]);
   const rows = data[tab] || [];
   const filtered = rows.filter((row) => {
     const text = JSON.stringify(row || {}).toLowerCase();
@@ -5887,26 +7180,142 @@ function CustomerDevicesPage() {
     if (!device.ssid && device.stale_session_ssid) values.splice(device.client_ip ? 1 : 0, 0, 'Current SSID not detected');
     return values.join(' · ') || 'No network details yet';
   }
+  function timeAmountSeconds() {
+    const amount = Math.max(0, Number(timeForm.amount) || 0);
+    const multiplier = timeForm.unit === 'days' ? 86400 : timeForm.unit === 'hours' ? 3600 : 60;
+    return amount * multiplier * (timeForm.mode === 'deduct' ? -1 : 1);
+  }
+  function timeAdjustmentLabel(value) {
+    const seconds = Math.abs(Number(value || 0));
+    const sign = Number(value || 0) < 0 ? '-' : '+';
+    return `${sign}${formatSeconds(seconds)}`;
+  }
+  function openCustomerDetails(customer, nextTab = 'devices') {
+    setCustomerDetailsTab(nextTab);
+    setCustomerBagTab('active');
+    setDeviceDetailsTarget(customer);
+  }
+  function datetimeLocalValue(value) {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const offsetMs = date.getTimezoneOffset() * 60000;
+    return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+  }
+  function bagItemPayload() {
+    return {
+      item_name: bagItemForm.item_name,
+      time_value: Number(bagItemForm.time_value || 1),
+      time_unit: bagItemForm.time_unit || 'hours',
+      expires_at: bagItemForm.expires_at ? new Date(bagItemForm.expires_at).toISOString() : null,
+    };
+  }
+  function openAddBagItem(customer) {
+    if (!customer?.user_id) {
+      setError('Customer account is missing. Add a customer profile before adding WiFi bag items.');
+      return;
+    }
+    setBagItemTarget({ mode: 'create', user_id: customer.user_id, customer_name: customer.name || 'Customer' });
+    setBagItemForm({ item_name: '', time_value: 1, time_unit: 'hours', expires_at: '' });
+  }
+  function openEditBagItem(customer, item) {
+    setBagItemTarget({ mode: 'edit', user_id: customer.user_id, customer_name: customer.name || 'Customer', item });
+    const metadata = item.metadata || {};
+    const durationUnit = metadata.duration_unit || 'hours';
+    const durationValue = metadata.duration_value || (durationUnit === 'days' ? Math.max(1, Math.round(Number(item.duration_seconds || 0) / 86400)) : durationUnit === 'minutes' ? Math.max(1, Math.round(Number(item.duration_seconds || 0) / 60)) : Math.max(1, Math.round(Number(item.duration_seconds || 0) / 3600)));
+    setBagItemForm({
+      item_name: item.product_name || '',
+      time_value: durationValue,
+      time_unit: durationUnit,
+      expires_at: datetimeLocalValue(item.expires_at),
+    });
+  }
+  async function loadCustomerBag(userId) {
+    if (!userId) return;
+    setCustomerBagDetails((current) => ({ ...current, userId, loading: true, error: '' }));
+    try {
+      const result = await request(`/customer-devices/customers/${encodeURIComponent(userId)}/bag`);
+      setCustomerBagDetails({ userId, loading: false, error: '', bag: result.bag || null });
+    } catch (err) {
+      setCustomerBagDetails({ userId, loading: false, error: err.message || 'Could not load My WiFi Bag.', bag: null });
+    }
+  }
+  async function saveBagItem(e) {
+    e.preventDefault();
+    if (!bagItemTarget?.user_id) return;
+    setError('');
+    try {
+      const isEdit = bagItemTarget.mode === 'edit' && bagItemTarget.item?.id;
+      const path = isEdit
+        ? `/customer-devices/customers/${encodeURIComponent(bagItemTarget.user_id)}/bag-items/${encodeURIComponent(bagItemTarget.item.id)}`
+        : `/customer-devices/customers/${encodeURIComponent(bagItemTarget.user_id)}/bag-items`;
+      const result = await request(path, { method: isEdit ? 'PUT' : 'POST', body: JSON.stringify(bagItemPayload()) });
+      setCustomerBagDetails({ userId: bagItemTarget.user_id, loading: false, error: '', bag: result.bag || null });
+      setBagItemTarget(null);
+      setMessage(result.message || (isEdit ? 'WiFi bag item updated.' : 'WiFi bag item added.'));
+      await load();
+    } catch (err) {
+      setError(err.message || 'Could not save WiFi bag item.');
+    }
+  }
+  async function deleteBagItem(customer, item) {
+    if (!customer?.user_id || !item?.id) return;
+    if (!window.confirm(`Delete ${item.product_name || 'this WiFi bag item'} from this customer bag?`)) return;
+    setError('');
+    try {
+      const result = await request(`/customer-devices/customers/${encodeURIComponent(customer.user_id)}/bag-items/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+      setCustomerBagDetails({ userId: customer.user_id, loading: false, error: '', bag: result.bag || null });
+      setMessage(result.message || 'WiFi bag item deleted.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'Could not delete WiFi bag item.');
+    }
+  }
   async function manageTime(e) {
     e.preventDefault();
     if (!timeTarget?.portal_session_id) return;
-    const amount = Math.max(0, Number(timeForm.minutes) || 0) * 60 * (timeForm.mode === 'deduct' ? -1 : 1);
-    await request(`/connected-devices/${timeTarget.portal_session_id}/time-adjust`, { method: 'POST', body: JSON.stringify({ amount_seconds: amount, note: timeForm.note || null }) });
-    setTimeTarget(null);
-    setMessage('Device time updated.');
-    await load();
+    setError('');
+    try {
+      await request(`/connected-devices/${timeTarget.portal_session_id}/time-adjust`, { method: 'POST', body: JSON.stringify({ amount_seconds: timeAmountSeconds(), note: timeForm.note || null, bag_item_id: timeTarget.bag_item_id || null }) });
+      setTimeTarget(null);
+      setMessage('Device time updated.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'Could not update device time.');
+    }
   }
   async function deleteDevice(row) {
     if (!window.confirm(`Remove access for ${row.device_name || row.hostname || row.client_mac || row.client_ip || 'this device'}?`)) return;
-    await request(`/connected-devices/${row.portal_session_id || row.id}`, { method: 'DELETE' });
-    setMessage('Device access removed.');
-    await load();
+    setError('');
+    try {
+      await request(`/connected-devices/${row.portal_session_id || row.id}`, { method: 'DELETE' });
+      setMessage('Device access removed.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'Could not remove device access.');
+    }
   }
   async function blockDevice(row) {
     if (!window.confirm(`Block ${row.device_name || row.hostname || row.client_mac || row.client_ip || 'this device'} and remove current access?`)) return;
-    await request(`/connected-devices/${row.portal_session_id || row.id}/block`, { method: 'POST', body: JSON.stringify({ reason: 'Blocked from Customer Devices page' }) });
-    setMessage('Device blocked.');
-    await load();
+    setError('');
+    try {
+      await request(`/connected-devices/${row.portal_session_id || row.id}/block`, { method: 'POST', body: JSON.stringify({ reason: 'Blocked by operator' }) });
+      setMessage('Device blocked.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'Could not block device.');
+    }
+  }
+  async function unblockDevice(row) {
+    if (!window.confirm(`Unblock ${row.device_name || row.client_mac || row.client_ip || 'this device'}?`)) return;
+    setError('');
+    try {
+      await request(`/connected-devices/blocked/${row.id}/unblock`, { method: 'POST' });
+      setMessage('Device block removed.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'Could not unblock device.');
+    }
   }
   async function resetProfile() {
     if (!resetTarget?.user_id) return;
@@ -5977,17 +7386,69 @@ function CustomerDevicesPage() {
     const stats = customerDeviceStats(customer);
     return (
       <div className="customer-device-summary">
-        <button className="customer-device-count-badge bg-blue-lt text-blue" type="button" onClick={() => setDeviceDetailsTarget(customer)}>
+        <button className="customer-device-count-badge bg-blue-lt text-blue" type="button" onClick={() => openCustomerDetails(customer, 'devices')}>
           <IconRouter size={15} /> {stats.devices} device{stats.devices === 1 ? '' : 's'}
         </button>
-        <button className="customer-device-count-badge bg-cyan-lt text-cyan" type="button" onClick={() => setDeviceDetailsTarget(customer)}>
+        <button className="customer-device-count-badge bg-cyan-lt text-cyan" type="button" onClick={() => openCustomerDetails(customer, 'devices')}>
           <IconWifi size={15} /> {stats.macs} MAC{stats.macs === 1 ? '' : 's'}
         </button>
         {stats.activeDevices > 0 && (
-          <button className="customer-device-count-badge bg-green-lt text-green" type="button" onClick={() => setDeviceDetailsTarget(customer)}>
+          <button className="customer-device-count-badge bg-green-lt text-green" type="button" onClick={() => openCustomerDetails(customer, 'devices')}>
             <IconActivity size={15} /> {stats.activeDevices} active
           </button>
         )}
+      </div>
+    );
+  }
+  function bagStatusTone(status) {
+    const value = String(status || '').toUpperCase();
+    if (value === 'ACTIVE') return 'green';
+    if (value === 'QUEUED') return 'blue';
+    if (value === 'CONSUMED') return 'secondary';
+    if (value === 'EXPIRED') return 'yellow';
+    if (value === 'CANCELLED') return 'red';
+    return 'secondary';
+  }
+  function BagItemRow({ customer, item }) {
+    const editable = item.admin_created && !['ACTIVE', 'CONSUMED'].includes(String(item.status || '').toUpperCase());
+    return (
+      <div className="customer-bag-item">
+        <div className="d-flex align-items-start justify-content-between gap-2">
+          <div className="min-w-0">
+            <div className="fw-semibold text-truncate">{item.product_name || 'WiFi bag item'}</div>
+            <div className="text-muted small text-truncate">{item.product_category_name || (item.source === 'MANUAL' ? 'Admin Given' : item.source || 'WiFi Bag')}</div>
+          </div>
+          <span className={`badge bg-${bagStatusTone(item.status)}-lt text-${bagStatusTone(item.status)}`}>{item.status || 'UNKNOWN'}</span>
+        </div>
+        <div className="d-flex flex-wrap align-items-center gap-2 mt-2">
+          <span className="badge bg-cyan-lt text-cyan"><IconClock size={14} className="me-1" />{formatSeconds(item.duration_seconds)}</span>
+          {item.status === 'ACTIVE' && <span className="badge bg-green-lt text-green">{formatSeconds(item.remaining_seconds)} left</span>}
+          <span className="badge bg-purple-lt text-purple"><IconUsers size={14} className="me-1" />{deviceLimitLabel(item.allowed_devices)}</span>
+          <span className="badge bg-secondary-lt">{item.source || 'SOURCE'}</span>
+          {item.expires_at && <span className={`badge ${item.expired ? 'bg-red-lt text-red' : 'bg-yellow-lt text-yellow'}`}><IconCalendarStats size={14} className="me-1" />Expires {compactDateTime(item.expires_at)}</span>}
+        </div>
+        <div className="d-flex align-items-center justify-content-between gap-2 mt-2">
+          <div className="text-muted small">Added {compactDateTime(item.created_at)}</div>
+          {editable && (
+            <ActionBadgeGroup>
+              <ActionBadgeButton icon={IconEdit} label="Edit admin bag item" tone="blue" onClick={() => openEditBagItem(customer, item)} />
+              <ActionBadgeButton icon={IconTrash} label="Delete admin bag item" tone="red" onClick={() => deleteBagItem(customer, item)} />
+            </ActionBadgeGroup>
+          )}
+        </div>
+      </div>
+    );
+  }
+  function BagItemSection({ title, items = [], empty, customer }) {
+    return (
+      <div className="customer-bag-section">
+        <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+          <div className="fw-semibold">{title}</div>
+          <span className="badge bg-secondary-lt">{items.length}</span>
+        </div>
+        <div className="customer-bag-list">
+          {items.length ? items.map((item) => <BagItemRow key={item.id} customer={customer} item={item} />) : <div className="text-muted small">{empty}</div>}
+        </div>
       </div>
     );
   }
@@ -5995,7 +7456,19 @@ function CustomerDevicesPage() {
     if (!customer) return null;
     const stats = customerDeviceStats(customer);
     const title = customer.name || 'Profile not set';
-    return createPortal(
+    const bagLoading = customer.user_id && customerBagDetails.userId === customer.user_id && customerBagDetails.loading;
+    const bagError = customer.user_id && customerBagDetails.userId === customer.user_id ? customerBagDetails.error : '';
+	    const bag = customer.user_id && customerBagDetails.userId === customer.user_id ? (customerBagDetails.bag || {}) : {};
+	    const activeItems = bag.active_items || [];
+	    const queuedItems = bag.queued_items || [];
+	    const historyItems = bag.history_items || [];
+	    const bagTabs = [
+	      { key: 'active', label: 'Active Now', tone: 'green', items: activeItems, empty: 'No active product right now.' },
+	      { key: 'available', label: 'Available / Unused', tone: 'blue', items: queuedItems, empty: 'No unused items in the bag.' },
+	      { key: 'history', label: 'History', tone: 'secondary', items: historyItems, empty: 'No consumed or cancelled items yet.' },
+	    ];
+	    const selectedBagTab = bagTabs.find((item) => item.key === customerBagTab) || bagTabs[0];
+	    return createPortal(
       <>
         <button className="customer-devices-drawer-backdrop" type="button" aria-label="Close device details" onClick={() => setDeviceDetailsTarget(null)} />
         <aside className="customer-devices-drawer" aria-label="Customer device and MAC history">
@@ -6012,7 +7485,7 @@ function CustomerDevicesPage() {
             </button>
           </div>
           <div className="customer-devices-drawer-body">
-            <div className="customer-device-detail-kpis">
+	            <div className="customer-device-detail-kpis">
               <div className="customer-device-detail-kpi">
                 <div className="customer-device-detail-kpi-label"><span><IconRouter size={18} /></span><small>Devices</small></div>
                 <strong>{stats.devices}</strong>
@@ -6028,21 +7501,84 @@ function CustomerDevicesPage() {
               <div className="customer-device-detail-kpi">
                 <div className="customer-device-detail-kpi-label"><span><IconHistory size={18} /></span><small>Sessions</small></div>
                 <strong>{stats.sessions}</strong>
-              </div>
-            </div>
-            <div className="card mt-3">
-              <div className="card-header">
-                <div>
-                  <h3 className="card-title mb-1">Devices and MAC History</h3>
-                  <div className="text-muted small">All known devices and MAC addresses grouped under this customer row.</div>
-                </div>
-              </div>
-              <div className="card-body">
-                <DeviceStack devices={customer.devices || []} showSessions />
-              </div>
-            </div>
-          </div>
-        </aside>
+	              </div>
+	            </div>
+	            <div className="card mt-3 customer-details-card">
+	              <div className="card-body border-bottom py-2">
+	                <ul className="nav nav-tabs customer-detail-tabs" role="tablist">
+	                  <li className="nav-item" role="presentation">
+	                    <button className={`nav-link ${customerDetailsTab === 'devices' ? 'active' : ''}`} type="button" role="tab" aria-selected={customerDetailsTab === 'devices'} onClick={() => setCustomerDetailsTab('devices')}>
+	                      <IconRouter size={16} className="me-1" />Devices <span className="badge bg-blue-lt ms-1">{stats.devices}</span>
+	                    </button>
+	                  </li>
+	                  <li className="nav-item" role="presentation">
+	                    <button className={`nav-link ${customerDetailsTab === 'bag' ? 'active' : ''}`} type="button" role="tab" aria-selected={customerDetailsTab === 'bag'} onClick={() => setCustomerDetailsTab('bag')}>
+	                      <IconShoppingBag size={16} className="me-1" />My WiFi Bag <span className="badge bg-purple-lt ms-1">{activeItems.length + queuedItems.length}</span>
+	                    </button>
+	                  </li>
+	                </ul>
+	              </div>
+	              {customerDetailsTab === 'devices' ? (
+	                <>
+	                  <div className="card-header">
+	                    <div>
+	                      <h3 className="card-title mb-1">Devices and MAC History</h3>
+	                      <div className="text-muted small">All known devices and MAC addresses grouped under this customer row.</div>
+	                    </div>
+	                  </div>
+	                  <div className="card-body">
+	                    <DeviceStack devices={customer.devices || []} showSessions />
+	                  </div>
+	                </>
+	              ) : (
+	                <>
+	                  <div className="card-header">
+	                    <div>
+	                      <h3 className="card-title mb-1">My WiFi Bag</h3>
+	                      <div className="text-muted small">Bought, queued, active, and consumed WiFi items for this customer.</div>
+	                    </div>
+	                    <div className="card-actions">
+	                      <button className="btn btn-primary btn-sm" type="button" onClick={() => openAddBagItem(customer)} disabled={!customer.user_id}>
+	                        <IconPlus size={16} className="me-1" />Add Item
+	                      </button>
+	                    </div>
+	                  </div>
+	                  <div className="card-body">
+	                    {!customer.user_id ? (
+	                      <div className="alert alert-warning mb-0">This customer row has no account id yet. Set or verify the customer profile before adding bag items.</div>
+	                    ) : bagLoading ? (
+	                      <div className="text-muted">Loading My WiFi Bag...</div>
+	                    ) : bagError ? (
+	                      <div className="alert alert-warning mb-0">{bagError}</div>
+	                    ) : (
+	                      <>
+	                        <div className="row g-2 mb-3">
+	                          <div className="col-4"><div className="customer-bag-kpi"><span>Active</span><strong>{activeItems.length}</strong></div></div>
+	                          <div className="col-4"><div className="customer-bag-kpi"><span>Available</span><strong>{queuedItems.length}</strong></div></div>
+	                          <div className="col-4"><div className="customer-bag-kpi"><span>Total Time</span><strong>{formatSeconds(bag.summary?.remaining_seconds)}</strong></div></div>
+	                        </div>
+	                        <ul className="nav nav-tabs customer-bag-tabs mb-3" role="tablist">
+	                          {bagTabs.map((bagTab) => (
+	                            <li className="nav-item" role="presentation" key={bagTab.key}>
+	                              <button className={`nav-link ${selectedBagTab.key === bagTab.key ? 'active' : ''}`} type="button" role="tab" aria-selected={selectedBagTab.key === bagTab.key} onClick={() => setCustomerBagTab(bagTab.key)}>
+	                                {bagTab.label} <span className={`badge bg-${bagTab.tone}-lt ms-1`}>{bagTab.items.length}</span>
+	                              </button>
+	                            </li>
+	                          ))}
+	                        </ul>
+	                        <div className="customer-bag-list">
+	                          {selectedBagTab.items.length
+	                            ? selectedBagTab.items.map((item) => <BagItemRow key={item.id} customer={customer} item={item} />)
+	                            : <div className="text-muted small">{selectedBagTab.empty}</div>}
+	                        </div>
+	                      </>
+	                    )}
+	                  </div>
+	                </>
+	              )}
+	            </div>
+	          </div>
+	        </aside>
       </>,
       document.body
     );
@@ -6069,13 +7605,13 @@ function CustomerDevicesPage() {
                 className="customer-clickable-row"
                 role="button"
                 tabIndex={0}
-                onClick={() => setDeviceDetailsTarget(customer)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    setDeviceDetailsTarget(customer);
-                  }
-                }}
+	                onClick={() => openCustomerDetails(customer, 'devices')}
+	                onKeyDown={(event) => {
+	                  if (event.key === 'Enter' || event.key === ' ') {
+	                    event.preventDefault();
+	                    openCustomerDetails(customer, 'devices');
+	                  }
+	                }}
               >
                 <td>
                   <div className="d-flex align-items-center gap-2">
@@ -6093,12 +7629,12 @@ function CustomerDevicesPage() {
                 <td className="text-end text-nowrap">
                   {profileRequired ? (
                     <ActionBadgeGroup className="justify-content-end">
-                      <ActionBadgeButton icon={IconEye} label="View devices and MAC history" tone="blue" onClick={(event) => { event.stopPropagation(); setDeviceDetailsTarget(customer); }} />
+	                      <ActionBadgeButton icon={IconEye} label="View devices and MAC history" tone="blue" onClick={(event) => { event.stopPropagation(); openCustomerDetails(customer, 'devices'); }} />
                       <ActionBadgeButton icon={IconUserCog} label="Reset customer profile" tone="red" onClick={(event) => { event.stopPropagation(); setResetTarget(customer); }} />
                     </ActionBadgeGroup>
                   ) : (
                     <ActionBadgeGroup className="justify-content-end">
-                      <ActionBadgeButton icon={IconEye} label="View devices and MAC history" tone="blue" onClick={(event) => { event.stopPropagation(); setDeviceDetailsTarget(customer); }} />
+	                      <ActionBadgeButton icon={IconEye} label="View devices and MAC history" tone="blue" onClick={(event) => { event.stopPropagation(); openCustomerDetails(customer, 'devices'); }} />
                     </ActionBadgeGroup>
                   )}
                 </td>
@@ -6121,6 +7657,7 @@ function CustomerDevicesPage() {
       <KpiCard icon={IconUser} label="No Profile Yet" value={data.summary?.without_profiles || 0} tone="yellow" />
       <KpiCard icon={IconWifi} label="Active Devices" value={data.summary?.active || 0} tone="green" />
       <KpiCard icon={IconKey} label="Active Access" value={data.summary?.active_access || 0} tone="purple" />
+      <KpiCard icon={IconBan} label="Blocked Devices" value={data.summary?.blocked || 0} tone="red" />
       {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
       {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
       <div className="col-12">
@@ -6154,6 +7691,73 @@ function CustomerDevicesPage() {
           </div>
           {customerTabs.includes(tab) ? (
             <CustomerRows rows={filtered} profileRequired={tab === 'customers'} />
+          ) : tab === 'blocked' ? (
+          <div className="table-responsive">
+            <table className="table card-table table-vcenter">
+              <thead>
+                <tr>
+                  <th>Device</th>
+                  <th>MAC</th>
+                  <th>IP</th>
+                  <th>Reason</th>
+                  <th>Blocked By</th>
+                  <th>Blocked At</th>
+                  <th className="text-end">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((device) => (
+                  <tr key={device.id}>
+                    <td><div className="fw-semibold">{device.device_name || 'Blocked device'}</div></td>
+                    <td><code>{device.client_mac || 'n/a'}</code></td>
+                    <td>{device.client_ip || 'n/a'}</td>
+                    <td>{device.reason || <span className="text-muted">No reason recorded</span>}</td>
+                    <td>{device.blocked_by_username || <span className="text-muted">Unknown admin</span>}</td>
+                    <td>{fmt(device.created_at)}</td>
+                    <td className="text-end text-nowrap">
+                      <ActionBadgeGroup className="justify-content-end">
+                        <ActionBadgeButton icon={IconRefresh} label="Unblock device" tone="green" onClick={() => unblockDevice(device)} />
+                      </ActionBadgeGroup>
+                    </td>
+                  </tr>
+                ))}
+                {!filtered.length && <tr><td colSpan="7" className="text-muted p-4">No blocked devices.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          ) : tab === 'time_adjustment_history' ? (
+          <div className="table-responsive">
+            <table className="table card-table table-vcenter">
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Contact</th>
+                  <th>Change</th>
+                  <th>Reference</th>
+                  <th>Note</th>
+                  <th>Updated By</th>
+                  <th>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((entry) => (
+                  <tr key={entry.id}>
+                    <td>
+                      <div className="fw-semibold">{entry.customer_name || entry.account_username || 'Customer'}</div>
+                      <div className="text-muted small">{entry.customer_email || 'No email'}</div>
+                    </td>
+                    <td>{entry.customer_contact_number || <span className="text-muted">Not verified</span>}</td>
+                    <td><span className={`badge ${Number(entry.amount_seconds || 0) >= 0 ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>{timeAdjustmentLabel(entry.amount_seconds)}</span></td>
+                    <td>{entry.reference ? <code>{entry.reference}</code> : <span className="text-muted">n/a</span>}</td>
+                    <td>{entry.note || <span className="text-muted">No note</span>}</td>
+                    <td>{entry.admin_username || <span className="text-muted">System/admin</span>}</td>
+                    <td>{fmt(entry.created_at)}</td>
+                  </tr>
+                ))}
+                {!filtered.length && <tr><td colSpan="7" className="text-muted p-4">No time adjustments recorded yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
           ) : tab === 'active_access' ? (
           <div className="table-responsive">
             <table className="table card-table table-vcenter">
@@ -6192,12 +7796,12 @@ function CustomerDevicesPage() {
                     <td><SsidValue device={device} /></td>
                     <td>{device.site || 'n/a'}</td>
                     <td><span className="badge bg-green-lt text-green">{formatSeconds(device.remaining_time_seconds)}</span></td>
-                    <td className="text-end text-nowrap">
-                      <ActionBadgeGroup>
-                        <ActionBadgeButton icon={IconClock} label="Manage time" tone="blue" onClick={() => { setTimeTarget(device); setTimeForm({ mode: 'add', minutes: 5, note: '' }); }} />
-                        <ActionBadgeButton icon={IconBan} label="Block device" tone="orange" onClick={() => blockDevice(device)} />
-                        <ActionBadgeButton icon={IconTrash} label="Delete device" tone="red" onClick={() => deleteDevice(device)} />
-                      </ActionBadgeGroup>
+	                    <td className="text-end text-nowrap">
+	                      <ActionBadgeGroup>
+	                        <ActionBadgeButton icon={IconClock} label="Manage time" tone="blue" onClick={() => { setTimeTarget(device); setTimeForm({ mode: 'add', amount: 5, unit: 'minutes', note: '' }); }} />
+	                        <ActionBadgeButton icon={IconBan} label="Block device" tone="orange" onClick={() => blockDevice(device)} />
+	                        <ActionBadgeButton icon={IconTrash} label="Delete device" tone="red" onClick={() => deleteDevice(device)} />
+	                      </ActionBadgeGroup>
                     </td>
                   </tr>
                 ))}
@@ -6250,21 +7854,78 @@ function CustomerDevicesPage() {
           )}
         </div>
       </div>
-      {timeTarget && (
-        <Modal title={`Manage Time: ${timeTarget.device_name || timeTarget.client_mac || 'Device'}`} onClose={() => setTimeTarget(null)}>
-          <form onSubmit={manageTime}>
-            <div className="row g-3">
-              <div className="col-md-6">
-                <label className="form-label">Action</label>
-                <select className="form-select" value={timeForm.mode} onChange={(e) => setTimeForm({ ...timeForm, mode: e.target.value })}>
-                  <option value="add">Add time</option>
-                  <option value="deduct">Deduct time</option>
-                </select>
-              </div>
-              <div className="col-md-6"><label className="form-label">Minutes</label><input className="form-control" type="number" min="1" value={timeForm.minutes} onChange={(e) => setTimeForm({ ...timeForm, minutes: e.target.value })} /></div>
-              <div className="col-12"><label className="form-label">Note</label><input className="form-control" value={timeForm.note} onChange={(e) => setTimeForm({ ...timeForm, note: e.target.value })} /></div>
-            </div>
+	      {timeTarget && (
+	        <Modal title={`Manage Time: ${timeTarget.device_name || timeTarget.client_mac || 'Device'}`} onClose={() => setTimeTarget(null)}>
+	          <form onSubmit={manageTime}>
+	            <div className="row g-3">
+	              <div className="col-md-6">
+	                <label className="form-label">Action</label>
+	                <select className="form-select" value={timeForm.mode} onChange={(e) => setTimeForm({ ...timeForm, mode: e.target.value })}>
+	                  <option value="add">Add time</option>
+	                  <option value="deduct">Deduct time</option>
+	                </select>
+	              </div>
+	              <div className="col-md-6">
+	                <label className="form-label">Amount</label>
+	                <div className="input-group">
+	                  <input className="form-control" type="number" min="1" value={timeForm.amount} onChange={(e) => setTimeForm({ ...timeForm, amount: e.target.value })} />
+	                  <select className="form-select" value={timeForm.unit} onChange={(e) => setTimeForm({ ...timeForm, unit: e.target.value })}>
+	                    <option value="minutes">Minutes</option>
+	                    <option value="hours">Hours</option>
+	                    <option value="days">Days</option>
+	                  </select>
+	                </div>
+	              </div>
+	              <div className="col-12">
+	                <div className={`alert ${timeForm.mode === 'deduct' ? 'alert-warning' : 'alert-info'} mb-0`}>
+	                  This will apply <strong>{timeAdjustmentLabel(timeAmountSeconds())}</strong> to {timeTarget.product_name || timeTarget.display_voucher_code || 'this active access'}.
+	                </div>
+	              </div>
+	              <div className="col-12"><label className="form-label">Note</label><input className="form-control" value={timeForm.note} onChange={(e) => setTimeForm({ ...timeForm, note: e.target.value })} /></div>
+	            </div>
             <div className="modal-footer px-0 pb-0"><button className="btn" type="button" onClick={() => setTimeTarget(null)}>Cancel</button><button className="btn btn-primary">Save Time</button></div>
+          </form>
+        </Modal>
+      )}
+      {bagItemTarget && (
+        <Modal title={bagItemTarget.mode === 'edit' ? 'Edit WiFi Bag Item' : 'Add WiFi Bag Item'} onClose={() => setBagItemTarget(null)} size="md">
+          <form onSubmit={saveBagItem}>
+	            <div className="row g-3">
+	              <div className="col-12">
+	                <div className="alert alert-info customer-bag-admin-note mb-0">
+	                  <span className="avatar bg-blue-lt text-blue"><IconShoppingBag size={20} /></span>
+	                  <div className="min-w-0">
+	                    <div className="fw-semibold">Admin-given WiFi bag item</div>
+	                    <div className="small">Customer: <strong>{bagItemTarget.customer_name || 'This customer'}</strong></div>
+	                    <div className="text-muted small">Saved to My WiFi Bag only. It will not activate automatically; the customer can activate it from the portal.</div>
+	                  </div>
+	                </div>
+	              </div>
+              <div className="col-12">
+                <label className="form-label">Item Name</label>
+                <input className="form-control" required maxLength="160" value={bagItemForm.item_name} onChange={(e) => setBagItemForm({ ...bagItemForm, item_name: e.target.value })} placeholder="Example: Admin Courtesy 1 Hour" />
+              </div>
+              <div className="col-12">
+                <label className="form-label">Time</label>
+                <div className="input-group">
+                  <input className="form-control" required type="number" min="1" value={bagItemForm.time_value} onChange={(e) => setBagItemForm({ ...bagItemForm, time_value: e.target.value })} />
+                  <select className="form-select" value={bagItemForm.time_unit} onChange={(e) => setBagItemForm({ ...bagItemForm, time_unit: e.target.value })}>
+                    <option value="minutes">Minutes</option>
+                    <option value="hours">Hours</option>
+                    <option value="days">Days</option>
+                  </select>
+                </div>
+              </div>
+              <div className="col-12">
+                <label className="form-label">Expiration</label>
+                <input className="form-control" type="datetime-local" value={bagItemForm.expires_at} onChange={(e) => setBagItemForm({ ...bagItemForm, expires_at: e.target.value })} />
+                <div className="form-hint">Leave blank if this admin-given item should not expire while unused.</div>
+              </div>
+            </div>
+            <div className="modal-footer px-0 pb-0">
+              <button className="btn" type="button" onClick={() => setBagItemTarget(null)}>Cancel</button>
+              <button className="btn btn-primary" type="submit"><IconDeviceFloppy size={18} className="me-2" />Save Item</button>
+            </div>
           </form>
         </Modal>
       )}
@@ -8134,7 +9795,11 @@ function LongLatMap({
   customerLocation = null,
   routeAp = null,
   routePath = [],
-  extraControls = null
+  extraControls = null,
+  markerKind = 'ap',
+  showCoverageRings = true,
+  markerStatusText = apMapStatusText,
+  markerTone = apMapTone
 }) {
   const mapRef = useRef(null);
   const [size, setSize] = useState({ width: 1024, height: 640 });
@@ -8308,7 +9973,7 @@ function LongLatMap({
         const point = latLngToWorldPixel(ap.map_latitude, ap.map_longitude, zoom);
         const left = point.x - topLeft.x;
         const top = point.y - topLeft.y;
-        const tone = apMapTone(ap);
+        const tone = markerTone(ap);
         const clientCount = apMapClientCount(ap);
         const coverageRadiusPx = metersToMapPixels(coverageMeters, ap.map_latitude, zoom);
         const coverageSizePx = Math.max(0, coverageRadiusPx * 2);
@@ -8322,7 +9987,7 @@ function LongLatMap({
             draggable={markerDraggable}
             className={`longlat-map-marker longlat-marker-${tone} ${markerDraggable ? 'is-draggable' : 'is-locked'} ${markerEditing ? 'is-editing' : ''} ${selectedApId === ap.id ? 'is-selected' : ''}`}
             style={{ left, top }}
-            title={`${ap.display_name || ap.name || 'AP'} · ${apMapStatusText(ap)}`}
+            title={`${ap.display_name || ap.name || (markerKind === 'store' ? 'Store' : 'AP')} · ${markerStatusText(ap)}`}
             onClick={() => onSelectAp(ap)}
             onDragStart={markerDraggable ? (e) => {
               e.dataTransfer.effectAllowed = 'move';
@@ -8330,10 +9995,10 @@ function LongLatMap({
               e.dataTransfer.setData('text/plain', ap.id);
             } : undefined}
           >
-            <span className="longlat-coverage-ring" style={coverageStyle} />
-            <span className="longlat-coverage-wave" style={coverageStyle} />
+            {showCoverageRings && <span className="longlat-coverage-ring" style={coverageStyle} />}
+            {showCoverageRings && <span className="longlat-coverage-wave" style={coverageStyle} />}
             <span className="longlat-marker-pulse" />
-            <span className="longlat-marker-core"><IconWifi size={15} /></span>
+            <span className="longlat-marker-core">{markerKind === 'store' ? <IconBuildingStore size={15} /> : <IconWifi size={15} />}</span>
             {showClientBadges && clientCount > 0 && <span className="longlat-marker-client-badge">{clientCount > 99 ? '99+' : clientCount}</span>}
           </button>
         );
@@ -9886,6 +11551,388 @@ function PortalCoveragePage() {
   );
 }
 
+function PortalStoreMapPage() {
+  const query = new URLSearchParams(window.location.search);
+  const requestedStoreId = query.get('store_id') || '';
+  const requestedSessionId = query.get('portal_session_id') || localStorage.getItem('centralwifi_portal_session') || '';
+  const [settings, setSettings] = useState(null);
+  const [storeMap, setStoreMap] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [customerLocation, setCustomerLocation] = useState(null);
+  const [center, setCenter] = useState(DEFAULT_MAP_CENTER);
+  const [zoom, setZoom] = useState(DEFAULT_MAP_ZOOM);
+  const [routeStoreId, setRouteStoreId] = useState('');
+  const [selectedStoreId, setSelectedStoreId] = useState(requestedStoreId);
+  const [routePath, setRoutePath] = useState([]);
+  const [routeLoadingId, setRouteLoadingId] = useState('');
+  const [storesPanelOpen, setStoresPanelOpen] = useState(true);
+  const [expandedStoreGroups, setExpandedStoreGroups] = useState({});
+  const [storeSearch, setStoreSearch] = useState('');
+
+  const stores = storeMap?.stores || [];
+  const selectedStore = selectedStoreId ? stores.find((store) => store.id === selectedStoreId) : null;
+  const routeStore = routeStoreId ? stores.find((store) => store.id === routeStoreId) : null;
+  const nearest = customerLocation && stores.length
+    ? stores
+      .map((store) => ({ store, distance: distanceMetersBetween(customerLocation, store) }))
+      .filter((item) => Number.isFinite(item.distance))
+      .sort((a, b) => a.distance - b.distance)[0]
+    : null;
+  const routeStatus = routeLoadingId
+    ? 'Finding road route...'
+    : routeStore && routePath.length >= 2
+      ? `${routeStore.store_name || 'Selected store'} route loaded.`
+      : '';
+
+  function storeGroupKey(store) {
+    return [store.barangay, store.municipality].filter(Boolean).join('|') || 'unknown-store-area';
+  }
+
+  function storeGroupLabel(store) {
+    return [store.barangay, store.municipality].filter(Boolean).join(', ') || 'Store Area';
+  }
+
+  function storeGroups() {
+    const groups = new Map();
+    const search = String(storeSearch || '').trim().toLowerCase();
+    stores.forEach((store) => {
+      const searchable = [
+        store.store_name,
+        store.address,
+        store.barangay,
+        store.municipality,
+        store.contact_name,
+        store.contact_phone,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (search && !searchable.includes(search)) return;
+      const key = storeGroupKey(store);
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          label: storeGroupLabel(store),
+          stores: [],
+          nearestDistance: null,
+        });
+      }
+      const distance = customerLocation ? distanceMetersBetween(customerLocation, store) : null;
+      const row = { ...store, distance };
+      const group = groups.get(key);
+      group.stores.push(row);
+      if (Number.isFinite(distance) && (!Number.isFinite(group.nearestDistance) || distance < group.nearestDistance)) {
+        group.nearestDistance = distance;
+      }
+    });
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        stores: group.stores.sort((a, b) => {
+          if (Number.isFinite(a.distance) && Number.isFinite(b.distance)) return a.distance - b.distance;
+          return (a.store_name || '').localeCompare(b.store_name || '');
+        }),
+      }))
+      .sort((a, b) => {
+        if (Number.isFinite(a.nearestDistance) && Number.isFinite(b.nearestDistance)) return a.nearestDistance - b.nearestDistance;
+        return a.label.localeCompare(b.label);
+      });
+  }
+
+  function updateStoreCenter(data = storeMap, location = customerLocation, targetStore = null) {
+    const rows = data?.stores || [];
+    const nearestRow = location && rows.length
+      ? rows
+        .map((store) => ({ store, distance: distanceMetersBetween(location, store) }))
+        .filter((item) => Number.isFinite(item.distance))
+        .sort((a, b) => a.distance - b.distance)[0]
+      : null;
+    const store = targetStore || nearestRow?.store || rows.find((row) => row.id === requestedStoreId) || rows[0];
+    if (location && store) {
+      const mid = midpointLocation(location, store);
+      if (mid) {
+        setCenter(mid);
+        setZoom(nearestRow?.distance && nearestRow.distance > 1500 ? 13 : 15);
+        return;
+      }
+    }
+    if (location) {
+      setCenter(location);
+      setZoom(16);
+      return;
+    }
+    if (store?.mapped) {
+      setCenter({ latitude: Number(store.map_latitude), longitude: Number(store.map_longitude) });
+      setZoom(16);
+    }
+  }
+
+  async function loadRoadRoute(store, location) {
+    if (!store || !location) return;
+    setRouteLoadingId(store.id);
+    setRoutePath([]);
+    const params = new URLSearchParams({
+      from_lat: String(location.latitude),
+      from_lng: String(location.longitude),
+      to_lat: String(store.map_latitude),
+      to_lng: String(store.map_longitude),
+    });
+    try {
+      const result = await publicRequest(`/portal/ap-route?${params.toString()}`);
+      setRoutePath(Array.isArray(result.route) ? result.route : []);
+      setError(result.status === 'FALLBACK' ? 'Road route is unavailable right now. Showing a direct line instead.' : '');
+    } catch (err) {
+      setRoutePath([
+        { latitude: location.latitude, longitude: location.longitude },
+        { latitude: Number(store.map_latitude), longitude: Number(store.map_longitude) },
+      ]);
+      setError(err.message || 'Road route is unavailable right now. Showing a direct line instead.');
+    } finally {
+      setRouteLoadingId('');
+    }
+  }
+
+  function requestLocation(data = storeMap, options = {}) {
+    if (!navigator.geolocation) {
+      setError('Your browser did not allow location detection. Showing store locations only.');
+      updateStoreCenter(data, null, options.targetStore);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const location = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+        };
+        setCustomerLocation(location);
+        const targetStore = options.targetStore || (selectedStoreId ? (data?.stores || []).find((store) => store.id === selectedStoreId) : null);
+        if (options.centerOnCustomer) {
+          setCenter(location);
+          setZoom(17);
+        } else {
+          updateStoreCenter(data || storeMap, location, targetStore);
+        }
+        if (targetStore) {
+          setRouteStoreId(targetStore.id);
+          loadRoadRoute(targetStore, location);
+        }
+        setError('');
+      },
+      () => {
+        setError('Location permission was not granted. Showing store locations only.');
+        updateStoreCenter(data || storeMap, null, options.targetStore);
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 },
+    );
+  }
+
+  function selectStore(store) {
+    setSelectedStoreId(store.id);
+    setRouteStoreId(store.id);
+    if (customerLocation) {
+      updateStoreCenter(storeMap, customerLocation, store);
+      loadRoadRoute(store, customerLocation);
+      return;
+    }
+    setRoutePath([]);
+    if (store.mapped) {
+      setCenter({ latitude: Number(store.map_latitude), longitude: Number(store.map_longitude) });
+      setZoom(17);
+    }
+    setError('Tap the location button beside zoom controls to draw a route from your phone to this store.');
+  }
+
+  function clearStoreRoute() {
+    setRouteStoreId('');
+    setRoutePath([]);
+    setRouteLoadingId('');
+  }
+
+  function returnToStorePaymentPortal() {
+    const params = new URLSearchParams({
+      screen: 'shop',
+      purchase_channel: 'STORE',
+      store_map_returned_at: String(Date.now()),
+    });
+    if (requestedSessionId) params.set('portal_session_id', requestedSessionId);
+    window.location.assign(`/portal?${params.toString()}`);
+  }
+
+  useEffect(() => {
+    let mounted = true;
+    const params = new URLSearchParams();
+    if (requestedSessionId) params.set('portal_session_id', requestedSessionId);
+    if (requestedStoreId) params.set('store_id', requestedStoreId);
+    Promise.all([
+      publicRequest('/portal/settings').catch(() => null),
+      publicRequest(`/portal/store-map?${params.toString()}`),
+    ]).then(([portalSettings, data]) => {
+      if (!mounted) return;
+      setSettings(portalSettings);
+      setStoreMap(data);
+      const brandColor = portalSettings?.accent_color || '#066fd1';
+      document.documentElement.style.setProperty('--tblr-primary', brandColor);
+      document.documentElement.style.setProperty('--portal-brand-color', brandColor);
+      document.documentElement.style.setProperty('--portal-brand-rgb', cssHexToRgb(brandColor));
+      const targetStore = (data.stores || []).find((store) => store.id === (data.selected_store_id || requestedStoreId)) || null;
+      if (targetStore) setSelectedStoreId(targetStore.id);
+      updateStoreCenter(data, null, targetStore);
+      requestLocation(data, { targetStore });
+    }).catch((err) => {
+      if (mounted) setError(err.message || 'Store map could not be loaded.');
+    }).finally(() => {
+      if (mounted) setLoading(false);
+    });
+    return () => { mounted = false; };
+  }, []);
+
+  const groups = storeGroups();
+  const mappedCount = Number((storeMap?.summary || {}).mapped || 0);
+
+  return (
+    <div className="portal-coverage-page">
+      {loading ? (
+        <div className="portal-coverage-loading">Loading store map...</div>
+      ) : stores.length ? (
+        <div className="portal-coverage-map-shell">
+          <LongLatMap
+            aps={stores}
+            center={center}
+            zoom={zoom}
+            setCenter={setCenter}
+            setZoom={setZoom}
+            selectedApId={selectedStoreId}
+            onSelectAp={selectStore}
+            editable={false}
+            showClientBadges={false}
+            showLegend={false}
+            showCoverageRings={false}
+            markerKind="store"
+            markerTone={storeMapTone}
+            markerStatusText={storeMapStatusText}
+            customerLocation={customerLocation}
+            routeAp={routeStore}
+            routePath={routePath}
+            extraControls={(
+              <button className="longlat-map-control" type="button" onClick={() => requestLocation(storeMap, { centerOnCustomer: true })} title="Use my location" aria-label="Use my location">
+                <IconMapPin size={18} />
+              </button>
+            )}
+          />
+          <div className={`portal-coverage-floating-panel portal-coverage-sites-panel ${storesPanelOpen ? 'is-open' : 'is-closed'}`}>
+            <div className="portal-coverage-sites-header">
+              <div>
+                <div className="portal-coverage-title"><IconBuildingStore size={20} />3J WiFi Stores</div>
+                <div className="text-muted small">
+                  {mappedCount ? `${mappedCount} mapped store${mappedCount === 1 ? '' : 's'}` : 'Mapped store locations are not available yet.'}
+                  {customerLocation && nearest ? ` · Nearest ${formatDistanceMeters(nearest.distance)}` : ''}
+                </div>
+              </div>
+              <button
+                className="btn btn-sm btn-icon"
+                type="button"
+                onClick={() => setStoresPanelOpen((current) => !current)}
+                title={storesPanelOpen ? 'Hide store list' : 'Show store list'}
+                aria-label={storesPanelOpen ? 'Hide store list' : 'Show store list'}
+              >
+                {storesPanelOpen ? <IconX size={18} /> : <IconChevronUp size={18} />}
+              </button>
+            </div>
+            {storesPanelOpen && (
+              <>
+                <div className="portal-coverage-search">
+                  <IconSearch size={16} />
+                  <input
+                    type="search"
+                    value={storeSearch}
+                    onChange={(event) => setStoreSearch(event.target.value)}
+                    placeholder="Search stores or locations"
+                    aria-label="Search stores or locations"
+                  />
+                  {storeSearch && (
+                    <button type="button" onClick={() => setStoreSearch('')} aria-label="Clear search">
+                      <IconX size={14} />
+                    </button>
+                  )}
+                </div>
+                {error && <div className="alert alert-warning py-2 mb-2">{error}</div>}
+                {!customerLocation && <div className="alert alert-info py-2 mb-2">Tap the location button beside zoom controls to show distance and road routes.</div>}
+                {routeStatus && <div className="portal-coverage-route-status">{routeStatus}</div>}
+                <div className="portal-coverage-sites-list">
+                  {groups.map((group) => {
+                    const expanded = expandedStoreGroups[group.key] !== false;
+                    return (
+                      <div className="portal-coverage-site-group" key={`store-group-${group.key}`}>
+                        <button className="portal-coverage-site-toggle" type="button" onClick={() => setExpandedStoreGroups((current) => ({ ...current, [group.key]: current[group.key] === false }))}>
+                          <span className="portal-coverage-site-main">
+                            <span className="fw-semibold">{group.label}</span>
+                            <span className="text-muted small">{group.stores.length} store{group.stores.length === 1 ? '' : 's'}{Number.isFinite(group.nearestDistance) ? ` · nearest ${formatDistanceMeters(group.nearestDistance)}` : ''}</span>
+                          </span>
+                          {expanded ? <IconChevronDown size={18} /> : <IconChevronRight size={18} />}
+                        </button>
+                        {expanded && (
+                          <div className="portal-coverage-ap-list">
+                            {group.stores.map((store) => (
+                              <button
+                                className={`portal-coverage-ap-row ${selectedStoreId === store.id ? 'active' : ''}`}
+                                type="button"
+                                key={`store-row-${store.id}`}
+                                onClick={() => selectStore(store)}
+                              >
+                                <span className="portal-coverage-ap-icon"><IconBuildingStore size={17} /></span>
+                                <span className="portal-coverage-ap-row-main">
+                                  <span className="fw-semibold">{store.store_name || 'Physical Store'}</span>
+                                  <span className="text-muted small">{[store.barangay, store.municipality].filter(Boolean).join(', ') || 'Location not set'}</span>
+                                </span>
+                                <span className="portal-coverage-distance-badge">
+                                  {routeLoadingId === store.id ? 'Routing...' : Number.isFinite(store.distance) ? formatDistanceMeters(store.distance) : 'Locate'}
+                                </span>
+                                {routeStoreId === store.id && (
+                                  <span
+                                    role="button"
+                                    tabIndex={0}
+                                    className="portal-coverage-route-clear"
+                                    title="Close route"
+                                    aria-label="Close route"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      clearStoreRoute();
+                                    }}
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter' || event.key === ' ') {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        clearStoreRoute();
+                                      }
+                                    }}
+                                  >
+                                    <IconX size={15} />
+                                  </span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {!groups.length && <div className="portal-coverage-empty-search">No stores match your search.</div>}
+                </div>
+              </>
+            )}
+          </div>
+          <button className="portal-coverage-return-button" type="button" onClick={returnToStorePaymentPortal}>
+            <IconChevronLeft size={15} />
+            Captive Portal
+          </button>
+        </div>
+      ) : (
+        <div className="portal-coverage-loading">No mapped store locations are available yet.</div>
+      )}
+    </div>
+  );
+}
+
 function WalletPage({ refresh }) {
   const [users, setUsers] = useState([]);
   const [topup, setTopup] = useState({ user_id: '', hours: 1, valid_until: '', is_unlimited: false, note: '' });
@@ -9995,11 +12042,14 @@ function PhysicalStoresPage() {
     barangay: '',
     latitude: '',
     longitude: '',
-    contact_name: '',
-    contact_phone: '',
+    owner_display_name: '',
+    owner_contact_number: '',
+    owner_notes: '',
+    commission_type: 'PERCENT_OF_SALES',
+    commission_value: '0',
+    item_ids: [],
     site_ids: [],
-    status: 'ACTIVE',
-    notes: ''
+    status: 'SETUP'
   };
   const emptyItemForm = {
     name: '',
@@ -10017,19 +12067,38 @@ function PhysicalStoresPage() {
     sort_order: '0'
   };
   const [stores, setStores] = useState([]);
+  const [itemCatalog, setItemCatalog] = useState([]);
   const [sites, setSites] = useState([]);
   const [locations, setLocations] = useState([]);
-  const [summary, setSummary] = useState({ total: 0, active: 0, disabled: 0, assigned_sites: 0, with_coordinates: 0 });
+  const [summary, setSummary] = useState({ total: 0, active: 0, setup: 0, disabled: 0, assigned_sites: 0, with_coordinates: 0 });
   const [modalMode, setModalMode] = useState('');
   const [selectedStore, setSelectedStore] = useState(null);
   const [form, setForm] = useState(emptyForm);
-  const [itemModalStore, setItemModalStore] = useState(null);
-  const [itemModalItems, setItemModalItems] = useState([]);
+  const [pageTab, setPageTab] = useState('STORES');
+  const [itemCatalogSearch, setItemCatalogSearch] = useState('');
   const [itemForm, setItemForm] = useState(emptyItemForm);
   const [editingItem, setEditingItem] = useState(null);
+  const [itemModalOpen, setItemModalOpen] = useState(false);
   const [itemMessage, setItemMessage] = useState('');
   const [itemError, setItemError] = useState('');
+  const emptyOwnerForm = {
+    username: '',
+    display_name: '',
+    contact_number: '',
+    owner_notes: '',
+    status: 'SETUP'
+  };
+  const [ownerModalStore, setOwnerModalStore] = useState(null);
+  const [ownerForm, setOwnerForm] = useState(emptyOwnerForm);
+  const [ownerExisting, setOwnerExisting] = useState(null);
+  const [ownerLoading, setOwnerLoading] = useState(false);
+  const [ownerMessage, setOwnerMessage] = useState('');
+  const [ownerError, setOwnerError] = useState('');
+  const [resendingOwnerSmsId, setResendingOwnerSmsId] = useState('');
+  const [selectedStoreDetails, setSelectedStoreDetails] = useState(null);
   const [locationSearchText, setLocationSearchText] = useState('');
+  const [siteSearchText, setSiteSearchText] = useState('');
+  const [storeFormTab, setStoreFormTab] = useState('LOCATION');
   const [captureMapOpen, setCaptureMapOpen] = useState(false);
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState('');
@@ -10038,7 +12107,10 @@ function PhysicalStoresPage() {
 
   async function load() {
     const data = await request('/physical-stores');
-    setStores(data.stores || []);
+    const nextStores = data.stores || [];
+    setStores(nextStores);
+    setSelectedStoreDetails((current) => current ? nextStores.find((store) => store.id === current.id) || current : null);
+    setItemCatalog(data.items || []);
     setSites(data.sites || []);
     setLocations(data.locations || []);
     setSummary(data.summary || {});
@@ -10074,6 +12146,74 @@ function PhysicalStoresPage() {
   function locationSummary(location) {
     if (!location) return '';
     return [location.address, location.barangay, location.municipality, location.province].filter(Boolean).join(' · ');
+  }
+
+  function storeStatusBadgeClass(status) {
+    if (status === 'ACTIVE') return 'bg-green-lt text-green';
+    if (status === 'SETUP') return 'bg-yellow-lt text-yellow';
+    if (status === 'DISABLED') return 'bg-red-lt text-red';
+    return 'bg-secondary-lt text-secondary';
+  }
+
+  function storeStatusMeta(status) {
+    if (status === 'ACTIVE') {
+      return {
+        icon: IconCircleCheck,
+        label: 'Active',
+        className: 'is-active',
+        badgeClass: 'bg-green-lt text-green',
+        description: 'Visible to customers and sends owner activation SMS when first activated.',
+      };
+    }
+    if (status === 'DISABLED') {
+      return {
+        icon: IconBan,
+        label: 'Disabled',
+        className: 'is-disabled',
+        badgeClass: 'bg-red-lt text-red',
+        description: 'Hidden from customers. Store owner access is disabled.',
+      };
+    }
+    return {
+      icon: IconSettings,
+      label: 'Setup',
+      className: 'is-setup',
+      badgeClass: 'bg-yellow-lt text-yellow',
+      description: 'Use while completing store location, owner, site, and item details.',
+    };
+  }
+
+  function missingOwnerDetails() {
+    const missing = [];
+    if (!form.owner_display_name.trim()) missing.push('Owner Contact Name');
+    if (!form.owner_contact_number.trim()) missing.push('Owner Contact Phone');
+    return missing;
+  }
+
+  function ownerActivationSmsResendDisabledReason(store) {
+    if (!store?.owner?.id) return 'Owner details required before SMS resend.';
+    if (store.status !== 'ACTIVE') return 'Store must be Active before SMS resend.';
+    if (store.owner?.status !== 'ACTIVE') return 'Store owner must be Active before SMS resend.';
+    if (store.owner?.last_login_at) return 'Resend disabled because the owner has already logged in.';
+    if (resendingOwnerSmsId === store.id) return 'Resending activation SMS...';
+    return '';
+  }
+
+  function storeCommissionSummary(store) {
+    if (!store) return 'Not set';
+    const value = store.commission_value_display || (store.commission_type === 'FIXED_MONTHLY'
+      ? `PHP ${Number(store.commission_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : `${store.commission_value || 0}%`);
+    return store.commission_type === 'FIXED_MONTHLY' ? `${value} monthly` : `${value} of sales`;
+  }
+
+  function FieldLabel({ children, info }) {
+    return (
+      <label className="form-label d-inline-flex align-items-center gap-1">
+        <span>{children}</span>
+        {info && <IconInfoCircle className="text-muted" size={15} title={info} />}
+      </label>
+    );
   }
 
   function applyStoreLocation(location) {
@@ -10121,6 +12261,8 @@ function PhysicalStoresPage() {
     setSelectedStore(null);
     setForm(emptyForm);
     setLocationSearchText('');
+    setSiteSearchText('');
+    setStoreFormTab('LOCATION');
     setImageFile(null);
     setModalMode('create');
   }
@@ -10138,13 +12280,18 @@ function PhysicalStoresPage() {
       barangay: store.barangay || '',
       latitude: store.latitude === null || store.latitude === undefined ? '' : String(store.latitude),
       longitude: store.longitude === null || store.longitude === undefined ? '' : String(store.longitude),
-      contact_name: store.contact_name || '',
-      contact_phone: store.contact_phone || '',
+      owner_display_name: store.owner?.display_name || store.contact_name || '',
+      owner_contact_number: store.owner?.contact_number || store.contact_phone || '',
+      owner_notes: store.owner?.owner_notes || store.notes || '',
+      commission_type: store.commission_type || 'PERCENT_OF_SALES',
+      commission_value: store.commission_value === null || store.commission_value === undefined ? '0' : String(store.commission_value),
+      item_ids: store.item_ids || [],
       site_ids: store.site_ids || [],
-      status: store.status || 'ACTIVE',
-      notes: store.notes || ''
+      status: store.status || 'SETUP'
     });
     setLocationSearchText(store.location_name || store.address ? locationLabel({ location_name: store.location_name || store.address, address: store.address, barangay: store.barangay, municipality: store.municipality }) : '');
+    setSiteSearchText('');
+    setStoreFormTab('LOCATION');
     setImageFile(null);
     setModalMode('edit');
   }
@@ -10160,11 +12307,18 @@ function PhysicalStoresPage() {
       barangay: form.barangay.trim() || null,
       latitude: form.latitude === '' ? null : Number(form.latitude),
       longitude: form.longitude === '' ? null : Number(form.longitude),
-      contact_name: form.contact_name.trim() || null,
-      contact_phone: form.contact_phone.trim() || null,
+      commission_type: form.commission_type || 'PERCENT_OF_SALES',
+      commission_value: Number(form.commission_value || 0),
       site_ids: form.site_ids || [],
+      item_ids: form.item_ids || [],
       status: form.status,
-      notes: form.notes.trim() || null
+      owner: {
+        username: form.owner_contact_number.trim(),
+        display_name: form.owner_display_name.trim(),
+        contact_number: form.owner_contact_number.trim(),
+        status: form.status === 'ACTIVE' ? 'ACTIVE' : form.status === 'DISABLED' ? 'DISABLED' : 'SETUP',
+        owner_notes: form.owner_notes.trim() || null
+      }
     };
   }
 
@@ -10177,6 +12331,15 @@ function PhysicalStoresPage() {
     });
   }
 
+  function toggleStoreItem(itemId) {
+    setForm((current) => {
+      const existing = new Set(current.item_ids || []);
+      if (existing.has(itemId)) existing.delete(itemId);
+      else existing.add(itemId);
+      return { ...current, item_ids: Array.from(existing) };
+    });
+  }
+
   async function save(e) {
     e.preventDefault();
     setError('');
@@ -10185,6 +12348,27 @@ function PhysicalStoresPage() {
       if (!nextPayload.store_name) throw new Error('Store name is required.');
       if (!nextPayload.location_id) throw new Error('Select a saved Location Management record for this store.');
       if (!nextPayload.site_ids.length) throw new Error('Select at least one site where this store is available.');
+      if (!['PERCENT_OF_SALES', 'FIXED_MONTHLY'].includes(nextPayload.commission_type)) {
+        setStoreFormTab('COMMISSION');
+        throw new Error('Choose a store commission type.');
+      }
+      if (!Number.isFinite(nextPayload.commission_value) || nextPayload.commission_value < 0) {
+        setStoreFormTab('COMMISSION');
+        throw new Error('Enter a valid store commission value.');
+      }
+      if (nextPayload.commission_type === 'PERCENT_OF_SALES' && nextPayload.commission_value > 100) {
+        setStoreFormTab('COMMISSION');
+        throw new Error('Percent commission cannot be higher than 100%.');
+      }
+      const ownerMissing = missingOwnerDetails();
+      if (nextPayload.status === 'ACTIVE' && ownerMissing.length) {
+        setStoreFormTab('OWNER');
+        throw new Error(`A store cannot be Active until these owner details are complete: ${ownerMissing.join(', ')}.`);
+      }
+      if (ownerMissing.length) {
+        setStoreFormTab('OWNER');
+        throw new Error(`Complete Store Owner details before saving: ${ownerMissing.join(', ')}.`);
+      }
       if (imageFile && imageFile.size > 2 * 1024 * 1024) throw new Error('Store image is too large. Upload WebP, JPG, or PNG up to 2 MB.');
       let saved;
       if (modalMode === 'edit' && selectedStore) {
@@ -10234,19 +12418,12 @@ function PhysicalStoresPage() {
     };
   }
 
-  function openItems(store) {
-    setItemModalStore(store);
-    setItemModalItems(store.items || []);
-    setEditingItem(null);
-    setItemForm(emptyItemForm);
-    setItemMessage('');
-    setItemError('');
-  }
-
   function editItem(item) {
     setEditingItem(item);
     setItemMessage('');
     setItemError('');
+    setPageTab('ITEMS');
+    setItemModalOpen(true);
     setItemForm({
       name: item.name || '',
       description: item.description || '',
@@ -10264,24 +12441,28 @@ function PhysicalStoresPage() {
     });
   }
 
+  function openNewItem() {
+    setEditingItem(null);
+    setItemForm(emptyItemForm);
+    setItemMessage('');
+    setItemError('');
+    setPageTab('ITEMS');
+    setItemModalOpen(true);
+  }
+
   async function saveItem(e) {
     e.preventDefault();
-    if (!itemModalStore) return;
     setItemError('');
     setItemMessage('');
     try {
       const body = JSON.stringify(itemPayload());
       const saved = editingItem
-        ? await request(`/physical-stores/${itemModalStore.id}/items/${editingItem.id}`, { method: 'PATCH', body })
-        : await request(`/physical-stores/${itemModalStore.id}/items`, { method: 'POST', body });
-      setItemMessage(editingItem ? 'Store item updated.' : 'Store item added.');
+        ? await request(`/physical-store-items/${editingItem.id}`, { method: 'PATCH', body })
+        : await request('/physical-store-items', { method: 'POST', body });
+      setItemMessage(editingItem ? 'Item updated.' : 'Item added.');
       setItemForm(emptyItemForm);
       setEditingItem(null);
-      const nextItems = editingItem
-        ? itemModalItems.map((item) => (item.id === saved.id ? saved : item))
-        : [...itemModalItems, saved];
-      setItemModalItems(nextItems);
-      setStores((current) => current.map((store) => (store.id === itemModalStore.id ? { ...store, items: nextItems, item_count: nextItems.length } : store)));
+      setItemModalOpen(false);
       await load();
     } catch (err) {
       setItemError(err.message);
@@ -10289,24 +12470,120 @@ function PhysicalStoresPage() {
   }
 
   async function removeItem(item) {
-    if (!itemModalStore || !window.confirm(`Delete store item "${item.name}"?`)) return;
+    if (!window.confirm(`Delete item "${item.name}"? Stores using this item will lose it too.`)) return;
     setItemError('');
     setItemMessage('');
     try {
-      await request(`/physical-stores/${itemModalStore.id}/items/${item.id}`, { method: 'DELETE' });
-      setItemMessage('Store item deleted.');
-      const nextItems = itemModalItems.filter((candidate) => candidate.id !== item.id);
-      setItemModalItems(nextItems);
-      setStores((current) => current.map((store) => (store.id === itemModalStore.id ? { ...store, items: nextItems, item_count: nextItems.length } : store)));
+      await request(`/physical-store-items/${item.id}`, { method: 'DELETE' });
+      setItemMessage('Item deleted.');
       await load();
     } catch (err) {
       setItemError(err.message);
     }
   }
 
+  async function openOwner(store) {
+    setOwnerModalStore(store);
+    setOwnerForm(emptyOwnerForm);
+    setOwnerExisting(null);
+    setOwnerMessage('');
+    setOwnerError('');
+    setOwnerLoading(true);
+    try {
+      const data = await request(`/physical-stores/${store.id}/owner`);
+      const owner = data.owner || null;
+      setOwnerExisting(owner);
+      setOwnerForm(owner ? {
+        username: owner.contact_number || owner.username || '',
+        display_name: owner.display_name || '',
+        contact_number: owner.contact_number || '',
+        owner_notes: owner.owner_notes || '',
+        status: owner.status || 'SETUP'
+      } : {
+        ...emptyOwnerForm,
+        username: store.owner?.contact_number || store.contact_phone || '',
+        display_name: store.owner?.display_name || store.contact_name || store.store_name || '',
+        contact_number: store.owner?.contact_number || store.contact_phone || '',
+        owner_notes: store.owner?.owner_notes || store.notes || '',
+      });
+    } catch (err) {
+      setOwnerError(err.message || 'Could not load store owner.');
+    } finally {
+      setOwnerLoading(false);
+    }
+  }
+
+  async function saveOwner(e) {
+    e.preventDefault();
+    if (!ownerModalStore) return;
+    setOwnerError('');
+    setOwnerMessage('');
+    try {
+      const payload = {
+        username: ownerForm.contact_number.trim(),
+        display_name: ownerForm.display_name.trim() || null,
+        contact_number: ownerForm.contact_number.trim(),
+        status: ownerForm.status,
+        owner_notes: ownerForm.owner_notes.trim() || null,
+      };
+      const data = await request(`/physical-stores/${ownerModalStore.id}/owner`, { method: 'PUT', body: JSON.stringify(payload) });
+      setOwnerExisting(data.owner || null);
+      setOwnerForm((current) => ({ ...current, status: data.owner?.status || current.status }));
+      setOwnerMessage(ownerExisting ? 'Store owner updated.' : 'Store owner created.');
+    } catch (err) {
+      setOwnerError(err.message || 'Could not save store owner.');
+    }
+  }
+
+  async function removeOwner() {
+    if (!ownerModalStore || !ownerExisting) return;
+    if (!window.confirm(`Remove owner access for ${ownerModalStore.store_name}?`)) return;
+    setOwnerError('');
+    setOwnerMessage('');
+    try {
+      await request(`/physical-stores/${ownerModalStore.id}/owner`, { method: 'DELETE' });
+      setOwnerExisting(null);
+      setOwnerForm(emptyOwnerForm);
+      setOwnerMessage('Store owner access removed.');
+    } catch (err) {
+      setOwnerError(err.message || 'Could not remove store owner.');
+    }
+  }
+
+  async function resendOwnerActivationSms(store) {
+    if (!store?.id || !store?.owner?.id) return;
+    if (!window.confirm(`Resend activation SMS to ${store.owner.contact_number || store.owner.display_name || 'this store owner'}? This creates a new temporary password and the old temporary password will no longer work.`)) return;
+    setError('');
+    setMessage('');
+    setResendingOwnerSmsId(store.id);
+    try {
+      const data = await request(`/physical-stores/${store.id}/owner/resend-activation-sms`, { method: 'POST' });
+      const messageId = data?.sms?.message_id;
+      setMessage(`Store owner activation SMS resent${messageId ? ` · Message-ID ${messageId}` : ''}.`);
+      await load();
+    } catch (err) {
+      setError(err.message || 'Could not resend store owner activation SMS.');
+    } finally {
+      setResendingOwnerSmsId('');
+    }
+  }
+
   const previewImage = imagePreview || cacheBustedUploadUrl(selectedStore?.image_url, selectedStore?.updated_at) || '';
   const selectedStoreLocation = selectedLocation();
+  const selectedStoreStatusMeta = storeStatusMeta(form.status);
+  const SelectedStoreStatusIcon = selectedStoreStatusMeta.icon;
+  const ownerMissingForStatus = missingOwnerDetails();
   const mapUrl = mapEmbedUrl();
+  const filteredItemCatalog = itemCatalog.filter((item) => {
+    const query = itemCatalogSearch.trim().toLowerCase();
+    if (!query) return true;
+    return [item.name, item.description, item.device_scope_label, item.access_scope_label, item.allowed_barangay, item.price_display, item.duration_label].filter(Boolean).join(' ').toLowerCase().includes(query);
+  });
+  const filteredSites = sites.filter((site) => {
+    const query = siteSearchText.trim().toLowerCase();
+    if (!query) return true;
+    return [site.site_name, site.barangay, site.municipality, site.omada_site_id, site.location].filter(Boolean).join(' ').toLowerCase().includes(query);
+  });
 
   return (
     <div className="row row-cards">
@@ -10323,9 +12600,26 @@ function PhysicalStoresPage() {
       {error && <div className="col-12"><div className="alert alert-danger mb-0">{error}</div></div>}
       <KpiCard icon={IconBuildingStore} label="Stores" value={summary.total || 0} tone="blue" />
       <KpiCard icon={IconCircleCheck} label="Active" value={summary.active || 0} tone="green" />
+      <KpiCard icon={IconSettings} label="Setup" value={summary.setup || 0} tone="yellow" />
       <KpiCard icon={IconBan} label="Disabled" value={summary.disabled || 0} tone="red" />
       <KpiCard icon={IconMapPin} label="Assigned Sites" value={summary.assigned_sites || 0} tone="cyan" />
       <KpiCard icon={IconMapPin} label="With Coordinates" value={summary.with_coordinates || 0} tone="purple" />
+      <div className="col-12">
+        <ul className="nav nav-tabs">
+          <li className="nav-item">
+            <button className={`nav-link ${pageTab === 'STORES' ? 'active' : ''}`} type="button" onClick={() => setPageTab('STORES')}>
+              <IconBuildingStore size={16} className="me-1" />Stores
+            </button>
+          </li>
+          <li className="nav-item">
+            <button className={`nav-link ${pageTab === 'ITEMS' ? 'active' : ''}`} type="button" onClick={() => setPageTab('ITEMS')}>
+              <IconShoppingBag size={16} className="me-1" />Items
+              <span className="badge bg-blue-lt text-blue ms-2">{itemCatalog.length}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
+      {pageTab === 'STORES' && (
       <div className="col-12">
         <Card title="Store Payment Locations" subtitle="Stores must be assigned to at least one site before customers connected to that site can see them.">
           <div className="table-responsive">
@@ -10336,14 +12630,17 @@ function PhysicalStoresPage() {
                   <th>Location</th>
                   <th>Sites</th>
                   <th>Items</th>
+                  <th>Commission</th>
                   <th>Contact</th>
                   <th>Status</th>
                   <th className="text-end">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {stores.map((store) => (
-                  <tr key={store.id}>
+                {stores.map((store) => {
+                  const smsResendDisabledReason = ownerActivationSmsResendDisabledReason(store);
+                  return (
+                  <tr key={store.id} className="physical-store-clickable-row" onClick={() => setSelectedStoreDetails(store)}>
                     <td>
                       <div className="d-flex align-items-center gap-3">
                         <span className="avatar avatar-md bg-blue-lt text-blue overflow-hidden">
@@ -10368,29 +12665,244 @@ function PhysicalStoresPage() {
                       </div>
                     </td>
                     <td>
-                      <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openItems(store)}>
-                        <IconShoppingBag size={16} className="me-1" />{store.item_count || (store.items || []).length || 0} item{(store.item_count || (store.items || []).length || 0) === 1 ? '' : 's'}
-                      </button>
+                      <div className="d-flex flex-wrap gap-1">
+                        {(store.items || []).slice(0, 3).map((item) => <span className="badge bg-blue-lt text-blue" key={`${store.id}-${item.id}`}>{item.name}</span>)}
+                        {(store.items || []).length > 3 && <span className="badge bg-secondary-lt text-secondary">+{(store.items || []).length - 3} more</span>}
+                        {!(store.items || []).length && <span className="badge bg-secondary-lt text-secondary">No items</span>}
+                      </div>
                     </td>
-                    <td>{store.contact_name || store.contact_phone ? <><div>{store.contact_name || 'n/a'}</div><div className="text-muted small">{store.contact_phone || ''}</div></> : <span className="text-muted">n/a</span>}</td>
-                    <td><span className={`badge ${store.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{store.status}</span></td>
-                    <td className="text-end">
+                    <td>
+                      <span className={`badge ${store.commission_type === 'FIXED_MONTHLY' ? 'bg-purple-lt text-purple' : 'bg-green-lt text-green'}`}>
+                        {store.commission_type_label || (store.commission_type === 'FIXED_MONTHLY' ? 'Fixed Monthly' : 'Percent of Sales')}
+                      </span>
+                      <div className="text-muted small mt-1">{storeCommissionSummary(store)}</div>
+                    </td>
+                    <td>{store.owner?.display_name || store.owner?.contact_number ? <><div>{store.owner?.display_name || 'n/a'}</div><div className="text-muted small">{store.owner?.contact_number || ''}</div></> : <span className="text-muted">Owner not set</span>}</td>
+                    <td>
+                      <div className="d-flex flex-column gap-1 align-items-start">
+                        <span className={`badge ${storeStatusBadgeClass(store.status)}`}>{store.status}</span>
+                        {store.owner?.activation_sms_sent_at && (
+                          <span
+                            className="badge bg-blue-lt text-blue"
+                            title={[
+                              store.owner?.activation_sms_status?.response_summary,
+                              store.owner?.activation_sms_status?.message_id ? `Message-ID: ${store.owner.activation_sms_status.message_id}` : '',
+                            ].filter(Boolean).join(' · ')}
+                          >
+                            SMS accepted{store.owner?.activation_sms_status?.message_id ? ` #${store.owner.activation_sms_status.message_id}` : ''}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="text-end" onClick={(event) => event.stopPropagation()}>
                       <ActionBadgeGroup className="justify-content-end">
-                        <ActionBadgeButton icon={IconShoppingBag} label="Manage items" tone="green" onClick={() => openItems(store)} />
+                        <ActionBadgeButton
+                          icon={IconMessageCircle}
+                          label={smsResendDisabledReason || 'Resend owner activation SMS'}
+                          tone="green"
+                          disabled={Boolean(smsResendDisabledReason)}
+                          onClick={() => resendOwnerActivationSms(store)}
+                        />
                         <ActionBadgeButton icon={IconEdit} label="Edit store" tone="blue" onClick={() => openEdit(store)} />
                         <ActionBadgeButton icon={IconTrash} label="Delete store" tone="red" onClick={() => remove(store)} />
                       </ActionBadgeGroup>
                     </td>
                   </tr>
-                ))}
+                );
+                })}
                 {!stores.length && (
-                  <tr><td colSpan={7} className="text-center text-muted py-4">No physical stores yet.</td></tr>
+                  <tr><td colSpan={8} className="text-center text-muted py-4">No physical stores yet.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
         </Card>
       </div>
+      )}
+      {pageTab === 'ITEMS' && (
+        <div className="col-12">
+          <Card title="Store Item Catalog" subtitle="Reusable items remain in the system even when a physical store is deleted. Assign suitable items inside each store.">
+                {itemMessage && <AutoDismissAlert message={itemMessage} onDismiss={() => setItemMessage('')} />}
+                {!itemModalOpen && itemError && <div className="alert alert-danger">{itemError}</div>}
+                <div className="d-flex align-items-center justify-content-between gap-2 flex-wrap mb-3">
+                  <div className="input-icon flex-fill" style={{ minWidth: '220px' }}>
+                    <span className="input-icon-addon"><IconSearch size={16} /></span>
+                    <input className="form-control" value={itemCatalogSearch} onChange={(e) => setItemCatalogSearch(e.target.value)} placeholder="Search items" />
+                  </div>
+                  <button className="btn btn-primary" type="button" onClick={openNewItem}><IconPlus size={18} className="me-2" />Add Item</button>
+                </div>
+                <div className="table-responsive border rounded">
+                  <table className="table table-vcenter card-table mb-0">
+                    <thead>
+                      <tr>
+                        <th>Item</th>
+                        <th>Price / Time</th>
+                        <th>Access</th>
+                        <th>Stores</th>
+                        <th>Status</th>
+                        <th className="text-end">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredItemCatalog.map((item) => (
+                        <tr key={item.id}>
+                          <td>
+                            <div className="fw-semibold">{item.name}</div>
+                            {item.description && <div className="text-muted small">{item.description}</div>}
+                            {item.more_info_enabled && <span className="badge bg-blue-lt text-blue mt-1">More info enabled</span>}
+                          </td>
+                          <td>
+                            <div className="fw-semibold">{item.price_display}</div>
+                            <div className="text-muted small">{item.duration_label} · {item.device_scope_label}{item.device_scope === 'MULTI_DEVICE' ? ` · ${item.allowed_devices_label}` : ''}</div>
+                          </td>
+                          <td>
+                            <span className={`badge ${item.access_scope === 'BARANGAY_ONLY' ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>{item.access_scope_label}</span>
+                            {item.allowed_barangay && <div className="text-muted small mt-1">{item.allowed_barangay}</div>}
+                          </td>
+                          <td><span className="badge bg-cyan-lt text-cyan">{item.assigned_store_count || 0} store{Number(item.assigned_store_count || 0) === 1 ? '' : 's'}</span></td>
+                          <td><span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{item.status}</span></td>
+                          <td className="text-end">
+                            <ActionBadgeGroup className="justify-content-end">
+                              <ActionBadgeButton icon={IconEdit} label="Edit item" tone="blue" onClick={() => editItem(item)} />
+                              <ActionBadgeButton icon={IconTrash} label="Delete item" tone="red" onClick={() => removeItem(item)} />
+                            </ActionBadgeGroup>
+                          </td>
+                        </tr>
+                      ))}
+                      {!filteredItemCatalog.length && <tr><td colSpan={6} className="text-center text-muted py-4">No store items found.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+          </Card>
+        </div>
+      )}
+
+      {itemModalOpen && (
+        <Modal
+          title={editingItem ? 'Edit Item' : 'Add Item'}
+          onClose={() => {
+            setItemModalOpen(false);
+            setEditingItem(null);
+            setItemForm(emptyItemForm);
+            setItemError('');
+          }}
+          size="lg"
+        >
+          <form onSubmit={saveItem}>
+            {itemError && <div className="alert alert-danger">{itemError}</div>}
+            <div className="row g-3">
+              <div className="col-md-8">
+                <label className="form-label">Item Name</label>
+                <input className="form-control" value={itemForm.name} onChange={(e) => setItemForm({ ...itemForm, name: e.target.value })} required />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Status</label>
+                <select className="form-select" value={itemForm.status} onChange={(e) => setItemForm({ ...itemForm, status: e.target.value })}>
+                  <option value="ACTIVE">Active</option>
+                  <option value="DISABLED">Disabled</option>
+                </select>
+              </div>
+              <div className="col-12">
+                <label className="form-label">Description</label>
+                <textarea className="form-control" rows={2} value={itemForm.description} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Price</label>
+                <input className="form-control" type="number" step="0.01" min="0" value={itemForm.price} onChange={(e) => setItemForm({ ...itemForm, price: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Time</label>
+                <input className="form-control" type="number" min="1" value={itemForm.duration_value} onChange={(e) => setItemForm({ ...itemForm, duration_value: e.target.value })} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Unit</label>
+                <select className="form-select" value={itemForm.duration_unit} onChange={(e) => setItemForm({ ...itemForm, duration_unit: e.target.value })}>
+                  <option value="minutes">Minutes</option>
+                  <option value="hours">Hours</option>
+                  <option value="days">Days</option>
+                </select>
+              </div>
+              <div className="col-12">
+                <label className="form-label">Pass Type</label>
+                <div className="row g-2">
+                  {PRODUCT_PASS_TYPES.map((type) => {
+                    const Icon = type.icon;
+                    return (
+                      <div className="col-md-6" key={type.key}>
+                        <label className={`physical-store-item-pass ${itemForm.device_scope === type.key ? 'is-selected' : ''}`}>
+                          <input type="radio" checked={itemForm.device_scope === type.key} onChange={() => setItemForm({ ...itemForm, device_scope: type.key, allowed_devices: type.key === 'SINGLE_DEVICE' ? '1' : itemForm.allowed_devices || '2' })} />
+                          <Icon size={18} />
+                          <span>{type.title}</span>
+                        </label>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {itemForm.device_scope === 'MULTI_DEVICE' && (
+                <div className="col-md-6">
+                  <label className="form-label">Allowed Devices</label>
+                  <input className="form-control" type="number" min="2" max="100" value={itemForm.allowed_devices} onChange={(e) => setItemForm({ ...itemForm, allowed_devices: e.target.value })} />
+                </div>
+              )}
+              <div className="col-md-6">
+                <label className="form-label">Access Scope</label>
+                <select className="form-select" value={itemForm.access_scope} onChange={(e) => setItemForm({ ...itemForm, access_scope: e.target.value })}>
+                  <option value="ALL_LOCATIONS">All Locations</option>
+                  <option value="BARANGAY_ONLY">Barangay only</option>
+                </select>
+              </div>
+              {itemForm.access_scope === 'BARANGAY_ONLY' && (
+                <div className="col-md-6">
+                  <label className="form-label">Allowed Barangay</label>
+                  <input className="form-control" value={itemForm.allowed_barangay} onChange={(e) => setItemForm({ ...itemForm, allowed_barangay: e.target.value })} />
+                </div>
+              )}
+              <div className="col-12">
+                <div className="physical-store-more-info-panel">
+                  <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                    <div>
+                      <div className="fw-semibold">More Info</div>
+                      <div className="text-muted small">Optional customer-facing details shown from the store item modal.</div>
+                    </div>
+                    <label className="form-check form-switch mb-0">
+                      <input className="form-check-input" type="checkbox" checked={itemForm.more_info_enabled} onChange={(e) => setItemForm({ ...itemForm, more_info_enabled: e.target.checked })} />
+                      <span className="form-check-label">Show more info</span>
+                    </label>
+                  </div>
+                  <label className="form-label">More Info Text</label>
+                  <textarea
+                    className="form-control"
+                    rows={4}
+                    value={itemForm.more_info_text}
+                    onChange={(e) => setItemForm({ ...itemForm, more_info_text: e.target.value })}
+                    disabled={!itemForm.more_info_enabled}
+                  />
+                </div>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Sort Order</label>
+                <input className="form-control" type="number" min="0" value={itemForm.sort_order} onChange={(e) => setItemForm({ ...itemForm, sort_order: e.target.value })} />
+              </div>
+            </div>
+            <div className="d-flex justify-content-end gap-2 mt-4">
+              <button
+                className="btn"
+                type="button"
+                onClick={() => {
+                  setItemModalOpen(false);
+                  setEditingItem(null);
+                  setItemForm(emptyItemForm);
+                  setItemError('');
+                }}
+              >
+                Cancel
+              </button>
+              <button className="btn btn-primary" type="submit">{editingItem ? 'Save Item' : 'Add Item'}</button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {modalMode && (
         <Modal title={modalMode === 'edit' ? 'Edit Physical Store' : 'Add Physical Store'} onClose={() => setModalMode('')} size="xl">
@@ -10400,23 +12912,58 @@ function PhysicalStoresPage() {
                 <div className="card h-100">
                   <div className="card-body">
                     <div className="mb-3">
-                      <label className="form-label">Store Picture</label>
+                      <FieldLabel info="Use a clear WebP, JPG, or PNG image below 2 MB. Square or 4:3 images work best on mobile.">Store Picture</FieldLabel>
                       <div className="physical-store-image-preview mb-3">
                         {previewImage ? <img src={previewImage} alt="" /> : <div><IconPhoto size={34} /><span>No image selected</span></div>}
                       </div>
                       <input className="form-control" type="file" accept="image/png,image/jpeg,image/webp" onChange={(e) => setImageFile(e.target.files?.[0] || null)} />
-                      <div className="form-hint">Use a clear WebP/JPG/PNG image. Keep it below 2 MB; square or 4:3 works best on mobile.</div>
                     </div>
                     <div className="mb-3">
-                      <label className="form-label">Status</label>
-                      <select className="form-select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                        <option value="ACTIVE">Active</option>
-                        <option value="DISABLED">Disabled</option>
-                      </select>
+                      <FieldLabel info="Setup keeps owner login disabled while profile and store details are being completed. Active sends the owner activation SMS.">Status</FieldLabel>
+                      <div className={`physical-store-status-card ${selectedStoreStatusMeta.className}`}>
+                        <div className="physical-store-status-icon">
+                          <SelectedStoreStatusIcon size={22} />
+                        </div>
+                        <div className="flex-fill">
+                          <div className="d-flex align-items-center justify-content-between gap-2 flex-wrap">
+                            <span className={`badge ${selectedStoreStatusMeta.badgeClass}`}>{selectedStoreStatusMeta.label}</span>
+                            <select className="form-select form-select-sm physical-store-status-select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                              <option value="SETUP">Setup</option>
+                              <option value="ACTIVE">Active</option>
+                              <option value="DISABLED">Disabled</option>
+                            </select>
+                          </div>
+                          <div className="text-muted small mt-2">{selectedStoreStatusMeta.description}</div>
+                        </div>
+                      </div>
+                      {form.status === 'ACTIVE' && ownerMissingForStatus.length > 0 && (
+                        <div className="alert alert-danger mt-3 mb-0 d-flex gap-2">
+                          <IconAlertTriangle size={18} className="flex-shrink-0" />
+                          <div>Complete owner details before activation: {ownerMissingForStatus.join(', ')}.</div>
+                        </div>
+                      )}
+                      {form.status === 'ACTIVE' && ownerMissingForStatus.length === 0 && (
+                        <div className="alert alert-warning mt-3 mb-0 d-flex gap-2">
+                          <IconBell size={18} className="flex-shrink-0" />
+                          <div>Activating this store sends the owner an SMS with the Store Portal URL, username, and a temporary password.</div>
+                        </div>
+                      )}
                     </div>
-                    <label className="form-label">Deploy to Sites</label>
+                    <div className="d-flex align-items-center justify-content-between gap-2">
+                      <label className="form-label mb-0">Deploy to Sites</label>
+                      <span className="badge bg-cyan-lt text-cyan">{(form.site_ids || []).length} selected</span>
+                    </div>
+                    <div className="input-icon my-2">
+                      <span className="input-icon-addon"><IconSearch size={16} /></span>
+                      <input
+                        className="form-control"
+                        value={siteSearchText}
+                        onChange={(e) => setSiteSearchText(e.target.value)}
+                        placeholder="Search sites"
+                      />
+                    </div>
                     <div className="physical-store-site-list">
-                      {sites.map((site) => (
+                      {filteredSites.map((site) => (
                         <label className="physical-store-site-choice" key={site.id}>
                           <input type="checkbox" checked={(form.site_ids || []).includes(site.id)} onChange={() => toggleSite(site.id)} />
                           <span>
@@ -10426,6 +12973,7 @@ function PhysicalStoresPage() {
                         </label>
                       ))}
                       {!sites.length && <div className="text-muted small">No sites found. Create a site first under APs Deployment - Sites.</div>}
+                      {Boolean(sites.length) && !filteredSites.length && <div className="text-muted small">No sites match your search.</div>}
                     </div>
                   </div>
                 </div>
@@ -10434,14 +12982,45 @@ function PhysicalStoresPage() {
                 <div className="row g-3">
                   <div className="col-12">
                     <label className="form-label">Store Name</label>
-                    <input className="form-control" value={form.store_name} onChange={(e) => setForm({ ...form, store_name: e.target.value })} required />
+                    <input
+                      className="form-control"
+                      value={form.store_name}
+                      onChange={(e) => setForm((current) => ({ ...current, store_name: e.target.value }))}
+                      required
+                    />
                   </div>
                   <div className="col-12">
                     <label className="form-label">Description</label>
                     <textarea className="form-control" rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
                   </div>
                   <div className="col-12">
-                    <div className="physical-store-location-panel">
+                    <div className="physical-store-tab-panel">
+                      <ul className="nav nav-tabs physical-store-form-tabs" role="tablist">
+                        <li className="nav-item" role="presentation">
+                          <button className={`nav-link ${storeFormTab === 'LOCATION' ? 'active' : ''}`} type="button" role="tab" aria-selected={storeFormTab === 'LOCATION'} onClick={() => setStoreFormTab('LOCATION')}>
+                            <IconMapPin size={16} className="me-1" />Store Location
+                          </button>
+                        </li>
+                        <li className="nav-item" role="presentation">
+                        <button className={`nav-link ${storeFormTab === 'OWNER' ? 'active' : ''}`} type="button" role="tab" aria-selected={storeFormTab === 'OWNER'} onClick={() => setStoreFormTab('OWNER')}>
+                          <IconUserCog size={16} className="me-1" />Store Owner
+                        </button>
+                      </li>
+                        <li className="nav-item" role="presentation">
+                          <button className={`nav-link ${storeFormTab === 'COMMISSION' ? 'active' : ''}`} type="button" role="tab" aria-selected={storeFormTab === 'COMMISSION'} onClick={() => setStoreFormTab('COMMISSION')}>
+                            <IconWallet size={16} className="me-1" />Commission
+                          </button>
+                        </li>
+                        <li className="nav-item" role="presentation">
+                          <button className={`nav-link ${storeFormTab === 'ITEMS' ? 'active' : ''}`} type="button" role="tab" aria-selected={storeFormTab === 'ITEMS'} onClick={() => setStoreFormTab('ITEMS')}>
+                            <IconShoppingBag size={16} className="me-1" />Store Items
+                            <span className="badge bg-blue-lt text-blue ms-2">{(form.item_ids || []).length}</span>
+                          </button>
+                        </li>
+                      </ul>
+                      <div className="physical-store-tab-body">
+                  {storeFormTab === 'LOCATION' && (
+                    <>
                       <div className="physical-store-panel-header">
                         <div>
                           <div className="fw-semibold">Store Location</div>
@@ -10450,7 +13029,7 @@ function PhysicalStoresPage() {
                       </div>
                       <div className="row g-3">
                         <div className="col-12">
-                          <label className="form-label">Search Location</label>
+                          <FieldLabel info="Create reusable addresses in Location Management first, then choose one here to fill address, Barangay, municipality, and coordinates.">Search Location</FieldLabel>
                           <input
                             className="form-control"
                             list="physical-store-location-options"
@@ -10461,7 +13040,6 @@ function PhysicalStoresPage() {
                           <datalist id="physical-store-location-options">
                             {locations.map((location) => <option key={location.id} value={locationLabel(location)} />)}
                           </datalist>
-                          <div className="form-hint">Create reusable addresses in Location Management first, then select one here.</div>
                         </div>
                         <div className="col-12">
                           <label className="form-label">Address</label>
@@ -10494,19 +13072,155 @@ function PhysicalStoresPage() {
                           </div>
                         )}
                       </div>
+                    </>
+                  )}
+                  {storeFormTab === 'OWNER' && (
+                    <>
+                      <div className="physical-store-panel-header">
+                        <div>
+                          <div className="fw-semibold">Owner Details</div>
+                          <div className="text-muted small">Required. The owner account is created in setup status first, then activated when the store is made active.</div>
+                        </div>
+                        <span className={`badge ${form.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{form.status === 'ACTIVE' ? 'SMS on activation' : 'Setup first'}</span>
+                      </div>
+                      <div className="row g-3">
+                        <div className="col-md-6">
+                          <label className="form-label">Owner Contact Name</label>
+                          <input className="form-control" value={form.owner_display_name} onChange={(e) => setForm({ ...form, owner_display_name: e.target.value })} required />
+                        </div>
+                        <div className="col-md-6">
+                          <FieldLabel info="Used for activation SMS, login verification, and password reset.">Owner Contact Phone</FieldLabel>
+                          <input className="form-control" value={form.owner_contact_number} onChange={(e) => setForm({ ...form, owner_contact_number: e.target.value })} required />
+                        </div>
+                        <div className="col-12">
+                          <div className="alert alert-light border mb-0 d-flex gap-2">
+                            <IconPhone size={18} className="flex-shrink-0 text-muted" />
+                            <div>
+                              <div className="fw-semibold">Store Portal Login</div>
+                              <div className="small text-muted">The owner contact number is the login username. The activation SMS sends this number as <code>{'<USERNAME>'}</code>.</div>
+                              <div className="mt-1"><strong>{form.owner_contact_number.trim() || 'Enter owner contact phone first'}</strong></div>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="col-12">
+                          <label className="form-label">Owner Notes</label>
+                          <textarea className="form-control" rows={3} value={form.owner_notes} onChange={(e) => setForm({ ...form, owner_notes: e.target.value })} />
+                        </div>
+                        <div className="col-12">
+                          <div className="alert alert-info mb-0 d-flex gap-2">
+                            <IconExternalLink size={18} className="flex-shrink-0" />
+                            <div>Store owners always use <strong>net.3jhotspot.com/store</strong>. The activation SMS includes this link automatically.</div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  {storeFormTab === 'COMMISSION' && (
+                    <>
+                      <div className="physical-store-panel-header">
+                        <div>
+                          <div className="fw-semibold">Store Commission</div>
+                          <div className="text-muted small">Required. This is the store commission deducted from gross physical-store sales for net income reporting.</div>
+                        </div>
+                        <span className="badge bg-purple-lt text-purple">{form.commission_type === 'FIXED_MONTHLY' ? 'Monthly fee' : 'Sales percent'}</span>
+                      </div>
+                      <div className="row g-3">
+                        <div className="col-12">
+                          <FieldLabel info="Percent of Sales calculates commission from approved store purchases. Fixed Monthly counts once per store per month when that store has approved sales.">Commission Type</FieldLabel>
+                          <div className="row g-2">
+                            {[
+                              { key: 'PERCENT_OF_SALES', title: 'Percent of Sales', subtitle: 'Commission is a percentage of approved store sales.', icon: IconCash },
+                              { key: 'FIXED_MONTHLY', title: 'Fixed Monthly', subtitle: 'Commission is a fixed monthly amount for the store.', icon: IconCalendarStats },
+                            ].map((option) => {
+                              const OptionIcon = option.icon;
+                              return (
+                                <div className="col-md-6" key={option.key}>
+                                  <label className={`physical-store-item-pass ${form.commission_type === option.key ? 'is-selected' : ''}`}>
+                                    <input
+                                      type="radio"
+                                      checked={form.commission_type === option.key}
+                                      onChange={() => setForm({ ...form, commission_type: option.key })}
+                                      required
+                                    />
+                                    <OptionIcon size={18} />
+                                    <span>
+                                      <strong>{option.title}</strong>
+                                      <small>{option.subtitle}</small>
+                                    </span>
+                                  </label>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <div className="col-md-6">
+                          <FieldLabel info={form.commission_type === 'FIXED_MONTHLY' ? 'Monthly peso amount paid or deducted as store commission.' : 'Percentage of approved store sales. Maximum is 100%.'}>
+                            Commission Value
+                          </FieldLabel>
+                          <div className="input-group">
+                            {form.commission_type === 'FIXED_MONTHLY' && <span className="input-group-text">PHP</span>}
+                            <input
+                              className="form-control"
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              max={form.commission_type === 'PERCENT_OF_SALES' ? '100' : undefined}
+                              value={form.commission_value}
+                              onChange={(e) => setForm({ ...form, commission_value: e.target.value })}
+                              required
+                            />
+                            {form.commission_type === 'PERCENT_OF_SALES' && <span className="input-group-text">%</span>}
+                            {form.commission_type === 'FIXED_MONTHLY' && <span className="input-group-text">monthly</span>}
+                          </div>
+                        </div>
+                        <div className="col-md-6">
+                          <label className="form-label">Report Preview</label>
+                          <div className="alert alert-light border mb-0">
+                            <div className="fw-semibold">{form.commission_type === 'FIXED_MONTHLY' ? 'Fixed monthly commission' : 'Percent commission'}</div>
+                            <div className="small text-muted">
+                              {form.commission_type === 'FIXED_MONTHLY'
+                                ? `Sales page net income subtracts PHP ${Number(form.commission_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} once per active sales month.`
+                                : `Sales page net income subtracts ${Number(form.commission_value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}% from this store's approved sales.`}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  {storeFormTab === 'ITEMS' && (
+                    <>
+                      <div className="physical-store-panel-header">
+                        <div>
+                          <div className="fw-semibold">Store Items</div>
+                          <div className="text-muted small">Select the reusable catalog items this physical store can sell. Items remain in the system even if this store is deleted.</div>
+                        </div>
+                        <span className="badge bg-blue-lt text-blue">{(form.item_ids || []).length} selected</span>
+                      </div>
+                      <div className="physical-store-assigned-items">
+                        {itemCatalog.map((item) => (
+                          <label className="physical-store-site-choice" key={`store-item-choice-${item.id}`}>
+                            <input type="checkbox" checked={(form.item_ids || []).includes(item.id)} onChange={() => toggleStoreItem(item.id)} />
+                            <span>
+                              <strong>{item.name}</strong>
+                              <small>{item.price_display} · {item.duration_label} · {item.device_scope_label}{item.device_scope === 'MULTI_DEVICE' ? ` · ${item.allowed_devices_label}` : ''}</small>
+                              <small>{item.access_scope_label}{item.allowed_barangay ? ` · ${item.allowed_barangay}` : ''} · {item.status}</small>
+                            </span>
+                          </label>
+                        ))}
+                        {!itemCatalog.length && (
+                          <div className="empty py-4">
+                            <IconShoppingBag size={28} />
+                            <p className="mb-2">No reusable store items yet.</p>
+                            <button className="btn btn-primary btn-sm" type="button" onClick={() => { setModalMode(''); openNewItem(); }}>
+                              <IconPlus size={16} className="me-1" />Add item in Items tab
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                      </div>
                     </div>
-                  </div>
-                  <div className="col-md-6">
-                    <label className="form-label">Contact Name</label>
-                    <input className="form-control" value={form.contact_name} onChange={(e) => setForm({ ...form, contact_name: e.target.value })} />
-                  </div>
-                  <div className="col-md-6">
-                    <label className="form-label">Contact Phone</label>
-                    <input className="form-control" value={form.contact_phone} onChange={(e) => setForm({ ...form, contact_phone: e.target.value })} />
-                  </div>
-                  <div className="col-12">
-                    <label className="form-label">Notes</label>
-                    <textarea className="form-control" rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
                   </div>
                 </div>
               </div>
@@ -10518,152 +13232,152 @@ function PhysicalStoresPage() {
           </form>
         </Modal>
       )}
-      {itemModalStore && (
-        <Modal title={`Store Items - ${itemModalStore.store_name}`} onClose={() => setItemModalStore(null)} size="xl">
-          <div className="row g-4">
-            <div className="col-lg-7">
-              {itemMessage && <AutoDismissAlert message={itemMessage} onDismiss={() => setItemMessage('')} />}
-              {itemError && <div className="alert alert-danger">{itemError}</div>}
-              <div className="table-responsive border rounded">
-                <table className="table table-vcenter card-table mb-0">
-                  <thead>
-                    <tr>
-                      <th>Item</th>
-                      <th>Price / Time</th>
-                      <th>Access</th>
-                      <th>Status</th>
-                      <th className="text-end">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {itemModalItems.map((item) => (
-                      <tr key={item.id}>
-                        <td>
-                          <div className="fw-semibold">{item.name}</div>
-                          {item.description && <div className="text-muted small">{item.description}</div>}
-                          {item.more_info_enabled && <span className="badge bg-blue-lt text-blue mt-1">More info enabled</span>}
-                        </td>
-                        <td>
-                          <div className="fw-semibold">{item.price_display}</div>
-                          <div className="text-muted small">{item.duration_label} · {item.device_scope_label}{item.device_scope === 'MULTI_DEVICE' ? ` · ${item.allowed_devices_label}` : ''}</div>
-                        </td>
-                        <td>
-                          <span className={`badge ${item.access_scope === 'BARANGAY_ONLY' ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>{item.access_scope_label}</span>
-                          {item.allowed_barangay && <div className="text-muted small mt-1">{item.allowed_barangay}</div>}
-                        </td>
-                        <td><span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{item.status}</span></td>
-                        <td className="text-end">
-                          <ActionBadgeGroup className="justify-content-end">
-                            <ActionBadgeButton icon={IconEdit} label="Edit item" tone="blue" onClick={() => editItem(item)} />
-                            <ActionBadgeButton icon={IconTrash} label="Delete item" tone="red" onClick={() => removeItem(item)} />
-                          </ActionBadgeGroup>
-                        </td>
-                      </tr>
-                    ))}
-                    {!itemModalItems.length && (
-                      <tr><td colSpan={5} className="text-center text-muted py-4">No store items yet.</td></tr>
-                    )}
-                  </tbody>
-                </table>
+      {selectedStoreDetails && (
+        <div className="physical-store-details-backdrop" onClick={() => setSelectedStoreDetails(null)}>
+          <aside className="physical-store-details-panel" onClick={(event) => event.stopPropagation()}>
+            <div className="physical-store-details-hero">
+              {selectedStoreDetails.image_url ? (
+                <img src={cacheBustedUploadUrl(selectedStoreDetails.image_url, selectedStoreDetails.updated_at)} alt="" />
+              ) : (
+                <div className="physical-store-details-placeholder"><IconBuildingStore size={42} /></div>
+              )}
+              <button className="btn btn-icon btn-light physical-store-details-close" type="button" onClick={() => setSelectedStoreDetails(null)} aria-label="Close store details">
+                <IconX size={18} />
+              </button>
+            </div>
+            <div className="physical-store-details-body">
+              <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                <div>
+                  <h3 className="mb-1">{selectedStoreDetails.store_name}</h3>
+                  <div className="text-muted">{selectedStoreDetails.description || 'No description'}</div>
+                </div>
+                <span className={`badge ${storeStatusBadgeClass(selectedStoreDetails.status)}`}>{selectedStoreDetails.status}</span>
+              </div>
+              <div className="physical-store-details-grid">
+                <div><IconMapPin size={17} /><span>Location</span><strong>{[selectedStoreDetails.barangay, selectedStoreDetails.municipality].filter(Boolean).join(', ') || 'Not set'}</strong></div>
+                <div><IconMapPin size={17} /><span>Coordinates</span><strong>{selectedStoreDetails.latitude !== null && selectedStoreDetails.longitude !== null ? `${Number(selectedStoreDetails.latitude).toFixed(6)}, ${Number(selectedStoreDetails.longitude).toFixed(6)}` : 'Not set'}</strong></div>
+                <div><IconBuildingStore size={17} /><span>Sites</span><strong>{(selectedStoreDetails.sites || []).length}</strong></div>
+                <div><IconShoppingBag size={17} /><span>Items</span><strong>{(selectedStoreDetails.items || []).length}</strong></div>
+                <div><IconWallet size={17} /><span>Commission</span><strong>{storeCommissionSummary(selectedStoreDetails)}</strong></div>
+              </div>
+              <div className="physical-store-details-section">
+                <div className="physical-store-details-section-title"><IconUserCog size={18} /> Store Owner</div>
+                {selectedStoreDetails.owner ? (
+                  <div className="physical-store-owner-card">
+                    <div className="d-flex align-items-center justify-content-between gap-2">
+                      <div>
+                        <div className="fw-semibold">{selectedStoreDetails.owner.display_name || selectedStoreDetails.owner.username}</div>
+                        <div className="text-muted small">{selectedStoreDetails.owner.contact_number || 'No contact number'}</div>
+                      </div>
+                      <div className="d-flex align-items-center gap-2">
+                        <span className={`badge ${selectedStoreDetails.owner.status === 'ACTIVE' ? 'bg-green-lt text-green' : selectedStoreDetails.owner.status === 'DISABLED' ? 'bg-red-lt text-red' : 'bg-yellow-lt text-yellow'}`}>{selectedStoreDetails.owner.status}</span>
+                        <ActionBadgeButton
+                          icon={IconMessageCircle}
+                          label={ownerActivationSmsResendDisabledReason(selectedStoreDetails) || 'Resend owner activation SMS'}
+                          tone="green"
+                          disabled={Boolean(ownerActivationSmsResendDisabledReason(selectedStoreDetails))}
+                          onClick={() => resendOwnerActivationSms(selectedStoreDetails)}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-2 small">
+                      <div><span className="text-muted">Login contact:</span> <strong>{selectedStoreDetails.owner.contact_number || selectedStoreDetails.owner.username || '-'}</strong></div>
+                      <div><span className="text-muted">Last login:</span> <strong>{selectedStoreDetails.owner.last_login_at ? formatPortalDateTime(selectedStoreDetails.owner.last_login_at) : 'Never'}</strong></div>
+                      <div><span className="text-muted">Activation SMS:</span> <strong>{selectedStoreDetails.owner.activation_sms_sent_at ? formatPortalDateTime(selectedStoreDetails.owner.activation_sms_sent_at) : 'Not sent'}</strong></div>
+                      {selectedStoreDetails.owner.activation_sms_status?.message_id && <div><span className="text-muted">Message-ID:</span> <strong>{selectedStoreDetails.owner.activation_sms_status.message_id}</strong></div>}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="alert alert-warning mb-0">Owner details are not set.</div>
+                )}
+              </div>
+              <div className="physical-store-details-section">
+                <div className="physical-store-details-section-title"><IconBuildingStore size={18} /> Deployed Sites</div>
+                <div className="d-flex flex-wrap gap-1">
+                  {(selectedStoreDetails.sites || []).length ? selectedStoreDetails.sites.map((site) => <span className="badge bg-cyan-lt text-cyan" key={`details-site-${site.site_deployment_id}`}>{site.site_name}</span>) : <span className="text-muted small">No sites assigned.</span>}
+                </div>
+              </div>
+              <div className="physical-store-details-section">
+                <div className="physical-store-details-section-title"><IconShoppingBag size={18} /> Store Items</div>
+                <div className="d-flex flex-column gap-2">
+                  {(selectedStoreDetails.items || []).length ? selectedStoreDetails.items.map((item) => (
+                    <div className="physical-store-details-item" key={`details-item-${item.id}`}>
+                      <div>
+                        <div className="fw-semibold">{item.name}</div>
+                        <div className="text-muted small">{item.duration_label} · {item.device_scope_label} · {item.access_scope_label}</div>
+                      </div>
+                      <span className="badge bg-blue-lt text-blue">{item.price_display}</span>
+                    </div>
+                  )) : <span className="text-muted small">No items assigned.</span>}
+                </div>
+              </div>
+              <div className="d-flex justify-content-end gap-2 mt-4">
+                <button className="btn" type="button" onClick={() => setSelectedStoreDetails(null)}>Close</button>
+                <button className="btn btn-primary" type="button" onClick={() => { openEdit(selectedStoreDetails); setSelectedStoreDetails(null); }}>
+                  <IconEdit size={17} className="me-1" />Edit Store
+                </button>
               </div>
             </div>
-            <div className="col-lg-5">
-              <form className="card" onSubmit={saveItem}>
-                <div className="card-header">
-                  <h3 className="card-title">{editingItem ? 'Edit Store Item' : 'Add Store Item'}</h3>
-                  {editingItem && <button className="btn btn-sm" type="button" onClick={() => { setEditingItem(null); setItemForm(emptyItemForm); }}>New item</button>}
-                </div>
-                <div className="card-body">
-                  <div className="mb-3">
-                    <label className="form-label">Item Name</label>
-                    <input className="form-control" value={itemForm.name} onChange={(e) => setItemForm({ ...itemForm, name: e.target.value })} required />
-                  </div>
-                  <div className="mb-3">
-                    <label className="form-label">Description</label>
-                    <textarea className="form-control" rows={2} value={itemForm.description} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} />
-                  </div>
-                  <div className="row g-3">
-                    <div className="col-md-6">
-                      <label className="form-label">Price</label>
-                      <input className="form-control" type="number" step="0.01" min="0" value={itemForm.price} onChange={(e) => setItemForm({ ...itemForm, price: e.target.value })} />
-                    </div>
-                    <div className="col-md-6">
-                      <label className="form-label">Status</label>
-                      <select className="form-select" value={itemForm.status} onChange={(e) => setItemForm({ ...itemForm, status: e.target.value })}>
-                        <option value="ACTIVE">Active</option>
-                        <option value="DISABLED">Disabled</option>
-                      </select>
-                    </div>
-                    <div className="col-md-6">
-                      <label className="form-label">Time</label>
-                      <input className="form-control" type="number" min="1" value={itemForm.duration_value} onChange={(e) => setItemForm({ ...itemForm, duration_value: e.target.value })} />
-                    </div>
-                    <div className="col-md-6">
-                      <label className="form-label">Unit</label>
-                      <select className="form-select" value={itemForm.duration_unit} onChange={(e) => setItemForm({ ...itemForm, duration_unit: e.target.value })}>
-                        <option value="minutes">Minutes</option>
-                        <option value="hours">Hours</option>
-                        <option value="days">Days</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="mt-3">
-                    <label className="form-label">Pass Type</label>
-                    <div className="row g-2">
-                      {PRODUCT_PASS_TYPES.map((type) => {
-                        const Icon = type.icon;
-                        return (
-                          <div className="col-6" key={type.key}>
-                            <label className={`physical-store-item-pass ${itemForm.device_scope === type.key ? 'is-selected' : ''}`}>
-                              <input type="radio" checked={itemForm.device_scope === type.key} onChange={() => setItemForm({ ...itemForm, device_scope: type.key, allowed_devices: type.key === 'SINGLE_DEVICE' ? '1' : itemForm.allowed_devices || '2' })} />
-                              <Icon size={18} />
-                              <span>{type.title}</span>
-                            </label>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                  {itemForm.device_scope === 'MULTI_DEVICE' && (
-                    <div className="mt-3">
-                      <label className="form-label">Allowed Devices</label>
-                      <input className="form-control" type="number" min="2" max="100" value={itemForm.allowed_devices} onChange={(e) => setItemForm({ ...itemForm, allowed_devices: e.target.value })} />
-                    </div>
-                  )}
-                  <div className="mt-3">
-                    <label className="form-label">Access Scope</label>
-                    <select className="form-select" value={itemForm.access_scope} onChange={(e) => setItemForm({ ...itemForm, access_scope: e.target.value })}>
-                      <option value="ALL_LOCATIONS">All Locations</option>
-                      <option value="BARANGAY_ONLY">Barangay only</option>
-                    </select>
-                  </div>
-                  {itemForm.access_scope === 'BARANGAY_ONLY' && (
-                    <div className="mt-3">
-                      <label className="form-label">Allowed Barangay</label>
-                      <input className="form-control" value={itemForm.allowed_barangay} onChange={(e) => setItemForm({ ...itemForm, allowed_barangay: e.target.value })} />
-                    </div>
-                  )}
-                  <div className="mt-3">
-                    <label className="form-check form-switch">
-                      <input className="form-check-input" type="checkbox" checked={itemForm.more_info_enabled} onChange={(e) => setItemForm({ ...itemForm, more_info_enabled: e.target.checked })} />
-                      <span className="form-check-label">Show more info in captive portal</span>
-                    </label>
-                  </div>
-                  <div className="mt-3">
-                    <label className="form-label">More Info Text</label>
-                    <textarea className="form-control" rows={4} value={itemForm.more_info_text} onChange={(e) => setItemForm({ ...itemForm, more_info_text: e.target.value })} />
-                  </div>
-                  <div className="mt-3">
-                    <label className="form-label">Sort Order</label>
-                    <input className="form-control" type="number" min="0" value={itemForm.sort_order} onChange={(e) => setItemForm({ ...itemForm, sort_order: e.target.value })} />
-                  </div>
-                </div>
-                <div className="card-footer d-flex justify-content-end">
-                  <button className="btn btn-primary" type="submit">{editingItem ? 'Save Item' : 'Add Item'}</button>
-                </div>
-              </form>
+          </aside>
+        </div>
+      )}
+      {ownerModalStore && (
+        <Modal title={`Store Owner - ${ownerModalStore.store_name}`} onClose={() => setOwnerModalStore(null)} size="lg">
+          {ownerLoading ? (
+            <div className="d-flex align-items-center gap-2 py-4">
+              <span className="spinner-border spinner-border-sm" aria-hidden="true" />
+              <span>Loading store owner...</span>
             </div>
-          </div>
+          ) : (
+            <form onSubmit={saveOwner}>
+              {ownerMessage && <AutoDismissAlert message={ownerMessage} onDismiss={() => setOwnerMessage('')} />}
+              {ownerError && <div className="alert alert-danger">{ownerError}</div>}
+              <div className="alert alert-info d-flex gap-2">
+                <IconShieldLock size={20} className="flex-shrink-0" />
+                <div>
+                  <strong>One owner account per physical store.</strong>
+                  <div className="small">New device login and password changes require SMS verification to the owner contact number.</div>
+                </div>
+              </div>
+              <div className="row g-3">
+                <div className="col-md-6">
+                  <label className="form-label">Status</label>
+                  <select className="form-select" value={ownerForm.status} onChange={(e) => setOwnerForm({ ...ownerForm, status: e.target.value })}>
+                    <option value="SETUP">Setup</option>
+                    <option value="ACTIVE">Active</option>
+                    <option value="DISABLED">Disabled</option>
+                  </select>
+                  <div className="form-hint">Activation sends a temporary password by SMS when the physical store itself is Active.</div>
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label">Display Name</label>
+                  <input className="form-control" value={ownerForm.display_name} onChange={(e) => setOwnerForm({ ...ownerForm, display_name: e.target.value })} />
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label">SMS Contact Number</label>
+                  <input className="form-control" value={ownerForm.contact_number} onChange={(e) => setOwnerForm({ ...ownerForm, contact_number: e.target.value, username: e.target.value })} required />
+                  <div className="form-hint">This contact number is also the Store Portal login username.</div>
+                </div>
+                <div className="col-12">
+                  <label className="form-label">Owner Notes</label>
+                  <textarea className="form-control" rows={3} value={ownerForm.owner_notes} onChange={(e) => setOwnerForm({ ...ownerForm, owner_notes: e.target.value })} />
+                </div>
+              </div>
+              <div className="d-flex justify-content-between gap-2 mt-4">
+                <div>
+                  {ownerExisting && (
+                    <button className="btn btn-outline-danger" type="button" onClick={removeOwner}>
+                      <IconTrash size={17} className="me-1" />Remove Owner Access
+                    </button>
+                  )}
+                </div>
+                <div className="d-flex gap-2">
+                  <button className="btn" type="button" onClick={() => setOwnerModalStore(null)}>Close</button>
+                  <button className="btn btn-primary" type="submit">{ownerExisting ? 'Save Owner' : 'Create Owner'}</button>
+                </div>
+              </div>
+            </form>
+          )}
         </Modal>
       )}
       {captureMapOpen && (
@@ -10686,6 +13400,1166 @@ function PhysicalStoresPage() {
               </div>
             )}
           </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+function StoreMapPage() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [center, setCenter] = useState(DEFAULT_MAP_CENTER);
+  const [zoom, setZoom] = useState(DEFAULT_MAP_ZOOM);
+  const [selectedStoreId, setSelectedStoreId] = useState('');
+  const [search, setSearch] = useState('');
+  const [floatingMenuVisible, setFloatingMenuVisible] = useState(true);
+
+  const stores = data?.stores || [];
+  const mappedStores = stores.filter((store) => store.mapped);
+  const visibleStores = stores.filter((store) => {
+    const query = search.trim().toLowerCase();
+    if (!query) return true;
+    return [
+      store.store_name,
+      store.address,
+      store.barangay,
+      store.municipality,
+      store.owner?.display_name,
+      store.owner?.contact_number,
+      store.status,
+    ].filter(Boolean).join(' ').toLowerCase().includes(query);
+  });
+  const selectedStore = stores.find((store) => store.id === selectedStoreId) || null;
+  const summary = data?.summary || {};
+
+  async function load() {
+    setLoading(true);
+    setError('');
+    try {
+      const payload = await request('/physical-stores/map');
+      setData(payload);
+      const first = (payload.stores || []).find((store) => store.mapped);
+      if (first) {
+        setCenter({ latitude: Number(first.map_latitude), longitude: Number(first.map_longitude) });
+        setZoom(15);
+      }
+    } catch (err) {
+      setError(err.message || 'Store map could not be loaded.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    document.documentElement.classList.add('longlat-scroll-lock');
+    document.body.classList.add('longlat-scroll-lock');
+    load();
+    return () => {
+      document.documentElement.classList.remove('longlat-scroll-lock');
+      document.body.classList.remove('longlat-scroll-lock');
+    };
+  }, []);
+
+  function selectStore(store) {
+    setSelectedStoreId(store.id);
+    if (store.mapped) {
+      setCenter({ latitude: Number(store.map_latitude), longitude: Number(store.map_longitude) });
+      setZoom(17);
+    }
+  }
+
+  return (
+    <div className={`longlat-page store-map-page ${floatingMenuVisible ? '' : 'longlat-menu-hidden'}`}>
+      {loading && <div className="longlat-loading">Loading store map...</div>}
+      {error && <div className="alert alert-danger longlat-error">{error}</div>}
+      <LongLatMap
+        aps={stores}
+        center={center}
+        zoom={zoom}
+        setCenter={setCenter}
+        setZoom={setZoom}
+        selectedApId={selectedStoreId}
+        onSelectAp={selectStore}
+        editable={false}
+        showClientBadges={false}
+        showLegend={false}
+        showCoverageRings={false}
+        markerKind="store"
+        markerTone={storeMapTone}
+        markerStatusText={storeMapStatusText}
+      />
+      <div className="ap-client-map-kpi-overlay longlat-map-kpi-overlay" aria-label="Store map summary">
+        <span className="ap-client-kpi-chip ap-client-kpi-mapped"><i><IconBuildingStore size={15} /></i><strong>Stores</strong><em>({summary.total || 0})</em></span>
+        <span className="ap-client-kpi-chip ap-client-kpi-active"><i><IconMapPin size={15} /></i><strong>Mapped</strong><em>({summary.mapped || 0})</em></span>
+        <span className="ap-client-kpi-chip ap-client-kpi-clients"><i><IconUsers size={15} /></i><strong>Customers</strong><em>({summary.customer_count || 0})</em></span>
+        <span className="ap-client-kpi-chip ap-client-kpi-unmapped"><i><IconCash size={15} /></i><strong>Overall Sales</strong><em>{summary.total_sales_display || 'PHP 0.00'}</em></span>
+        <span className="ap-client-kpi-chip ap-client-kpi-active"><i><IconCalendarStats size={15} /></i><strong>This Month</strong><em>{summary.monthly_sales_display || 'PHP 0.00'}</em></span>
+      </div>
+      {!floatingMenuVisible && (
+        <button className="btn btn-primary longlat-floating-toggle" type="button" onClick={() => setFloatingMenuVisible(true)} title="Show Store Map menu" aria-label="Show Store Map menu">
+          <IconListDetails size={18} />
+        </button>
+      )}
+      {floatingMenuVisible && (
+        <div className="longlat-floating-panel card">
+          <div className="card-header longlat-panel-header ap-client-map-panel-header">
+            <button className="btn btn-icon btn-outline-secondary longlat-panel-hide" type="button" onClick={() => setFloatingMenuVisible(false)} title="Hide Store Map menu" aria-label="Hide Store Map menu">
+              <IconX size={18} />
+            </button>
+            <div className="longlat-panel-title">
+              <h3 className="card-title mb-1">Store Map</h3>
+              <div className="text-muted small">Inspect store locations, owners, sales, and customer usage.</div>
+            </div>
+          </div>
+          <div className="card-body">
+            <div className="input-icon mb-3">
+              <span className="input-icon-addon"><IconSearch size={16} /></span>
+              <input className="form-control" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search stores, owners, or Barangay" />
+            </div>
+            {selectedStore && (
+              <div className="store-map-selected-panel mb-3">
+                <div className="d-flex align-items-start gap-2 mb-2">
+                  <span className="avatar bg-orange-lt text-orange"><IconBuildingStore size={20} /></span>
+                  <div className="min-w-0">
+                    <div className="fw-bold text-truncate">{selectedStore.store_name}</div>
+                    <div className="text-muted small">{[selectedStore.barangay, selectedStore.municipality].filter(Boolean).join(', ') || 'Location not set'}</div>
+                  </div>
+                </div>
+                <div className="store-map-kpi-grid">
+                  <div><span>Overall Sales</span><strong>{selectedStore.total_sales_display || 'PHP 0.00'}</strong></div>
+                  <div><span>This Month</span><strong>{selectedStore.monthly_sales_display || 'PHP 0.00'}</strong></div>
+                  <div><span>Customers</span><strong>{selectedStore.customer_count || 0}</strong></div>
+                  <div><span>Orders</span><strong>{selectedStore.order_count || 0}</strong></div>
+                  <div><span>Items</span><strong>{selectedStore.item_count || 0}</strong></div>
+                </div>
+                <div className="store-map-detail-list mt-2">
+                  <div><span>Owner</span><strong>{selectedStore.owner?.display_name || selectedStore.contact_name || 'n/a'}</strong></div>
+                  <div><span>Phone</span><strong>{selectedStore.owner?.contact_number || selectedStore.contact_phone || 'n/a'}</strong></div>
+                  <div><span>Sites</span><strong>{selectedStore.site_count || 0}</strong></div>
+                  <div><span>Status</span><strong>{selectedStore.status || 'ACTIVE'}</strong></div>
+                </div>
+              </div>
+            )}
+            <div className="longlat-panel-list">
+              {visibleStores.map((store) => (
+                <button className={`longlat-ap-card longlat-ap-card-compact ${selectedStoreId === store.id ? 'active' : ''}`} key={store.id} type="button" onClick={() => selectStore(store)}>
+                  <span className={`longlat-ap-status-dot longlat-status-${storeMapTone(store)}`} />
+                  <span className="longlat-ap-card-body">
+                    <span className="fw-semibold text-truncate">{store.store_name}</span>
+                    <span className="small text-muted">{[store.barangay, store.municipality].filter(Boolean).join(', ') || 'No location'}</span>
+                    <span className="small">{store.mapped ? `${formatCoordinate(store.map_latitude)}, ${formatCoordinate(store.map_longitude)}` : 'No coordinates'}</span>
+                  </span>
+                  <span className="longlat-ap-card-action">{store.total_sales_display || 'PHP 0.00'}</span>
+                </button>
+              ))}
+              {!visibleStores.length && <div className="empty p-4">No stores match your search.</div>}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StoreOwnerPortalApp() {
+  const storePortalParams = new URLSearchParams(window.location.search);
+  const initialStoreCode = storePortalParams.get('code') || storePortalParams.get('purchase_code') || '';
+  const initialAutoApprove = storePortalParams.get('auto_approve') === '1';
+  const processedUrlCodeRef = useRef('');
+  const [owner, setOwner] = useState(null);
+  const [loginForm, setLoginForm] = useState({ username: '', password: '', verification_code: '' });
+  const [challenge, setChallenge] = useState(null);
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [requests, setRequests] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [statusFilter, setStatusFilter] = useState('PENDING');
+  const [lookupCode, setLookupCode] = useState('');
+  const [lookupResult, setLookupResult] = useState(null);
+  const [actionLoading, setActionLoading] = useState('');
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [passwordChallenge, setPasswordChallenge] = useState(null);
+  const [passwordForm, setPasswordForm] = useState({ verification_code: '', new_password: '', confirm_password: '' });
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [profileTab, setProfileTab] = useState('DETAILS');
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [pinForm, setPinForm] = useState({ pin_code: '', pin_required_interval_minutes: '5' });
+  const [pinChallenge, setPinChallenge] = useState(null);
+  const [pinVerificationCode, setPinVerificationCode] = useState('');
+  const [pinLoading, setPinLoading] = useState(false);
+  const [approvalPinModal, setApprovalPinModal] = useState(null);
+  const [approvalPin, setApprovalPin] = useState('');
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [qrError, setQrError] = useState('');
+  const [qrCameraActive, setQrCameraActive] = useState(false);
+  const [qrBox, setQrBox] = useState(null);
+  const [codeLookupModalOpen, setCodeLookupModalOpen] = useState(false);
+  const [scannedRequestModal, setScannedRequestModal] = useState(null);
+  const [supportModalOpen, setSupportModalOpen] = useState(false);
+  const [supportConversation, setSupportConversation] = useState(null);
+  const [supportMessage, setSupportMessage] = useState('');
+  const [supportLoading, setSupportLoading] = useState(false);
+  const [storeNavOpen, setStoreNavOpen] = useState(false);
+  const qrVideoRef = useRef(null);
+  const qrStreamRef = useRef(null);
+  const qrScanTimerRef = useRef(null);
+  const qrScanningActiveRef = useRef(false);
+
+  function recentLoginVerificationActive(nextOwner = owner) {
+    const expiresAt = nextOwner?.recent_login_verification?.expires_at;
+    if (!expiresAt) return false;
+    const expiresTime = new Date(expiresAt).getTime();
+    return Number.isFinite(expiresTime) && expiresTime > Date.now();
+  }
+
+  function ownerPinVerifiedActive(nextOwner = owner) {
+    const expiresAt = nextOwner?.pin?.verified_until;
+    if (!expiresAt) return false;
+    const expiresTime = new Date(expiresAt).getTime();
+    return Number.isFinite(expiresTime) && expiresTime > Date.now();
+  }
+
+  async function loadStorePortal(nextStatus = statusFilter) {
+    const data = await storeOwnerRequest(`/store-portal/purchase-requests?status=${encodeURIComponent(nextStatus)}`);
+    setOwner(data.owner || owner);
+    setRequests(data.requests || []);
+    setSummary(data.summary || {});
+  }
+
+  async function loadStoreSupportConversation() {
+    const data = await storeOwnerRequest('/store-portal/support/conversation');
+    setSupportConversation(data.conversation || null);
+    return data.conversation || null;
+  }
+
+  async function openStoreSupport() {
+    setSupportModalOpen(true);
+    setError('');
+    try {
+      await loadStoreSupportConversation();
+    } catch (err) {
+      setError(err.message || 'Could not load admin chat.');
+    }
+  }
+
+  async function sendStoreSupportMessage(e) {
+    e.preventDefault();
+    const body = supportMessage.trim();
+    if (!body) return;
+    setSupportLoading(true);
+    setError('');
+    try {
+      const endpoint = supportConversation?.public_conversation_id
+        ? `/store-portal/support/conversations/${encodeURIComponent(supportConversation.public_conversation_id)}/messages`
+        : '/store-portal/support/conversations';
+      const data = await storeOwnerRequest(endpoint, {
+        method: 'POST',
+        body: JSON.stringify({ message_text: body }),
+      });
+      setSupportConversation(data.conversation || null);
+      setSupportMessage('');
+    } catch (err) {
+      setError(err.message || 'Could not send message.');
+    } finally {
+      setSupportLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!owner) return;
+    setPinForm((current) => ({
+      ...current,
+      pin_required_interval_minutes: String(owner.pin?.required_interval_minutes || 5),
+    }));
+  }, [owner?.id, owner?.pin?.required_interval_minutes]);
+
+  useEffect(() => () => stopQrScanner(), []);
+
+  useEffect(() => {
+    if (!localStorage.getItem('centralwifi_store_owner_token')) return;
+    storeOwnerRequest('/store-portal/me')
+      .then((data) => {
+        setOwner(data.owner || null);
+        return loadStorePortal();
+      })
+      .catch(() => {
+        localStorage.removeItem('centralwifi_store_owner_token');
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!owner || !initialStoreCode || processedUrlCodeRef.current === initialStoreCode) return;
+    processedUrlCodeRef.current = initialStoreCode;
+    setLookupCode(initialStoreCode.toUpperCase());
+    setActionLoading(initialAutoApprove ? initialStoreCode : '');
+    storeOwnerRequest('/store-portal/purchase-requests/lookup', {
+      method: 'POST',
+      body: JSON.stringify({ code: initialStoreCode }),
+    })
+      .then(async (data) => {
+        const requestRow = data.request || null;
+        setLookupResult(requestRow);
+        if (owner?.must_change_password) {
+          setPasswordModalOpen(true);
+          setError('Change your temporary password before approving scanned purchases.');
+          return;
+        }
+        if (initialAutoApprove && requestRow?.public_id) await approveRequest(requestRow);
+      })
+      .catch((err) => setError(err.message || 'Scanned store purchase could not be processed.'))
+      .finally(() => setActionLoading(''));
+  }, [owner]);
+
+  useEffect(() => {
+    if (owner?.must_change_password) {
+      if (recentLoginVerificationActive(owner) && !passwordChallenge) {
+        setPasswordChallenge({ recent_login_verified: true, status: 'RECENT_LOGIN_VERIFIED' });
+      }
+      setPasswordModalOpen(true);
+    }
+  }, [owner?.must_change_password]);
+
+  async function login(e) {
+    e.preventDefault();
+    setLoginLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      const data = await publicApi('/store-portal/login', {
+        method: 'POST',
+        body: JSON.stringify({ ...loginForm, device_token: storeOwnerDeviceToken() }),
+      });
+      if (data.status === 'SMS_REQUIRED') {
+        setChallenge(data);
+        setMessage(`SMS verification sent to ${data.contact_hint || 'the store owner contact'}.`);
+        return;
+      }
+      localStorage.setItem('centralwifi_store_owner_token', data.token);
+      setOwner(data.owner || null);
+      setChallenge(null);
+      await loadStorePortal();
+    } catch (err) {
+      setError(err.message || 'Store owner login failed.');
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function verifyLogin(e) {
+    e.preventDefault();
+    if (!challenge?.challenge_id) return;
+    setLoginLoading(true);
+    setError('');
+    try {
+      const data = await publicApi('/store-portal/login/verify', {
+        method: 'POST',
+        body: JSON.stringify({
+          challenge_id: challenge.challenge_id,
+          verification_code: loginForm.verification_code,
+          device_token: storeOwnerDeviceToken(),
+        }),
+      });
+      localStorage.setItem('centralwifi_store_owner_token', data.token);
+      setOwner(data.owner || null);
+      setChallenge(null);
+      setMessage('Store owner device verified.');
+      await loadStorePortal();
+    } catch (err) {
+      setError(err.message || 'Verification failed.');
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  function logout() {
+    localStorage.removeItem('centralwifi_store_owner_token');
+    setOwner(null);
+    setRequests([]);
+    setSummary({});
+    setChallenge(null);
+  }
+
+  async function approveRequest(requestRow) {
+    if (owner?.must_change_password) {
+      setPasswordModalOpen(true);
+      setError('Change your temporary password before approving store purchases.');
+      return;
+    }
+    if (!owner?.pin?.configured) {
+      setProfileTab('PIN');
+      setProfileModalOpen(true);
+      setError('Set a 4-digit approval PIN before approving store purchases.');
+      return;
+    }
+    if (!ownerPinVerifiedActive(owner)) {
+      setApprovalPin('');
+      setApprovalPinModal(requestRow);
+      return;
+    }
+    await submitApproveRequest(requestRow);
+  }
+
+  async function submitApproveRequest(requestRow, pinCode = '') {
+    setActionLoading(requestRow.public_id);
+    setError('');
+    setMessage('');
+    try {
+      const data = await storeOwnerRequest(`/store-portal/purchase-requests/${encodeURIComponent(requestRow.public_id)}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ pin_code: pinCode || undefined }),
+      });
+      if (data.owner) setOwner(data.owner);
+      setMessage(data.message || 'Store purchase approved.');
+      setLookupResult(null);
+      setScannedRequestModal(null);
+      setCodeLookupModalOpen(false);
+      setApprovalPinModal(null);
+      setApprovalPin('');
+      await loadStorePortal(statusFilter);
+    } catch (err) {
+      setError(err.message || 'Approval failed.');
+    } finally {
+      setActionLoading('');
+    }
+  }
+
+  async function rejectRequest(requestRow) {
+    if (owner?.must_change_password) {
+      setPasswordModalOpen(true);
+      setError('Change your temporary password before rejecting store purchases.');
+      return;
+    }
+    const reason = window.prompt('Reason for rejecting this request?', 'Payment was not completed.');
+    if (reason === null) return;
+    setActionLoading(requestRow.public_id);
+    setError('');
+    setMessage('');
+    try {
+      await storeOwnerRequest(`/store-portal/purchase-requests/${encodeURIComponent(requestRow.public_id)}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      });
+      setMessage('Store purchase rejected.');
+      setLookupResult(null);
+      setScannedRequestModal(null);
+      setCodeLookupModalOpen(false);
+      await loadStorePortal(statusFilter);
+    } catch (err) {
+      setError(err.message || 'Reject failed.');
+    } finally {
+      setActionLoading('');
+    }
+  }
+
+  async function lookupPurchase(e) {
+    e.preventDefault();
+    await lookupPurchaseCode(lookupCode);
+  }
+
+  async function lookupPurchaseCode(codeValue) {
+    if (owner?.must_change_password) {
+      setPasswordModalOpen(true);
+      setError('Change your temporary password before approving store purchases.');
+      return;
+    }
+    setError('');
+    setLookupResult(null);
+    try {
+      const data = await storeOwnerRequest('/store-portal/purchase-requests/lookup', {
+        method: 'POST',
+        body: JSON.stringify({ code: codeValue }),
+      });
+      setLookupCode(String(codeValue || '').toUpperCase());
+      setLookupResult(data.request || null);
+      setScannedRequestModal(data.request || null);
+      setCodeLookupModalOpen(false);
+    } catch (err) {
+      setError(err.message || 'Purchase code was not found.');
+    }
+  }
+
+  async function saveStoreProfile(e) {
+    e.preventDefault();
+    const cleanPin = String(pinForm.pin_code || '').trim();
+    if (cleanPin && !/^\d{4}$/.test(cleanPin)) {
+      setError('Approval PIN must be exactly 4 numerical digits.');
+      return;
+    }
+    if (cleanPin && (!pinChallenge?.challenge_id || !pinVerificationCode.trim())) {
+      setError('Send and enter the 5-character SMS verification code before changing the approval PIN.');
+      return;
+    }
+    setProfileLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      const data = await storeOwnerRequest('/store-portal/profile', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          pin_code: cleanPin || undefined,
+          pin_required_interval_minutes: Number(pinForm.pin_required_interval_minutes || 5),
+          challenge_id: cleanPin ? pinChallenge.challenge_id : undefined,
+          verification_code: cleanPin ? pinVerificationCode.trim().toUpperCase() : undefined,
+          device_token: storeOwnerDeviceToken(),
+        }),
+      });
+      if (data.owner) setOwner(data.owner);
+      setPinForm((current) => ({ ...current, pin_code: '' }));
+      setPinChallenge(null);
+      setPinVerificationCode('');
+      setMessage(data.message || 'Store profile updated.');
+    } catch (err) {
+      setError(err.message || 'Store profile update failed.');
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
+  function stopQrScanner() {
+    qrScanningActiveRef.current = false;
+    if (qrScanTimerRef.current) {
+      window.clearTimeout(qrScanTimerRef.current);
+      qrScanTimerRef.current = null;
+    }
+    if (qrStreamRef.current) {
+      qrStreamRef.current.getTracks().forEach((track) => track.stop());
+      qrStreamRef.current = null;
+    }
+    setQrCameraActive(false);
+    setQrBox(null);
+  }
+
+  function updateQrTrackingBox(barcode) {
+    const video = qrVideoRef.current;
+    const box = barcode?.boundingBox;
+    if (!video || !box || !video.videoWidth || !video.videoHeight) {
+      setQrBox(null);
+      return;
+    }
+    const rect = video.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      setQrBox(null);
+      return;
+    }
+    const scale = Math.max(rect.width / video.videoWidth, rect.height / video.videoHeight);
+    const renderedWidth = video.videoWidth * scale;
+    const renderedHeight = video.videoHeight * scale;
+    const offsetX = (rect.width - renderedWidth) / 2;
+    const offsetY = (rect.height - renderedHeight) / 2;
+    const nextBox = {
+      left: Math.max(0, Math.min(rect.width, offsetX + box.x * scale)),
+      top: Math.max(0, Math.min(rect.height, offsetY + box.y * scale)),
+      width: Math.max(18, Math.min(rect.width, box.width * scale)),
+      height: Math.max(18, Math.min(rect.height, box.height * scale)),
+    };
+    setQrBox(nextBox);
+  }
+
+  async function openQrScanner() {
+    setQrModalOpen(true);
+    setQrError('');
+    stopQrScanner();
+    if (!navigator.mediaDevices?.getUserMedia || !('BarcodeDetector' in window)) {
+      setQrError('Camera QR scanning is not supported in this browser. Enter the purchase code manually.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      qrStreamRef.current = stream;
+      qrScanningActiveRef.current = true;
+      setQrCameraActive(true);
+      window.setTimeout(async () => {
+        const video = qrVideoRef.current;
+        if (!video || !qrScanningActiveRef.current) return;
+        video.srcObject = stream;
+        await video.play().catch(() => {});
+        const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+        const scanFrame = async () => {
+          if (!qrScanningActiveRef.current || !qrVideoRef.current) return;
+          try {
+            const codes = await detector.detect(qrVideoRef.current);
+            const detectedCode = codes?.[0] || null;
+            const rawValue = detectedCode?.rawValue || '';
+            if (detectedCode) updateQrTrackingBox(detectedCode);
+            else setQrBox(null);
+            if (rawValue) {
+              qrScanningActiveRef.current = false;
+              setQrError('QR detected. Checking purchase...');
+              window.setTimeout(async () => {
+                stopQrScanner();
+                setQrModalOpen(false);
+                await lookupPurchaseCode(rawValue);
+              }, 450);
+              return;
+            }
+          } catch (err) {
+            setQrError('QR scanner could not read the camera frame. Enter the code manually if this continues.');
+          }
+          qrScanTimerRef.current = window.setTimeout(scanFrame, 450);
+        };
+        scanFrame();
+      }, 150);
+    } catch (err) {
+      stopQrScanner();
+      setQrError('Camera permission was denied or no camera is available. Enter the purchase code manually.');
+    }
+  }
+
+  async function sendPasswordCode() {
+    setPasswordLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      const data = await storeOwnerRequest('/store-portal/password/send-code', {
+        method: 'POST',
+        body: JSON.stringify({ device_token: storeOwnerDeviceToken() }),
+      });
+      setPasswordChallenge(data);
+      setMessage(data.recent_login_verified
+        ? 'Recent login verification reused. Set your new password.'
+        : `Password code sent to ${data.contact_hint || 'owner contact'}.`);
+    } catch (err) {
+      setError(err.message || 'Could not send password code.');
+    } finally {
+      setPasswordLoading(false);
+    }
+  }
+
+  async function sendPinCode() {
+    setPinLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      const data = await storeOwnerRequest('/store-portal/pin/send-code', {
+        method: 'POST',
+        body: JSON.stringify({ device_token: storeOwnerDeviceToken() }),
+      });
+      setPinChallenge(data);
+      setPinVerificationCode('');
+      setMessage(`Approval PIN verification code sent to ${data.contact_hint || 'owner contact'}.`);
+    } catch (err) {
+      setError(err.message || 'Could not send approval PIN verification code.');
+    } finally {
+      setPinLoading(false);
+    }
+  }
+
+  async function changePassword(e) {
+    e.preventDefault();
+    const recentVerified = Boolean(passwordChallenge?.recent_login_verified || recentLoginVerificationActive(owner));
+    if (!passwordChallenge?.challenge_id && !recentVerified) return;
+    setPasswordLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      await storeOwnerRequest('/store-portal/password/change', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...passwordForm,
+          challenge_id: passwordChallenge?.challenge_id || null,
+          verification_code: passwordChallenge?.challenge_id ? passwordForm.verification_code : null,
+          device_token: storeOwnerDeviceToken(),
+        }),
+      });
+      setPasswordModalOpen(false);
+      setPasswordChallenge(null);
+      setPasswordForm({ verification_code: '', new_password: '', confirm_password: '' });
+      setOwner((current) => current ? { ...current, must_change_password: false } : current);
+      setMessage('Password changed.');
+    } catch (err) {
+      setError(err.message || 'Password change failed.');
+    } finally {
+      setPasswordLoading(false);
+    }
+  }
+
+  function passwordChangeFormContent() {
+    return (
+      <form onSubmit={changePassword}>
+        {!passwordChallenge && !recentLoginVerificationActive(owner) ? (
+          <div className="d-grid gap-3">
+            <div className="alert alert-info mb-0">{owner.must_change_password ? 'Before you continue, set your own password. ' : ''}A verification code will be sent to {owner.contact_hint || 'your registered contact'}.</div>
+            <button className="btn btn-primary" type="button" disabled={passwordLoading} onClick={sendPasswordCode}>
+              {passwordLoading ? 'Sending...' : 'Send SMS Code'}
+            </button>
+          </div>
+        ) : (
+          <div className="d-grid gap-3">
+            {(passwordChallenge?.recent_login_verified || recentLoginVerificationActive(owner)) && !passwordChallenge?.challenge_id ? (
+              <div className="alert alert-success mb-0">
+                Your recent login SMS verification is still valid, so no second code is needed for this password change.
+              </div>
+            ) : (
+              <input className="form-control text-center fs-2 fw-bold" value={passwordForm.verification_code} onChange={(e) => setPasswordForm({ ...passwordForm, verification_code: e.target.value.toUpperCase() })} placeholder="SMS code" required />
+            )}
+            <input className="form-control" type="password" value={passwordForm.new_password} onChange={(e) => setPasswordForm({ ...passwordForm, new_password: e.target.value })} placeholder="New password" required />
+            <input className="form-control" type="password" value={passwordForm.confirm_password} onChange={(e) => setPasswordForm({ ...passwordForm, confirm_password: e.target.value })} placeholder="Confirm password" required />
+            <button className="btn btn-primary" type="submit" disabled={passwordLoading}>{passwordLoading ? 'Saving...' : 'Change Password'}</button>
+            {owner.must_change_password && <div className="text-muted small text-center">This password change is required after first activation.</div>}
+          </div>
+        )}
+      </form>
+    );
+  }
+
+  function storeOwnerRequestItemsLabel(items = []) {
+    if (!items.length) return 'Store purchase';
+    if (items.length === 1) {
+      const item = items[0];
+      return `${item.quantity || 1} x ${item.item_name || 'Store item'}`;
+    }
+    return `${items.length} items`;
+  }
+
+  function requestCard(requestRow) {
+    const items = requestRow.items || [];
+    return (
+      <div className="store-owner-request-card" key={requestRow.public_id}>
+        <div className="store-owner-request-main">
+          <span className="avatar bg-orange-lt text-orange"><IconShoppingBag size={20} /></span>
+          <div className="min-w-0">
+            <div className="fw-bold text-truncate">{storeOwnerRequestItemsLabel(items)}</div>
+            <div className="text-muted small">{requestRow.customer_name || 'Customer'} · {requestRow.customer_device_label || 'Device not named'}</div>
+            <div className="store-owner-request-tags">
+              <span className="badge bg-green-lt text-green">{requestRow.amount_display}</span>
+              <span className="badge bg-blue-lt text-blue">{formatSeconds(requestRow.total_duration_seconds || 0)}</span>
+              <span className="badge bg-purple-lt text-purple">{requestRow.device_scope === 'MULTI_DEVICE' ? `${requestRow.allowed_devices || 1} devices` : '1 device'}</span>
+              <span className="badge bg-secondary-lt text-secondary">{requestRow.request_method}</span>
+            </div>
+          </div>
+        </div>
+        {requestRow.status === 'PENDING' ? (
+          <div className="store-owner-request-actions">
+            <button className="btn btn-success btn-sm" type="button" disabled={actionLoading === requestRow.public_id} onClick={() => approveRequest(requestRow)}>
+              <IconCircleCheck size={16} className="me-1" />Approve
+            </button>
+            <button className="btn btn-outline-danger btn-sm" type="button" disabled={actionLoading === requestRow.public_id} onClick={() => rejectRequest(requestRow)}>
+              <IconX size={16} className="me-1" />Reject
+            </button>
+          </div>
+        ) : (
+          <span className={`badge ${requestRow.status === 'APPROVED' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{requestRow.status}</span>
+        )}
+      </div>
+    );
+  }
+
+  function storeOwnerRequestFilterCount(status) {
+    const key = String(status || '').toLowerCase();
+    if (key === 'all') return Number(summary.all || 0);
+    return Number(summary[key] || 0);
+  }
+
+  if (!owner) {
+    return (
+      <div className="store-owner-page">
+        <div className="store-owner-login-card">
+          <span className="store-owner-login-icon"><IconBuildingStore size={30} /></span>
+          <h1>3J Store Portal</h1>
+          <p>Approve physical store WiFi purchases and manage your store owner password.</p>
+          {message && <AutoDismissAlert message={message} onDismiss={() => setMessage('')} />}
+          {error && <div className="alert alert-danger">{error}</div>}
+          {!challenge ? (
+            <form onSubmit={login} className="store-owner-form">
+              <input className="form-control" value={loginForm.username} onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })} placeholder="Contact number" inputMode="tel" autoComplete="tel username" required />
+              <input className="form-control" type="password" value={loginForm.password} onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })} placeholder="Password" autoComplete="current-password" required />
+              <button className="btn btn-primary w-100" type="submit" disabled={loginLoading}>{loginLoading ? 'Checking...' : 'Log in'}</button>
+            </form>
+          ) : (
+            <form onSubmit={verifyLogin} className="store-owner-form">
+              <div className="alert alert-info mb-0">New device detected. Enter the SMS code sent to {challenge.contact_hint || 'your registered contact'}.</div>
+              <input className="form-control text-center fs-2 fw-bold" value={loginForm.verification_code} onChange={(e) => setLoginForm({ ...loginForm, verification_code: e.target.value.toUpperCase() })} placeholder="SMS code" autoComplete="one-time-code" required />
+              <button className="btn btn-primary w-100" type="submit" disabled={loginLoading}>{loginLoading ? 'Verifying...' : 'Verify device'}</button>
+              <button className="btn btn-link" type="button" onClick={() => setChallenge(null)}>Back to login</button>
+            </form>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="store-owner-page">
+      <div className="store-owner-shell">
+        <header className="store-owner-hero">
+          {owner.store?.image_url ? (
+            <img className="store-owner-hero-image" src={cacheBustedUploadUrl(owner.store.image_url, owner.updated_at)} alt="" />
+          ) : (
+            <div className="store-owner-hero-image store-owner-hero-placeholder"><IconBuildingStore size={42} /></div>
+          )}
+          <div className="store-owner-hero-gradient" />
+          <div className="store-owner-hero-title">
+            <h1>{owner.store?.store_name || 'Store Portal'}</h1>
+            <div><IconMapPin size={15} /> {[owner.store?.barangay, owner.store?.municipality].filter(Boolean).join(', ') || owner.display_name}</div>
+          </div>
+          <div className="store-owner-hero-actions">
+            <button
+              className="btn btn-light btn-icon store-owner-menu-toggle"
+              type="button"
+              onClick={() => setStoreNavOpen((open) => !open)}
+              aria-expanded={storeNavOpen}
+              aria-label="Open store portal menu"
+            >
+              <IconMenu2 size={20} />
+            </button>
+            {storeNavOpen && (
+              <div className="store-owner-menu-panel">
+                <button
+                  className="store-owner-menu-item"
+                  type="button"
+                  onClick={() => {
+                    setStoreNavOpen(false);
+                    openStoreSupport();
+                  }}
+                >
+                  <IconMessageCircle size={17} />Chat Admin
+                </button>
+                <button
+                  className="store-owner-menu-item"
+                  type="button"
+                  onClick={() => {
+                    setStoreNavOpen(false);
+                    setProfileTab('DETAILS');
+                    setProfileModalOpen(true);
+                  }}
+                >
+                  <IconUserCog size={17} />Profile
+                </button>
+                <button
+                  className="store-owner-menu-item is-danger"
+                  type="button"
+                  onClick={() => {
+                    setStoreNavOpen(false);
+                    logout();
+                  }}
+                >
+                  <IconLogout size={17} />Logout
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="store-owner-hero-kpis">
+            {[
+              { icon: IconCash, label: 'Daily', value: summary.sales_today_display || 'PHP 0.00' },
+              { icon: IconCalendarStats, label: 'Monthly', value: summary.sales_month_display || 'PHP 0.00' },
+              { icon: IconWallet, label: 'Commission', value: summary.commission_month_display || 'PHP 0.00' },
+            ].map((item) => {
+              const HeroIcon = item.icon;
+              return (
+                <span className="store-owner-hero-kpi" key={item.label}>
+                  <HeroIcon size={15} />
+                  <small>{item.label}</small>
+                  <strong>{item.value}</strong>
+                </span>
+              );
+            })}
+          </div>
+        </header>
+        {message && <AutoDismissAlert message={message} onDismiss={() => setMessage('')} />}
+        {error && <div className="alert alert-danger">{error}</div>}
+        {owner.must_change_password && (
+          <div className="alert alert-warning d-flex gap-2">
+            <IconKey size={20} className="flex-shrink-0" />
+            <div>Your account is using a temporary activation password. Change it before approving store purchases.</div>
+          </div>
+        )}
+        <div className="store-owner-grid">
+          <Card title="Purchase Requests" subtitle="Customers who submitted a request from the captive portal appear here.">
+            <div className="btn-list mb-3">
+              {['PENDING', 'APPROVED', 'REJECTED', 'ALL'].map((status) => (
+                <button
+                  className={`btn btn-sm store-owner-filter-btn ${statusFilter === status ? 'btn-primary' : 'btn-outline-secondary'}`}
+                  type="button"
+                  key={status}
+                  onClick={() => {
+                    setStatusFilter(status);
+                    loadStorePortal(status).catch((err) => setError(err.message));
+                  }}
+                >
+                  <span>{status}</span>
+                  <span className={`badge ms-1 ${statusFilter === status ? 'bg-white text-primary' : 'bg-secondary-lt text-secondary'}`}>{storeOwnerRequestFilterCount(status)}</span>
+                </button>
+              ))}
+            </div>
+            <div className="store-owner-request-list">
+              {requests.length ? requests.map(requestCard) : <div className="empty py-4">No {statusFilter.toLowerCase()} requests.</div>}
+            </div>
+          </Card>
+        </div>
+      </div>
+      <div className="store-owner-floating-actions">
+        <button className="store-owner-floating-action is-primary" type="button" onClick={openQrScanner}>
+          <IconQrcode size={20} />
+          <span>QR</span>
+        </button>
+        <button className="store-owner-floating-action" type="button" onClick={() => setCodeLookupModalOpen(true)}>
+          <IconKey size={20} />
+          <span>Code</span>
+        </button>
+      </div>
+      {supportModalOpen && (
+        <Modal title="Chat with Admin" onClose={() => setSupportModalOpen(false)} size="md">
+          <div className="store-owner-support-modal">
+            <div className="portal-chat-thread store-owner-chat-thread">
+              {(supportConversation?.messages || []).map((item) => (
+                <div className={`portal-chat-bubble ${item.sender_type === 'ADMIN' ? 'is-admin' : 'is-customer'}`} key={item.id}>
+                  <div>{item.message_text}</div>
+                  <div className="small opacity-75 mt-1">
+                    {item.sender_type === 'ADMIN' ? `Admin${item.admin_username ? ` · ${item.admin_username}` : ''}` : 'Store owner'} · {formatPortalDateTime(item.created_at)}
+                  </div>
+                </div>
+              ))}
+              {!supportConversation?.messages?.length && (
+                <div className="empty py-4">Send a message to the admin about store purchases, customer requests, or account issues.</div>
+              )}
+            </div>
+            <form onSubmit={sendStoreSupportMessage} className="store-owner-support-form">
+              <textarea
+                className="form-control"
+                rows={3}
+                value={supportMessage}
+                onChange={(event) => setSupportMessage(event.target.value)}
+                placeholder="Write your message to admin..."
+              />
+              <button className="btn btn-primary" type="submit" disabled={supportLoading || !supportMessage.trim()}>
+                <IconSend size={17} className="me-1" />{supportLoading ? 'Sending...' : 'Send Message'}
+              </button>
+            </form>
+          </div>
+        </Modal>
+      )}
+      {profileModalOpen && (
+        <Modal title="Store Profile" onClose={() => setProfileModalOpen(false)} size="lg">
+          <div className="store-owner-profile-modal">
+            <ul className="nav nav-tabs mb-3">
+              {[
+                { key: 'DETAILS', label: 'Store Details', icon: IconBuildingStore },
+                { key: 'PIN', label: 'PIN Code', icon: IconShieldLock },
+                { key: 'PASSWORD', label: 'Password', icon: IconKey },
+              ].map((tab) => {
+                const TabIcon = tab.icon;
+                return (
+                  <li className="nav-item" key={tab.key}>
+                    <button className={`nav-link ${profileTab === tab.key ? 'active' : ''}`} type="button" onClick={() => setProfileTab(tab.key)}>
+                      <TabIcon size={16} className="me-1" />{tab.label}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {profileTab === 'DETAILS' && (
+              <div className="row g-3">
+                <div className="col-md-5">
+                  <div className="store-owner-profile-image">
+                    {owner.store?.image_url ? <img src={cacheBustedUploadUrl(owner.store.image_url, owner.updated_at)} alt="" /> : <IconBuildingStore size={42} />}
+                  </div>
+                </div>
+                <div className="col-md-7">
+                  <div className="list-group list-group-flush">
+                    <div className="list-group-item px-0">
+                      <div className="text-muted small">Store</div>
+                      <div className="fw-bold">{owner.store?.store_name || 'Store Portal'}</div>
+                    </div>
+                    <div className="list-group-item px-0">
+                      <div className="text-muted small">Location</div>
+                      <div>{[owner.store?.barangay, owner.store?.municipality].filter(Boolean).join(', ') || 'Location not set'}</div>
+                    </div>
+                    <div className="list-group-item px-0">
+                      <div className="text-muted small">Owner</div>
+                      <div>{owner.display_name || owner.username}</div>
+                    </div>
+                    <div className="list-group-item px-0">
+                      <div className="text-muted small">Contact</div>
+                      <div>{owner.contact_number || owner.contact_hint || 'Contact not set'}</div>
+                    </div>
+                    <div className="list-group-item px-0">
+                      <div className="text-muted small">Status</div>
+                      <span className="badge bg-green-lt text-green">{owner.status || 'ACTIVE'}</span>
+                    </div>
+                    <div className="list-group-item px-0">
+                      <div className="text-muted small">Commission</div>
+                      <div>{owner.store?.commission_type === 'FIXED_MONTHLY' ? `${owner.store?.commission_value_display || 'PHP 0.00'} monthly` : `${owner.store?.commission_value_display || '0%'} of sales`}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            {profileTab === 'PIN' && (
+              <form onSubmit={saveStoreProfile} className="row g-3">
+                <div className="col-12">
+                  <div className="alert alert-info d-flex gap-2 mb-0">
+                    <IconLock size={19} className="flex-shrink-0" />
+                    <div>A 4-digit PIN is required before approving customer store purchases. Changing the PIN requires a 5-character SMS verification code.</div>
+                  </div>
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label">Approval PIN</label>
+                  <input
+                    className="form-control text-center fs-2 fw-bold"
+                    value={pinForm.pin_code}
+                    onChange={(e) => setPinForm({ ...pinForm, pin_code: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                    placeholder={owner.pin?.configured ? '••••' : '0000'}
+                    inputMode="numeric"
+                    autoComplete="off"
+                  />
+                  <div className="form-hint">{owner.pin?.configured ? 'Leave blank to keep the current PIN.' : 'Set exactly 4 numerical digits.'}</div>
+                </div>
+                <div className="col-md-6">
+                  <label className="form-label">Ask PIN every</label>
+                  <div className="input-group">
+                    <input
+                      className="form-control"
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={pinForm.pin_required_interval_minutes}
+                      onChange={(e) => setPinForm({ ...pinForm, pin_required_interval_minutes: e.target.value })}
+                    />
+                    <span className="input-group-text">minutes</span>
+                  </div>
+                  <div className="form-hint">Default is 5 minutes. Maximum allowed is 30 minutes.</div>
+                </div>
+                {pinForm.pin_code ? (
+                  <div className="col-12">
+                    <div className="border rounded-3 p-3 d-grid gap-3">
+                      <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+                        <div>
+                          <div className="fw-bold">SMS verification</div>
+                          <div className="text-muted small">Send a 5-character code to {owner.contact_hint || 'the store owner contact'} before saving a new PIN.</div>
+                        </div>
+                        <button className="btn btn-outline-primary" type="button" onClick={sendPinCode} disabled={pinLoading}>
+                          <IconMessageCircle size={17} className="me-1" />{pinLoading ? 'Sending...' : 'Send PIN Code'}
+                        </button>
+                      </div>
+                      {pinChallenge?.challenge_id && (
+                        <input
+                          className="form-control text-center fs-2 fw-bold"
+                          value={pinVerificationCode}
+                          onChange={(e) => setPinVerificationCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5))}
+                          placeholder="5-character code"
+                          autoComplete="one-time-code"
+                          required
+                        />
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+                <div className="col-12 d-flex justify-content-end">
+                  <button className="btn btn-primary" type="submit" disabled={profileLoading}>
+                    <IconDeviceFloppy size={17} className="me-1" />{profileLoading ? 'Saving...' : 'Save PIN Code'}
+                  </button>
+                </div>
+              </form>
+            )}
+            {profileTab === 'PASSWORD' && (
+              <div className="store-owner-password-tab">
+                {passwordChangeFormContent()}
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+      {approvalPinModal && (
+        <Modal title="Approve Store Sale" onClose={() => { setApprovalPinModal(null); setApprovalPin(''); }} size="sm">
+          <form
+            className="d-grid gap-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!/^\d{4}$/.test(approvalPin)) {
+                setError('Enter your 4-digit approval PIN.');
+                return;
+              }
+              submitApproveRequest(approvalPinModal, approvalPin);
+            }}
+          >
+            <div className="text-center">
+              <span className="store-owner-pin-icon"><IconShieldLock size={28} /></span>
+              <div className="fw-bold mt-2">Enter approval PIN</div>
+              <div className="text-muted small">Approving {storeOwnerRequestItemsLabel(approvalPinModal.items || [])} for {approvalPinModal.amount_display}.</div>
+            </div>
+            <input
+              className="form-control text-center fs-1 fw-bold"
+              value={approvalPin}
+              onChange={(e) => setApprovalPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+              inputMode="numeric"
+              autoComplete="off"
+              placeholder="0000"
+              autoFocus
+            />
+            <button className="btn btn-success" type="submit" disabled={actionLoading === approvalPinModal.public_id}>
+              <IconCircleCheck size={17} className="me-1" />{actionLoading === approvalPinModal.public_id ? 'Approving...' : 'Approve Sale'}
+            </button>
+          </form>
+        </Modal>
+      )}
+      {scannedRequestModal && (
+        <Modal title="Scanned Purchase" onClose={() => setScannedRequestModal(null)} size="md">
+          <div className="d-grid gap-3">
+            <div className="alert alert-success d-flex gap-2 mb-0">
+              <IconCircleCheck size={20} className="flex-shrink-0" />
+              <div>QR/code detected. Review the purchase before approving.</div>
+            </div>
+            {requestCard(scannedRequestModal)}
+          </div>
+        </Modal>
+      )}
+      {codeLookupModalOpen && (
+        <Modal title="Enter Purchase Code" onClose={() => setCodeLookupModalOpen(false)} size="sm">
+          <form
+            className="d-grid gap-3"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              await lookupPurchaseCode(lookupCode);
+            }}
+          >
+            <input className="form-control text-center fs-2 fw-bold" value={lookupCode} onChange={(e) => setLookupCode(e.target.value.toUpperCase())} placeholder="PURCHASE CODE" autoFocus />
+            <button className="btn btn-primary" type="submit">
+              <IconSearch size={17} className="me-1" />Lookup
+            </button>
+          </form>
+        </Modal>
+      )}
+      {qrModalOpen && (
+        <Modal title="Scan Purchase QR" onClose={() => { stopQrScanner(); setQrModalOpen(false); }} size="md">
+          <div className="d-grid gap-3">
+            <div className="store-owner-qr-scanner">
+              <video ref={qrVideoRef} playsInline muted />
+              {qrBox && (
+                <span
+                  className="store-owner-qr-tracking-box"
+                  style={{
+                    left: `${qrBox.left}px`,
+                    top: `${qrBox.top}px`,
+                    width: `${qrBox.width}px`,
+                    height: `${qrBox.height}px`,
+                  }}
+                />
+              )}
+              {!qrCameraActive && <div className="store-owner-qr-placeholder"><IconQrcode size={42} /></div>}
+            </div>
+            {qrError && <div className="alert alert-warning mb-0">{qrError}</div>}
+            <form
+              className="d-flex gap-2"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                stopQrScanner();
+                setQrModalOpen(false);
+                await lookupPurchaseCode(lookupCode);
+              }}
+            >
+              <input className="form-control" value={lookupCode} onChange={(e) => setLookupCode(e.target.value.toUpperCase())} placeholder="Enter code manually" />
+              <button className="btn btn-primary" type="submit"><IconSearch size={17} /></button>
+            </form>
+          </div>
+        </Modal>
+      )}
+      {passwordModalOpen && (
+        <Modal title={owner.must_change_password ? 'Change Temporary Password' : 'Change Store Password'} onClose={() => { if (!owner.must_change_password) setPasswordModalOpen(false); }} size="md">
+          {passwordChangeFormContent()}
         </Modal>
       )}
     </div>
@@ -11583,6 +15457,10 @@ function buildSalesTrendSeries(mode, data) {
     const labels = (data.sales_by_barangay || []).slice(0, 5).map((item) => item.label);
     return buildGrouped(labels, data.daily_sales_by_barangay || [], 'Sales Per Barangay', data.sales_by_barangay || []);
   }
+  if (mode === 'store') {
+    const labels = (data.sales_by_store || []).map((item) => item.label);
+    return buildGrouped(labels, data.daily_sales_by_store || [], 'Sales Per Store', data.sales_by_store || []);
+  }
   const points = (data.daily_sales || []).map((item) => rowToPoint(item, 'label')).filter(Boolean);
   return {
     series: [{ name: 'Total Sales', data: points }],
@@ -11677,6 +15555,7 @@ function SalesTrendPanel({ data, mode, setMode }) {
     { key: 'total', label: 'Total Sales', icon: IconCash },
     { key: 'site', label: 'Per Site', icon: IconRouter },
     { key: 'barangay', label: 'Per Barangay', icon: IconMapPin },
+    { key: 'store', label: 'Per Store', icon: IconBuildingStore },
   ];
 
   return (
@@ -11700,7 +15579,7 @@ function SalesTrendPanel({ data, mode, setMode }) {
         </div>
       </div>
       <SalesApexLineChart trend={trend} />
-      {mode !== 'total' && <SalesBreakdownList title={mode === 'site' ? 'Top Sites' : 'Top Barangays'} rows={trend.breakdown} />}
+      {mode !== 'total' && <SalesBreakdownList title={mode === 'site' ? 'Top Sites' : mode === 'store' ? 'Stores' : 'Top Barangays'} rows={trend.breakdown} />}
     </Card>
   );
 }
@@ -11725,7 +15604,7 @@ function SalesBreakdownList({ rows = [], title }) {
 function SalesPage() {
   const [rangeDays, setRangeDays] = useState(30);
   const [chartMode, setChartMode] = useState('total');
-  const [data, setData] = useState({ kpis: {}, daily_sales: [], sales_by_site: [], sales_by_barangay: [], daily_sales_by_site: [], daily_sales_by_barangay: [], orders: [] });
+  const [data, setData] = useState({ kpis: {}, daily_sales: [], sales_by_site: [], sales_by_barangay: [], sales_by_store: [], daily_sales_by_site: [], daily_sales_by_barangay: [], daily_sales_by_store: [], orders: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -11745,6 +15624,7 @@ function SalesPage() {
   });
   const [clearConfirmation, setClearConfirmation] = useState('');
   const [tableFilters, setTableFilters] = useState({ search: '', fulfillment: '', site: '', barangay: '' });
+  const [salesTableTab, setSalesTableTab] = useState('ALL');
   const [pageSize, setPageSize] = useState(10);
   const [pageNo, setPageNo] = useState(1);
 
@@ -11845,7 +15725,35 @@ function SalesPage() {
   const kpis = data.kpis || {};
   const siteOptions = Array.from(new Set((data.orders || []).map((order) => order.site_name).filter(Boolean))).sort();
   const barangayOptions = Array.from(new Set((data.orders || []).map((order) => order.barangay).filter(Boolean))).sort();
+  const storeTabOptions = (data.sales_by_store || []).map((store) => ({
+    key: `STORE:${store.physical_store_id || store.label}`,
+    id: store.physical_store_id || '',
+    label: store.label || 'Unknown Store',
+    order_count: Number(store.order_count || 0),
+    amount_display: store.amount_display || formatCentavos(store.amount_centavos),
+  }));
+  function orderMatchesSalesTab(order, tab = salesTableTab) {
+    if (tab === 'ALL') return true;
+    if (tab === 'ONLINE') return order.sale_channel === 'ONLINE';
+    if (tab === 'PHYSICAL_STORE') return order.sale_channel === 'PHYSICAL_STORE';
+    if (tab.startsWith('STORE:')) {
+      const storeKey = tab.slice('STORE:'.length);
+      return order.sale_channel === 'PHYSICAL_STORE'
+        && (String(order.physical_store_id || '') === storeKey || String(order.physical_store_name || '') === storeKey);
+    }
+    return true;
+  }
+  function salesTabCount(tab) {
+    return (data.orders || []).filter((order) => orderMatchesSalesTab(order, tab)).length;
+  }
+  const salesTableTabs = [
+    { key: 'ALL', label: 'All Sales', icon: IconListDetails, count: salesTabCount('ALL') },
+    { key: 'ONLINE', label: 'PayMongo Online', icon: IconCash, count: salesTabCount('ONLINE') },
+    { key: 'PHYSICAL_STORE', label: 'Store Sales', icon: IconBuildingStore, count: salesTabCount('PHYSICAL_STORE') },
+    ...storeTabOptions.map((store) => ({ ...store, icon: IconBuildingStore, count: salesTabCount(store.key) })),
+  ];
   const filteredOrders = (data.orders || []).filter((order) => {
+    if (!orderMatchesSalesTab(order)) return false;
     const search = tableFilters.search.trim().toLowerCase();
     const customer = order.customer_display_name || order.customer_name || order.device_name || order.client_mac || 'Unprofiled device';
     const haystack = [
@@ -11862,13 +15770,17 @@ function SalesPage() {
       order.site_name,
       order.barangay,
       order.amount_display,
-      order.fulfillment_status,
-    ].join(' ').toLowerCase();
-    if (search && !haystack.includes(search)) return false;
-    if (tableFilters.fulfillment && order.fulfillment_status !== tableFilters.fulfillment) return false;
-    if (tableFilters.site && order.site_name !== tableFilters.site) return false;
-    if (tableFilters.barangay && order.barangay !== tableFilters.barangay) return false;
-    return true;
+	      order.fulfillment_status,
+	      order.sale_channel,
+	      order.sale_channel_label,
+	      order.payment_method,
+	      order.physical_store_name,
+	    ].join(' ').toLowerCase();
+	    if (search && !haystack.includes(search)) return false;
+	    if (tableFilters.fulfillment && order.fulfillment_status !== tableFilters.fulfillment) return false;
+	    if (tableFilters.site && order.site_name !== tableFilters.site) return false;
+	    if (tableFilters.barangay && order.barangay !== tableFilters.barangay) return false;
+	    return true;
   });
   const totalPages = Math.max(1, Math.ceil(filteredOrders.length / pageSize));
   const currentPage = Math.min(pageNo, totalPages);
@@ -11882,7 +15794,7 @@ function SalesPage() {
         <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
           <div>
             <h2 className="page-title mb-1">Sales</h2>
-            <div className="text-muted">Track PayMongo package sales across sites and barangays.</div>
+	            <div className="text-muted">Track online and physical store WiFi pass sales across sites and barangays.</div>
           </div>
           <div className="d-flex align-items-center gap-2">
             <select className="form-select" value={rangeDays} onChange={(e) => changeRange(e.target.value)}>
@@ -11898,7 +15810,9 @@ function SalesPage() {
       </div>
       {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
       {error && <div className="col-12"><div className="alert alert-danger mb-0">{error}</div></div>}
-      <KpiCard icon={IconCash} label="Total Sales" value={kpis.gross_sales_display || 'PHP 0.00'} tone="green" />
+      <KpiCard icon={IconCash} label="Gross Sales" value={kpis.gross_sales_display || 'PHP 0.00'} tone="green" />
+      <KpiCard icon={IconWallet} label="Commission" value={kpis.commission_display || 'PHP 0.00'} tone="orange" />
+      <KpiCard icon={IconCash} label="Net Income" value={kpis.net_income_display || 'PHP 0.00'} tone="blue" />
       <KpiCard icon={IconListDetails} label="Paid Orders" value={kpis.paid_orders || 0} tone="blue" />
       <KpiCard icon={IconCircleCheck} label="Fulfilled" value={kpis.fulfilled_orders || 0} tone="green" />
       <KpiCard icon={IconActivity} label="Avg Order" value={kpis.average_order_display || 'PHP 0.00'} tone="yellow" />
@@ -11911,7 +15825,31 @@ function SalesPage() {
         <SalesTrendPanel data={data} mode={chartMode} setMode={setChartMode} />
       </div>
       <div className="col-12">
-        <Card title="Sales Table" subtitle="Latest paid payment orders.">
+	        <Card title="Sales Table" subtitle="Latest online checkouts and approved physical store purchases.">
+          <div className="sales-table-tab-strip mb-3">
+            <ul className="nav nav-tabs flex-nowrap">
+              {salesTableTabs.map((tab) => {
+                const TabIcon = tab.icon;
+                return (
+                  <li className="nav-item" key={tab.key}>
+                    <button
+                      className={`nav-link ${salesTableTab === tab.key ? 'active' : ''}`}
+                      type="button"
+                      title={tab.amount_display ? `${tab.label}: ${tab.amount_display}` : tab.label}
+                      onClick={() => {
+                        setSalesTableTab(tab.key);
+                        setPageNo(1);
+                      }}
+                    >
+                      <TabIcon size={16} className="me-1" />
+                      <span>{tab.label}</span>
+                      <span className="badge bg-secondary-lt text-secondary ms-2">{tab.count}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
           <div className="row g-2 align-items-end mb-3">
             <div className="col-md-4">
               <label className="form-label">Search</label>
@@ -11920,32 +15858,32 @@ function SalesPage() {
                 <input className="form-control" value={tableFilters.search} onChange={(e) => updateTableFilter('search', e.target.value)} placeholder="Search order, product, customer, site..." />
               </div>
             </div>
-            <div className="col-md-2">
-              <label className="form-label">Status</label>
-              <select className="form-select" value={tableFilters.fulfillment} onChange={(e) => updateTableFilter('fulfillment', e.target.value)}>
-                <option value="">All</option>
-                <option value="FULFILLED">Fulfilled</option>
-                <option value="FAILED">Failed</option>
-                <option value="PENDING">Pending</option>
-              </select>
-            </div>
-            <div className="col-md-2">
-              <label className="form-label">Site</label>
-              <select className="form-select" value={tableFilters.site} onChange={(e) => updateTableFilter('site', e.target.value)}>
-                <option value="">All sites</option>
-                {siteOptions.map((site) => <option key={site} value={site}>{site}</option>)}
-              </select>
-            </div>
-            <div className="col-md-2">
-              <label className="form-label">Barangay</label>
+	            <div className="col-md-2">
+	              <label className="form-label">Status</label>
+	              <select className="form-select" value={tableFilters.fulfillment} onChange={(e) => updateTableFilter('fulfillment', e.target.value)}>
+	                <option value="">All</option>
+	                <option value="FULFILLED">Fulfilled</option>
+	                <option value="FAILED">Failed</option>
+	                <option value="PENDING">Pending</option>
+	              </select>
+	            </div>
+	            <div className="col-md-2">
+	              <label className="form-label">Site</label>
+	              <select className="form-select" value={tableFilters.site} onChange={(e) => updateTableFilter('site', e.target.value)}>
+	                <option value="">All sites</option>
+	                {siteOptions.map((site) => <option key={site} value={site}>{site}</option>)}
+	              </select>
+	            </div>
+	            <div className="col-md-2">
+	              <label className="form-label">Barangay</label>
               <select className="form-select" value={tableFilters.barangay} onChange={(e) => updateTableFilter('barangay', e.target.value)}>
                 <option value="">All barangays</option>
                 {barangayOptions.map((barangay) => <option key={barangay} value={barangay}>{barangay}</option>)}
               </select>
             </div>
-            <div className="col-md-2">
-              <label className="form-label">Show entries</label>
-              <select className="form-select" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPageNo(1); }}>
+	            <div className="col-md-2">
+	              <label className="form-label">Show entries</label>
+	              <select className="form-select" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPageNo(1); }}>
                 <option value={10}>10</option>
                 <option value={25}>25</option>
                 <option value={50}>50</option>
@@ -11957,13 +15895,16 @@ function SalesPage() {
             <table className="table table-vcenter card-table">
               <thead>
                 <tr>
-	                  <th>Order</th>
-	                  <th>Product</th>
-	                  <th>Profile</th>
+		                  <th>Order</th>
+		                  <th>Channel</th>
+		                  <th>Product</th>
+		                  <th>Profile</th>
 	                  <th>Customer</th>
 	                  <th>Site</th>
                   <th>Barangay</th>
-                  <th>Amount</th>
+                  <th>Gross</th>
+                  <th>Commission</th>
+                  <th>Net</th>
                   <th>Status</th>
                   <th>Paid At</th>
                 </tr>
@@ -11972,9 +15913,16 @@ function SalesPage() {
                 {pagedOrders.length ? pagedOrders.map((order) => {
                   const customerName = order.customer_display_name || order.customer_name || order.device_name || order.client_mac || 'Unprofiled device';
                   return (
-                  <tr key={order.id}>
-                    <td><code>{order.public_order_id}</code></td>
+	                  <tr key={order.id}>
+	                    <td><code>{order.public_order_id}</code></td>
 	                    <td>
+	                      <span className={`badge ${order.sale_channel === 'PHYSICAL_STORE' ? 'bg-orange-lt text-orange' : 'bg-blue-lt text-blue'}`}>
+	                        {order.sale_channel === 'PHYSICAL_STORE' ? <IconBuildingStore size={14} className="me-1" /> : <IconCash size={14} className="me-1" />}
+	                        {order.sale_channel_label || (order.sale_channel === 'PHYSICAL_STORE' ? 'Physical Store' : 'Online')}
+	                      </span>
+	                      {order.physical_store_name && <div className="text-muted small mt-1">{order.physical_store_name}</div>}
+	                    </td>
+		                    <td>
 	                      <div className="fw-semibold">{order.product_name}</div>
 	                      <div className="text-muted small">{deviceLimitLabel(order.allowed_devices)}</div>
 	                    </td>
@@ -11996,13 +15944,19 @@ function SalesPage() {
                     </td>
                     <td>{order.site_name || 'Unknown Site'}</td>
                     <td>{order.barangay || 'Unknown Barangay'}</td>
-                    <td className="fw-semibold">{order.amount_display}</td>
+                    <td className="fw-semibold">{order.gross_amount_display || order.amount_display}</td>
+                    <td>
+                      <div className="fw-semibold">{order.commission_display || 'PHP 0.00'}</div>
+                      {order.sale_channel === 'PHYSICAL_STORE' && order.commission_type === 'FIXED_MONTHLY' && <div className="text-muted small">Monthly commission counted in KPI</div>}
+                      {order.sale_channel === 'PHYSICAL_STORE' && order.commission_type === 'PERCENT_OF_SALES' && <div className="text-muted small">{order.commission_value || 0}% of sales</div>}
+                    </td>
+                    <td className="fw-semibold">{order.net_amount_display || order.amount_display}</td>
                     <td><span className={`badge ${order.fulfillment_status === 'FULFILLED' ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{order.fulfillment_status}</span></td>
                     <td>{compactDateTime(order.sale_at)}</td>
                   </tr>
                   );
                 }) : (
-	                  <tr><td colSpan={9} className="text-center text-muted py-4">No paid sales yet.</td></tr>
+		                  <tr><td colSpan={12} className="text-center text-muted py-4">No paid sales yet.</td></tr>
                 )}
               </tbody>
             </table>
@@ -12404,7 +16358,15 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [portalDesignTab, setPortalDesignTab] = useState('No Internet Page');
   const [avatarNotesTab, setAvatarNotesTab] = useState('Main Page First');
   const [portalSmsSettings, setPortalSmsSettings] = useState(null);
-  const [portalSmsForm, setPortalSmsForm] = useState({ sender_id: '', monthly_credit_limit: '', monthly_reset_day: 1, welcome_sms_enabled: true, welcome_sms_message: '' });
+  const [portalSmsForm, setPortalSmsForm] = useState({
+    sender_id: '',
+    monthly_credit_limit: '',
+    monthly_reset_day: 1,
+    welcome_sms_enabled: true,
+    welcome_sms_message: '',
+    store_owner_activation_sms_enabled: true,
+    store_owner_activation_sms_message: ''
+  });
   const [portalSmsSaving, setPortalSmsSaving] = useState(false);
   const [portalSmsRefreshing, setPortalSmsRefreshing] = useState(false);
   const [mikrotiks, setMikrotiks] = useState([]);
@@ -14625,7 +18587,9 @@ function CaptivePortalPage({ mode = 'full' }) {
       monthly_credit_limit: data?.monthly_credit_limit ?? '',
       monthly_reset_day: data?.monthly_reset_day || 1,
       welcome_sms_enabled: data?.welcome_sms_enabled !== false,
-      welcome_sms_message: data?.welcome_sms_message || ''
+      welcome_sms_message: data?.welcome_sms_message || '',
+      store_owner_activation_sms_enabled: data?.store_owner_activation_sms_enabled !== false,
+      store_owner_activation_sms_message: data?.store_owner_activation_sms_message || ''
     });
   }
   async function loadPortalSmsSettings({ quiet = false } = {}) {
@@ -14812,7 +18776,9 @@ function CaptivePortalPage({ mode = 'full' }) {
           monthly_credit_limit: portalSmsForm.monthly_credit_limit === '' ? null : Number(portalSmsForm.monthly_credit_limit),
           monthly_reset_day: Number(portalSmsForm.monthly_reset_day) || 1,
           welcome_sms_enabled: portalSmsForm.welcome_sms_enabled !== false,
-          welcome_sms_message: portalSmsForm.welcome_sms_message || null
+          welcome_sms_message: portalSmsForm.welcome_sms_message || null,
+          store_owner_activation_sms_enabled: portalSmsForm.store_owner_activation_sms_enabled !== false,
+          store_owner_activation_sms_message: portalSmsForm.store_owner_activation_sms_message || null
         })
       });
       hydratePortalSmsForm(saved);
@@ -20689,6 +24655,34 @@ function CaptivePortalPage({ mode = 'full' }) {
 		              </form>
 		            </Card>
 		          </div>
+		          <div className="col-12">
+		            <Card title={<CardHeaderContent><div className="d-flex align-items-center gap-2"><IconBuildingStore size={20} /><h3 className="card-title mb-0">Store Owner Activation SMS</h3></div></CardHeaderContent>} subtitle="Sent when a physical store is changed from Setup to Active. The SMS includes the Store Portal URL, username, and a temporary password.">
+		              <form onSubmit={savePortalSmsSettings}>
+		                <div className="row g-3">
+		                  <div className="col-lg-4">
+		                    <div className="portal-notif-control-panel mb-0 h-100">
+		                      <div>
+		                        <div className="fw-semibold">Enable activation SMS</div>
+		                        <div className="text-muted small">Owner login stays disabled while the store is in Setup. Activating the store creates a temporary password and marks password change required.</div>
+		                      </div>
+		                      <label className="form-check form-switch mb-0">
+		                        <input className="form-check-input" type="checkbox" checked={portalSmsForm.store_owner_activation_sms_enabled !== false} onChange={(e) => setPortalSmsForm({ ...portalSmsForm, store_owner_activation_sms_enabled: e.target.checked })} />
+		                      </label>
+		                    </div>
+		                  </div>
+		                  <div className="col-lg-8">
+		                    <label className="form-label">Activation Message</label>
+		                    <textarea className="form-control" rows={5} value={portalSmsForm.store_owner_activation_sms_message || ''} onChange={(e) => setPortalSmsForm({ ...portalSmsForm, store_owner_activation_sms_message: e.target.value })} placeholder="Welcome to 3J Hotspot, <OWNER>! Your store <STORE> is now active. Store portal: <STORE_PORTAL_URL> Username: <USERNAME> Temporary password: <TEMP_PASSWORD>." />
+		                    <div className="form-hint">Template tags: <code>{'<OWNER>'}</code>, <code>{'<STORE>'}</code>, <code>{'<STORE_PORTAL_URL>'}</code>, <code>{'<USERNAME>'}</code>, <code>{'<TEMP_PASSWORD>'}</code>, <code>{'<BRAND>'}</code></div>
+		                  </div>
+		                  <div className="col-12 d-flex justify-content-between align-items-center gap-2 flex-wrap">
+		                    <div className="text-muted small">Current Store Portal URL: <code>{portalSmsSettings.store_owner_activation_sms?.portal_url || 'net.3jhotspot.com/store'}</code></div>
+		                    <button className="btn btn-primary" disabled={portalSmsSaving}><IconDeviceFloppy size={18} className="me-2" />{portalSmsSaving ? 'Saving...' : 'Save Store Owner SMS'}</button>
+		                  </div>
+		                </div>
+		              </form>
+		            </Card>
+		          </div>
 		        </> : <div className="col-12"><div className="empty">Loading welcome SMS settings...</div></div>}
 		      </>}
 		      {activeTab === 'Message Defaults' && <>
@@ -21753,7 +25747,10 @@ function ProfilePage({ onSaved }) {
 
 function SystemSettingsPage({ refresh }) {
   const tabs = ['General', 'Access', 'Public HTTPS', 'Payments', 'A2P Messaging', 'System Update', 'Backup', 'Danger'];
-  const [tab, setTab] = useState('General');
+  const [tab, setTab] = useState(() => {
+    const requestedTab = new URLSearchParams(window.location.search).get('tab');
+    return tabs.includes(requestedTab) ? requestedTab : 'General';
+  });
   const [settings, setSettings] = useState(null);
   const [admins, setAdmins] = useState([]);
   const [newAdmin, setNewAdmin] = useState({ username: '', password: '', full_name: '', email: '', role: 'admin' });
@@ -21767,6 +25764,19 @@ function SystemSettingsPage({ refresh }) {
     setAdmins(await request('/system/access/admins'));
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const syncTabFromRoute = () => {
+      const requestedTab = new URLSearchParams(window.location.search).get('tab');
+      if (tabs.includes(requestedTab)) setTab(requestedTab);
+    };
+    syncTabFromRoute();
+    window.addEventListener('admin-route-changed', syncTabFromRoute);
+    window.addEventListener('popstate', syncTabFromRoute);
+    return () => {
+      window.removeEventListener('admin-route-changed', syncTabFromRoute);
+      window.removeEventListener('popstate', syncTabFromRoute);
+    };
+  }, []);
   useEffect(() => {
     if (!tabs.includes(tab)) setTab('General');
   }, [tab]);
@@ -21835,6 +25845,73 @@ function SystemSettingsPage({ refresh }) {
                   <div className="col-md-5"><label className="form-label">Country / Region</label><input className="form-control" value={settings.general?.country_region || 'Philippines'} onChange={(e) => setSettings({ ...settings, general: { ...settings.general, country_region: e.target.value } })} /></div>
                   <div className="col-md-5"><label className="form-label">Time Zone</label><input className="form-control" value={settings.general?.time_zone || 'Asia/Manila'} onChange={(e) => setSettings({ ...settings, general: { ...settings.general, time_zone: e.target.value } })} /></div>
                   <div className="col-md-2"><button type="submit" className="btn btn-primary w-100"><IconDeviceFloppy size={18} className="me-2" />Save</button></div>
+                </div>
+              </form>
+            </Card>
+          </div>
+          <div className="col-12">
+            <Card title="Support Chat Protection" subtitle="Limits continuous customer messages before cooldown. Blocked devices can be permanently blocked from messaging after repeated abuse.">
+              <form onSubmit={saveSettings}>
+                <div className="row g-3 align-items-end">
+                  <div className="col-12">
+                    <label className="form-check form-switch mb-0">
+                      <input
+                        className="form-check-input"
+                        type="checkbox"
+                        checked={settings.support_chat_protection?.enabled !== false}
+                        onChange={(e) => setSettings({ ...settings, support_chat_protection: { ...settings.support_chat_protection, enabled: e.target.checked } })}
+                      />
+                      <span className="form-check-label">Enable support chat spam protection</span>
+                    </label>
+                  </div>
+                  <div className="col-md-3">
+                    <label className="form-label">Continuous Messages</label>
+                    <input
+                      className="form-control"
+                      type="number"
+                      min="1"
+                      max="50"
+                      value={settings.support_chat_protection?.max_continuous_messages ?? 5}
+                      onChange={(e) => setSettings({ ...settings, support_chat_protection: { ...settings.support_chat_protection, max_continuous_messages: Number(e.target.value) } })}
+                    />
+                    <div className="text-muted small mt-1">Default: 5 customer messages before cooldown.</div>
+                  </div>
+                  <div className="col-md-3">
+                    <label className="form-label">Cooldown Seconds</label>
+                    <input
+                      className="form-control"
+                      type="number"
+                      min="10"
+                      max="3600"
+                      value={settings.support_chat_protection?.cooldown_seconds ?? 120}
+                      onChange={(e) => setSettings({ ...settings, support_chat_protection: { ...settings.support_chat_protection, cooldown_seconds: Number(e.target.value) } })}
+                    />
+                    <div className="text-muted small mt-1">Default: 120 seconds.</div>
+                  </div>
+                  <div className="col-md-3">
+                    <label className="form-label">Blocked Device Bursts</label>
+                    <input
+                      className="form-control"
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={settings.support_chat_protection?.blocked_device_max_bursts ?? 2}
+                      onChange={(e) => setSettings({ ...settings, support_chat_protection: { ...settings.support_chat_protection, blocked_device_max_bursts: Number(e.target.value) } })}
+                    />
+                    <div className="text-muted small mt-1">Default: 2 bursts, or 10 messages at 5 per burst.</div>
+                  </div>
+                  <div className="col-md-3">
+                    <label className="form-check form-switch mb-2">
+                      <input
+                        className="form-check-input"
+                        type="checkbox"
+                        checked={settings.support_chat_protection?.permanently_block_blocked_devices !== false}
+                        onChange={(e) => setSettings({ ...settings, support_chat_protection: { ...settings.support_chat_protection, permanently_block_blocked_devices: e.target.checked } })}
+                      />
+                      <span className="form-check-label">Hard block blocked devices after limit</span>
+                    </label>
+                    <button type="submit" className="btn btn-primary w-100"><IconDeviceFloppy size={18} className="me-2" />Save Protection</button>
+                  </div>
                 </div>
               </form>
             </Card>
@@ -22584,6 +26661,10 @@ function A2PMessagingSettingsTab() {
   const [saving, setSaving] = useState(false);
   const [checkingCredits, setCheckingCredits] = useState(false);
   const [sendingTest, setSendingTest] = useState(false);
+  const [activeA2PSection, setActiveA2PSection] = useState(() => {
+    const subtab = new URLSearchParams(window.location.search).get('subtab');
+    return String(subtab || '').toLowerCase() === 'messages' ? 'messages' : 'settings';
+  });
   const [creditMessage, setCreditMessage] = useState('');
   const [creditError, setCreditError] = useState('');
   const [testMessage, setTestMessage] = useState('');
@@ -22636,6 +26717,19 @@ function A2PMessagingSettingsTab() {
   }
 
   useEffect(() => { loadA2PSettings(); }, []);
+  useEffect(() => {
+    const syncSubtabFromRoute = () => {
+      const subtab = new URLSearchParams(window.location.search).get('subtab');
+      if (String(subtab || '').toLowerCase() === 'messages') setActiveA2PSection('messages');
+    };
+    syncSubtabFromRoute();
+    window.addEventListener('admin-route-changed', syncSubtabFromRoute);
+    window.addEventListener('popstate', syncSubtabFromRoute);
+    return () => {
+      window.removeEventListener('admin-route-changed', syncSubtabFromRoute);
+      window.removeEventListener('popstate', syncSubtabFromRoute);
+    };
+  }, []);
 
   function updateField(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -22775,6 +26869,24 @@ function A2PMessagingSettingsTab() {
   );
 
   return (
+    <>
+      <div className="card mb-3">
+        <div className="card-header p-0">
+          <ul className="nav nav-tabs card-header-tabs" role="tablist">
+            <li className="nav-item" role="presentation">
+              <button className={`nav-link ${activeA2PSection === 'settings' ? 'active' : ''}`} type="button" onClick={() => setActiveA2PSection('settings')}>
+                <IconSettings size={18} className="me-2" />Settings
+              </button>
+            </li>
+            <li className="nav-item" role="presentation">
+              <button className={`nav-link ${activeA2PSection === 'messages' ? 'active' : ''}`} type="button" onClick={() => setActiveA2PSection('messages')}>
+                <IconMessageCircle size={18} className="me-2" />Messages
+              </button>
+            </li>
+          </ul>
+        </div>
+      </div>
+      {activeA2PSection === 'settings' ? (
     <div className="row row-cards">
       <div className="col-12">
         {message && <div className="alert alert-info auto-dismiss-alert">{message}</div>}
@@ -22974,6 +27086,162 @@ function A2PMessagingSettingsTab() {
             </Card>
           </div>
         </div>
+      </div>
+    </div>
+      ) : (
+        <A2PMessageLogsPanel />
+      )}
+    </>
+  );
+}
+
+function A2PMessageLogsPanel() {
+  const [items, setItems] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [purposes, setPurposes] = useState([]);
+  const [status, setStatus] = useState('ALL');
+  const [purpose, setPurpose] = useState('ALL');
+  const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function loadMessages(nextPage = page) {
+    setLoading(true);
+    setError('');
+    try {
+      const params = new URLSearchParams({
+        status,
+        purpose,
+        search,
+        page: String(nextPage),
+        page_size: String(pageSize)
+      });
+      const data = await request(`/system-settings/a2p-messaging/messages?${params.toString()}`);
+      setItems(data.items || []);
+      setSummary(data.summary || {});
+      setPurposes(data.purposes || []);
+      setTotal(Number(data.total || 0));
+      setPage(Number(data.page || nextPage));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => loadMessages(1), 250);
+    return () => window.clearTimeout(timer);
+  }, [status, purpose, search, pageSize]);
+
+  const maxPage = Math.max(1, Math.ceil(total / pageSize));
+  const statusBadge = (value) => value === 'SUCCESS'
+    ? 'bg-success-lt text-success'
+    : value === 'FAILED'
+      ? 'bg-danger-lt text-danger'
+      : 'bg-warning-lt text-warning';
+
+  return (
+    <div className="row row-cards">
+      {error && <div className="col-12"><AutoDismissAlert message={error} tone="danger" onDismiss={() => setError('')} /></div>}
+      <KpiCard icon={IconSend} label="Total SMS Logs" value={summary.total || 0} tone="blue" />
+      <KpiCard icon={IconCircleCheck} label="Successful" value={summary.success || 0} tone="green" />
+      <KpiCard icon={IconAlertTriangle} label="Failed" value={summary.failed || 0} tone="red" />
+      <KpiCard icon={IconClock} label="This Month" value={summary.this_month || 0} tone="purple" />
+
+      <div className="col-12">
+        <Card title="A2P Messages" subtitle="Every Smart Messaging Suite SMS attempt is tracked here, including accepted and failed sends.">
+          <div className="row g-3 align-items-end mb-3">
+            <div className="col-12 col-lg-4">
+              <label className="form-label">Search</label>
+              <div className="input-icon">
+                <span className="input-icon-addon"><IconSearch size={18} /></span>
+                <input className="form-control" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search phone, sender, message ID, text, or error..." />
+              </div>
+            </div>
+            <div className="col-6 col-lg-2">
+              <label className="form-label">Status</label>
+              <select className="form-select" value={status} onChange={(e) => setStatus(e.target.value)}>
+                <option value="ALL">All</option>
+                <option value="SUCCESS">Success</option>
+                <option value="FAILED">Failed</option>
+                <option value="PENDING">Pending</option>
+              </select>
+            </div>
+            <div className="col-6 col-lg-2">
+              <label className="form-label">Purpose</label>
+              <select className="form-select" value={purpose} onChange={(e) => setPurpose(e.target.value)}>
+                <option value="ALL">All purposes</option>
+                {purposes.map((item) => <option key={item.purpose} value={item.purpose}>{item.purpose} ({item.count})</option>)}
+              </select>
+            </div>
+            <div className="col-6 col-lg-2">
+              <label className="form-label">Show entries</label>
+              <select className="form-select" value={pageSize} onChange={(e) => setPageSize(Number(e.target.value))}>
+                {[10, 20, 50, 100].map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </div>
+            <div className="col-6 col-lg-2">
+              <button className="btn btn-outline-primary w-100" type="button" onClick={() => loadMessages(page)} disabled={loading}>
+                <IconRefresh size={18} className="me-2" />{loading ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+
+          <div className="table-responsive table-sticky-wrap">
+            <table className="table card-table table-vcenter">
+              <thead>
+                <tr>
+                  <th>Status</th>
+                  <th>Purpose</th>
+                  <th>To</th>
+                  <th>Sender ID</th>
+                  <th>Message</th>
+                  <th>Smart / Message ID</th>
+                  <th>Result</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.id}>
+                    <td><span className={`badge ${statusBadge(item.status)}`}>{item.status}</span></td>
+                    <td><span className="badge bg-secondary-lt text-secondary">{item.purpose || 'GENERAL'}</span></td>
+                    <td>{item.destination_masked || '-'}</td>
+                    <td>{item.source || '-'}</td>
+                    <td className="text-wrap" style={{ minWidth: 260 }}>
+                      <div className="fw-semibold">{item.message_preview || '-'}</div>
+                    </td>
+                    <td>
+                      <div>{item.smart_status || '-'}</div>
+                      <div className="text-muted small">{item.message_id || '-'}</div>
+                    </td>
+                    <td className="text-wrap" style={{ minWidth: 260 }}>
+                      {item.error_message ? <span className="text-danger">{item.error_message}</span> : <span className="text-muted">{item.response_summary || '-'}</span>}
+                      {item.http_status && <div className="small text-muted">HTTP {item.http_status}</div>}
+                    </td>
+                    <td>{formatPortalDateTime(item.created_at)}</td>
+                  </tr>
+                ))}
+                {!items.length && (
+                  <tr><td colSpan="8" className="text-center text-muted py-4">No A2P messages found.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3">
+            <div className="text-muted small">Showing {items.length ? ((page - 1) * pageSize) + 1 : 0}-{Math.min(total, page * pageSize)} of {total}</div>
+            <div className="btn-list">
+              <button className="btn btn-outline-secondary" type="button" disabled={page <= 1 || loading} onClick={() => { const next = Math.max(1, page - 1); setPage(next); loadMessages(next); }}>Previous</button>
+              <span className="btn disabled">Page {page} of {maxPage}</span>
+              <button className="btn btn-outline-secondary" type="button" disabled={page >= maxPage || loading} onClick={() => { const next = Math.min(maxPage, page + 1); setPage(next); loadMessages(next); }}>Next</button>
+            </div>
+          </div>
+        </Card>
       </div>
     </div>
   );
@@ -24165,19 +28433,31 @@ function OmadaControllerPage({ refresh }) {
 }
 
 function SupportInboxPage() {
+  const initialSupportParams = new URLSearchParams(window.location.search);
+  const initialSource = initialSupportParams.get('source_type') === 'STORE_OWNER' ? 'STORE_OWNER' : 'CUSTOMER';
   const [items, setItems] = useState([]);
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedId, setSelectedId] = useState(() => initialSupportParams.get('conversation_id') || '');
   const [selected, setSelected] = useState(null);
   const [reply, setReply] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [sourceTab, setSourceTab] = useState(initialSource);
+  const [summary, setSummary] = useState({ customer_unread_count: 0, store_owner_unread_count: 0, unread_admin_count: 0 });
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
 
   async function loadList() {
-    const query = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : '';
+    const params = new URLSearchParams();
+    params.set('source_type', sourceTab);
+    if (statusFilter) params.set('status', statusFilter);
+    const query = `?${params.toString()}`;
     const data = await request(`/support/conversations${query}`);
-    setItems(data.items || []);
-    if (!selectedId && data.items?.[0]?.id) setSelectedId(data.items[0].id);
+    const nextItems = data.items || [];
+    setItems(nextItems);
+    setSummary(data.summary || { customer_unread_count: 0, store_owner_unread_count: 0, unread_admin_count: 0 });
+    setSelectedId((current) => {
+      if (current && nextItems.some((item) => item.id === current)) return current;
+      return nextItems[0]?.id || '';
+    });
   }
 
   async function loadSelected(id = selectedId) {
@@ -24187,10 +28467,27 @@ function SupportInboxPage() {
     }
     const data = await request(`/support/conversations/${id}`);
     setSelected(data);
+    window.dispatchEvent(new CustomEvent('admin-notification-refresh'));
   }
 
-  useEffect(() => { loadList().catch((err) => setMessage(err.message)); }, [statusFilter]);
+  useEffect(() => { loadList().catch((err) => setMessage(err.message)); }, [statusFilter, sourceTab]);
   useEffect(() => { loadSelected().catch((err) => setMessage(err.message)); }, [selectedId]);
+  useEffect(() => {
+    const syncSelectedFromRoute = () => {
+      const params = new URLSearchParams(window.location.search);
+      const routeSource = params.get('source_type');
+      if (routeSource === 'CUSTOMER' || routeSource === 'STORE_OWNER') setSourceTab(routeSource);
+      const routeConversationId = params.get('conversation_id') || '';
+      if (routeConversationId) setSelectedId(routeConversationId);
+    };
+    syncSelectedFromRoute();
+    window.addEventListener('admin-route-changed', syncSelectedFromRoute);
+    window.addEventListener('popstate', syncSelectedFromRoute);
+    return () => {
+      window.removeEventListener('admin-route-changed', syncSelectedFromRoute);
+      window.removeEventListener('popstate', syncSelectedFromRoute);
+    };
+  }, []);
 
   async function sendReply(e) {
     e.preventDefault();
@@ -24207,6 +28504,33 @@ function SupportInboxPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function supportSourceCount(source) {
+    return source === 'STORE_OWNER'
+      ? Number(summary.store_owner_unread_count || 0)
+      : Number(summary.customer_unread_count || 0);
+  }
+
+  function conversationName(item) {
+    if (!item) return sourceTab === 'STORE_OWNER' ? 'Store Owner Conversation' : 'Customer Conversation';
+    if (item.source_type === 'STORE_OWNER') return item.customer_name || item.store_name || 'Store owner';
+    return item.customer_name || 'Customer';
+  }
+
+  function conversationSubtitle(item) {
+    if (!item) return '';
+    if (item.source_type === 'STORE_OWNER') {
+      return [item.store_name, item.contact_number, item.public_conversation_id].filter(Boolean).join(' · ');
+    }
+    return item.contact_number || item.email || item.public_conversation_id;
+  }
+
+  function messageSenderLabel(item) {
+    if (item.sender_type === 'ADMIN') return `Admin${item.admin_username ? ` · ${item.admin_username}` : ''}`;
+    if (item.sender_type === 'STORE_OWNER') return 'Store owner';
+    if (item.sender_type === 'SYSTEM') return 'System';
+    return 'Customer';
   }
 
   async function updateConversation(patch) {
@@ -24230,13 +28554,39 @@ function SupportInboxPage() {
         <div className="page-header d-print-none mb-3">
           <div>
             <h2 className="page-title mb-1">Support Inbox</h2>
-            <div className="text-muted">Back-and-forth customer messages from the captive portal help button.</div>
+            <div className="text-muted">Back-and-forth customer and store owner messages.</div>
           </div>
         </div>
         {message && <AutoDismissAlert message={message} tone={message.toLowerCase().includes('failed') || message.toLowerCase().includes('not') ? 'danger' : 'success'} onDismiss={() => setMessage('')} />}
       </div>
       <div className="col-lg-4">
         <Card title="Conversations">
+          <ul className="nav nav-tabs mb-3">
+            {[
+              { key: 'CUSTOMER', label: 'Customer Chats', icon: IconUser },
+              { key: 'STORE_OWNER', label: 'Store Owner Chats', icon: IconBuildingStore },
+            ].map((tab) => {
+              const TabIcon = tab.icon;
+              const count = supportSourceCount(tab.key);
+              return (
+                <li className="nav-item" key={tab.key}>
+                  <button
+                    className={`nav-link d-inline-flex align-items-center gap-2 ${sourceTab === tab.key ? 'active' : ''}`}
+                    type="button"
+                    onClick={() => {
+                      setSourceTab(tab.key);
+                      setSelectedId('');
+                      setSelected(null);
+                    }}
+                  >
+                    <TabIcon size={16} />
+                    <span>{tab.label}</span>
+                    <span className={`badge ${count > 0 ? 'bg-orange-lt text-orange' : 'bg-secondary-lt text-secondary'}`}>{count}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
           <div className="mb-3">
             <select className="form-select" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">All statuses</option>
@@ -24250,25 +28600,27 @@ function SupportInboxPage() {
             {items.map((item) => (
               <button className={`list-group-item list-group-item-action px-0 ${selectedId === item.id ? 'active' : ''}`} type="button" key={item.id} onClick={() => setSelectedId(item.id)}>
                 <div className="d-flex justify-content-between gap-2">
-                  <div className="fw-semibold">{item.customer_name || 'Customer'}</div>
+                  <div className="fw-semibold">{conversationName(item)}</div>
                   <span className={`badge ${item.status === 'PENDING_ADMIN' ? 'bg-red-lt text-red' : item.status === 'CLOSED' ? 'bg-secondary-lt text-secondary' : 'bg-blue-lt text-blue'}`}>{item.status}</span>
                 </div>
-                <div className="small text-muted">{item.contact_number || item.email || item.public_conversation_id}</div>
+                <div className="small text-muted">{conversationSubtitle(item)}</div>
                 <div className="small text-muted">{formatPortalDateTime(item.last_message_at || item.created_at)}</div>
                 {item.unread_admin_count > 0 && <span className="badge bg-orange-lt text-orange mt-1">{item.unread_admin_count} unread</span>}
               </button>
             ))}
-            {!items.length && <div className="text-muted text-center py-4">No customer messages yet.</div>}
+            {!items.length && <div className="text-muted text-center py-4">No {sourceTab === 'STORE_OWNER' ? 'store owner' : 'customer'} messages yet.</div>}
           </div>
         </Card>
       </div>
       <div className="col-lg-8">
-        <Card title={selected ? selected.customer_name || 'Customer Conversation' : 'Conversation'} subtitle={selected?.public_conversation_id}>
+        <Card title={selected ? conversationName(selected) : 'Conversation'} subtitle={conversationSubtitle(selected)}>
           {selected ? (
             <div>
               <div className="d-flex flex-wrap gap-2 mb-3">
                 <span className="badge bg-blue-lt text-blue">{selected.status}</span>
                 <span className="badge bg-secondary-lt text-secondary">{selected.priority}</span>
+                {selected.source_type === 'STORE_OWNER' && <span className="badge bg-orange-lt text-orange"><IconBuildingStore size={14} className="me-1" />Store Owner</span>}
+                {selected.store_name && <span className="badge bg-purple-lt text-purple">{selected.store_name}</span>}
                 {selected.contact_number && <span className="badge bg-green-lt text-green"><IconPhone size={14} className="me-1" />{selected.contact_number}</span>}
                 {selected.email && <span className="badge bg-cyan-lt text-cyan"><IconMail size={14} className="me-1" />{selected.email}</span>}
               </div>
@@ -24276,7 +28628,7 @@ function SupportInboxPage() {
                 {(selected.messages || []).map((item) => (
                   <div className={`portal-chat-bubble ${item.sender_type === 'ADMIN' ? 'is-admin' : 'is-customer'}`} key={item.id}>
                     <div>{item.message_text}</div>
-                    <div className="small opacity-75 mt-1">{item.sender_type === 'ADMIN' ? `Admin${item.admin_username ? ` · ${item.admin_username}` : ''}` : 'Customer'} · {formatPortalDateTime(item.created_at)}</div>
+                    <div className="small opacity-75 mt-1">{messageSenderLabel(item)} · {formatPortalDateTime(item.created_at)}</div>
                   </div>
                 ))}
               </div>
@@ -24325,7 +28677,15 @@ const nav = [
   { page: 'Location Management', icon: IconMapPin, tone: 'green' },
   { page: 'Vouchers', icon: IconKey, tone: 'yellow' },
   { page: 'Product Items', icon: IconListDetails, tone: 'green' },
-  { page: 'Physical Stores', icon: IconBuildingStore, tone: 'orange' },
+  {
+    page: 'Physical Stores',
+    icon: IconBuildingStore,
+    tone: 'orange',
+    children: [
+      { page: 'Physical Stores', icon: IconBuildingStore, tone: 'orange' },
+      { page: 'Store Map', icon: IconMapPin, tone: 'green' }
+    ]
+  },
   { page: 'Sales', icon: IconCalendarStats, tone: 'green' },
   { page: 'Wallet / Manual Top-Up', icon: IconCash, tone: 'green' },
   { page: 'Captive Portal', icon: IconWifi, tone: 'blue' },
@@ -24348,7 +28708,7 @@ function pageMeta(page) {
   return flatNav.find((item) => item.page === page) || profilePages[page] || { icon: IconShieldLock, tone: 'blue' };
 }
 
-function Sidebar({ page, setPage, me, logout, branding, collapsed }) {
+function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnreadCount = 0 }) {
   const [open, setOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [openGroups, setOpenGroups] = useState({ 'APs Deployment': true });
@@ -24411,6 +28771,9 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed }) {
                   <button className={`nav-link ${page === item.page ? 'active' : ''}`} onClick={() => setActivePage(item.page)}>
                     <IconWrap><Icon size={20} /></IconWrap>
                     <span className="nav-link-title">{item.page}</span>
+                    {item.page === 'Support Inbox' && supportUnreadCount > 0 && (
+                      <span className="nav-unread-badge">{supportUnreadCount > 99 ? '99+' : supportUnreadCount}</span>
+                    )}
                   </button>
                 </li>
               );
@@ -24442,7 +28805,157 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed }) {
   );
 }
 
-function Header({ page, dashboard, resources, omadaPortalStatus, onToggleSidebar, sidebarCollapsed, onOpenCaptivePortal }) {
+function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [a2pFailureCount, setA2PFailureCount] = useState(0);
+  const [supportCount, setSupportCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function loadNotifications() {
+    setLoading(true);
+    try {
+      const data = await request('/admin/notifications');
+      setItems(data.items || []);
+      setUnreadCount(Number(data.unread_count || 0));
+      setA2PFailureCount(Number(data.a2p_failure_unread_count || 0));
+      setSupportCount(Number(data.support_unread_count || 0));
+      onSupportCountChange?.(Number(data.support_unread_count || 0));
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadNotifications();
+    const timer = window.setInterval(loadNotifications, 30000);
+    window.addEventListener('admin-notification-refresh', loadNotifications);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('admin-notification-refresh', loadNotifications);
+    };
+  }, []);
+
+  async function markAllRead() {
+    try {
+      await request('/admin/notifications/read-all', { method: 'POST' });
+      await loadNotifications();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function notificationIcon(item) {
+    if (item.category === 'SUPPORT_MESSAGE') return IconMessageCircle;
+    if (item.category === 'A2P_SMS_FAILED') return IconSend;
+    if (item.severity === 'DANGER' || item.severity === 'WARNING') return IconAlertTriangle;
+    return IconBell;
+  }
+
+  function notificationTone(item) {
+    if (item.severity === 'DANGER') return 'red';
+    if (item.severity === 'WARNING') return 'yellow';
+    if (item.category === 'SUPPORT_MESSAGE') return 'orange';
+    if (item.severity === 'SUCCESS') return 'green';
+    return 'blue';
+  }
+
+  function targetPageFromUrl(targetUrl, fallbackPage) {
+    if (!targetUrl) return { page: fallbackPage || 'Dashboard', path: routeForPage(fallbackPage || 'Dashboard') };
+    try {
+      const url = new URL(targetUrl, window.location.origin);
+      const slug = url.pathname.replace(/\/+$/, '').replace(/^\/admin\/?/, '');
+      return {
+        page: routePages[slug] || fallbackPage || 'Dashboard',
+        path: `${url.pathname}${url.search}`
+      };
+    } catch (_err) {
+      return { page: fallbackPage || 'Dashboard', path: routeForPage(fallbackPage || 'Dashboard') };
+    }
+  }
+
+  async function openNotification(item) {
+    if (!String(item.id || '').startsWith('support-') && item.status === 'UNREAD') {
+      await request(`/admin/notifications/${encodeURIComponent(item.id)}/read`, { method: 'POST' }).catch(() => {});
+    }
+    setOpen(false);
+    const target = targetPageFromUrl(item.target_url, item.target_page);
+    onNavigate(target.page, false, target.path);
+    window.setTimeout(loadNotifications, 350);
+  }
+
+  return (
+    <div className="admin-notification-shell">
+      <button className="admin-notification-trigger" type="button" onClick={() => { setOpen(true); loadNotifications(); }} aria-label="Open notifications">
+        <IconBell size={20} />
+        {unreadCount > 0 && <span className="admin-notification-count">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+      </button>
+      {open && (
+        <div className="admin-notification-overlay" onMouseDown={() => setOpen(false)}>
+          <aside className="admin-notification-drawer" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="admin-notification-header">
+              <div>
+                <div className="h3 mb-1">Notifications</div>
+                <div className="text-muted small">SMS failures and customer messages that need attention.</div>
+              </div>
+              <button className="btn btn-icon" type="button" onClick={() => setOpen(false)} aria-label="Close notifications"><IconX size={18} /></button>
+            </div>
+            <div className="admin-notification-kpis">
+              <div className="admin-notification-kpi">
+                <IconBell size={18} />
+                <span>Unread</span>
+                <strong>{unreadCount}</strong>
+              </div>
+              <div className="admin-notification-kpi">
+                <IconSend size={18} />
+                <span>SMS Failed</span>
+                <strong>{a2pFailureCount}</strong>
+              </div>
+              <div className="admin-notification-kpi">
+                <IconMessageCircle size={18} />
+                <span>Messages</span>
+                <strong>{supportCount}</strong>
+              </div>
+            </div>
+            <div className="d-flex align-items-center justify-content-between gap-2 px-3 py-2 border-bottom">
+              <button className="btn btn-sm btn-outline-secondary" type="button" onClick={loadNotifications} disabled={loading}><IconRefresh size={16} className="me-1" />Refresh</button>
+              <button className="btn btn-sm btn-outline-primary" type="button" onClick={markAllRead} disabled={loading || unreadCount === supportCount}>Mark system read</button>
+            </div>
+            {error && <div className="alert alert-danger m-3 py-2">{error}</div>}
+            <div className="admin-notification-list">
+              {items.map((item) => {
+                const Icon = notificationIcon(item);
+                const tone = notificationTone(item);
+                return (
+                  <button className={`admin-notification-item ${item.status === 'UNREAD' ? 'is-unread' : ''}`} type="button" key={item.id} onClick={() => openNotification(item)}>
+                    <span className={`badge bg-${tone}-lt text-${tone} admin-notification-icon`}><Icon size={18} /></span>
+                    <span className="admin-notification-body">
+                      <span className="admin-notification-title">{item.title}</span>
+                      <span className="admin-notification-message">{item.message}</span>
+                      <span className="admin-notification-meta">
+                        <span className={`badge ${item.status === 'UNREAD' ? 'bg-red-lt text-red' : 'bg-secondary-lt text-secondary'}`}>{item.status}</span>
+                        <span>{formatPortalDateTime(item.created_at)}</span>
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+              {!items.length && !loading && <div className="empty py-5">No notifications yet.</div>}
+              {loading && !items.length && <div className="empty py-5">Loading notifications...</div>}
+            </div>
+          </aside>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Header({ page, dashboard, resources, omadaPortalStatus, onToggleSidebar, sidebarCollapsed, onOpenCaptivePortal, onNavigatePage, onSupportCountChange }) {
   const meta = pageMeta(page);
   const PageIcon = meta.icon;
   const ramAllocated = resources?.ram_used_incl_cache_pct;
@@ -24470,6 +28983,9 @@ function Header({ page, dashboard, resources, omadaPortalStatus, onToggleSidebar
             <div className="sys-metric text-muted"><IconDatabase size={18} /><span>DISK {resources?.disk_pct ?? 0}%</span></div>
             <div className="sys-metric text-muted"><IconClock size={18} /><span>UPTIME {formatUptime(resources?.uptime_seconds)}</span></div>
           </div>
+          <div className="ms-3">
+            <AdminNotificationBell onNavigate={onNavigatePage} onSupportCountChange={onSupportCountChange} />
+          </div>
         </div>
       </div>
     </header>
@@ -24486,6 +29002,7 @@ function App() {
   const [resources, setResources] = useState(null);
   const [omadaPortalStatus, setOmadaPortalStatus] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [supportUnreadCount, setSupportUnreadCount] = useState(0);
   const [branding, setBranding] = useState({ display_name: '3JCentralPisowifi', portal_subtitle: 'Captive Portal + WiFi Pass Access', accent_color: '#206bc4', company_logo_url: null, browser_logo_url: null });
 
   async function refresh() {
@@ -24510,6 +29027,7 @@ function App() {
     if (currentPath !== nextPath) {
       window.history[replace ? 'replaceState' : 'pushState']({ page: nextPage }, '', nextPath);
     }
+    window.dispatchEvent(new CustomEvent('admin-route-changed', { detail: { page: nextPage, path: nextPath } }));
     if (nextPage === 'Long Lat') {
       window.dispatchEvent(new CustomEvent('longlat-site-filter-change'));
     }
@@ -24572,7 +29090,9 @@ function App() {
       window.clearInterval(timer);
     };
   }, [authed]);
+  if (portalPath === '/store') return <StoreOwnerPortalApp />;
   if (portalPath === '/portal/ap-coverage') return <PortalCoveragePage />;
+  if (portalPath === '/portal/store-map') return <PortalStoreMapPage />;
   if (isPortalRoute) return <PortalApp />;
   if (!authed) return <Login onLogin={() => setAuthed(true)} branding={branding} />;
 
@@ -24583,13 +29103,15 @@ function App() {
 
   return (
     <div className={`page ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-      <Sidebar page={page} setPage={navigatePage} me={me} logout={logout} branding={branding} collapsed={sidebarCollapsed} />
+      <Sidebar page={page} setPage={navigatePage} me={me} logout={logout} branding={branding} collapsed={sidebarCollapsed} supportUnreadCount={supportUnreadCount} />
       <div className="page-wrapper">
-        <Header page={page} dashboard={dashboard} resources={resources} omadaPortalStatus={omadaPortalStatus} onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)} sidebarCollapsed={sidebarCollapsed} onOpenCaptivePortal={() => navigatePage('Captive Portal')} />
+        <Header page={page} dashboard={dashboard} resources={resources} omadaPortalStatus={omadaPortalStatus} onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)} sidebarCollapsed={sidebarCollapsed} onOpenCaptivePortal={() => navigatePage('Captive Portal')} onNavigatePage={navigatePage} onSupportCountChange={setSupportUnreadCount} />
         {page === 'Long Lat' ? (
           <LongLatPage />
         ) : page === 'AP & Client Map' ? (
           <ApClientMapPage />
+        ) : page === 'Store Map' ? (
+          <StoreMapPage />
         ) : (
           <div className="page-body">
             <div className="container-xl">

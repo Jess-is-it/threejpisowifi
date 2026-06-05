@@ -5,6 +5,14 @@ Every future AI agent, developer, or maintainer must read this file before chang
 ## Shared screenshot location
 When the project owner references an attached screenshot/image by filename only, immediately check `/mnt/windows_vod/3jmain_ss/` for matching files. Example: if the user says `payment1`, inspect `/mnt/windows_vod/3jmain_ss/payment1*` before asking for the image path.
 
+## Captive Portal Modal Scroll Stability — 2026-06-05
+- `PortalApp` re-renders frequently because remaining-time countdowns and store purchase polling update state while customer modals are open.
+- Do not render modal helpers defined inside `PortalApp` as nested React component elements such as `<BagModal />` or `<CategoryProductsModal />`. React treats that inline function identity as a new component type after each parent render, remounting the modal and resetting mobile scroll back to the top.
+- If a modal helper stays inside `PortalApp` and does not use hooks, call it as a render helper, for example `{BagModal()}`. If hooks are needed, move the modal component outside `PortalApp` and pass props explicitly.
+- Custom three-row modals with fixed header, scrollable middle content, and fixed footer must wire back-to-top buttons to the real scroll container, such as `.portal-store-scroll-area`, not the generic modal body.
+- Current captive portal modal helpers inside `PortalApp` are rendered as function calls, not JSX component tags, so countdown/polling re-renders do not remount them.
+- Physical store item selection is intentionally a full in-page store detail screen, not a modal, because the store item list and sticky purchase footer are easier to control with normal page scrolling on mobile.
+
 ## 1. Project overview
 3JCentralPisowifi is now focused on Omada Captive Portal + Voucher customer access. 3JCentralPisowifi validates vouchers, tracks wallet/access/session state, and authorizes clients through Omada captive portal APIs. MikroTik remains for station VLAN/DHCP/NAT transport and read-only preflight validation.
 
@@ -45,6 +53,15 @@ Active cleanup phase: remove retired RADIUS/WPA2-Enterprise lab tooling, AI/Open
 - The default Sender ID is selected from the provisioned Smart A2P Sender IDs. Do not show or edit the Sender ID list in this tab.
 - Portal SMS confirmation tracking is separate from global A2P tracking and counts only captive-portal profile verification and Report Missing Time verification codes.
 - System Settings -> A2P Messaging remains for Smart provider credentials, API paths, direct credits check, and test SMS only.
+- Never include `https://` or `http://` in SMS message bodies. Smart may block SMS containing full URL schemes, so customer/owner SMS must use bare domains such as `net.3jhotspot.com` or `net.3jhotspot.com/store`.
+- This bare-domain SMS rule applies only to SMS text. Browser links, Cloudflare Tunnel, PayMongo webhooks, Omada external portal configuration, and API calls may still use full HTTPS URLs where required.
+
+## Contact Number Normalization
+- Any contact number entered anywhere in the system must be normalized before SMS/API use.
+- Philippine mobile numbers entered as local `09XXXXXXXXX` must be converted to international Smart A2P format `63XXXXXXXXXX` for SMS delivery.
+- For database/customer display, keep the readable local form when useful, but backend matching should store a normalized contact key such as `+63XXXXXXXXXX`.
+- Do not expose this conversion as editable text to customers; normalize silently in the backend to reduce confusion and input errors.
+- Physical store owner login usernames must use the owner contact number, for example `09055726415`. Do not generate dotted usernames from store names. Store owner login should accept the local contact number and the backend may also match the normalized contact key.
 
 ## Public HTTPS Endpoint — Cloudflare Tunnel
 - Production public HTTPS should use Cloudflare Tunnel instead of MikroTik inbound port-forwarding.
