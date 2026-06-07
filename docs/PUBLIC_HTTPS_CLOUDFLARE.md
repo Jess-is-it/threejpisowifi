@@ -9,7 +9,7 @@ The tunnel gives the captive portal and payment webhooks a stable public HTTPS U
 Recommended hostname:
 
 ```text
-https://portal.3jhotspot.com/portal
+https://net.3jhotspot.com/portal
 ```
 
 ## Current Design
@@ -42,7 +42,7 @@ The page lets the operator:
 In Cloudflare One, configure the tunnel public hostname as:
 
 ```text
-Subdomain: portal
+Subdomain: net
 Domain: 3jhotspot.com
 Type: HTTP
 URL: http://proxy:80
@@ -62,7 +62,7 @@ The `http://proxy:80` value is intentional because `cloudflared` runs inside the
 PayMongo webhook endpoints should use the public HTTPS hostname:
 
 ```text
-https://portal.3jhotspot.com/api/payments/paymongo/webhook
+https://net.3jhotspot.com/api/payments/paymongo/webhook
 ```
 
 Webhook signing secrets are still configured in:
@@ -76,7 +76,7 @@ System Settings -> Payments
 Omada external portal URL should use:
 
 ```text
-https://portal.3jhotspot.com/portal
+https://net.3jhotspot.com/portal
 ```
 
 Unauthenticated clients must be allowed to reach the portal hostname and any required PayMongo/GCash checkout domains through Omada pre-auth/walled-garden rules.

@@ -1,16 +1,16 @@
 # Captive Portal Integration
 
-The active customer access flow is Omada Captive Portal + Voucher. MikroTik is retained for station transport only.
+The active customer access flow is Omada Captive Portal + WiFi Pass. MikroTik is retained for station transport only.
 
 ## Active Flow
 
 1. Customer connects to the open SSID configured in `APs Deployment -> Sites -> Configurations`.
 2. Omada captive portal redirects the customer to `/portal`.
 3. `/portal` captures Omada client parameters.
-4. Customer enters a voucher.
-5. 3JCentralPisowifi validates the voucher from PostgreSQL.
+4. Customer buys a Product Item, submits a Physical Store purchase request, claims an optional voucher, or activates an existing WiFi Bag item.
+5. 3JCentralPisowifi validates the product/store/voucher/customer WiFi Bag state from PostgreSQL.
 6. If the session came from Omada, 3JCentralPisowifi attempts Omada client authorization.
-7. After successful authorization, the voucher is consumed and wallet/access state is credited.
+7. After successful authorization, active WiFi Bag time is consumed by portal/session rules.
 
 ## Component Roles
 
@@ -18,7 +18,7 @@ Omada:
 - AP adoption.
 - SSID/radio/VLAN settings.
 - Captive portal redirect/enforcement.
-- Client authorization after voucher success.
+- Client authorization after WiFi pass activation.
 
 MikroTik:
 - Station VLAN transport.
@@ -27,8 +27,8 @@ MikroTik:
 - No active MikroTik HotSpot enforcement.
 
 3JCentralPisowifi:
-- Voucher validation.
-- Wallet/source-of-truth access state.
+- Product Item, Physical Store, and optional voucher validation.
+- Customer WiFi Bag/source-of-truth access state.
 - Portal sessions/events.
 - Omada authorization logs.
 - Station planning and reviewed MikroTik transport push.
@@ -37,7 +37,7 @@ MikroTik:
 
 ```text
 Local/Staging fallback: http://192.168.50.70:8080/portal
-Production HTTPS:       https://portal.3jhotspot.com/portal
+Production HTTPS:       https://net.3jhotspot.com/portal
 ```
 
 For production, configure the public HTTPS endpoint in `System Settings -> Public HTTPS`. The preferred path is Cloudflare Tunnel to `http://proxy:80`, avoiding MikroTik inbound port-forwarding.
@@ -65,13 +65,13 @@ authToken
 
 Raw query parameters are stored with `portal_sessions` for diagnostics.
 
-## Voucher Behavior
+## WiFi Bag And Voucher Behavior
 
-Manual `/portal` testing can redeem a voucher into wallet/access state without gateway authorization.
+Manual `/portal` testing can create or activate WiFi Bag items, but internet access is granted only when the customer is connected through a supported Omada captive portal session or already has an authorizable session.
 
-Omada-sourced sessions validate the voucher first, then attempt Omada authorization. If Omada authorization fails, the voucher is not consumed.
+Omada-sourced sessions validate the selected Product Item, Physical Store approval, voucher, or existing WiFi Bag item first, then attempt Omada authorization. If Omada authorization fails, paid/store/voucher state should remain reviewable and not be silently lost.
 
-Unlimited vouchers without an expiry use the configured default authorization duration for Omada authorization.
+Vouchers are optional and secondary. Successful voucher claims add WiFi Bag items instead of wallet credit.
 
 ## Random MAC / Private WiFi Address
 
@@ -87,7 +87,7 @@ This avoids Google login and avoids unreliable fingerprinting. If the browser to
 
 ## Portal Notifications
 
-Admin -> Captive Portal -> Portal Notifs controls optional customer messages for voucher success, remaining-time warning, time consumed, and restored sessions.
+Admin -> Captive Portal -> Portal Notifs controls optional customer messages for WiFi pass activation, voucher claim success, remaining-time warning, time consumed, and restored sessions.
 
 Supported template tags are `<TIME>`, `<REMAINING>`, `<VOUCHER>`, `<SSID>`, `<EXPIRES_AT>`, `<BRAND>`, and `<STATUS>`.
 
@@ -128,11 +128,11 @@ Office AP Path is retired from the active UI. The current AP adoption process is
 2. Adopt the AP into the correct Omada site.
 3. Create or edit the open SSID from APs Deployment configuration.
 4. Enable Portal Authentication / External Portal.
-5. Set the external portal URL to `http://192.168.50.70:8080/portal`.
+5. Set the external portal URL to the current portal URL from Admin -> Captive Portal -> Portal Settings. Production should use `https://net.3jhotspot.com/portal`.
 6. Configure the SSID VLAN to the station customer VLAN.
 7. Add pre-auth access for `192.168.50.70` and DNS if needed.
 8. Apply to one AP first.
-9. Connect a phone and redeem one test voucher.
+9. Connect a phone and test one Product Item or optional voucher claim.
 
 ## Troubleshooting
 
@@ -152,10 +152,10 @@ Client authorized but no internet:
 - Confirm the phone received an IP from the station customer subnet.
 - Confirm the SSID VLAN matches the station VLAN.
 
-PayMongo GCash checkout:
+PayMongo checkout:
 - Product Items shown in the captive portal can start a PayMongo hosted checkout when System Settings -> Payments is enabled and the active Test/Live mode has keys saved.
 - A PayMongo redirect back to `/portal` is only a status hint. 3JCentralPisowifi grants access only after the backend confirms the checkout is paid, either from `/api/payments/paymongo/webhook` with a valid `Paymongo-Signature` or from a server-side PayMongo order reconciliation check.
-- Successful webhook fulfillment creates a system voucher for the Product Item duration and then uses the same Omada authorization path as normal voucher redemption.
+- Successful webhook fulfillment creates a customer WiFi Bag item for the Product Item duration and then uses the same Omada authorization path as normal WiFi pass activation.
 - Valid signed PayMongo webhooks are acknowledged with HTTP 200 after being recorded. If local fulfillment fails, the event is marked failed for operator review rather than returning HTTP 500 to PayMongo.
 - If the webhook secret is not configured, customers can reach PayMongo checkout but access remains pending after payment until the webhook is configured and delivered.
 
@@ -166,4 +166,5 @@ PayMongo GCash checkout:
 - WPA2-Enterprise test SSID automation.
 - AI/OpenAI assistant planning.
 - MikroTik HotSpot enforcement and managed `login.html`.
+- Wallet / Manual Top-Up.
 - SMS, coinslot/vendo, WireGuard automation, and production rollout automation.

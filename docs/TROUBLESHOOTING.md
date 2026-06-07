@@ -19,10 +19,10 @@ docker logs centralwifi_staging-postgres-1
 ```
 
 Current access troubleshooting:
-- The active customer flow is Omada open SSID captive portal -> `/portal` voucher entry -> Omada client authorization.
+- The active customer flow is Omada open SSID captive portal -> `/portal` -> Product Item / Physical Store / optional voucher claim -> WiFi Bag item -> Omada client authorization.
 - RADIUS packet tests, NAS client management, and old accounting sessions are removed from the active UI/API.
 - If a removed endpoint returns `410 Gone`, use Captive Portal sessions, Authorization Logs, Omada Controller, APs Deployment, or Network -> MikroTik instead.
-- Wallet remains active and should be checked when voucher credit or future balance behavior is suspected.
+- Wallet / Manual Top-Up is removed. Check Customer Devices, My WiFi Bag, Sales, Store Purchase Requests, Vouchers, Portal Sessions, and Authorization Logs for access-time issues.
 
 Firewall checks:
 
@@ -90,16 +90,16 @@ SSID creation failed:
 
 ## Captive Portal Priority Notes
 
-The main customer access direction is open SSID + Omada Captive Portal + Voucher. WPA2-Enterprise and Omada RADIUS profile automation are retired from the active system.
+The main customer access direction is open SSID + Omada Captive Portal + WiFi Pass. WPA2-Enterprise and Omada RADIUS profile automation are retired from the active system.
 
 If an operator expects customers to enter a WPA2 username/password:
 - Re-check the current project direction.
-- Customers should connect to an open SSID and enter a voucher on the portal.
+- Customers should connect to an open SSID and buy/activate a WiFi pass from the portal.
 
 If the Captive Portal page shows authorization failures:
 - Confirm the phone was redirected by Omada, not by MikroTik HotSpot.
 - Confirm `/portal` captured Omada query parameters.
-- Confirm voucher redemption did not consume the voucher when Omada authorization failed.
+- Confirm voucher or WiFi Bag activation did not consume access when Omada authorization failed.
 
 ## Portal Notifications Do Not Show In Phone Notification Bar
 
@@ -131,9 +131,9 @@ Voucher voided:
 - Voided vouchers are intentionally invalidated.
 - Create a new voucher instead of reusing a voided one.
 
-User not found during test redeem:
-- Select an existing customer/account on the Test Redeem tab.
-- Confirm the user has not been deleted.
+Customer not found during voucher claim:
+- Confirm the customer profile/device exists or that the portal can create a supported session.
+- Confirm the customer has not been deleted.
 
 ## Client Portal Troubleshooting
 
@@ -166,9 +166,10 @@ Rate limited:
 - Too many failed attempts were made from the same IP/session.
 - Wait a few minutes and try again.
 
-Portal redeemed but internet is not enabled:
-- This is expected in Phase 2B.
-- Voucher redemption and wallet crediting work, but captive portal redirect/enforcement is a future phase.
+Portal shows time but internet is not enabled:
+- Check Captive Portal -> Authorization Logs for Omada authorization errors.
+- Confirm the phone is connected through an Omada captive portal SSID, not only browsing the public portal from outside 3J WiFi.
+- Confirm the active WiFi Bag item belongs to the same verified customer/device token.
 
 ## Phase 2C Omada Captive Portal Troubleshooting
 
@@ -188,7 +189,7 @@ Open SSID creation failed:
 
 External portal configuration failed:
 - Omada controller API paths vary by version.
-- Configure External Portal manually and point it to `http://192.168.50.70:8080/portal`.
+- Configure External Portal manually and point it to the current portal URL from Admin -> Captive Portal -> Portal Settings. Production should use `https://net.3jhotspot.com/portal`.
 
 Missing client MAC/token from Omada redirect:
 - Confirm Omada is redirecting to the portal with client parameters.
@@ -536,7 +537,7 @@ Cloudflare Tunnel / Public HTTPS is not reachable:
 - Open System Settings -> Public HTTPS.
 - Confirm `cloudflared binary` is Installed and `Connector process` is Running.
 - Confirm Cloudflare Tunnel Public Hostname uses service type `HTTP` and URL `http://proxy:80`.
-- Confirm the public hostname is `portal.3jhotspot.com`.
+- Confirm the public hostname is `net.3jhotspot.com`.
 - Check Local health first. If local health fails, the app reverse proxy is not reachable from the connector container.
 - If local health passes but public HTTPS fails, check Cloudflare One -> Networks -> Connectors -> Cloudflare Tunnels and confirm the connector is Healthy.
 - Do not add MikroTik dst-nat rules for this path; Cloudflare Tunnel works through outbound connector traffic.

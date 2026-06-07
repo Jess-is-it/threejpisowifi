@@ -13,7 +13,7 @@ It can be opened manually for testing, but the production path is Omada captive 
 1. Customer connects to the Omada open SSID.
 2. Omada redirects the customer browser to `/portal`.
 3. The portal opens on the No Internet page with operator-managed avatar/headline.
-4. Customer can buy a Product Item, enter a voucher, or save a verified profile.
+4. Customer can buy a Product Item, submit a Physical Store purchase request, claim an optional voucher, or save a verified profile.
 5. Successful Product Item payments are saved as individual customer bag items.
 6. 3JCentralPisowifi validates payment/voucher/gift access.
 7. Omada authorization is attempted only for supported Omada-sourced sessions.
@@ -56,7 +56,7 @@ The Help button includes Message Admin. This is an in-system support inbox, not 
 
 ## Portal Notifications
 
-Portal Notifs can show voucher success, remaining time, expired time, and restored-session messages. Messages support `<TIME>`, `<REMAINING>`, `<VOUCHER>`, `<SSID>`, `<EXPIRES_AT>`, `<BRAND>`, and `<STATUS>`.
+Portal Notifs can show WiFi pass activation, voucher claim success, remaining time, expired time, and restored-session messages. Messages support `<TIME>`, `<REMAINING>`, `<VOUCHER>`, `<SSID>`, `<EXPIRES_AT>`, `<BRAND>`, and `<STATUS>`.
 
 Native phone notification-bar behavior depends on the browser and captive portal WebView. When native Web Notifications are blocked or unsupported, the portal shows the notification message inside the page.
 
@@ -69,10 +69,11 @@ Native phone notification-bar behavior depends on the browser and captive portal
 
 ## Source Of Truth
 
-Vouchers and wallets are stored in PostgreSQL. Omada authorizes network access, but it does not own voucher or wallet state.
+Product Items, Physical Store requests, vouchers, customer profiles, WiFi Bag items/events, and portal sessions are stored in PostgreSQL. Omada authorizes network access, but it does not own customer access time or purchase state.
 
 ## Not Active
 
+- Wallet / Manual Top-Up.
 - RADIUS/WPA2-Enterprise customer login.
 - MikroTik HotSpot `login.html` redirect.
 - Coinslot/vendo integration.

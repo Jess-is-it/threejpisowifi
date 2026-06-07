@@ -14,22 +14,23 @@ When the project owner references an attached screenshot/image by filename only,
 - Physical store item selection is intentionally a full in-page store detail screen, not a modal, because the store item list and sticky purchase footer are easier to control with normal page scrolling on mobile.
 
 ## 1. Project overview
-3JCentralPisowifi is now focused on Omada Captive Portal + Voucher customer access. 3JCentralPisowifi validates vouchers, tracks wallet/access/session state, and authorizes clients through Omada captive portal APIs. MikroTik remains for station VLAN/DHCP/NAT transport and read-only preflight validation.
+3JCentralPisowifi is now focused on Omada Captive Portal + WiFi Pass access. Product Items, PayMongo, Physical Stores, welcome gifts, and optional vouchers create customer WiFi Bag items. 3JCentralPisowifi tracks customer profiles, WiFi Bag access, portal sessions, and Omada authorization state. MikroTik remains for station VLAN/DHCP/NAT transport and read-only preflight validation.
 
 ## 2. Business goal
-Create a dependable central system where operators can manage vouchers, wallet credit, Omada AP/site/SSID readiness, MikroTik station transport, and customer-facing captive portal access before later commercial integrations are considered.
+Create a dependable central system where operators can manage product items, physical stores, vouchers for events/refunds/gifts, customer WiFi Bag access, Omada AP/site/SSID readiness, MikroTik station transport, and customer-facing captive portal access.
 
 ## 3. Current phase
-Active cleanup phase: remove retired RADIUS/WPA2-Enterprise lab tooling, AI/OpenAI assistant surfaces, and MikroTik HotSpot enforcement surfaces from the active system.
+Active cleanup phase: remove the old Wallet feature completely and retire RADIUS/WPA2-Enterprise lab tooling, AI/OpenAI assistant surfaces, MikroTik HotSpot enforcement surfaces, and Office AP Path transport from the active system.
 
 ## Active Product Direction — May 2026 Cleanup
-- Primary customer flow: Omada open SSID captive portal -> `/portal` voucher entry -> voucher/wallet validation -> Omada client authorization.
-- MikroTik flow: station VLAN/DHCP/NAT/trunk transport only. MikroTik HotSpot enforcement, login.html sync, and HotSpot diagnostics are removed from the active system.
-- Wallet must remain. Wallet crediting is still reused by voucher redemption and future access/accounting work.
+- Primary customer flow: Omada open SSID captive portal -> `/portal` -> Product Items / Physical Stores / optional voucher claim -> customer WiFi Bag item -> Omada client authorization.
+- MikroTik flow: station VLAN/DHCP/NAT/trunk transport only. MikroTik HotSpot enforcement, login.html sync, HotSpot diagnostics, and Office AP Path transport are removed from the active system.
+- Wallet is removed completely. Do not reintroduce `wallets`, `transactions`, Wallet / Manual Top-Up UI, or wallet crediting. Use `customer_bag_items`, `customer_bag_events`, `sales`, `store_purchase_requests`, `vouchers`, `voucher_redemptions`, and `portal_sessions`.
 - Old Omada install/manage automation must remain. The Omada Controller page still supports controller install/start/stop/restart/backup/host-network management and API settings.
 - RADIUS/FreeRADIUS, NAS client management, RADIUS packet tests, RADIUS accounting sessions, Omada RADIUS profile automation, WPA2-Enterprise test SSID automation, and AI/OpenAI assistant workflows are retired and should not be restored unless the project owner explicitly asks.
 - Read-only MikroTik preflight scanning remains because it is needed to validate VLAN, subnet, pool, DHCP, routing, PPPoE, OSPF, WireGuard, and firewall risks before station transport changes.
-- Database tables and historical migrations for retired features may remain for audit/history, but active UI/API flows should not expose those features.
+- Migration `117_cleanup_retired_wallet_ai_radius_hotspot.sql` drops retired Wallet, RADIUS/NAS, AI/OpenAI planning, MikroTik HotSpot sync/authorization, Office AP Path, Omada RADIUS lab, and legacy portal template tables. The legacy `sessions` table is temporarily retained only as a Customer Devices fallback until that page is fully moved to `portal_sessions` and WiFi Bag records.
+- Any older historical section below that says Wallet, RADIUS, AI, MikroTik HotSpot, or Office AP Path remains active is superseded by this cleanup section.
 
 ## Random MAC Handling — Device Session Token
 - Random/private WiFi MAC handling uses a 3J device-session token, not Google login, browser fingerprinting, or a user prompt.
@@ -39,14 +40,21 @@ Active cleanup phase: remove retired RADIUS/WPA2-Enterprise lab tooling, AI/Open
 - The voucher is not redeemed again and no new time is credited during a MAC rebind.
 - MAC rebinds are limited and logged in `portal_mac_rebind_events` and `portal_events`.
 - If the phone/browser loses local storage, the system cannot prove it is the same device; the operator can handle that manually later.
-- Google login remains a future optional account/wallet feature only. It is not required for voucher random-MAC handling.
+- Google login remains a future optional account feature only. It is not required for voucher random-MAC handling.
 
 ## Captive Portal — Portal Notifs
 - Admin -> Captive Portal -> Portal Notifs configures customer-facing notification messages.
-- Notifications include voucher success, remaining-time reminder, time-consumed, and restored-session messages.
+- Notifications include WiFi pass activation, voucher claim success, remaining-time reminder, time-consumed, and restored-session messages.
 - Template tags include `<TIME>`, `<REMAINING>`, `<VOUCHER>`, `<SSID>`, `<EXPIRES_AT>`, `<BRAND>`, and `<STATUS>`.
 - The portal attempts browser/Web Notifications where the phone browser allows them and always shows an in-portal fallback message.
 - The system cannot customize the Android/iOS built-in `Sign in to WiFi network` notification text.
+
+## Store Owner Purchase Request Alerts
+- Store owner purchase request alerts must use browser/phone Web Push notifications, not Smart A2P SMS.
+- The store owner must log in to `/store` on the target phone/browser and enable alerts once so the browser push subscription can be saved.
+- When a customer submits a store purchase request, the backend sends a Web Push notification to active subscriptions for that store owner. The store portal may still show in-page live updates while open.
+- SMS for store owners remains limited to account activation, login/device verification, password reset, and PIN verification. Do not use SMS for every customer purchase request.
+- Web Push requires HTTPS and browser support. Android Chrome supports the intended flow; unsupported browsers must still rely on the live store portal page.
 
 ## Captive Portal — Message Defaults
 - Admin -> Captive Portal -> Message Defaults owns portal SMS confirmation defaults.
@@ -81,7 +89,7 @@ The Phase 1 notes below are historical context. The active May 2026 product dire
 - Separate production and staging deployments on the same server.
 - PostgreSQL as the source of truth.
 - Admin Portal at `/admin`.
-- Admin login, wallet/manual top-up, vouchers, Omada management, and MikroTik station transport.
+- Admin login, customer devices, vouchers, Product Items, Physical Stores, Omada management, and MikroTik station transport.
 
 ## 5. Phase 1 exclusions
 - Coinslot integration.
@@ -143,7 +151,7 @@ Staging runs from `/opt/3jcentralpisowifi-staging` using `/opt/3jcentralpisowifi
 Nginx reverse proxy routes `/admin` to the React admin portal, `/portal` to the customer portal, and `/api` to FastAPI. FastAPI manages source-of-truth data in PostgreSQL, serves uploaded branding assets from an environment-specific Docker volume, and uses Redis for health/cache readiness. Omada handles captive portal enforcement and client authorization; MikroTik handles station VLAN/DHCP/NAT transport.
 
 ## 12. Source of truth explanation
-PostgreSQL is the only source of truth for admins, users, wallets, vouchers, portal sessions, portal authorization logs, MikroTik station plans, Omada site/AP records, transactions, and audit logs. Network devices must not become the voucher or wallet database.
+PostgreSQL is the only source of truth for admins, users/customer profiles, customer WiFi Bag items/events, vouchers, sales, store purchase requests, portal sessions, portal authorization logs, MikroTik station plans, Omada site/AP records, and audit logs. Network devices must not become the customer access database.
 
 ## 13. Tech stack
 - Ubuntu 22.04+
@@ -175,7 +183,9 @@ Staging:
 - AP & Client Map
 - APs Deployment
 - Vouchers
-- Wallet / Manual Top-Up
+- Product Items
+- Physical Stores
+- Sales
 - Captive Portal
 - Network -> MikroTik station transport/preflight/AP management
 - Omada Controller install/manage/API settings
@@ -1247,16 +1257,16 @@ Safety:
 - Read-only MikroTik checks, scans, diagnostics, and status queries can still run without this apply approval because they do not change RouterOS state.
 - Temporary test configuration must still follow the same rule and must include the cleanup/removal command if a rollback is expected.
 
-## Active Workflow Cleanup — 2026-05-23
+## Active Workflow Cleanup — 2026-06-05
 
-- Wallet remains active and must not be removed. It will be reused for voucher credit/access tracking.
+- Wallet / Manual Top-Up is removed completely. Do not use or recreate `wallets` or `transactions`; customer access time is represented by WiFi Bag items/events and portal sessions.
 - Old Omada Controller install/manage automation remains active. Keep controller install, start, stop, restart, backup, host-network fix, SSH settings, API settings, site detection, and automation logs.
-- The active customer access flow is Omada captive portal redirect/enforcement plus 3J voucher validation and Omada authorization. Customers should not use WPA2-Enterprise/RADIUS credentials.
+- The active customer access flow is Omada captive portal redirect/enforcement plus Product Items, Physical Store approvals, optional voucher claims, customer WiFi Bag validation, and Omada authorization. Customers should not use WPA2-Enterprise/RADIUS credentials.
 - The active MikroTik flow is station transport: VLAN, DHCP, NAT, AP management transport, and raw tracking exceptions. MikroTik HotSpot enforcement is retired.
 - The admin UI removes active RADIUS/WPA2-Enterprise lab pages, old Sessions navigation, NAS/RADIUS client management, OpenAI settings, AI Network Assistant, AI explain/chat/smoke-test/draft-plan workflows, MikroTik HotSpot login.html sync, and legacy single-router MikroTik HotSpot setup controls.
 - The backend returns `410 Gone` for removed RADIUS, NAS, AI/OpenAI assistant, Omada RADIUS automation, WPA2-Enterprise test SSID, MikroTik HotSpot login.html sync, HotSpot diagnostics, and legacy single-router HotSpot apply endpoints.
 - Docker Compose no longer runs the FreeRADIUS service in active staging/production compose files.
-- Historical database tables and migrations are intentionally left in place for audit/history and to avoid destructive data loss. Do not build new active features on those retired tables unless the owner explicitly reopens that workflow.
+- Migration `117_cleanup_retired_wallet_ai_radius_hotspot.sql` drops the retired Wallet, RADIUS/NAS, AI/OpenAI planning, MikroTik HotSpot sync/authorization, Office AP Path, Omada RADIUS lab, and legacy portal template tables. The `sessions` table is temporarily retained only for Customer Devices fallback/history.
 - Read-only MikroTik preflight scanning remains active and should continue to label old `/ip hotspot` findings as legacy HotSpot objects for conflict awareness only.
 
 ## Office AP Path Transport Retired — 2026-05-25

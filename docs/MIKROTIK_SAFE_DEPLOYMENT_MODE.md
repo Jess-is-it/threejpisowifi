@@ -2,7 +2,7 @@
 
 The active MikroTik workflow is now station transport, not captive portal enforcement.
 
-MikroTik is used to build and validate station VLAN, DHCP, NAT, AP-management, and trunk paths. Omada handles the open SSID captive portal redirect and client authorization. 3JCentralPisowifi remains the source of truth for vouchers, wallet credit, portal sessions, and access decisions.
+MikroTik is used to build and validate station VLAN, DHCP, NAT, AP-management, and trunk paths. Omada handles the open SSID captive portal redirect and client authorization. 3JCentralPisowifi remains the source of truth for Product Items, Physical Store approvals, optional vouchers, WiFi Bag access, portal sessions, and access decisions.
 
 ## Purpose
 

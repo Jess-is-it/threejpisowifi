@@ -5,32 +5,38 @@ PostgreSQL remains the source of truth for 3JCentralPisowifi.
 ## Active Source-Of-Truth Records
 
 - `admins`: admin users.
-- `users`: portal/customer account records created for voucher access.
-- `wallets`: remaining time, valid-until, and unlimited access state.
-- `transactions`: wallet credits/debits, including voucher credits.
-- `vouchers`: voucher code inventory and status.
-- `voucher_redemptions`: successful and failed voucher redemption attempts.
+- `users`: portal/customer account records.
+- `customer_bag_items`: purchased, store-approved, admin-granted, welcome-gift, and voucher-claimed WiFi pass items.
+- `customer_bag_events`: activation, consumption, admin adjustment, and other WiFi Bag history.
+- `product_categories` and `product_items`: online WiFi/IPTV package catalog.
+- `physical_stores`, store owner tables, store items, and `store_purchase_requests`: physical-store sales and approvals.
+- `sales`: online and physical-store sales reporting.
+- `vouchers`: optional code inventory for events, refunds, and gifts.
+- `voucher_redemptions`: voucher claim attempts/results.
 - `portal_sessions`: browser/device portal context.
-- `portal_events`: portal views, voucher submissions, successes, failures, and status checks.
-- `portal_mac_rebind_events`: random/private-MAC device token reauthorization events.
+- `portal_events`: portal views, purchase activity, voucher submissions, failures, and status checks.
+- `portal_mac_rebind_events`: random/private-MAC device-token reauthorization events.
 - `omada_portal_authorizations`: Omada client authorization attempts.
-- `captive_portal_settings`: portal URLs, current Omada captive portal settings, Portal Notifs switches, message templates, and remaining-time trigger seconds.
-- `portal_design_templates`: customer portal HTML/CSS template.
+- `captive_portal_settings`: portal URLs, Omada captive portal settings, notification switches/templates, welcome SMS, portal design controls, profile gift controls, and customer-facing text.
 - `mikrotik_routers`: RouterOS API connection records for station transport planning.
 - `mikrotik_preflight_scans`: read-only scan snapshots used to validate VLANs/subnets/pools/DHCP/routing risks.
 - `mikrotik_stations` and related station tables: reviewed station VLAN/DHCP/NAT/trunk transport plans.
-- `ap_deployments` and AP deployment configuration tables: local AP/site/SSID configuration state.
-- `omada_controller_settings` and `omada_install_logs`: old Omada install/manage automation state.
+- AP deployment and Omada site/AP configuration tables: local AP/site/SSID configuration state.
+- `omada_controller_settings`, `omada_api_settings`, `omada_install_logs`, and `omada_automation_logs`: Omada install/manage/API state.
+- Smart A2P settings/log tables: SMS configuration, credit tracking, and message delivery history.
 - `audit_logs`: operator/system audit trail.
 
-## Voucher Rules
+## WiFi Bag Rules
 
-Vouchers are a credit source, not the final access source of truth after redemption.
+The WiFi Bag is the active access ledger.
 
-- `vouchers.status` tracks `UNUSED`, `USED`, `EXPIRED`, `DISABLED`, or `VOIDED`.
-- `voucher_redemptions.source = CLIENT_PORTAL` identifies customer portal redemption.
-- Successful voucher redemption writes a wallet transaction.
-- Wallet/access state remains the source of truth after voucher redemption.
+- Paid PayMongo products create bag items after payment confirmation.
+- Physical Store approvals create bag items after the store owner approves a request, QR, or code.
+- Voucher claims create bag items instead of wallet credit.
+- Admin time adjustments are recorded in `customer_bag_events`.
+- Omada authorization is attempted when an active bag item/session should grant network access.
+
+Do not reintroduce `wallets`, `transactions`, or Wallet / Manual Top-Up behavior.
 
 ## Portal Session Rules
 
@@ -40,22 +46,24 @@ Omada captive portal data is integration context, not the database of record.
 - `portal_sessions.device_token_hash` stores only a hashed browser device-session token used for random/private-MAC rebinds.
 - `portal_events` stores user-visible portal activity and troubleshooting context.
 - `omada_portal_authorizations` stores sanitized Omada API request/response summaries.
-- `portal_mac_rebind_events` records old/new MAC, remaining time, status, and sanitized authorization summary when a token-based MAC rebind is attempted.
-
-For Omada-sourced sessions, voucher redemption is committed only after Omada authorization succeeds.
+- `portal_mac_rebind_events` records old/new MAC, remaining time, status, and sanitized authorization summary when token-based MAC rebind is attempted.
 
 ## MikroTik Rules
 
-MikroTik is not the source of truth for vouchers or wallet access.
+MikroTik is not the source of truth for customer access time.
 
 MikroTik tables store:
+
 - Router API credentials/settings.
 - Read-only preflight scan data.
 - Station transport plans.
+- AP management transport plans.
 - RouterOS command history for reviewed transport pushes/removals.
 
-MikroTik HotSpot enforcement tables and legacy fields may remain historically, but they are not active in the current workflow.
+MikroTik HotSpot enforcement, managed `login.html`, HotSpot client authorization, and Office AP Path transport are retired from the active workflow.
 
-## Historical Tables
+## Retired Tables
 
-Some old RADIUS/FreeRADIUS/NAS/accounting tables may remain in existing databases or migrations for history and audit compatibility. They are retired from the active UI/API and should not be used for current customer access.
+Migration `117_cleanup_retired_wallet_ai_radius_hotspot.sql` drops retired Wallet, RADIUS/NAS, AI/OpenAI planning, MikroTik HotSpot sync/authorization, Office AP Path, Omada RADIUS lab, and legacy portal template tables.
+
+The legacy `sessions` table is temporarily retained only as a Customer Devices fallback/history source. New access features should use `portal_sessions`, `customer_bag_items`, and `customer_bag_events`.

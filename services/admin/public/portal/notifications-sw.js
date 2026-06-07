@@ -6,6 +6,28 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
+self.addEventListener('push', (event) => {
+  let payload = {};
+  try {
+    payload = event.data ? event.data.json() : {};
+  } catch (_error) {
+    payload = { body: event.data ? event.data.text() : '' };
+  }
+  const targetUrl = payload.url || payload.data?.url || '/portal';
+  const options = {
+    body: payload.body || payload.message || '',
+    tag: payload.tag || `3j-notification-${Date.now()}`,
+    renotify: true,
+    data: {
+      ...(payload.data || {}),
+      url: targetUrl,
+    },
+  };
+  if (payload.icon) options.icon = payload.icon;
+  if (payload.badge) options.badge = payload.badge;
+  event.waitUntil(self.registration.showNotification(payload.title || '3J WiFi', options));
+});
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const targetUrl = event.notification?.data?.url || '/portal';

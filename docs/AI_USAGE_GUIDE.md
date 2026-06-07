@@ -22,7 +22,8 @@ AI features are no longer part of the active 3JCentralPisowifi operator workflow
 - Always update `/PROJECT_CONTEXT.md` whenever architecture, deployment, features, commands, branches, workflows, or decisions change.
 - Preserve the production/staging deployment model.
 - Keep secrets in environment-specific `.env` files and never commit generated secrets.
-- Current product priority is Captive Portal + Voucher access.
+- Current product priority is Captive Portal + WiFi Pass access.
 - Omada is the captive portal enforcement layer; MikroTik remains for station VLAN/DHCP/NAT/AP-management transport.
-- Preserve voucher, portal, wallet, Omada Controller install/manage automation, Omada AP/SSID workflows, and MikroTik read-only scan/station transport features.
+- Preserve vouchers for events/refunds/gifts, portal, Product Items, Physical Stores, customer WiFi Bag, Omada Controller install/manage automation, Omada AP/SSID workflows, and MikroTik read-only scan/station transport features.
 - RADIUS/authentication/accounting/session lab tools, OpenAI settings, AI assistant, and MikroTik HotSpot enforcement are retired from the active product workflow.
+- Wallet / Manual Top-Up is removed completely and must not be rebuilt unless the project owner explicitly changes direction.

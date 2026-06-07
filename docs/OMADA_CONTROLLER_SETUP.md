@@ -8,7 +8,7 @@ Omada Controller remains active in 3JCentralPisowifi. It is used for TP-Link Oma
 Omada Controller:       192.168.50.71
 3JCentralPisowifi API:  192.168.50.70
 Portal URL staging:     http://192.168.50.70:8080/portal
-Portal URL production:  http://192.168.50.70/portal
+Portal URL production:  https://net.3jhotspot.com/portal
 ```
 
 ## What Omada Does
@@ -17,16 +17,16 @@ Portal URL production:  http://192.168.50.70/portal
 - Manages sites, APs, radios, SSIDs, and SSID VLAN tagging.
 - Hosts the open SSID captive portal policy.
 - Redirects unauthenticated clients to the 3JCentralPisowifi portal.
-- Authorizes clients after voucher validation when the Omada API path is supported.
+- Authorizes clients after WiFi pass validation when the Omada API path is supported.
 
 ## What Omada Does Not Do
 
 - It does not store vouchers.
-- It does not store customer wallets.
-- It does not decide voucher validity.
+- It does not store customer WiFi Bag access.
+- It does not decide Product Item, Physical Store, or voucher validity.
 - It does not replace PostgreSQL as the source of truth.
 
-3JCentralPisowifi remains the source of truth for vouchers, wallets, portal sessions, authorization logs, and access decisions.
+3JCentralPisowifi remains the source of truth for Product Items, Physical Store approvals, vouchers, customer WiFi Bag access, portal sessions, authorization logs, and access decisions.
 
 ## Install From Admin Portal
 
@@ -73,7 +73,7 @@ If Omada Controller is reinstalled, local Sites Deployments records may point to
 2. Bind the station to the correct Omada site from Network -> MikroTik -> Configuration.
 3. Ensure the SSID VLAN matches the station customer VLAN.
 4. Configure Omada Portal Authentication / External Portal.
-5. Set the external portal URL to `http://192.168.50.70:8080/portal` for staging.
+5. Set the external portal URL to the current portal URL from Admin -> Captive Portal -> Portal Settings. Production should use `https://net.3jhotspot.com/portal`.
 6. Allow pre-auth/walled-garden access to `192.168.50.70` and DNS as required by the controller.
 7. Test on one AP before wider rollout.
 
@@ -92,7 +92,7 @@ AP not visible:
 - Confirm DHCP option 138 or Omada inform/discovery is configured if the AP is outside the controller subnet.
 - Confirm firewall/raw rules do not block controller/AP traffic.
 
-Voucher valid but authorization failed:
+WiFi pass valid but authorization failed:
 - Check Captive Portal -> Authorization Logs.
 - Confirm Omada is sending client context such as client MAC/token/site.
 - If API authorization is unsupported by this controller version, use the manual Omada portal setup flow.
