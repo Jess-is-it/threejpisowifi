@@ -419,8 +419,6 @@ class ProductItemPayload(BaseModel):
     price: float = Field(default=0, ge=0, le=1_000_000)
     duration_value: int = Field(default=1, ge=1, le=100_000)
     duration_unit: str = Field(default="hours", max_length=20)
-    device_scope: str = Field(default="SINGLE_DEVICE", max_length=30)
-    allowed_devices: int = Field(default=1, ge=1, le=100)
     use_category_discounts: bool = True
     enabled_category_discount_ids: Optional[list[str]] = None
     discounts: list[ProductDiscountPayload] = Field(default_factory=list)
@@ -489,8 +487,6 @@ class PhysicalStoreItemPayload(BaseModel):
     price: float = Field(default=0, ge=0, le=1_000_000)
     duration_value: int = Field(default=1, ge=1, le=100_000)
     duration_unit: str = Field(default="hours", max_length=20)
-    device_scope: str = Field(default="SINGLE_DEVICE", max_length=30)
-    allowed_devices: int = Field(default=1, ge=1, le=100)
     access_scope: str = Field(default="ALL_LOCATIONS", max_length=40)
     allowed_barangay: Optional[str] = Field(default=None, max_length=120)
     more_info_enabled: bool = False
@@ -585,7 +581,6 @@ class AdminCustomerBagItemRequest(BaseModel):
 class PortalBlockDeviceRequest(BaseModel):
     reason: Optional[str] = None
     bag_item_id: Optional[str] = None
-    share_id: Optional[str] = None
 
 
 class PortalSessionRequest(BaseModel):
@@ -674,26 +669,6 @@ class PortalBagClaimVoucherRequest(PortalSessionRequest):
     voucher_code: str = Field(min_length=1, max_length=64)
 
 
-class PortalBagShareCreateRequest(PortalSessionRequest):
-    method: str = Field(default="QR", max_length=20)
-    contact_number: Optional[str] = Field(default=None, max_length=32)
-    confirm_existing_time: bool = False
-
-
-class PortalBagShareClaimRequest(PortalSessionRequest):
-    share_code: Optional[str] = Field(default=None, max_length=256)
-    share_token: Optional[str] = Field(default=None, max_length=512)
-    confirm_existing_time: bool = False
-
-
-class PortalBagShareActionRequest(PortalSessionRequest):
-    reason: Optional[str] = Field(default=None, max_length=500)
-
-
-class PortalBagShareSavedDeviceRequest(PortalSessionRequest):
-    confirm_existing_time: bool = False
-
-
 class PortalProfileOtpRequest(PortalSessionRequest):
     contact_number: str = Field(min_length=6, max_length=32)
 
@@ -726,14 +701,6 @@ class PortalDeviceLinkCodeRequest(PortalSessionRequest):
 
 class PortalDeviceLinkConfirmRequest(PortalSessionRequest):
     link_code: str = Field(min_length=8, max_length=512)
-
-
-class PortalShareDeviceStarRequest(PortalSessionRequest):
-    starred: bool = True
-
-
-class PortalShareDeviceReorderRequest(PortalSessionRequest):
-    shared_user_ids: List[str] = Field(default_factory=list, max_length=100)
 
 
 class PortalWelcomeGiftRedeemRequest(PortalSessionRequest):
@@ -2507,17 +2474,11 @@ def paymongo_checkout_billing(order: dict) -> dict:
 
 
 def paymongo_create_checkout_session(store: dict, secret_key: str, order: dict, session: dict, payment_method: str) -> dict:
-    order_device_scope = normalize_product_device_scope(order.get("device_scope"))
-    order_allowed_devices = normalize_product_allowed_devices(order_device_scope, int(order.get("allowed_devices") or 1))
     purchase_quantity = max(1, int(order.get("purchase_quantity") or 1))
     discount_amount = int(order.get("discount_amount_centavos") or 0)
     quantity_label = f" x{purchase_quantity}" if purchase_quantity > 1 else ""
     discount_label = f" Discount applied: PHP {discount_amount / 100:.2f}." if discount_amount > 0 else ""
-    default_product_description = (
-        f"{order['duration_seconds']} seconds WiFi access for up to {order_allowed_devices} devices.{discount_label}"
-        if order_device_scope == "MULTI_DEVICE"
-        else f"{order['duration_seconds']} seconds WiFi access for one device.{discount_label}"
-    )
+    default_product_description = f"{order['duration_seconds']} seconds WiFi access for one device.{discount_label}"
     success_url = append_url_params(store.get("success_url"), {
         "payment": "success",
         "payment_order_id": order["public_order_id"],
@@ -2553,12 +2514,10 @@ def paymongo_create_checkout_session(store: dict, secret_key: str, order: dict, 
             "product_category_name": order.get("product_category_name") or "",
             "product_category_access_scope": order.get("product_category_access_scope") or "ALL_LOCATIONS",
             "product_category_barangay": order.get("product_category_barangay") or "",
-            "device_scope": order_device_scope,
             "customer_name": order.get("customer_name") or "",
             "customer_email": order.get("customer_email") or "",
             "customer_contact_number": order.get("customer_contact_number") or "",
             "outside_network_purchase": "true" if order.get("outside_network_purchase") else "false",
-            "allowed_devices": str(order_allowed_devices),
             "purchase_quantity": str(purchase_quantity),
             "base_amount_centavos": str(order.get("base_amount_centavos") or order.get("amount_centavos") or ""),
             "discount_amount_centavos": str(discount_amount),
@@ -2871,8 +2830,6 @@ def payment_order_status_payload(order: Optional[dict]) -> dict:
         "product_category_access_scope": order.get("product_category_access_scope") or "ALL_LOCATIONS",
         "product_category_barangay": order.get("product_category_barangay"),
         "duration_seconds": order["duration_seconds"],
-        "device_scope": normalize_product_device_scope(order.get("device_scope")),
-        "allowed_devices": int(order.get("allowed_devices") or 1),
         "customer_name": order.get("customer_name"),
         "customer_email": order.get("customer_email"),
         "customer_contact_number": order.get("customer_contact_number"),
@@ -7313,14 +7270,6 @@ def generate_portal_device_link_code() -> str:
     return "".join(secrets.choice("23456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(8))
 
 
-def generate_portal_share_code() -> str:
-    return "".join(secrets.choice("23456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(8))
-
-
-def generate_portal_share_token() -> str:
-    return f"wps_{secrets.token_urlsafe(32)}"
-
-
 def portal_device_link_code_hash(code: str) -> str:
     code_text = normalize_payment_text(code, 32).upper().replace(" ", "")
     payload = f"DEVICE_LINK:{code_text}".encode("utf-8")
@@ -8547,8 +8496,6 @@ def bag_item_public(row: Optional[dict]) -> Optional[dict]:
         "consumed_at": row.get("consumed_at"),
         "auto_activate_snapshot": row.get("auto_activate_snapshot"),
         "overlap_seconds_snapshot": row.get("overlap_seconds_snapshot"),
-        "device_scope": normalize_product_device_scope(row.get("device_scope")),
-        "allowed_devices": int(row.get("allowed_devices") or 1),
         "access_scope": normalize_product_access_scope(row.get("access_scope")),
         "allowed_barangay": row.get("allowed_barangay"),
         "purchase_quantity": int(row.get("purchase_quantity") or 1),
@@ -8563,499 +8510,6 @@ def bag_item_public(row: Optional[dict]) -> Optional[dict]:
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
-
-
-def bag_item_share_is_usable(item: Optional[dict]) -> bool:
-    if not item:
-        return False
-    if item.get("status") != "ACTIVE":
-        return False
-    if normalize_product_device_scope(item.get("device_scope")) != "MULTI_DEVICE":
-        return False
-    if int(item.get("allowed_devices") or 1) <= 1:
-        return False
-    active_until = aware_utc(item.get("active_until"))
-    return bool(active_until and active_until > datetime.now(timezone.utc))
-
-
-def portal_share_capacity(cur, bag_item_id, exclude_share_id=None) -> dict:
-    cur.execute("SELECT * FROM customer_bag_items WHERE id = %s", (bag_item_id,))
-    item = cur.fetchone()
-    allowed = max(int((item or {}).get("allowed_devices") or 1), 1)
-    params = [bag_item_id]
-    exclude_clause = ""
-    if exclude_share_id:
-        exclude_clause = "AND id <> %s"
-        params.append(exclude_share_id)
-    cur.execute(
-        f"""
-        SELECT
-          COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS active_count,
-          COUNT(*) FILTER (WHERE status = 'PENDING_APPROVAL')::int AS pending_count
-        FROM customer_bag_item_shares
-        WHERE bag_item_id = %s
-          AND status IN ('ACTIVE', 'PENDING_APPROVAL')
-          {exclude_clause}
-        """,
-        tuple(params),
-    )
-    counts = cur.fetchone() or {}
-    active_count = int(counts.get("active_count") or 0)
-    pending_count = int(counts.get("pending_count") or 0)
-    max_shared_slots = max(allowed - 1, 0)
-    reserved_shared_slots = min(max_shared_slots, active_count + pending_count)
-    return {
-        "allowed_devices": allowed,
-        "owner_slots": 1,
-        "active_share_count": active_count,
-        "pending_share_count": pending_count,
-        "used_device_count": min(allowed, 1 + active_count),
-        "reserved_device_count": min(allowed, 1 + reserved_shared_slots),
-        "available_share_slots": max(max_shared_slots - reserved_shared_slots, 0),
-        "full": reserved_shared_slots >= max_shared_slots,
-    }
-
-
-def normalize_portal_share_method(value: Optional[str]) -> str:
-    method = normalize_payment_text(value or "QR", 20).upper()
-    if method not in {"QR", "CODE", "CONTACT"}:
-        raise HTTPException(status_code=400, detail="Unsupported sharing method.")
-    return method
-
-
-def portal_share_qr_payload(token: str) -> str:
-    base = (public_captive_portal_settings().get("current_portal_url") or "https://net.3jhotspot.com/portal").strip()
-    parsed = urlparse(base)
-    if not parsed.scheme or not parsed.netloc:
-        base = "https://net.3jhotspot.com/portal"
-    separator = "&" if "?" in base else "?"
-    return f"{base}{separator}share_token={quote(str(token), safe='')}"
-
-
-def public_customer_bag_share(row: Optional[dict]) -> Optional[dict]:
-    if not row:
-        return None
-    item = {
-        "id": str(row["bag_item_id"]) if row.get("bag_item_id") else None,
-        "product_name": row.get("product_name"),
-        "product_category_name": row.get("product_category_name"),
-        "duration_seconds": int(row.get("duration_seconds") or 0),
-        "remaining_seconds": int(row.get("item_remaining_seconds") or row.get("remaining_seconds") or 0),
-        "active_until": row.get("active_until"),
-        "device_scope": normalize_product_device_scope(row.get("device_scope")),
-        "allowed_devices": int(row.get("allowed_devices") or 1),
-    }
-    token = row.get("share_token")
-    capacity = {
-        "allowed_devices": int(row.get("allowed_devices") or 1),
-        "owner_slots": 1,
-        "active_share_count": int(row.get("active_share_count") or 0),
-    }
-    pending_share_count = int(row.get("pending_share_count") or 0)
-    max_shared_slots = max(capacity["allowed_devices"] - 1, 0)
-    reserved_shared_slots = min(max_shared_slots, capacity["active_share_count"] + pending_share_count)
-    capacity["pending_share_count"] = pending_share_count
-    capacity["used_device_count"] = min(capacity["allowed_devices"], 1 + capacity["active_share_count"])
-    capacity["reserved_device_count"] = min(capacity["allowed_devices"], 1 + reserved_shared_slots)
-    capacity["available_share_slots"] = max(max_shared_slots - reserved_shared_slots, 0)
-    capacity["full"] = reserved_shared_slots >= max_shared_slots
-    shared_mac = normalize_mac_if_valid(
-        row.get("shared_omada_client_mac")
-        or row.get("shared_mikrotik_client_mac")
-        or row.get("shared_client_mac")
-    )
-    omada_name_by_mac = fetch_omada_client_name_map() if shared_mac else {}
-    shared_device_name = (
-        preferred_device_name(omada_name_by_mac.get(shared_mac) if shared_mac else None)
-        or preferred_device_name(infer_device_name_from_user_agent(row.get("shared_user_agent")))
-        or preferred_device_name(row.get("shared_name"))
-        or (shared_mac if shared_mac else None)
-    )
-    return {
-        "id": str(row["id"]),
-        "owner_user_id": str(row["owner_user_id"]) if row.get("owner_user_id") else None,
-        "bag_item_id": str(row["bag_item_id"]) if row.get("bag_item_id") else None,
-        "shared_user_id": str(row["shared_user_id"]) if row.get("shared_user_id") else None,
-        "shared_portal_session_id": str(row["shared_portal_session_id"]) if row.get("shared_portal_session_id") else None,
-        "shared_contact_number": row.get("shared_contact_number"),
-        "share_code": row.get("share_code"),
-        "share_token": token,
-        "qr_payload": portal_share_qr_payload(token) if token else None,
-        "method": row.get("method"),
-        "status": row.get("status"),
-        "claimed_at": row.get("claimed_at"),
-        "approved_at": row.get("approved_at"),
-        "rejected_at": row.get("rejected_at"),
-        "revoked_at": row.get("revoked_at"),
-        "expires_at": row.get("expires_at"),
-        "owner_name": row.get("owner_name"),
-        "shared_name": row.get("shared_name"),
-        "shared_device_name": shared_device_name,
-        "shared_client_mac": shared_mac,
-        "shared_client_ip": str(row.get("shared_client_ip") or row.get("shared_mikrotik_client_ip") or ""),
-        "shared_ssid": row.get("shared_ssid") or "",
-        "shared_site_name": row.get("shared_site_name") or row.get("shared_site") or "",
-        "owner_starred": bool(row.get("owner_starred")),
-        "owner_priority": row.get("owner_priority"),
-        "item": item,
-        "capacity": capacity,
-        "created_at": row.get("created_at"),
-        "updated_at": row.get("updated_at"),
-    }
-
-
-def portal_share_base_query(extra_where: str = "") -> str:
-    return f"""
-        SELECT s.*,
-               i.product_name,
-               i.product_category_name,
-               i.duration_seconds,
-               i.remaining_seconds AS item_remaining_seconds,
-               i.active_until,
-               i.device_scope,
-               i.allowed_devices,
-	               owner_profile.display_name AS owner_name,
-	               shared_profile.display_name AS shared_name,
-	               shared_session.omada_client_mac AS shared_omada_client_mac,
-	               shared_session.mikrotik_client_mac AS shared_mikrotik_client_mac,
-	               shared_session.client_mac AS shared_client_mac,
-	               shared_session.client_ip::text AS shared_client_ip,
-	               shared_session.mikrotik_client_ip::text AS shared_mikrotik_client_ip,
-	               shared_session.ssid AS shared_ssid,
-	               shared_session.site AS shared_site,
-	               shared_session.omada_site_name AS shared_site_name,
-	               shared_session.user_agent AS shared_user_agent,
-	               COALESCE(share_counts.active_share_count, 0) AS active_share_count,
-	               COALESCE(share_counts.pending_share_count, 0) AS pending_share_count
-	        FROM customer_bag_item_shares s
-	        JOIN customer_bag_items i ON i.id = s.bag_item_id
-	        LEFT JOIN portal_customer_profiles owner_profile ON owner_profile.user_id = s.owner_user_id
-	        LEFT JOIN portal_customer_profiles shared_profile ON shared_profile.user_id = s.shared_user_id
-	        LEFT JOIN portal_sessions shared_session ON shared_session.id = s.shared_portal_session_id
-	        LEFT JOIN (
-	            SELECT
-	              bag_item_id,
-	              COUNT(*) FILTER (WHERE status = 'ACTIVE')::int AS active_share_count,
-	              COUNT(*) FILTER (WHERE status = 'PENDING_APPROVAL')::int AS pending_share_count
-	            FROM customer_bag_item_shares
-	            WHERE status IN ('ACTIVE', 'PENDING_APPROVAL')
-	            GROUP BY bag_item_id
-	        ) share_counts ON share_counts.bag_item_id = s.bag_item_id
-	        WHERE 1 = 1
-	        {extra_where}
-	    """
-
-
-def expire_customer_bag_item_shares(cur):
-    cur.execute(
-        """
-        UPDATE customer_bag_item_shares s
-        SET status = 'EXPIRED',
-            updated_at = now()
-        FROM customer_bag_items i
-        WHERE i.id = s.bag_item_id
-          AND s.status IN ('INVITE', 'PENDING_APPROVAL', 'ACTIVE')
-          AND (
-                i.status IN ('CONSUMED', 'EXPIRED', 'CANCELLED')
-             OR (i.active_until IS NOT NULL AND i.active_until <= now())
-             OR (s.expires_at IS NOT NULL AND s.expires_at <= now() AND s.status <> 'ACTIVE')
-          )
-        """
-    )
-
-
-def portal_active_received_share_items(cur, user_id) -> list[dict]:
-    if not user_id:
-        return []
-    expire_customer_bag_item_shares(cur)
-    cur.execute(
-        """
-        SELECT i.*, s.id AS share_id, s.owner_user_id, s.method AS share_method,
-               s.shared_portal_session_id,
-               owner_profile.display_name AS owner_name
-        FROM customer_bag_item_shares s
-        JOIN customer_bag_items i ON i.id = s.bag_item_id
-        LEFT JOIN portal_customer_profiles owner_profile ON owner_profile.user_id = s.owner_user_id
-        WHERE s.shared_user_id = %s
-          AND s.status = 'ACTIVE'
-          AND i.status = 'ACTIVE'
-          AND i.active_until IS NOT NULL
-          AND i.active_until > now()
-        ORDER BY i.active_until ASC, s.created_at ASC
-        """,
-        (user_id,),
-    )
-    rows = cur.fetchall()
-    now = datetime.now(timezone.utc)
-    for row in rows:
-        active_until = aware_utc(row.get("active_until"))
-        row["remaining_seconds"] = max(int((active_until - now).total_seconds()), 0) if active_until else int(row.get("remaining_seconds") or 0)
-        row["shared_access"] = True
-    return rows
-
-
-def user_has_active_customer_time(cur, user_id) -> bool:
-    if not user_id:
-        return False
-    cur.execute(
-        """
-        SELECT 1
-        FROM customer_bag_items
-        WHERE user_id = %s
-          AND status = 'ACTIVE'
-          AND active_until IS NOT NULL
-          AND active_until > now()
-        LIMIT 1
-        """,
-        (user_id,),
-    )
-    if cur.fetchone():
-        return True
-    cur.execute(
-        """
-        SELECT 1
-        FROM customer_bag_item_shares s
-        JOIN customer_bag_items i ON i.id = s.bag_item_id
-        WHERE s.shared_user_id = %s
-          AND s.status = 'ACTIVE'
-          AND i.status = 'ACTIVE'
-          AND i.active_until IS NOT NULL
-          AND i.active_until > now()
-        LIMIT 1
-        """,
-        (user_id,),
-    )
-    return bool(cur.fetchone())
-
-
-def enforce_existing_time_share_confirmation(cur, user_id, confirmed: bool):
-    if not user_id or confirmed:
-        return
-    if user_has_active_customer_time(cur, user_id):
-        raise HTTPException(
-            status_code=409,
-            detail="This device/profile already has active internet time. Proceed only if you want to add this shared Multi-Pass as another active pass.",
-        )
-
-
-def public_shared_bag_item(row: dict) -> dict:
-    public = bag_item_public(row)
-    if not public:
-        return public
-    public["shared_access"] = True
-    public["share_id"] = str(row.get("share_id")) if row.get("share_id") else None
-    public["share_method"] = row.get("share_method")
-    public["owner_user_id"] = str(row.get("owner_user_id")) if row.get("owner_user_id") else None
-    public["owner_name"] = row.get("owner_name") or "Shared profile"
-    return public
-
-
-def get_shareable_customer_bag_item(cur, user_id, item_id) -> dict:
-    try:
-        clean_item_id = str(uuid.UUID(str(item_id)))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid WiFi bag item.")
-    cur.execute("SELECT * FROM customer_bag_items WHERE id = %s AND user_id = %s FOR UPDATE", (clean_item_id, user_id))
-    item = cur.fetchone()
-    if not item:
-        raise HTTPException(status_code=404, detail="WiFi bag item not found.")
-    if not bag_item_share_is_usable(item):
-        raise HTTPException(status_code=400, detail="Only active Multi-Pass items with remaining time can be shared.")
-    return item
-
-
-def user_owns_active_multipass(cur, user_id) -> bool:
-    if not user_id:
-        return False
-    cur.execute(
-        """
-        SELECT 1
-        FROM customer_bag_items
-        WHERE user_id = %s
-          AND status = 'ACTIVE'
-          AND device_scope = 'MULTI_DEVICE'
-          AND allowed_devices > 1
-          AND active_until IS NOT NULL
-          AND active_until > now()
-        LIMIT 1
-        """,
-        (user_id,),
-    )
-    return bool(cur.fetchone())
-
-
-def apply_starred_share_devices_to_multipass(cur, item: dict, session: dict, request: Optional[Request] = None) -> dict:
-    if not bag_item_share_is_usable(item):
-        return {"status": "SKIPPED", "applied": 0, "skipped": 0, "reason": "item_not_shareable"}
-    owner_user_id = item.get("user_id")
-    cur.execute(
-        """
-        SELECT shared_user_id,
-               MIN(owner_priority) FILTER (WHERE owner_priority IS NOT NULL) AS owner_priority
-        FROM customer_bag_item_shares
-        WHERE owner_user_id = %s
-          AND shared_user_id IS NOT NULL
-          AND owner_starred = TRUE
-        GROUP BY shared_user_id
-        ORDER BY owner_priority ASC NULLS LAST, MIN(updated_at) ASC
-        LIMIT 100
-        """,
-        (owner_user_id,),
-    )
-    starred_targets = cur.fetchall()
-    applied = 0
-    skipped = 0
-    for target in starred_targets:
-        target_user_id = target["shared_user_id"]
-        if str(target_user_id) == str(owner_user_id):
-            skipped += 1
-            continue
-        try:
-            ensure_share_capacity_available(cur, item["id"], target_user_id)
-        except HTTPException:
-            skipped += 1
-            continue
-        if user_owns_active_multipass(cur, target_user_id):
-            skipped += 1
-            continue
-        cur.execute(
-            """
-            SELECT *
-            FROM portal_customer_profiles
-            WHERE user_id = %s
-              AND contact_verified_at IS NOT NULL
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """,
-            (target_user_id,),
-        )
-        target_profile = cur.fetchone()
-        if not target_profile:
-            skipped += 1
-            continue
-        cur.execute(
-            """
-            SELECT id
-            FROM portal_sessions
-            WHERE user_id = %s
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """,
-            (target_user_id,),
-        )
-        target_session = cur.fetchone()
-        share = insert_customer_bag_item_share(
-            cur,
-            owner_user_id,
-            item["id"],
-            "CONTACT",
-            shared_user_id=target_user_id,
-            shared_portal_session_id=target_session["id"] if target_session else None,
-            shared_contact_number=target_profile.get("contact_number"),
-            normalized_contact=target_profile.get("normalized_contact"),
-            status="ACTIVE",
-            claimed_at=datetime.now(timezone.utc),
-            approved_at=datetime.now(timezone.utc),
-            expires_at=aware_utc(item.get("active_until")),
-            metadata={"created_from": "STARRED_DEVICE_AUTO_APPLY"},
-        )
-        cur.execute(
-            """
-            UPDATE customer_bag_item_shares
-            SET owner_starred = TRUE,
-                owner_priority = %s,
-                updated_at = now()
-            WHERE id = %s
-            """,
-            (target.get("owner_priority"), share["id"]),
-        )
-        applied += 1
-    if applied or skipped:
-        create_customer_bag_event(
-            cur,
-            owner_user_id,
-            item["id"],
-            session.get("id") if session else None,
-            "STARRED_SHARE_DEVICES_APPLIED",
-            "Starred shared devices applied to Multi-Pass.",
-            metadata={"applied": applied, "skipped": skipped},
-        )
-    return {"status": "SUCCESS", "applied": applied, "skipped": skipped}
-
-
-def insert_customer_bag_item_share(cur, owner_user_id, bag_item_id, method: str, **values) -> dict:
-    for _attempt in range(6):
-        share_code = values.get("share_code") or generate_portal_share_code()
-        share_token = values.get("share_token") or generate_portal_share_token()
-        cur.execute(
-            "SELECT 1 FROM customer_bag_item_shares WHERE share_code = %s OR share_token = %s LIMIT 1",
-            (share_code, share_token),
-        )
-        if cur.fetchone():
-            continue
-        cur.execute(
-            """
-            INSERT INTO customer_bag_item_shares(
-                owner_user_id, bag_item_id, shared_user_id, shared_portal_session_id,
-                shared_contact_number, normalized_contact, share_code, share_token,
-                method, status, claimed_at, approved_at, expires_at, metadata_json
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING *
-            """,
-            (
-                owner_user_id,
-                bag_item_id,
-                values.get("shared_user_id"),
-                values.get("shared_portal_session_id"),
-                values.get("shared_contact_number"),
-                values.get("normalized_contact"),
-                share_code,
-                share_token,
-                method,
-                values.get("status") or "INVITE",
-                values.get("claimed_at"),
-                values.get("approved_at"),
-                values.get("expires_at"),
-                Json(sanitize_summary(values.get("metadata") or {})),
-            ),
-        )
-        return cur.fetchone()
-    raise HTTPException(status_code=500, detail="Could not create a unique sharing code. Try again.")
-
-
-def fetch_customer_bag_item_share(cur, share_id, owner_user_id=None) -> dict:
-    try:
-        clean_share_id = str(uuid.UUID(str(share_id)))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid sharing record.")
-    where = "AND s.id = %s"
-    params = [clean_share_id]
-    if owner_user_id:
-        where += " AND s.owner_user_id = %s"
-        params.append(owner_user_id)
-    cur.execute(portal_share_base_query(where) + " FOR UPDATE OF s", tuple(params))
-    row = cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Sharing record was not found.")
-    return row
-
-
-def notify_customer_share_sms(cur, owner_profile: Optional[dict], shared_profile: dict, share_row: dict):
-    if not shared_profile or not shared_profile.get("normalized_contact"):
-        return None
-    owner_name = (owner_profile or {}).get("display_name") or "A 3J WiFi customer"
-    item_name = share_row.get("product_name") or "WiFi pass"
-    message = f"3J WiFi: {owner_name} shared {item_name} internet access with you. Open net.3jhotspot.com while connected to 3J WiFi to use it."
-    sms_settings = public_portal_sms_confirmation_settings()
-    sms_result = send_a2p_sms_message(
-        shared_profile["normalized_contact"],
-        message,
-        source=sms_settings.get("sender_id"),
-        purpose="WIFI_PASS_SHARED",
-        request_context={"share_id": str(share_row.get("id")), "owner_user_id": str(share_row.get("owner_user_id"))},
-    )
-    return sms_result
 
 
 def create_customer_bag_event(cur, user_id, bag_item_id=None, portal_session_id=None, event_type: str = "BAG_EVENT", message: str = None, auto_activate_enabled: Optional[bool] = None, overlap_seconds_value: Optional[int] = None, metadata: Optional[dict] = None):
@@ -9215,7 +8669,6 @@ def customer_bag_payload(cur, user_id) -> dict:
             "settings": {"auto_activate": False, "overlap_seconds": bag_overlap_seconds()},
             "active_item": None,
             "active_items": [],
-            "shared_items": [],
             "queued_items": [],
             "history_items": [],
             "summary": {"queued_count": 0, "history_count": 0, "remaining_seconds": 0},
@@ -9277,32 +8730,20 @@ def customer_bag_payload(cur, user_id) -> dict:
     )
     history = cur.fetchall()
     active_items = [row for row in active_and_queued if row.get("status") == "ACTIVE"]
-    shared_active_items = portal_active_received_share_items(cur, user_id)
     active_item = active_items[0] if active_items else None
     queued = [row for row in active_and_queued if row.get("status") == "QUEUED"]
     active_public = bag_item_public(active_item)
-    if active_item and bag_item_share_is_usable(active_item) and active_public:
-        active_public["share_capacity"] = portal_share_capacity(cur, active_item["id"])
-    active_public_items = []
-    for row in active_items:
-        public = bag_item_public(row)
-        if public and bag_item_share_is_usable(row):
-            public["share_capacity"] = portal_share_capacity(cur, row["id"])
-        active_public_items.append(public)
-    shared_public_items = [public_shared_bag_item(row) for row in shared_active_items]
-    combined_active_public_items = active_public_items + shared_public_items
+    active_public_items = [bag_item_public(row) for row in active_items]
     queued_public = [bag_item_public(row) for row in queued]
     history_public = [bag_item_public(row) for row in history]
-    remaining = sum(int(item.get("remaining_seconds") or 0) for item in combined_active_public_items) + sum(int(item.get("remaining_seconds") or 0) for item in queued_public)
+    remaining = sum(int(item.get("remaining_seconds") or 0) for item in active_public_items) + sum(int(item.get("remaining_seconds") or 0) for item in queued_public)
     return {
         "settings": {
             "auto_activate": bool(settings.get("auto_activate")),
             "overlap_seconds": overlap,
         },
-        "active_item": active_public or (shared_public_items[0] if shared_public_items else None),
-        "active_items": combined_active_public_items,
-        "own_active_items": active_public_items,
-        "shared_items": shared_public_items,
+        "active_item": active_public,
+        "active_items": active_public_items,
         "queued_items": queued_public,
         "history_items": history_public,
         "summary": {
@@ -9348,9 +8789,9 @@ def create_customer_bag_item_from_payment(cur, order: dict, session: dict, user:
         INSERT INTO customer_bag_items(
             user_id, portal_session_id, payment_order_id, product_item_id, product_category_id,
             product_name, product_category_name, source, status, priority, duration_seconds, remaining_seconds,
-            device_scope, allowed_devices, access_scope, allowed_barangay, purchase_quantity, amount_centavos, currency, metadata_json
+            access_scope, allowed_barangay, purchase_quantity, amount_centavos, currency, metadata_json
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'PAYMENT', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'PAYMENT', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING *
         """,
         (
@@ -9364,8 +8805,6 @@ def create_customer_bag_item_from_payment(cur, order: dict, session: dict, user:
             priority,
             int(order.get("duration_seconds") or 0),
             int(order.get("duration_seconds") or 0),
-            normalize_product_device_scope(order.get("device_scope")),
-            normalize_product_allowed_devices(order.get("device_scope"), int(order.get("allowed_devices") or 1)),
             normalize_product_access_scope(order.get("product_category_access_scope") or "ALL_LOCATIONS"),
             order.get("product_category_barangay"),
             int(order.get("purchase_quantity") or 1),
@@ -9432,9 +8871,9 @@ def create_customer_bag_item_from_voucher(
         INSERT INTO customer_bag_items(
             user_id, portal_session_id, voucher_id, product_category_id,
             product_name, product_category_name, source, status, priority, duration_seconds, remaining_seconds,
-            device_scope, allowed_devices, access_scope, allowed_barangay, purchase_quantity, amount_centavos, currency, metadata_json
+            access_scope, allowed_barangay, purchase_quantity, amount_centavos, currency, metadata_json
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'QUEUED', %s, %s, %s, 'SINGLE_DEVICE', 1, %s, %s, 1, 0, 'PHP', %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'QUEUED', %s, %s, %s, %s, %s, 1, 0, 'PHP', %s)
         RETURNING *
         """,
         (
@@ -9503,7 +8942,7 @@ def ensure_bag_item_voucher(cur, item: dict) -> dict:
             time_value_seconds=int(item.get("duration_seconds") or item.get("remaining_seconds") or 0),
             note=f"Bag item {item['id']} for {item.get('product_name') or 'WiFi package'}",
             status="UNUSED",
-            max_redemptions=max(int(item.get("allowed_devices") or 1), 1),
+            max_redemptions=1,
             code_prefix="BAG",
             code_length=10,
             product_category_id=str(item["product_category_id"]) if item.get("product_category_id") else None,
@@ -9636,9 +9075,8 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
         (voucher["id"], item["user_id"], next_status, omada_status, mikrotik_status, session_access_until, session["id"]),
     )
     session.update(cur.fetchone())
-    starred_share_result = apply_starred_share_devices_to_multipass(cur, active_item, session, request)
-    create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "ITEM_ACTIVATED", "Product item activated.", bool(settings.get("auto_activate")), overlap, {"reason": reason, "authorization": sanitize_summary(authorization), "starred_shares": sanitize_summary(starred_share_result)})
-    return {"status": "SUCCESS", "message": "Product item activated.", "item": active_item, "authorization": sanitize_summary(authorization), "starred_shares": sanitize_summary(starred_share_result)}
+    create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "ITEM_ACTIVATED", "Product item activated.", bool(settings.get("auto_activate")), overlap, {"reason": reason, "authorization": sanitize_summary(authorization)})
+    return {"status": "SUCCESS", "message": "Product item activated.", "item": active_item, "authorization": sanitize_summary(authorization)}
 
 
 def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> dict:
@@ -9685,23 +9123,7 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
             active["remaining_seconds"] = active_remaining
             current_active.append(active)
 
-    shared_active = portal_active_received_share_items(cur, session["user_id"])
-    for shared in shared_active:
-        if shared.get("share_id") and not shared.get("shared_portal_session_id"):
-            cur.execute(
-                """
-                UPDATE customer_bag_item_shares
-                SET shared_portal_session_id = %s,
-                    updated_at = now()
-                WHERE id = %s
-                  AND shared_user_id = %s
-                  AND status = 'ACTIVE'
-                  AND shared_portal_session_id IS NULL
-                """,
-                (session["id"], shared["share_id"], session["user_id"]),
-            )
-            shared["shared_portal_session_id"] = session["id"]
-    active_for_device = current_active + shared_active
+    active_for_device = current_active
 
     if active_for_device and session.get("source") in {"OMADA", "MIKROTIK"} and on_3j_network:
         gateway_sync = ensure_gateway_authorization_for_active_bag_items(cur, session, active_for_device, request, "ACTIVE_ITEM_REFRESH")
@@ -13448,785 +12870,6 @@ def claim_portal_bag_voucher(payload: PortalBagClaimVoucherRequest, request: Req
             }
 
 
-def portal_sharing_payload(cur, user_id) -> dict:
-    if not user_id:
-        return {"shareable_items": [], "owner_shares": [], "received_shares": [], "pending_approvals": []}
-    expire_customer_bag_item_shares(cur)
-    cur.execute(
-        """
-        SELECT *
-        FROM customer_bag_items
-        WHERE user_id = %s
-          AND status = 'ACTIVE'
-          AND device_scope = 'MULTI_DEVICE'
-          AND allowed_devices > 1
-          AND active_until IS NOT NULL
-          AND active_until > now()
-        ORDER BY active_until ASC, updated_at DESC
-        """,
-        (user_id,),
-    )
-    shareable_items = []
-    for row in cur.fetchall():
-        public = bag_item_public(row)
-        public["share_capacity"] = portal_share_capacity(cur, row["id"])
-        shareable_items.append(public)
-    cur.execute(
-        portal_share_base_query("AND s.owner_user_id = %s AND s.status IN ('ACTIVE', 'PENDING_APPROVAL') AND s.shared_user_id IS NOT NULL") + " ORDER BY s.created_at DESC",
-        (user_id,),
-    )
-    owner_shares = [public_customer_bag_share(row) for row in cur.fetchall()]
-    cur.execute(
-        portal_share_base_query("AND s.shared_user_id = %s AND s.status = 'ACTIVE'") + " ORDER BY s.created_at DESC",
-        (user_id,),
-    )
-    received_shares = [public_customer_bag_share(row) for row in cur.fetchall()]
-    pending_approvals = [row for row in owner_shares if row.get("status") == "PENDING_APPROVAL"]
-    return {
-        "shareable_items": shareable_items,
-        "owner_shares": owner_shares,
-        "owner_devices": portal_owner_share_devices(cur, user_id),
-        "received_shares": received_shares,
-        "pending_approvals": pending_approvals,
-    }
-
-
-def extract_portal_share_token(payload: PortalBagShareClaimRequest) -> str:
-    raw = normalize_payment_text(payload.share_token or payload.share_code, 512)
-    if not raw:
-        raise HTTPException(status_code=400, detail="Enter or scan a sharing code.")
-    if raw.startswith("3j-share:"):
-        raw = raw.split(":", 1)[1]
-    parsed = urlparse(raw)
-    if parsed.query:
-        query = dict(parse_qsl(parsed.query))
-        raw = query.get("share_token") or query.get("token") or raw
-    return raw.strip()
-
-
-def portal_owner_share_devices(cur, owner_user_id) -> list[dict]:
-    if not owner_user_id:
-        return []
-    cur.execute(
-        portal_share_base_query("AND s.owner_user_id = %s AND s.shared_user_id IS NOT NULL AND (s.status IN ('ACTIVE', 'PENDING_APPROVAL') OR s.owner_starred = TRUE)") + """
-        ORDER BY s.updated_at DESC
-        LIMIT 500
-        """,
-        (owner_user_id,),
-    )
-    status_rank = {"ACTIVE": 0, "PENDING_APPROVAL": 1, "EXPIRED": 2, "REVOKED": 3, "REJECTED": 4}
-    grouped: dict[str, dict] = {}
-    for row in cur.fetchall():
-        shared_user_id = str(row["shared_user_id"])
-        public = public_customer_bag_share(row)
-        public["owner_starred"] = bool(row.get("owner_starred"))
-        public["owner_priority"] = row.get("owner_priority")
-        current = grouped.get(shared_user_id)
-        if not current:
-            grouped[shared_user_id] = public
-            continue
-        current_starred = bool(current.get("owner_starred") or public.get("owner_starred"))
-        priorities = [
-            value for value in (current.get("owner_priority"), public.get("owner_priority"))
-            if value is not None
-        ]
-        current["owner_starred"] = current_starred
-        current["owner_priority"] = min(priorities) if priorities else None
-        current_rank = status_rank.get(current.get("status"), 9)
-        public_rank = status_rank.get(public.get("status"), 9)
-        if public_rank < current_rank:
-            public["owner_starred"] = current_starred
-            public["owner_priority"] = current["owner_priority"]
-            grouped[shared_user_id] = public
-    devices = list(grouped.values())
-    devices.sort(key=lambda item: (
-        0 if item.get("owner_starred") else 1,
-        item.get("owner_priority") if item.get("owner_priority") is not None else 999999,
-        item.get("shared_device_name") or item.get("shared_name") or "",
-    ))
-    enrich_portal_owner_share_devices_current_state(cur, devices)
-    return devices
-
-
-def enrich_portal_owner_share_devices_current_state(cur, devices: list[dict]):
-    shared_user_ids = sorted({
-        str(device.get("shared_user_id"))
-        for device in devices
-        if device.get("shared_user_id")
-    })
-    if not shared_user_ids:
-        return
-    cur.execute(
-        """
-        SELECT DISTINCT ON (s.user_id)
-               s.user_id,
-               s.public_session_id,
-               COALESCE(s.omada_client_mac, s.mikrotik_client_mac, s.client_mac) AS current_client_mac,
-               s.client_ip::text AS current_client_ip,
-               s.ssid AS current_ssid,
-               COALESCE(s.omada_site_name, s.site) AS current_site,
-               s.source AS current_source,
-               s.status AS current_status,
-               s.updated_at AS current_last_seen_at,
-               s.device_token_last_seen_at,
-               s.user_agent AS current_user_agent,
-               EXISTS (
-                   SELECT 1
-                   FROM customer_bag_items i
-                   WHERE i.user_id = s.user_id
-                     AND i.status = 'ACTIVE'
-                     AND i.active_until IS NOT NULL
-                     AND i.active_until > now()
-               ) OR EXISTS (
-                   SELECT 1
-                   FROM customer_bag_item_shares sh
-                   JOIN customer_bag_items i ON i.id = sh.bag_item_id
-                   WHERE sh.shared_user_id = s.user_id
-                     AND sh.status = 'ACTIVE'
-                     AND i.status = 'ACTIVE'
-                     AND i.active_until IS NOT NULL
-                     AND i.active_until > now()
-               ) AS has_active_time,
-               (
-                   SELECT MAX(active_until)
-                   FROM (
-                       SELECT i.active_until
-                       FROM customer_bag_items i
-                       WHERE i.user_id = s.user_id
-                         AND i.status = 'ACTIVE'
-                         AND i.active_until IS NOT NULL
-                         AND i.active_until > now()
-                       UNION ALL
-                       SELECT i.active_until
-                       FROM customer_bag_item_shares sh
-                       JOIN customer_bag_items i ON i.id = sh.bag_item_id
-                       WHERE sh.shared_user_id = s.user_id
-                         AND sh.status = 'ACTIVE'
-                         AND i.status = 'ACTIVE'
-                         AND i.active_until IS NOT NULL
-                         AND i.active_until > now()
-                   ) active_windows
-               ) AS current_access_expires_at
-        FROM portal_sessions s
-        WHERE s.user_id = ANY(%s::uuid[])
-          AND COALESCE(
-                s.omada_client_mac,
-                s.mikrotik_client_mac,
-                s.client_mac,
-                s.client_ip::text,
-                s.device_token_hash,
-                s.user_agent
-              ) IS NOT NULL
-        ORDER BY s.user_id, s.updated_at DESC
-        """,
-        (shared_user_ids,),
-    )
-    states = {str(row["user_id"]): row for row in cur.fetchall()}
-    omada_snapshots = fetch_omada_client_snapshot_map()
-    now = datetime.now(timezone.utc)
-    recent_window = now - timedelta(minutes=10)
-    for device in devices:
-        state = states.get(str(device.get("shared_user_id") or ""))
-        if not state:
-            device["is_online"] = False
-            device["has_active_time"] = False
-            continue
-        current_mac = normalize_mac_if_valid(state.get("current_client_mac"))
-        snapshot = omada_snapshots.get(current_mac) if current_mac else None
-        current_last_seen = aware_utc(state.get("device_token_last_seen_at")) or aware_utc(state.get("current_last_seen_at"))
-        recently_seen = bool(current_last_seen and current_last_seen >= recent_window)
-        is_omada_online = bool(snapshot and snapshot.get("active"))
-        device_name = (
-            preferred_device_name((snapshot or {}).get("device_name"))
-            or preferred_device_name(infer_device_name_from_user_agent(state.get("current_user_agent")))
-            or preferred_device_name(device.get("shared_device_name"), device.get("shared_name"))
-        )
-        current_ip = (snapshot or {}).get("client_ip") or state.get("current_client_ip") or device.get("shared_client_ip") or ""
-        current_ssid = (snapshot or {}).get("ssid") or state.get("current_ssid") or device.get("shared_ssid") or ""
-        current_site = (snapshot or {}).get("site") or state.get("current_site") or device.get("shared_site_name") or ""
-        device["shared_device_name"] = device_name or device.get("shared_device_name")
-        device["current_client_mac"] = current_mac or device.get("shared_client_mac") or ""
-        device["current_client_ip"] = str(current_ip or "")
-        device["current_ssid"] = current_ssid or ""
-        device["current_site"] = current_site or ""
-        device["current_status"] = state.get("current_status") or ""
-        device["current_source"] = state.get("current_source") or ""
-        device["current_last_seen_at"] = state.get("device_token_last_seen_at") or state.get("current_last_seen_at")
-        device["current_access_expires_at"] = state.get("current_access_expires_at") if aware_utc(state.get("current_access_expires_at")) and aware_utc(state.get("current_access_expires_at")) > now else None
-        device["has_active_time"] = bool(state.get("has_active_time"))
-        device["is_online"] = bool(is_omada_online or recently_seen)
-
-
-def portal_owner_share_device_record(cur, owner_user_id, shared_user_id) -> Optional[dict]:
-    cur.execute(
-        portal_share_base_query("AND s.owner_user_id = %s AND s.shared_user_id = %s AND (s.status IN ('ACTIVE', 'PENDING_APPROVAL') OR s.owner_starred = TRUE)") + """
-        ORDER BY s.owner_starred DESC,
-                 s.owner_priority ASC NULLS LAST,
-                 s.updated_at DESC
-        LIMIT 1
-        """,
-        (owner_user_id, shared_user_id),
-    )
-    return cur.fetchone()
-
-
-def ensure_share_capacity_available(cur, bag_item_id, target_user_id=None, exclude_share_id=None):
-    capacity = portal_share_capacity(cur, bag_item_id, exclude_share_id=exclude_share_id)
-    if capacity["full"]:
-        raise HTTPException(status_code=400, detail="This Multi-Pass has no available shared-device slots.")
-    if target_user_id:
-        cur.execute(
-            """
-            SELECT 1
-            FROM customer_bag_item_shares
-            WHERE bag_item_id = %s
-              AND shared_user_id = %s
-              AND status = 'ACTIVE'
-            LIMIT 1
-            """,
-            (bag_item_id, target_user_id),
-        )
-        if cur.fetchone():
-            raise HTTPException(status_code=409, detail="This customer already has this shared internet pass.")
-    return capacity
-
-
-@app.get("/api/portal/sharing")
-def get_portal_sharing(portal_session_id: str, request: Request):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, PortalSessionRequest(portal_session_id=portal_session_id), request)
-            user = ensure_portal_user(cur, session)
-            return {"status": "SUCCESS", "sharing": portal_sharing_payload(cur, user["id"]), "bag": customer_bag_payload(cur, user["id"])}
-
-
-@app.post("/api/portal/sharing/devices/{shared_user_id}/star")
-def star_portal_share_device(shared_user_id: str, payload: PortalShareDeviceStarRequest, request: Request):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, payload, request)
-            user = ensure_portal_user(cur, session)
-            cur.execute(
-                """
-                UPDATE customer_bag_item_shares
-                SET owner_starred = %s,
-                    owner_priority = CASE
-                      WHEN %s THEN COALESCE(owner_priority, (
-                        SELECT COALESCE(MAX(owner_priority), 0) + 1
-                        FROM customer_bag_item_shares
-                        WHERE owner_user_id = %s AND owner_starred = TRUE
-                      ))
-                      ELSE NULL
-                    END,
-                    updated_at = now()
-                WHERE owner_user_id = %s
-                  AND shared_user_id = %s
-                RETURNING id
-                """,
-                (payload.starred, payload.starred, user["id"], user["id"], shared_user_id),
-            )
-            if not cur.fetchall():
-                raise HTTPException(status_code=404, detail="Shared device was not found.")
-            return {"status": "SUCCESS", "message": "Device priority updated.", "sharing": portal_sharing_payload(cur, user["id"])}
-
-
-@app.post("/api/portal/sharing/devices/{shared_user_id}/delete")
-def delete_portal_share_device(shared_user_id: str, payload: PortalSessionRequest, request: Request):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, payload, request)
-            user = ensure_portal_user(cur, session)
-            cur.execute(
-                """
-                UPDATE customer_bag_item_shares
-                SET status = CASE
-                      WHEN status IN ('ACTIVE', 'PENDING_APPROVAL', 'INVITE') THEN 'REVOKED'
-                      ELSE status
-                    END,
-                    owner_starred = FALSE,
-                    owner_priority = NULL,
-                    revoked_at = CASE WHEN status IN ('ACTIVE', 'PENDING_APPROVAL', 'INVITE') THEN COALESCE(revoked_at, now()) ELSE revoked_at END,
-                    updated_at = now()
-                WHERE owner_user_id = %s
-                  AND shared_user_id = %s
-                RETURNING *
-                """,
-                (user["id"], shared_user_id),
-            )
-            rows = cur.fetchall()
-            if not rows:
-                raise HTTPException(status_code=404, detail="Shared device was not found.")
-            for share in rows:
-                create_customer_bag_event(cur, user["id"], share["bag_item_id"], session["id"], "SHARE_DEVICE_DELETED", "Shared device removed from owner devices.", metadata={"share_id": str(share["id"]), "shared_user_id": str(shared_user_id)})
-            return {"status": "SUCCESS", "message": "Shared device removed.", "sharing": portal_sharing_payload(cur, user["id"])}
-
-
-@app.post("/api/portal/sharing/devices/reorder")
-def reorder_portal_share_devices(payload: PortalShareDeviceReorderRequest, request: Request):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, payload, request)
-            user = ensure_portal_user(cur, session)
-            for index, shared_user_id in enumerate(payload.shared_user_ids or [], start=1):
-                cur.execute(
-                    """
-                    UPDATE customer_bag_item_shares
-                    SET owner_priority = %s,
-                        updated_at = now()
-                    WHERE owner_user_id = %s
-                      AND shared_user_id = %s
-                    """,
-                    (index, user["id"], shared_user_id),
-                )
-            return {"status": "SUCCESS", "message": "Device priority updated.", "sharing": portal_sharing_payload(cur, user["id"])}
-
-
-@app.post("/api/portal/bag/items/{item_id}/shares")
-def create_portal_bag_item_share(item_id: str, payload: PortalBagShareCreateRequest, request: Request):
-    method = normalize_portal_share_method(payload.method)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, payload, request)
-            enforce_portal_device_not_blocked(cur, session, payload, request, "BAG_SHARE_CREATE")
-            user = ensure_portal_user(cur, session)
-            owner_profile = portal_profile_for_user(cur, user["id"])
-            item = get_shareable_customer_bag_item(cur, user["id"], item_id)
-            ensure_share_capacity_available(cur, item["id"])
-            if method in {"QR", "CODE"}:
-                cur.execute(
-                    """
-                    SELECT *
-                    FROM customer_bag_item_shares
-                    WHERE owner_user_id = %s
-                      AND bag_item_id = %s
-                      AND method = %s
-                      AND status = 'INVITE'
-                      AND (expires_at IS NULL OR expires_at > now())
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    (user["id"], item["id"], method),
-                )
-                share = cur.fetchone()
-                if not share:
-                    share = insert_customer_bag_item_share(
-                        cur,
-                        user["id"],
-                        item["id"],
-                        method,
-                        expires_at=aware_utc(item.get("active_until")),
-                        metadata={"created_from": "PORTAL_SHARE_MODAL"},
-                    )
-            else:
-                if not payload.contact_number:
-                    raise HTTPException(status_code=400, detail="Enter a registered contact number to share with.")
-                cur.execute(
-                    """
-                    SELECT COUNT(*)::int AS sent_count
-                    FROM customer_bag_item_shares
-                    WHERE owner_user_id = %s
-                      AND method = 'CONTACT'
-                      AND created_at >= date_trunc('day', now())
-                    """,
-                    (user["id"],),
-                )
-                daily_contact_count = int((cur.fetchone() or {}).get("sent_count") or 0)
-                if daily_contact_count >= 3:
-                    raise HTTPException(status_code=429, detail="Phone sharing is temporarily unavailable. Try again tomorrow.")
-                normalized_contact, a2p_destination = normalize_portal_contact_number(payload.contact_number)
-                cur.execute(
-                    """
-                    SELECT *
-                    FROM portal_customer_profiles
-                    WHERE normalized_contact = %s
-                      AND contact_verified_at IS NOT NULL
-                    ORDER BY updated_at DESC
-                    LIMIT 1
-                    """,
-                    (normalized_contact,),
-                )
-                target_profile = cur.fetchone()
-                if not target_profile:
-                    raise HTTPException(status_code=404, detail="That phone number is not registered yet. Ask them to create a customer profile first.")
-                if str(target_profile["user_id"]) == str(user["id"]):
-                    raise HTTPException(status_code=400, detail="You cannot share this pass to your own profile.")
-                if user_owns_active_multipass(cur, target_profile["user_id"]):
-                    raise HTTPException(status_code=400, detail="That profile already owns an active Multi-Pass. Multi-Pass owners cannot receive another shared Multi-Pass.")
-                enforce_existing_time_share_confirmation(cur, target_profile["user_id"], payload.confirm_existing_time)
-                ensure_share_capacity_available(cur, item["id"], target_profile["user_id"])
-                share = insert_customer_bag_item_share(
-                    cur,
-                    user["id"],
-                    item["id"],
-                    method,
-                    shared_user_id=target_profile["user_id"],
-                    shared_contact_number=target_profile.get("contact_number") or payload.contact_number,
-                    normalized_contact=normalized_contact,
-                    status="ACTIVE",
-                    claimed_at=datetime.now(timezone.utc),
-                    approved_at=datetime.now(timezone.utc),
-                    expires_at=aware_utc(item.get("active_until")),
-                    metadata={"created_from": "CONTACT_INVITE"},
-                )
-                cur.execute(portal_share_base_query("AND s.id = %s"), (share["id"],))
-                share = cur.fetchone()
-                sms_result = notify_customer_share_sms(cur, owner_profile, target_profile, share)
-                create_customer_bag_event(
-                    cur,
-                    user["id"],
-                    item["id"],
-                    session["id"],
-                    "SHARE_CONTACT_INVITE_SENT",
-                    "Multi-Pass shared by registered contact number.",
-                    metadata={"share_id": str(share["id"]), "target_contact": mask_a2p_destination(a2p_destination), "sms": sanitize_summary(sms_result or {})},
-                )
-            cur.execute(portal_share_base_query("AND s.id = %s"), (share["id"],))
-            share_row = cur.fetchone()
-            return {
-                "status": "SUCCESS",
-                "message": "Sharing option is ready." if method != "CONTACT" else "Internet pass shared with the registered phone number.",
-                "share": public_customer_bag_share(share_row),
-                "sharing": portal_sharing_payload(cur, user["id"]),
-            }
-
-
-@app.post("/api/portal/bag/items/{item_id}/shares/saved-device/{shared_user_id}")
-def create_portal_bag_item_saved_device_share(item_id: str, shared_user_id: str, payload: PortalBagShareSavedDeviceRequest, request: Request):
-    try:
-        clean_shared_user_id = str(uuid.UUID(str(shared_user_id)))
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid saved device.")
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, payload, request)
-            enforce_portal_device_not_blocked(cur, session, payload, request, "BAG_SHARE_SAVED_DEVICE_CREATE")
-            user = ensure_portal_user(cur, session)
-            item = get_shareable_customer_bag_item(cur, user["id"], item_id)
-            saved_device = portal_owner_share_device_record(cur, user["id"], clean_shared_user_id)
-            if not saved_device:
-                raise HTTPException(status_code=404, detail="Saved shared device was not found.")
-            if clean_shared_user_id == str(user["id"]):
-                raise HTTPException(status_code=400, detail="You cannot share this pass to your own profile.")
-            cur.execute(
-                """
-                SELECT *
-                FROM portal_customer_profiles
-                WHERE user_id = %s
-                  AND contact_verified_at IS NOT NULL
-                ORDER BY updated_at DESC
-                LIMIT 1
-                """,
-                (clean_shared_user_id,),
-            )
-            target_profile = cur.fetchone()
-            if not target_profile:
-                raise HTTPException(status_code=404, detail="Saved device profile is no longer available.")
-            if user_owns_active_multipass(cur, clean_shared_user_id):
-                raise HTTPException(status_code=400, detail="That profile already owns an active Multi-Pass. Multi-Pass owners cannot receive another shared Multi-Pass.")
-            enforce_existing_time_share_confirmation(cur, clean_shared_user_id, payload.confirm_existing_time)
-            ensure_share_capacity_available(cur, item["id"], clean_shared_user_id)
-            cur.execute(
-                """
-                SELECT *
-                FROM portal_sessions
-                WHERE user_id = %s
-                ORDER BY updated_at DESC
-                LIMIT 1
-                """,
-                (clean_shared_user_id,),
-            )
-            target_session = cur.fetchone()
-            share = insert_customer_bag_item_share(
-                cur,
-                user["id"],
-                item["id"],
-                "CONTACT",
-                shared_user_id=clean_shared_user_id,
-                shared_portal_session_id=target_session["id"] if target_session else None,
-                shared_contact_number=target_profile.get("contact_number"),
-                normalized_contact=target_profile.get("normalized_contact"),
-                status="ACTIVE",
-                claimed_at=datetime.now(timezone.utc),
-                approved_at=datetime.now(timezone.utc),
-                expires_at=aware_utc(item.get("active_until")),
-                metadata={"created_from": "SAVED_DEVICE_SHARE"},
-            )
-            cur.execute(
-                """
-                UPDATE customer_bag_item_shares
-                SET owner_starred = %s,
-                    owner_priority = %s,
-                    updated_at = now()
-                WHERE id = %s
-                """,
-                (bool(saved_device.get("owner_starred")), saved_device.get("owner_priority"), share["id"]),
-            )
-            create_customer_bag_event(
-                cur,
-                user["id"],
-                item["id"],
-                session["id"],
-                "SHARE_SAVED_DEVICE_CONNECTED",
-                "Multi-Pass shared to a saved device.",
-                metadata={"share_id": str(share["id"]), "shared_user_id": clean_shared_user_id},
-            )
-            if target_session:
-                try:
-                    refresh_customer_bag_for_session(cur, target_session, request)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("saved-device share bag refresh failed: %s", exc)
-            cur.execute(portal_share_base_query("AND s.id = %s"), (share["id"],))
-            share_row = cur.fetchone()
-            return {
-                "status": "SUCCESS",
-                "message": "Internet pass shared with the saved device.",
-                "share": public_customer_bag_share(share_row),
-                "sharing": portal_sharing_payload(cur, user["id"]),
-            }
-
-
-@app.post("/api/portal/sharing/claim-qr")
-def claim_portal_bag_item_share_qr(payload: PortalBagShareClaimRequest, request: Request):
-    token = extract_portal_share_token(payload)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, payload, request)
-            enforce_portal_device_not_blocked(cur, session, payload, request, "BAG_SHARE_QR_CLAIM")
-            user = ensure_portal_user(cur, session)
-            cur.execute(portal_share_base_query("AND s.share_token = %s AND s.method = 'QR'") + " FOR UPDATE OF s", (token,))
-            share = cur.fetchone()
-            if not share:
-                raise HTTPException(status_code=404, detail="Sharing QR was not found or is no longer valid.")
-            if str(share["owner_user_id"]) == str(user["id"]):
-                raise HTTPException(status_code=400, detail="You cannot claim your own shared pass.")
-            if user_owns_active_multipass(cur, user["id"]):
-                raise HTTPException(status_code=400, detail="Your profile already owns an active Multi-Pass. Multi-Pass owners cannot receive another shared Multi-Pass.")
-            if share.get("status") == "ACTIVE" and str(share.get("shared_user_id")) == str(user["id"]):
-                return {"status": "SUCCESS", "message": "This shared pass is already linked to your profile.", "share": public_customer_bag_share(share), "sharing": portal_sharing_payload(cur, user["id"]), "bag": customer_bag_payload(cur, user["id"])}
-            if share.get("status") != "INVITE":
-                raise HTTPException(status_code=400, detail="This sharing QR is no longer available.")
-            cur.execute("SELECT * FROM customer_bag_items WHERE id = %s FOR UPDATE", (share["bag_item_id"],))
-            item = cur.fetchone()
-            if not bag_item_share_is_usable(item):
-                raise HTTPException(status_code=400, detail="The shared pass is no longer active.")
-            enforce_existing_time_share_confirmation(cur, user["id"], payload.confirm_existing_time)
-            ensure_share_capacity_available(cur, item["id"], user["id"])
-            cur.execute(
-                """
-                UPDATE customer_bag_item_shares
-                SET shared_user_id = %s,
-                    shared_portal_session_id = %s,
-                    status = 'ACTIVE',
-                    claimed_at = now(),
-                    approved_at = now(),
-                    expires_at = %s,
-                    updated_at = now()
-                WHERE id = %s
-                RETURNING *
-                """,
-                (user["id"], session["id"], item["active_until"], share["id"]),
-            )
-            updated = cur.fetchone()
-            create_customer_bag_event(cur, item["user_id"], item["id"], session["id"], "SHARE_QR_CLAIMED", "Multi-Pass sharing QR was claimed.", metadata={"share_id": str(updated["id"]), "shared_user_id": str(user["id"])})
-            bag_refresh = refresh_customer_bag_for_session(cur, session, request)
-            cur.execute(portal_share_base_query("AND s.id = %s"), (updated["id"],))
-            share_row = cur.fetchone()
-            return {
-                "status": "SUCCESS",
-                "message": "Shared internet pass connected to this profile.",
-                "share": public_customer_bag_share(share_row),
-                "sharing": portal_sharing_payload(cur, user["id"]),
-                "bag": bag_refresh["bag"],
-            }
-
-
-@app.post("/api/portal/sharing/claim-code")
-def claim_portal_bag_item_share_code(payload: PortalBagShareClaimRequest, request: Request):
-    code = normalize_payment_text(payload.share_code or payload.share_token, 64).upper().replace(" ", "").replace("-", "")
-    if not re.fullmatch(r"[A-Z0-9]{8}", code or ""):
-        raise HTTPException(status_code=400, detail="Enter the 8-character sharing code.")
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, payload, request)
-            enforce_portal_device_not_blocked(cur, session, payload, request, "BAG_SHARE_CODE_CLAIM")
-            user = ensure_portal_user(cur, session)
-            cur.execute(portal_share_base_query("AND s.share_code = %s AND s.method = 'CODE'") + " FOR UPDATE OF s", (code,))
-            share = cur.fetchone()
-            if not share:
-                raise HTTPException(status_code=404, detail="Sharing code was not found or is no longer valid.")
-            if str(share["owner_user_id"]) == str(user["id"]):
-                raise HTTPException(status_code=400, detail="You cannot claim your own shared pass.")
-            if user_owns_active_multipass(cur, user["id"]):
-                raise HTTPException(status_code=400, detail="Your profile already owns an active Multi-Pass. Multi-Pass owners cannot receive another shared Multi-Pass.")
-            if share.get("status") != "INVITE":
-                raise HTTPException(status_code=400, detail="This sharing code has already been used or is no longer available.")
-            cur.execute("SELECT * FROM customer_bag_items WHERE id = %s FOR UPDATE", (share["bag_item_id"],))
-            item = cur.fetchone()
-            if not bag_item_share_is_usable(item):
-                raise HTTPException(status_code=400, detail="The shared pass is no longer active.")
-            enforce_existing_time_share_confirmation(cur, user["id"], payload.confirm_existing_time)
-            ensure_share_capacity_available(cur, item["id"], user["id"])
-            cur.execute(
-                """
-                UPDATE customer_bag_item_shares
-                SET shared_user_id = %s,
-                    shared_portal_session_id = %s,
-                    status = 'PENDING_APPROVAL',
-                    claimed_at = now(),
-                    expires_at = %s,
-                    updated_at = now()
-                WHERE id = %s
-                RETURNING *
-                """,
-                (user["id"], session["id"], item["active_until"], share["id"]),
-            )
-            updated = cur.fetchone()
-            create_customer_bag_event(cur, item["user_id"], item["id"], session["id"], "SHARE_CODE_PENDING_APPROVAL", "Sharing code is waiting for owner approval.", metadata={"share_id": str(updated["id"]), "shared_user_id": str(user["id"])})
-            cur.execute(portal_share_base_query("AND s.id = %s"), (updated["id"],))
-            share_row = cur.fetchone()
-            return {
-                "status": "PENDING_APPROVAL",
-                "message": "Sharing request sent. Wait for the owner to approve this device.",
-                "share": public_customer_bag_share(share_row),
-                "sharing": portal_sharing_payload(cur, user["id"]),
-            }
-
-
-@app.post("/api/portal/sharing/{share_id}/approve")
-def approve_portal_bag_item_share(share_id: str, payload: PortalBagShareActionRequest, request: Request):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, payload, request)
-            user = ensure_portal_user(cur, session)
-            share = fetch_customer_bag_item_share(cur, share_id, user["id"])
-            if share.get("status") != "PENDING_APPROVAL" or not share.get("shared_user_id"):
-                raise HTTPException(status_code=400, detail="Only pending sharing requests can be approved.")
-            cur.execute("SELECT * FROM customer_bag_items WHERE id = %s FOR UPDATE", (share["bag_item_id"],))
-            item = cur.fetchone()
-            if not bag_item_share_is_usable(item):
-                raise HTTPException(status_code=400, detail="The shared pass is no longer active.")
-            ensure_share_capacity_available(cur, item["id"], share["shared_user_id"], exclude_share_id=share["id"])
-            cur.execute(
-                """
-                UPDATE customer_bag_item_shares
-                SET status = 'ACTIVE',
-                    approved_at = now(),
-                    expires_at = %s,
-                    updated_at = now()
-                WHERE id = %s
-                RETURNING *
-                """,
-                (item["active_until"], share["id"]),
-            )
-            updated = cur.fetchone()
-            create_customer_bag_event(cur, user["id"], item["id"], session["id"], "SHARE_CODE_APPROVED", "Sharing code request approved.", metadata={"share_id": str(updated["id"])})
-            cur.execute(portal_share_base_query("AND s.id = %s"), (updated["id"],))
-            share_row = cur.fetchone()
-            return {"status": "SUCCESS", "message": "Shared device approved.", "share": public_customer_bag_share(share_row), "sharing": portal_sharing_payload(cur, user["id"])}
-
-
-@app.post("/api/portal/sharing/{share_id}/reject")
-def reject_portal_bag_item_share(share_id: str, payload: PortalBagShareActionRequest, request: Request):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, payload, request)
-            user = ensure_portal_user(cur, session)
-            share = fetch_customer_bag_item_share(cur, share_id, user["id"])
-            if share.get("status") not in {"PENDING_APPROVAL", "INVITE"}:
-                raise HTTPException(status_code=400, detail="This share can no longer be rejected.")
-            cur.execute(
-                """
-                UPDATE customer_bag_item_shares
-                SET status = 'REJECTED',
-                    rejected_at = now(),
-                    metadata_json = COALESCE(metadata_json, '{}'::jsonb) || %s::jsonb,
-                    updated_at = now()
-                WHERE id = %s
-                RETURNING *
-                """,
-                (Json(sanitize_summary({"reject_reason": payload.reason or ""})), share["id"]),
-            )
-            updated = cur.fetchone()
-            create_customer_bag_event(cur, user["id"], share["bag_item_id"], session["id"], "SHARE_REJECTED", "Sharing request rejected.", metadata={"share_id": str(updated["id"]), "reason": payload.reason})
-            cur.execute(portal_share_base_query("AND s.id = %s"), (updated["id"],))
-            share_row = cur.fetchone()
-            return {"status": "SUCCESS", "message": "Sharing request rejected.", "share": public_customer_bag_share(share_row), "sharing": portal_sharing_payload(cur, user["id"])}
-
-
-@app.post("/api/portal/sharing/{share_id}/revoke")
-def revoke_portal_bag_item_share(share_id: str, payload: PortalBagShareActionRequest, request: Request):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            session = ensure_portal_session(cur, payload, request)
-            user = ensure_portal_user(cur, session)
-            share = fetch_customer_bag_item_share(cur, share_id, user["id"])
-            if share.get("status") not in {"ACTIVE", "PENDING_APPROVAL", "INVITE"}:
-                raise HTTPException(status_code=400, detail="This shared device is already closed.")
-            cur.execute(
-                """
-                UPDATE customer_bag_item_shares
-                SET status = 'REVOKED',
-                    revoked_at = now(),
-                    metadata_json = COALESCE(metadata_json, '{}'::jsonb) || %s::jsonb,
-                    updated_at = now()
-                WHERE id = %s
-                RETURNING *
-                """,
-                (Json(sanitize_summary({"revoke_reason": payload.reason or ""})), share["id"]),
-            )
-            updated = cur.fetchone()
-            if share.get("shared_portal_session_id"):
-                cur.execute("SELECT * FROM portal_sessions WHERE id = %s FOR UPDATE", (share["shared_portal_session_id"],))
-                shared_session = cur.fetchone()
-                if shared_session:
-                    cur.execute(
-                        """
-                        SELECT 1
-                        FROM customer_bag_items
-                        WHERE user_id = %s
-                          AND status = 'ACTIVE'
-                          AND active_until IS NOT NULL
-                          AND active_until > now()
-                        LIMIT 1
-                        """,
-                        (shared_session["user_id"],),
-                    )
-                    has_own_active = bool(cur.fetchone())
-                    cur.execute(
-                        """
-                        SELECT 1
-                        FROM customer_bag_item_shares s
-                        JOIN customer_bag_items i ON i.id = s.bag_item_id
-                        WHERE s.shared_user_id = %s
-                          AND s.status = 'ACTIVE'
-                          AND s.id <> %s
-                          AND i.status = 'ACTIVE'
-                          AND i.active_until IS NOT NULL
-                          AND i.active_until > now()
-                        LIMIT 1
-                        """,
-                        (shared_session["user_id"], share["id"]),
-                    )
-                    has_other_share = bool(cur.fetchone())
-                    if not has_own_active and not has_other_share:
-                        if shared_session.get("source") == "OMADA":
-                            revoke_omada_authorized_clients(cur, shared_session)
-                        cur.execute(
-                            """
-                            UPDATE portal_sessions
-                            SET status = 'EXPIRED',
-                                access_expires_at = now(),
-                                omada_authorization_status = CASE WHEN source = 'OMADA' THEN 'EXPIRED' ELSE omada_authorization_status END,
-                                updated_at = now()
-                            WHERE id = %s
-                            """,
-                            (shared_session["id"],),
-                        )
-            create_customer_bag_event(cur, user["id"], share["bag_item_id"], session["id"], "SHARE_REVOKED", "Shared device access revoked.", metadata={"share_id": str(updated["id"]), "reason": payload.reason})
-            cur.execute(portal_share_base_query("AND s.id = %s"), (updated["id"],))
-            share_row = cur.fetchone()
-            return {"status": "SUCCESS", "message": "Shared access revoked.", "share": public_customer_bag_share(share_row), "sharing": portal_sharing_payload(cur, user["id"])}
-
 
 def payment_checkout_method(store: dict, value: str) -> str:
     method = normalize_payment_text(value or "gcash", 40).lower()
@@ -14312,8 +12955,6 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
             amount_centavos = checkout_amount["amount_centavos"]
             duration_unit = normalize_product_duration_unit(product["duration_unit"])
             duration_seconds = product_duration_seconds(product["duration_value"], duration_unit) * checkout_amount["quantity"]
-            device_scope = normalize_product_device_scope(product.get("device_scope"))
-            allowed_devices = normalize_product_allowed_devices(device_scope, int(product.get("allowed_devices") or 1))
             public_order_id = generate_payment_order_public_id()
             for _ in range(10):
                 cur.execute("SELECT 1 FROM payment_orders WHERE public_order_id = %s", (public_order_id,))
@@ -14326,7 +12967,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     public_order_id, provider, provider_mode, product_item_id, portal_session_id, user_id,
                     status, fulfillment_status, payment_method, amount_centavos, base_amount_centavos,
                     purchase_quantity, discount_type, discount_value, discount_amount_centavos, currency, product_name,
-                    product_description, duration_seconds, device_scope, allowed_devices, product_category_id,
+                    product_description, duration_seconds, product_category_id,
                     product_category_name, product_category_access_scope, product_category_barangay, client_mac, client_ip, user_agent,
                     customer_name, customer_email, customer_contact_number, outside_network_purchase
                 )
@@ -14334,7 +12975,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     %s, 'PAYMONGO', %s, %s, %s, %s,
                     'PENDING', 'PENDING', %s, %s, %s,
                     %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
                     %s, %s, %s, NULLIF(%s, '')::inet, %s,
                     %s, %s, %s, %s
                 )
@@ -14357,8 +12998,6 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     product["name"],
                     product.get("description"),
                     duration_seconds,
-                    device_scope,
-                    allowed_devices,
                     product.get("category_id"),
                     product.get("category_name"),
                     category_access_scope,
@@ -15139,7 +13778,6 @@ def voucher_summary():
 
 PRODUCT_DURATION_UNITS = {"minutes", "hours", "days"}
 PRODUCT_ITEM_STATUSES = {"ACTIVE", "DISABLED"}
-PRODUCT_DEVICE_SCOPES = {"SINGLE_DEVICE", "MULTI_DEVICE"}
 PRODUCT_DISCOUNT_TYPES = {"PERCENT", "FIXED"}
 PRODUCT_CATEGORY_ACCESS_SCOPES = {"ALL_LOCATIONS", "BARANGAY_ONLY"}
 PRODUCT_CATEGORY_STATUSES = {"ACTIVE", "DISABLED"}
@@ -15274,31 +13912,6 @@ def normalize_product_category_id(value: Optional[str]) -> Optional[str]:
         return str(uuid.UUID(text))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Product category id is invalid.") from exc
-
-
-def normalize_product_device_scope(value: Optional[str]) -> str:
-    scope = (value or "SINGLE_DEVICE").strip().upper()
-    aliases = {
-        "INDIVIDUAL": "SINGLE_DEVICE",
-        "PERSONAL": "SINGLE_DEVICE",
-        "PERSONAL_PASS": "SINGLE_DEVICE",
-        "SINGLE": "SINGLE_DEVICE",
-        "MULTIPLE": "MULTI_DEVICE",
-        "MULTIPLE_DEVICES": "MULTI_DEVICE",
-        "SHARED": "MULTI_DEVICE",
-        "SHARED_PASS": "MULTI_DEVICE",
-        "GROUP": "MULTI_DEVICE",
-    }
-    scope = aliases.get(scope, scope)
-    if scope not in PRODUCT_DEVICE_SCOPES:
-        raise HTTPException(status_code=400, detail="Product category must be Personal Pass or Shared Device Pass.")
-    return scope
-
-
-def normalize_product_allowed_devices(device_scope: str, allowed_devices: int) -> int:
-    if device_scope == "SINGLE_DEVICE":
-        return 1
-    return max(2, min(int(allowed_devices or 2), 100))
 
 
 def normalize_product_discount_type(value: Optional[str]) -> Optional[str]:
@@ -15749,8 +14362,6 @@ def serialize_product_item(row) -> dict:
     if not row:
         return {}
     duration_unit = normalize_product_duration_unit(row["duration_unit"])
-    device_scope = normalize_product_device_scope(row.get("device_scope") or ("MULTI_DEVICE" if int(row.get("allowed_devices") or 1) > 1 else "SINGLE_DEVICE"))
-    allowed_devices = normalize_product_allowed_devices(device_scope, int(row.get("allowed_devices") or 1))
     price = float(row["price"] or 0)
     category_access_scope = normalize_product_access_scope(row.get("category_access_scope")) if row.get("category_id") or row.get("category_access_scope") else "ALL_LOCATIONS"
     category_barangay = normalize_barangay_label(row.get("category_allowed_barangay"))
@@ -15781,10 +14392,6 @@ def serialize_product_item(row) -> dict:
         "duration_unit": duration_unit,
         "duration_seconds": product_duration_seconds(row["duration_value"], duration_unit),
         "duration_label": product_duration_label(row["duration_value"], duration_unit),
-        "device_scope": device_scope,
-        "device_scope_label": "Shared Device Pass" if device_scope == "MULTI_DEVICE" else "Personal Pass",
-        "allowed_devices": allowed_devices,
-        "allowed_devices_label": f"{allowed_devices} device{'s' if allowed_devices != 1 else ''}",
         "use_category_discounts": bool(use_category_discounts),
         "enabled_category_discount_ids": enabled_category_discount_ids,
         "category_discounts": category_discounts,
@@ -16279,8 +14886,6 @@ def serialize_physical_store_item(row) -> dict:
     if not row:
         return {}
     duration_unit = normalize_product_duration_unit(row.get("duration_unit") or "hours")
-    device_scope = normalize_product_device_scope(row.get("device_scope") or "SINGLE_DEVICE")
-    allowed_devices = normalize_product_allowed_devices(device_scope, int(row.get("allowed_devices") or 1))
     access_scope = normalize_product_access_scope(row.get("access_scope") or "ALL_LOCATIONS")
     allowed_barangay = normalize_barangay_label(row.get("allowed_barangay"))
     price = float(row.get("price") or 0)
@@ -16297,10 +14902,6 @@ def serialize_physical_store_item(row) -> dict:
         "duration_unit": duration_unit,
         "duration_seconds": product_duration_seconds(int(row.get("duration_value") or 1), duration_unit),
         "duration_label": product_duration_label(int(row.get("duration_value") or 1), duration_unit),
-        "device_scope": device_scope,
-        "device_scope_label": "Shared Device Pass" if device_scope == "MULTI_DEVICE" else "Personal Pass",
-        "allowed_devices": allowed_devices,
-        "allowed_devices_label": f"{allowed_devices} device{'s' if allowed_devices != 1 else ''}",
         "access_scope": access_scope,
         "access_scope_label": "Barangay only" if access_scope == "BARANGAY_ONLY" else "All Locations",
         "allowed_barangay": allowed_barangay,
@@ -16356,9 +14957,7 @@ def physical_store_item_catalog_rows(active_only: bool = False) -> list[dict]:
 
 def physical_store_item_payload_values(payload: PhysicalStoreItemPayload) -> dict:
     duration_unit = normalize_product_duration_unit(payload.duration_unit)
-    device_scope = normalize_product_device_scope(payload.device_scope)
     access_scope = normalize_product_access_scope(payload.access_scope)
-    allowed_devices = normalize_product_allowed_devices(device_scope, payload.allowed_devices)
     name = re.sub(r"\s+", " ", payload.name.strip())
     if not name:
         raise HTTPException(status_code=400, detail="Store item name is required.")
@@ -16371,8 +14970,6 @@ def physical_store_item_payload_values(payload: PhysicalStoreItemPayload) -> dic
         "price": payload.price,
         "duration_value": int(payload.duration_value),
         "duration_unit": duration_unit,
-        "device_scope": device_scope,
-        "allowed_devices": allowed_devices,
         "access_scope": access_scope,
         "allowed_barangay": allowed_barangay if access_scope == "BARANGAY_ONLY" else None,
         "more_info_enabled": bool(payload.more_info_enabled),
@@ -16442,8 +15039,6 @@ def store_purchase_request_items(cur, request_ids: list[str]) -> dict[str, list[
             "price_display": money_display_from_centavos(int(row.get("price_centavos") or 0)),
             "quantity": int(row.get("quantity") or 1),
             "duration_seconds": int(row.get("duration_seconds") or 0),
-            "device_scope": normalize_product_device_scope(row.get("device_scope") or "SINGLE_DEVICE"),
-            "allowed_devices": int(row.get("allowed_devices") or 1),
             "access_scope": normalize_product_access_scope(row.get("access_scope") or "ALL_LOCATIONS"),
             "allowed_barangay": row.get("allowed_barangay"),
             "metadata": row.get("metadata_json") or {},
@@ -16475,8 +15070,6 @@ def serialize_store_purchase_request(row: dict, items: Optional[list[dict]] = No
         "amount_display": money_display_from_centavos(int(row.get("amount_centavos") or 0), row.get("currency") or "PHP"),
         "currency": row.get("currency") or "PHP",
         "total_duration_seconds": int(row.get("total_duration_seconds") or 0),
-        "device_scope": normalize_product_device_scope(row.get("device_scope") or "SINGLE_DEVICE"),
-        "allowed_devices": int(row.get("allowed_devices") or 1),
         "purchase_quantity": int(row.get("purchase_quantity") or 1),
         "customer_name": row.get("customer_name") or "",
         "customer_contact_number": row.get("customer_contact_number") or "",
@@ -16745,8 +15338,6 @@ def store_purchase_selection(cur, store: dict, payload_items: list[PortalStorePu
     amount_centavos = 0
     total_duration_seconds = 0
     total_quantity = 0
-    device_scopes = set()
-    allowed_devices = 1
     access_scope = "ALL_LOCATIONS"
     allowed_barangay = None
     current_barangay = portal_current_barangay(session, None)
@@ -16763,9 +15354,6 @@ def store_purchase_selection(cur, store: dict, payload_items: list[PortalStorePu
         amount_centavos += line_amount
         total_duration_seconds += line_duration
         total_quantity += quantity
-        device_scope = normalize_product_device_scope(item["device_scope"])
-        device_scopes.add(device_scope)
-        allowed_devices = max(allowed_devices, normalize_product_allowed_devices(device_scope, int(item["allowed_devices"] or 1)))
         lines.append({
             "row": row,
             "item": item,
@@ -16776,17 +15364,11 @@ def store_purchase_selection(cur, store: dict, payload_items: list[PortalStorePu
         })
     if not lines or amount_centavos <= 0 or total_duration_seconds <= 0:
         raise HTTPException(status_code=400, detail="Selected store items must have price and time.")
-    if len(device_scopes) > 1:
-        raise HTTPException(status_code=400, detail="Choose either Single Pass items or Multi-Pass items, not both in one store purchase.")
-    device_scope = device_scopes.pop() if device_scopes else "SINGLE_DEVICE"
-    allowed_devices = normalize_product_allowed_devices(device_scope, allowed_devices)
     return {
         "lines": lines,
         "amount_centavos": amount_centavos,
         "total_duration_seconds": total_duration_seconds,
         "total_quantity": total_quantity,
-        "device_scope": device_scope,
-        "allowed_devices": allowed_devices,
         "access_scope": access_scope,
         "allowed_barangay": allowed_barangay,
     }
@@ -16821,10 +15403,10 @@ def create_customer_bag_item_from_store_purchase(cur, purchase: dict, items: lis
         """
         INSERT INTO customer_bag_items(
             user_id, portal_session_id, product_name, product_category_name, source, status, priority,
-            duration_seconds, remaining_seconds, device_scope, allowed_devices, access_scope, allowed_barangay,
+            duration_seconds, remaining_seconds, access_scope, allowed_barangay,
             purchase_quantity, amount_centavos, currency, metadata_json
         )
-        VALUES (%s, %s, %s, %s, 'STORE_PURCHASE', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, 'STORE_PURCHASE', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING *
         """,
         (
@@ -16835,8 +15417,6 @@ def create_customer_bag_item_from_store_purchase(cur, purchase: dict, items: lis
             priority,
             int(purchase.get("total_duration_seconds") or 0),
             int(purchase.get("total_duration_seconds") or 0),
-            normalize_product_device_scope(purchase.get("device_scope")),
-            normalize_product_allowed_devices(purchase.get("device_scope"), int(purchase.get("allowed_devices") or 1)),
             normalize_product_access_scope((purchase.get("metadata_json") or {}).get("access_scope") or "ALL_LOCATIONS"),
             (purchase.get("metadata_json") or {}).get("allowed_barangay"),
             quantity,
@@ -17046,8 +15626,6 @@ def serialize_sales_order(row: dict) -> dict:
         "product_category_access_scope": row.get("product_category_access_scope") or "ALL_LOCATIONS",
         "product_category_barangay": row.get("product_category_barangay") or "",
         "duration_seconds": int(row.get("duration_seconds") or 0),
-        "device_scope": normalize_product_device_scope(row.get("device_scope")),
-        "allowed_devices": int(row.get("allowed_devices") or 1),
         "site_name": row.get("site_name") or "Unknown Site",
         "barangay": row.get("barangay") or "Unknown Barangay",
         "customer_name": customer_name,
@@ -17210,8 +15788,6 @@ def build_sales_payload(range_days: int = 30) -> dict:
                 po.product_category_access_scope,
                 po.product_category_barangay,
                 po.duration_seconds,
-                po.device_scope,
-                po.allowed_devices,
                 po.client_mac,
                 po.client_ip,
                 po.user_agent,
@@ -17270,8 +15846,6 @@ def build_sales_payload(range_days: int = 30) -> dict:
                 COALESCE((spr.metadata_json ->> 'access_scope'), 'ALL_LOCATIONS') AS product_category_access_scope,
                 spr.metadata_json ->> 'allowed_barangay' AS product_category_barangay,
                 spr.total_duration_seconds AS duration_seconds,
-                spr.device_scope,
-                spr.allowed_devices,
                 COALESCE(session_row.omada_client_mac, session_row.mikrotik_client_mac, session_row.client_mac) AS client_mac,
                 session_row.client_ip,
                 session_row.user_agent,
@@ -17690,8 +16264,6 @@ def active_access_rows(omada_client_by_mac: Optional[dict] = None) -> list[dict]
                i.product_category_name,
                i.source AS item_source,
                i.status AS item_status,
-               i.device_scope,
-               i.allowed_devices,
                i.activated_at,
                i.active_until,
                GREATEST(EXTRACT(EPOCH FROM (i.active_until - now()))::int, 0) AS remaining_time_seconds,
@@ -17730,73 +16302,6 @@ def active_access_rows(omada_client_by_mac: Optional[dict] = None) -> list[dict]
             or preferred_device_name(infer_device_name_from_user_agent(row.get("user_agent")))
             or preferred_device_name(row.get("customer_name"))
             or "Unknown device"
-        )
-        row["client_mac"] = mac or row.get("client_mac")
-        row["remaining_time_seconds"] = int(row.get("remaining_time_seconds") or 0)
-        rows.append(row)
-
-    shared_rows = fetch_all(
-        """
-        SELECT sh.id AS share_id,
-               i.id AS bag_item_id,
-               sh.shared_user_id AS user_id,
-               p.id AS customer_profile_id,
-               p.display_name AS customer_name,
-               p.email AS customer_email,
-               p.contact_number AS customer_contact_number,
-               sh.shared_portal_session_id AS portal_session_id,
-               s.public_session_id,
-               i.product_name,
-               i.product_category_name,
-               i.source AS item_source,
-               i.status AS item_status,
-               i.device_scope,
-               i.allowed_devices,
-               sh.approved_at AS activated_at,
-               i.active_until,
-               GREATEST(EXTRACT(EPOCH FROM (i.active_until - now()))::int, 0) AS remaining_time_seconds,
-               s.source AS portal_source,
-               s.status AS session_status,
-               COALESCE(s.omada_client_mac, s.mikrotik_client_mac, s.client_mac) AS client_mac,
-               host(s.client_ip) AS client_ip,
-               COALESCE(s.omada_ap_mac, s.ap_mac) AS ap_mac,
-               s.ssid,
-               COALESCE(s.omada_site_name, s.site) AS site,
-               s.user_agent,
-               s.omada_authorization_status,
-               s.mikrotik_authorization_status,
-               sh.owner_user_id,
-               owner_profile.display_name AS owner_name,
-               owner_profile.contact_number AS owner_contact_number,
-               sh.method AS share_method
-        FROM customer_bag_item_shares sh
-        JOIN customer_bag_items i ON i.id = sh.bag_item_id
-        LEFT JOIN portal_sessions s ON s.id = sh.shared_portal_session_id
-        LEFT JOIN portal_customer_profiles p ON p.user_id = sh.shared_user_id
-        LEFT JOIN portal_customer_profiles owner_profile ON owner_profile.user_id = sh.owner_user_id
-        WHERE sh.status = 'ACTIVE'
-          AND i.status = 'ACTIVE'
-          AND i.active_until IS NOT NULL
-          AND i.active_until > now()
-        ORDER BY i.active_until ASC, sh.approved_at DESC NULLS LAST
-        LIMIT 500
-        """
-    )
-    for row in shared_rows:
-        row = dict(row)
-        row["access_id"] = f"share:{row['share_id']}"
-        row["access_kind"] = "SHARED_MULTIPASS"
-        row["access_source"] = "Shared Multi-Pass"
-        row["shared_access"] = True
-        row["display_voucher_code"] = None
-        apply_current_network_to_access_row(row, omada_client_by_mac, configured_ssids)
-        mac = normalize_mac_if_valid(row.get("client_mac"))
-        current_client = omada_client_by_session_network(row.get("client_mac"), row.get("client_ip"), omada_client_by_mac)
-        row["device_name"] = (
-            preferred_device_name((current_client or {}).get("device_name"))
-            or preferred_device_name(infer_device_name_from_user_agent(row.get("user_agent")))
-            or preferred_device_name(row.get("customer_name"))
-            or "Shared device"
         )
         row["client_mac"] = mac or row.get("client_mac")
         row["remaining_time_seconds"] = int(row.get("remaining_time_seconds") or 0)
@@ -18490,26 +16995,13 @@ def adjust_portal_session_time(
         cur.execute(
             """
             SELECT max(access_until) AS access_until
-            FROM (
-                SELECT active_until AS access_until
-                FROM customer_bag_items
-                WHERE portal_session_id = %s
-                  AND status = 'ACTIVE'
-                  AND active_until IS NOT NULL
-                  AND active_until > now()
-                UNION ALL
-                SELECT i.active_until AS access_until
-                FROM customer_bag_item_shares sh
-                JOIN customer_bag_items i ON i.id = sh.bag_item_id
-                WHERE sh.shared_portal_session_id = %s
-                  AND sh.shared_user_id = %s
-                  AND sh.status = 'ACTIVE'
-                  AND i.status = 'ACTIVE'
-                  AND i.active_until IS NOT NULL
-                  AND i.active_until > now()
-            ) active_windows
+            FROM customer_bag_items
+            WHERE portal_session_id = %s
+              AND status = 'ACTIVE'
+              AND active_until IS NOT NULL
+              AND active_until > now()
             """,
-            (session["id"], session["id"], session["user_id"]),
+            (session["id"],),
         )
         new_expiry = aware_utc((cur.fetchone() or {}).get("access_until")) or now
     else:
@@ -18568,77 +17060,6 @@ def adjust_portal_session_time(
         "remaining_time_seconds": max(int((aware_utc(updated.get("access_expires_at")) - now).total_seconds()), 0),
         "actual_delta_seconds": actual_delta_seconds,
         "affected_bag_item_ids": affected_bag_item_ids,
-        "omada_sync": sanitize_summary(omada_sync),
-    }
-
-
-def admin_revoke_shared_access(cur, share_id: str, admin, reason: str = "Shared Multi-Pass removed by operator") -> dict:
-    try:
-        clean_share_id = str(uuid.UUID(str(share_id)))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail="Shared access id is invalid.") from exc
-    cur.execute(portal_share_base_query("AND s.id = %s") + " FOR UPDATE OF s", (clean_share_id,))
-    share = cur.fetchone()
-    if not share:
-        raise HTTPException(status_code=404, detail="Shared Multi-Pass access was not found.")
-    if share.get("status") != "ACTIVE":
-        raise HTTPException(status_code=400, detail="Shared Multi-Pass access is not active.")
-    cur.execute(
-        """
-        UPDATE customer_bag_item_shares
-        SET status = 'REVOKED',
-            revoked_at = now(),
-            metadata_json = COALESCE(metadata_json, '{}'::jsonb) || %s::jsonb,
-            updated_at = now()
-        WHERE id = %s
-        RETURNING *
-        """,
-        (Json(sanitize_summary({"revoke_reason": reason, "admin_id": str(admin["id"])})), clean_share_id),
-    )
-    updated = cur.fetchone()
-    shared_session = None
-    omada_sync = None
-    if share.get("shared_portal_session_id"):
-        cur.execute("SELECT * FROM portal_sessions WHERE id = %s FOR UPDATE", (share["shared_portal_session_id"],))
-        shared_session = cur.fetchone()
-        if shared_session and not user_has_active_customer_time(cur, shared_session.get("user_id")):
-            if shared_session.get("source") == "OMADA":
-                omada_sync = revoke_omada_authorized_clients(cur, shared_session, admin)
-            cur.execute(
-                """
-                UPDATE portal_sessions
-                SET status = 'EXPIRED',
-                    access_expires_at = now(),
-                    last_error = %s,
-                    omada_authorization_status = CASE WHEN source = 'OMADA' THEN 'EXPIRED' ELSE omada_authorization_status END,
-                    updated_at = now()
-                WHERE id = %s
-                RETURNING *
-                """,
-                (reason, shared_session["id"]),
-            )
-            shared_session = cur.fetchone()
-    create_customer_bag_event(
-        cur,
-        share["owner_user_id"],
-        share["bag_item_id"],
-        shared_session["id"] if shared_session else None,
-        "ADMIN_SHARE_REVOKED",
-        reason,
-        metadata={
-            "share_id": clean_share_id,
-            "shared_user_id": str(share.get("shared_user_id") or ""),
-            "admin_id": str(admin["id"]),
-            "omada_sync": sanitize_summary(omada_sync),
-        },
-    )
-    cur.execute(portal_share_base_query("AND s.id = %s"), (clean_share_id,))
-    share_row = cur.fetchone()
-    return {
-        "status": "ok",
-        "message": "Shared Multi-Pass access removed.",
-        "share": public_customer_bag_share(share_row),
-        "session": sanitize_summary(shared_session),
         "omada_sync": sanitize_summary(omada_sync),
     }
 
@@ -19067,11 +17488,11 @@ def create_physical_store_catalog_item(payload: PhysicalStoreItemPayload, admin=
             cur.execute(
                 """
                 INSERT INTO physical_store_items(
-                    store_id, name, description, price, duration_value, duration_unit, device_scope,
-                    allowed_devices, access_scope, allowed_barangay, more_info_enabled, more_info_text,
+                    store_id, name, description, price, duration_value, duration_unit,
+                    access_scope, allowed_barangay, more_info_enabled, more_info_text,
                     status, sort_order, created_by_admin_id
                 )
-                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -19080,8 +17501,6 @@ def create_physical_store_catalog_item(payload: PhysicalStoreItemPayload, admin=
                     values["price"],
                     values["duration_value"],
                     values["duration_unit"],
-                    values["device_scope"],
-                    values["allowed_devices"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -19112,8 +17531,6 @@ def update_physical_store_catalog_item(item_id: str, payload: PhysicalStoreItemP
                     price = %s,
                     duration_value = %s,
                     duration_unit = %s,
-                    device_scope = %s,
-                    allowed_devices = %s,
                     access_scope = %s,
                     allowed_barangay = %s,
                     more_info_enabled = %s,
@@ -19130,8 +17547,6 @@ def update_physical_store_catalog_item(item_id: str, payload: PhysicalStoreItemP
                     values["price"],
                     values["duration_value"],
                     values["duration_unit"],
-                    values["device_scope"],
-                    values["allowed_devices"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -19178,11 +17593,11 @@ def create_physical_store_item(store_id: str, payload: PhysicalStoreItemPayload,
             cur.execute(
                 """
                 INSERT INTO physical_store_items(
-                    store_id, name, description, price, duration_value, duration_unit, device_scope,
-                    allowed_devices, access_scope, allowed_barangay, more_info_enabled, more_info_text,
+                    store_id, name, description, price, duration_value, duration_unit,
+                    access_scope, allowed_barangay, more_info_enabled, more_info_text,
                     status, sort_order, created_by_admin_id
                 )
-                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -19191,8 +17606,6 @@ def create_physical_store_item(store_id: str, payload: PhysicalStoreItemPayload,
                     values["price"],
                     values["duration_value"],
                     values["duration_unit"],
-                    values["device_scope"],
-                    values["allowed_devices"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -19242,8 +17655,6 @@ def update_physical_store_item(store_id: str, item_id: str, payload: PhysicalSto
                     price = %s,
                     duration_value = %s,
                     duration_unit = %s,
-                    device_scope = %s,
-                    allowed_devices = %s,
                     access_scope = %s,
                     allowed_barangay = %s,
                     more_info_enabled = %s,
@@ -19260,8 +17671,6 @@ def update_physical_store_item(store_id: str, item_id: str, payload: PhysicalSto
                     values["price"],
                     values["duration_value"],
                     values["duration_unit"],
-                    values["device_scope"],
-                    values["allowed_devices"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -19473,10 +17882,10 @@ def create_portal_store_purchase_request(payload: PortalStorePurchaseCreateReque
                 INSERT INTO store_purchase_requests(
                     public_id, store_id, user_id, portal_session_id, customer_profile_id,
                     request_method, approval_code_hash, display_code, qr_payload, auto_activate_if_no_time,
-                    amount_centavos, total_duration_seconds, device_scope, allowed_devices, purchase_quantity,
+                    amount_centavos, total_duration_seconds, purchase_quantity,
                     customer_name, customer_contact_number, customer_device_label, expires_at, metadata_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -19492,8 +17901,6 @@ def create_portal_store_purchase_request(payload: PortalStorePurchaseCreateReque
                     auto_activate,
                     selection["amount_centavos"],
                     selection["total_duration_seconds"],
-                    selection["device_scope"],
-                    selection["allowed_devices"],
                     selection["total_quantity"],
                     customer_name,
                     customer_contact,
@@ -19507,11 +17914,11 @@ def create_portal_store_purchase_request(payload: PortalStorePurchaseCreateReque
                 item = line["item"]
                 cur.execute(
                     """
-                    INSERT INTO store_purchase_request_items(
-                        request_id, store_item_id, item_name, item_description, price_centavos, quantity,
-                        duration_seconds, device_scope, allowed_devices, access_scope, allowed_barangay, metadata_json
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO store_purchase_request_items(
+                    request_id, store_item_id, item_name, item_description, price_centavos, quantity,
+                    duration_seconds, access_scope, allowed_barangay, metadata_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         purchase["id"],
@@ -19521,8 +17928,6 @@ def create_portal_store_purchase_request(payload: PortalStorePurchaseCreateReque
                         line["price_centavos"],
                         line["quantity"],
                         line["duration_seconds"],
-                        item["device_scope"],
-                        item["allowed_devices"],
                         item["access_scope"],
                         item["allowed_barangay"],
                         Json(sanitize_summary({"line_amount_centavos": line["line_amount_centavos"]})),
@@ -20301,10 +18706,10 @@ def store_portal_customer_buy_item(user_id: str, payload: StorePortalCustomerBuy
                 INSERT INTO store_purchase_requests(
                     public_id, store_id, user_id, portal_session_id, customer_profile_id,
                     request_method, status, auto_activate_if_no_time, amount_centavos, total_duration_seconds,
-                    device_scope, allowed_devices, purchase_quantity, customer_name, customer_contact_number,
-                    customer_device_label, expires_at, approved_by_owner_id, approved_at, metadata_json
+                    purchase_quantity, customer_name, customer_contact_number, customer_device_label,
+                    expires_at, approved_by_owner_id, approved_at, metadata_json
                 )
-                VALUES (%s, %s, %s, %s, %s, 'SUBMITTED', 'APPROVED', false, %s, %s, %s, %s, %s, %s, %s, %s, now() + interval '15 minutes', %s, now(), %s)
+                VALUES (%s, %s, %s, %s, %s, 'SUBMITTED', 'APPROVED', false, %s, %s, %s, %s, %s, %s, now() + interval '15 minutes', %s, now(), %s)
                 RETURNING *
                 """,
                 (
@@ -20315,8 +18720,6 @@ def store_portal_customer_buy_item(user_id: str, payload: StorePortalCustomerBuy
                     (profile or {}).get("id"),
                     selection["amount_centavos"],
                     selection["total_duration_seconds"],
-                    selection["device_scope"],
-                    selection["allowed_devices"],
                     selection["total_quantity"],
                     (profile or {}).get("display_name") or user.get("username") or "Customer",
                     (profile or {}).get("contact_number") or "",
@@ -20331,11 +18734,11 @@ def store_portal_customer_buy_item(user_id: str, payload: StorePortalCustomerBuy
                 item = line["item"]
                 cur.execute(
                     """
-                    INSERT INTO store_purchase_request_items(
-                        request_id, store_item_id, item_name, item_description, price_centavos, quantity,
-                        duration_seconds, device_scope, allowed_devices, access_scope, allowed_barangay, metadata_json
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO store_purchase_request_items(
+                    request_id, store_item_id, item_name, item_description, price_centavos, quantity,
+                    duration_seconds, access_scope, allowed_barangay, metadata_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         purchase["id"],
@@ -20345,8 +18748,6 @@ def store_portal_customer_buy_item(user_id: str, payload: StorePortalCustomerBuy
                         line["price_centavos"],
                         line["quantity"],
                         line["duration_seconds"],
-                        item["device_scope"],
-                        item["allowed_devices"],
                         item["access_scope"],
                         item["allowed_barangay"],
                         Json(sanitize_summary({"line_amount_centavos": line["line_amount_centavos"], "owner_direct_sale": True})),
@@ -20393,10 +18794,7 @@ def get_product_items(admin=Depends(current_admin)):
             "categories": len(categories),
             "active_categories": len([category for category in categories if category["status"] == "ACTIVE"]),
             "barangay_limited_categories": len([category for category in categories if category["access_scope"] == "BARANGAY_ONLY"]),
-            "personal_passes": len([item for item in items if item["device_scope"] == "SINGLE_DEVICE"]),
-            "shared_passes": len([item for item in items if item["device_scope"] == "MULTI_DEVICE"]),
             "lowest_price": min([item["price"] for item in items], default=0),
-            "max_allowed_devices": max([item["allowed_devices"] for item in items], default=1),
         },
     }
 
@@ -20596,16 +18994,14 @@ def delete_product_category(category_id: str, admin=Depends(current_admin)):
 @app.post("/api/product-items")
 def create_product_item(payload: ProductItemPayload, admin=Depends(current_admin)):
     duration_unit = normalize_product_duration_unit(payload.duration_unit)
-    device_scope = normalize_product_device_scope(payload.device_scope)
-    allowed_devices = normalize_product_allowed_devices(device_scope, payload.allowed_devices)
     status = normalize_product_status(payload.status)
     with get_conn() as conn:
         with conn.cursor() as cur:
             category = product_category_for_payload(cur, payload.category_id)
             cur.execute(
                 """
-                INSERT INTO product_items(category_id, name, description, price, duration_value, duration_unit, device_scope, allowed_devices, use_category_discounts, enabled_category_discount_ids, discount_enabled, discount_min_quantity, discount_type, discount_value, status, sort_order, created_by_admin_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL, FALSE, NULL, NULL, 0, %s, %s, %s)
+                INSERT INTO product_items(category_id, name, description, price, duration_value, duration_unit, use_category_discounts, enabled_category_discount_ids, discount_enabled, discount_min_quantity, discount_type, discount_value, status, sort_order, created_by_admin_id)
+                VALUES (%s, %s, %s, %s, %s, %s, FALSE, NULL, FALSE, NULL, NULL, 0, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -20615,8 +19011,6 @@ def create_product_item(payload: ProductItemPayload, admin=Depends(current_admin
                     payload.price,
                     payload.duration_value,
                     duration_unit,
-                    device_scope,
-                    allowed_devices,
                     status,
                     payload.sort_order,
                     admin["id"],
@@ -20642,8 +19036,6 @@ def update_product_item(item_id: str, payload: ProductItemPayload, admin=Depends
     if not current:
         raise HTTPException(status_code=404, detail="Product item not found")
     duration_unit = normalize_product_duration_unit(payload.duration_unit)
-    device_scope = normalize_product_device_scope(payload.device_scope)
-    allowed_devices = normalize_product_allowed_devices(device_scope, payload.allowed_devices)
     status = normalize_product_status(payload.status)
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -20657,8 +19049,6 @@ def update_product_item(item_id: str, payload: ProductItemPayload, admin=Depends
                     price = %s,
                     duration_value = %s,
                     duration_unit = %s,
-                    device_scope = %s,
-                    allowed_devices = %s,
                     use_category_discounts = FALSE,
                     enabled_category_discount_ids = NULL,
                     discount_enabled = FALSE,
@@ -20678,8 +19068,6 @@ def update_product_item(item_id: str, payload: ProductItemPayload, admin=Depends
                     payload.price,
                     payload.duration_value,
                     duration_unit,
-                    device_scope,
-                    allowed_devices,
                     status,
                     payload.sort_order,
                     item_id,
@@ -21117,16 +19505,6 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
                              AND i.active_until > now()
                        ), 0),
                        COALESCE((
-                           SELECT MAX(GREATEST(EXTRACT(EPOCH FROM (shared_item.active_until - now()))::int, 0))
-                           FROM customer_bag_item_shares sh
-                           JOIN customer_bag_items shared_item ON shared_item.id = sh.bag_item_id
-                           WHERE sh.shared_user_id = p.user_id
-                             AND sh.status = 'ACTIVE'
-                             AND shared_item.status = 'ACTIVE'
-                             AND shared_item.active_until IS NOT NULL
-                             AND shared_item.active_until > now()
-                       ), 0),
-                       COALESCE((
                            SELECT MAX(GREATEST(EXTRACT(EPOCH FROM (s.access_expires_at - now()))::int, 0))
                            FROM portal_sessions s
                            LEFT JOIN vouchers v ON v.id = s.voucher_id
@@ -21331,12 +19709,11 @@ def create_customer_device_bag_item(user_id: str, payload: AdminCustomerBagItemR
                 """
                 INSERT INTO customer_bag_items(
                     user_id, product_name, product_category_name, source, status, priority,
-                    duration_seconds, remaining_seconds, device_scope, allowed_devices,
-                    access_scope, purchase_quantity, amount_centavos, currency,
+                    duration_seconds, remaining_seconds, access_scope, purchase_quantity, amount_centavos, currency,
                     expires_at, admin_created_by, admin_updated_by, metadata_json
                 )
                 VALUES (%s, %s, 'Admin Given', 'MANUAL', 'QUEUED', %s, %s, %s,
-                        'SINGLE_DEVICE', 1, 'ALL_LOCATIONS', 1, 0, 'PHP', %s, %s, %s, %s)
+                        'ALL_LOCATIONS', 1, 0, 'PHP', %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -21499,24 +19876,12 @@ def adjust_connected_device_time(portal_session_id: str, payload: PortalTimeAdju
     return result
 
 
-@app.delete("/api/connected-devices/shared-access/{share_id}")
-def delete_connected_device_shared_access(share_id: str, admin=Depends(current_admin)):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            result = admin_revoke_shared_access(cur, share_id, admin)
-    audit(admin["id"], "delete_connected_device_shared_access", "customer_bag_item_share", share_id, {})
-    return result
-
-
 @app.delete("/api/connected-devices/{portal_session_id}")
-def delete_connected_device(portal_session_id: str, bag_item_id: Optional[str] = None, share_id: Optional[str] = None, admin=Depends(current_admin)):
+def delete_connected_device(portal_session_id: str, bag_item_id: Optional[str] = None, admin=Depends(current_admin)):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            if share_id:
-                result = admin_revoke_shared_access(cur, share_id, admin)
-            else:
-                result = adjust_portal_session_time(cur, portal_session_id, -315360000, admin, "Device removed by operator", bag_item_id, affect_all_session_items=not bool(bag_item_id))
-    audit(admin["id"], "delete_connected_device", "portal_session", portal_session_id, {"bag_item_id": bag_item_id, "share_id": share_id})
+            result = adjust_portal_session_time(cur, portal_session_id, -315360000, admin, "Device removed by operator", bag_item_id, affect_all_session_items=not bool(bag_item_id))
+    audit(admin["id"], "delete_connected_device", "portal_session", portal_session_id, {"bag_item_id": bag_item_id})
     return {"status": "ok", "message": "Device access removed.", "details": result}
 
 
@@ -21538,11 +19903,8 @@ def block_connected_device(portal_session_id: str, payload: PortalBlockDeviceReq
                     """,
                     (mac, ip_value or "", payload.reason or "Blocked by operator", admin["id"]),
                 )
-            if payload.share_id:
-                result = admin_revoke_shared_access(cur, payload.share_id, admin, payload.reason or "Device blocked by operator")
-            else:
-                result = adjust_portal_session_time(cur, portal_session_id, -315360000, admin, payload.reason or "Device blocked by operator", payload.bag_item_id, affect_all_session_items=not bool(payload.bag_item_id))
-    audit(admin["id"], "block_connected_device", "portal_session", portal_session_id, {"mac": mac, "ip": ip_value, "reason": payload.reason, "bag_item_id": payload.bag_item_id, "share_id": payload.share_id})
+            result = adjust_portal_session_time(cur, portal_session_id, -315360000, admin, payload.reason or "Device blocked by operator", payload.bag_item_id, affect_all_session_items=not bool(payload.bag_item_id))
+    audit(admin["id"], "block_connected_device", "portal_session", portal_session_id, {"mac": mac, "ip": ip_value, "reason": payload.reason, "bag_item_id": payload.bag_item_id})
     return {"status": "ok", "message": "Device blocked and current access removed.", "details": result}
 
 

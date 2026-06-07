@@ -1334,9 +1334,18 @@ Safety:
 
 ## Captive Portal Customer Bag and Seamless Auto Activation — 2026-06-01
 
-- Paid Product Items are no longer treated as one merged timer. A successful PayMongo payment creates a separate customer bag item with its own duration, product/category, device limit, priority, status, and history.
+- Paid Product Items are no longer treated as one merged timer. A successful PayMongo payment creates a separate customer bag item with its own duration, product/category, priority, status, and history.
 - Customers can open My WiFi Bag from the portal, see the active item, queued items, and consumed history, and drag queued items to choose activation priority.
 - Auto Activate can be enabled per customer bag. When enabled, the next queued item is activated 10 seconds before the current item ends so the customer should not feel the package transition.
 - Bag history records whether Auto Activate was enabled when an item was consumed.
 - Purchases made outside a 3J AP can be saved to the bag. Omada/MikroTik authorization still only happens when the customer is connected through a supported 3J captive portal session.
 - The deterministic backend still performs gateway authorization. The frontend bag UI cannot grant internet access by itself.
+
+## Shared Device Pass / Multi-Pass Removed — 2026-06-07
+
+- Shared Device Pass / Multi-Pass is retired and must not be reintroduced without a new approved design. Product Items, Physical Store Items, PayMongo orders, store purchase requests, vouchers, and My WiFi Bag items are now single-customer-device access products.
+- The captive portal must not show Single Pass vs Multi-Pass selection, share icons, QR/code/phone sharing flows, saved shared-device lists, or shared-access status panels.
+- Customer Devices and admin time management must operate on customer-owned product/voucher bag items only. There is no shared-access revoke endpoint or shared owner/pass relationship in the active workflow.
+- Vouchers remain active for events, refunds, welcome gifts, and manual customer support. Claiming a voucher adds/activates a normal single-device WiFi Bag item.
+- Anti-tethering/fairness rules remain active at the MikroTik station root gateway. Removing Multi-Pass does not remove the TTL guard that blocks phone hotspot sharing.
+- Migration `125_remove_shared_device_pass.sql` normalizes historical records to single-device values, drops `customer_bag_item_shares`, and removes `device_scope` / `allowed_devices` columns from active product, payment, bag, and store-purchase tables. Historical migrations may still contain those old columns because they document past schema evolution.

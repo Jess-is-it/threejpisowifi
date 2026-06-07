@@ -59,7 +59,6 @@ import {
   IconRobot,
   IconSearch,
   IconSettings,
-  IconShare,
   IconShoppingBag,
   IconShieldLock,
   IconServer,
@@ -227,9 +226,7 @@ const PORTAL_TRANSLATIONS = {
     'Pay through an available store in your connected site.': 'Magbayad sa available store sa connected site mo.',
     'Choose pass type': 'Pumili ng pass type',
     'Single Pass': 'Single Pass',
-    'Multi-Pass': 'Multi-Pass',
     'For one phone or laptop': 'Para sa isang phone o laptop',
-    'For shared device access': 'Para sa shared device access',
     'Available Packages': 'Available Packages',
     'No packages are available yet. Ask the operator for help.': 'Wala pang available na package. Humingi ng tulong sa operator.',
     'Payment received. Internet access is active.': 'Natanggap ang bayad. Aktibo na ang internet access.',
@@ -492,11 +489,6 @@ function compactDateTime(value) {
 function formatCentavos(value, currency = 'PHP') {
   const amount = Number(value || 0) / 100;
   return `${currency} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function deviceLimitLabel(value) {
-  const count = Math.max(1, Number(value || 1));
-  return `${count} device${count === 1 ? '' : 's'}`;
 }
 
 function truncateWithEllipsis(value, maxLength = 10) {
@@ -1631,8 +1623,6 @@ function PortalAppLegacy() {
                       <div className="client-portal-product-badges">
                         <span className="client-portal-price-badge"><span className="client-portal-price-icon">PHP</span>{Number(item.price || 0).toFixed(2)}</span>
                         <span className="client-portal-duration-badge">{item.duration_label}</span>
-                        <span className="client-portal-duration-badge">{item.device_scope_label || productPassLabel(item)}</span>
-                        {productPassType(item) === 'MULTI_DEVICE' && <span className="client-portal-duration-badge">{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
                       </div>
                       {item.description && <div className="client-portal-product-desc">{item.description}</div>}
                     </div>
@@ -1829,8 +1819,6 @@ function PortalApp() {
   const [productQuantities, setProductQuantities] = useState({});
   const [selectedCategoryBarangays, setSelectedCategoryBarangays] = useState({});
   const [barangayPickerOpen, setBarangayPickerOpen] = useState(false);
-  const [passTypeHelpOpen, setPassTypeHelpOpen] = useState(false);
-  const [purchasePassType, setPurchasePassType] = useState('SINGLE_DEVICE');
   const [purchaseChannel, setPurchaseChannel] = useState(() => {
     const initialParams = new URLSearchParams(window.location.search);
     return shouldRestoreStorePaymentFromMap(initialParams) ? 'STORE' : '';
@@ -1875,28 +1863,10 @@ function PortalApp() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileViewOpen, setProfileViewOpen] = useState(false);
   const [profileViewTab, setProfileViewTab] = useState('PROFILE');
-  const [sharing, setSharing] = useState(null);
-  const [sharingLoading, setSharingLoading] = useState(false);
-  const [sharingMessage, setSharingMessage] = useState(null);
-  const [profileDeviceDraggingId, setProfileDeviceDraggingId] = useState('');
-  const [profileDeviceFilterOpen, setProfileDeviceFilterOpen] = useState(false);
-  const [profileDeviceSearch, setProfileDeviceSearch] = useState('');
-  const [profileDeviceFilter, setProfileDeviceFilter] = useState('ALL');
-  const [shareModalItem, setShareModalItem] = useState(null);
-  const [shareModalData, setShareModalData] = useState({ qr: null, code: null });
-  const [shareModalLoading, setShareModalLoading] = useState(false);
-  const [shareOptionsOpen, setShareOptionsOpen] = useState(false);
-  const [shareMethodTab, setShareMethodTab] = useState('QR');
-  const [sharePhoneNumber, setSharePhoneNumber] = useState('');
-  const [sharePhoneCooldown, setSharePhoneCooldown] = useState(0);
-  const [shareQrDataUrl, setShareQrDataUrl] = useState('');
-  const [shareDeviceSearch, setShareDeviceSearch] = useState('');
-  const [shareClaimCode, setShareClaimCode] = useState('');
-  const [shareQrScannerOpen, setShareQrScannerOpen] = useState(false);
-  const [shareQrCameraActive, setShareQrCameraActive] = useState(false);
-  const [shareQrError, setShareQrError] = useState('');
-  const [shareQrBox, setShareQrBox] = useState(null);
-  const [qrScannerMode, setQrScannerMode] = useState('SHARE');
+  const [profileQrScannerOpen, setProfileQrScannerOpen] = useState(false);
+  const [profileQrCameraActive, setProfileQrCameraActive] = useState(false);
+  const [profileQrError, setProfileQrError] = useState('');
+  const [profileQrBox, setProfileQrBox] = useState(null);
   const [profileChoice, setProfileChoice] = useState('CHOICE');
   const [profileDevices, setProfileDevices] = useState([]);
   const [profileDevicesLoading, setProfileDevicesLoading] = useState(false);
@@ -1950,10 +1920,10 @@ function PortalApp() {
   const avatarEventNoteRef = useRef(null);
   const lowTimeNoteShownRef = useRef(false);
   const portalDiscountTabRefs = useRef({});
-  const shareQrVideoRef = useRef(null);
-  const shareQrStreamRef = useRef(null);
-  const shareQrScanTimerRef = useRef(null);
-  const shareQrScanningActiveRef = useRef(false);
+  const profileQrVideoRef = useRef(null);
+  const profileQrStreamRef = useRef(null);
+  const profileQrScanTimerRef = useRef(null);
+  const profileQrScanningActiveRef = useRef(false);
   const lastInsideNetworkAtRef = useRef(0);
   const remainingNoticeSentRef = useRef('');
   const remainingNoticeTimerRef = useRef(null);
@@ -1998,18 +1968,6 @@ function PortalApp() {
     window.addEventListener('pageshow', handlePageShow);
     return () => window.removeEventListener('pageshow', handlePageShow);
   }, []);
-  useEffect(() => {
-    const shareToken = params.get('share_token');
-    if (!shareToken || !sessionId) return;
-    claimShare('QR', shareToken).then(() => {
-      const query = new URLSearchParams(window.location.search);
-      query.delete('share_token');
-      const nextQuery = query.toString();
-      window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash || ''}`);
-      setBagTab('SHARING');
-      setPortalScreen('bag');
-    }).catch(() => null);
-  }, [sessionId]);
   const t = (text, values = {}) => portalTranslate(portalLanguage, text, values);
   const title = settings?.portal_title || '3J WiFi';
   const portalMessageAutoHideSeconds = Math.max(1, Math.min(60, Number(settings?.portal_message_auto_hide_seconds || 6)));
@@ -2481,14 +2439,6 @@ function PortalApp() {
   }, [deviceLinkCooldown > 0]);
 
   useEffect(() => {
-    if (!sharePhoneCooldown) return undefined;
-    const intervalId = window.setInterval(() => {
-      setSharePhoneCooldown((current) => Math.max(0, current - 1));
-    }, 1000);
-    return () => window.clearInterval(intervalId);
-  }, [sharePhoneCooldown > 0]);
-
-  useEffect(() => {
     if (!missingTimeCodeCooldown) return undefined;
     const intervalId = window.setInterval(() => {
       setMissingTimeCodeCooldown((current) => Math.max(0, current - 1));
@@ -2810,12 +2760,10 @@ function PortalApp() {
   }
 
   function openProfileView(tab = 'PROFILE') {
-    setProfileViewTab(tab === 'SHARING' ? 'PROFILE' : tab);
-    setProfileViewOpen(false);
+    setProfileViewTab('PROFILE');
     setSelectedProductCategory(null);
     setSelectedPhysicalStore(null);
-    setPortalScreen('profile');
-    if (tab === 'DEVICES') loadSharing().catch(() => null);
+    setProfileViewOpen(true);
   }
 
   function formatPortalDeviceDate(value) {
@@ -2845,380 +2793,31 @@ function PortalApp() {
     }
   }
 
-  async function loadSharing(options = {}) {
-    const id = sessionId || localStorage.getItem('centralwifi_portal_session');
-    if (!id) return null;
-    const silent = Boolean(options.silent);
-    if (!silent) {
-      setSharingLoading(true);
-      setSharingMessage(null);
+
+  function stopProfileQrScanner() {
+    profileQrScanningActiveRef.current = false;
+    if (profileQrScanTimerRef.current) {
+      window.clearTimeout(profileQrScanTimerRef.current);
+      profileQrScanTimerRef.current = null;
     }
-    try {
-      const data = await publicRequest(`/portal/sharing?portal_session_id=${encodeURIComponent(id)}`);
-      if (data.sharing) setSharing(data.sharing);
-      if (data.bag) setBag(data.bag);
-      return data.sharing || null;
-    } catch (err) {
-      if (!silent) setSharingMessage({ status: 'FAILED', message: err.message || 'Could not load sharing.' });
-      return null;
-    } finally {
-      if (!silent) setSharingLoading(false);
+    if (profileQrStreamRef.current) {
+      profileQrStreamRef.current.getTracks().forEach((track) => track.stop());
+      profileQrStreamRef.current = null;
     }
+    setProfileQrCameraActive(false);
+    setProfileQrBox(null);
   }
 
-  async function createShareForItem(item, method, extra = {}) {
-    if (!item?.id) return null;
-    const data = await publicApi(`/portal/bag/items/${encodeURIComponent(item.id)}/shares`, {
-      method: 'POST',
-      body: JSON.stringify(payload({ method, ...extra }))
-    });
-    if (data.sharing) setSharing(data.sharing);
-    return data.share || null;
-  }
-
-  async function prepareShareInviteOptions(item, capacity) {
-    const [qrResult, codeResult] = await Promise.allSettled([
-      createShareForItem(item, 'QR'),
-      createShareForItem(item, 'CODE')
-    ]);
-    const qrShare = qrResult.status === 'fulfilled' ? qrResult.value : null;
-    const codeShare = codeResult.status === 'fulfilled' ? codeResult.value : null;
-    setShareModalData({ qr: qrShare, code: codeShare, capacity: qrShare?.capacity || codeShare?.capacity || capacity || null });
-    if (qrShare?.qr_payload) {
-      try {
-        const dataUrl = await QRCode.toDataURL(qrShare.qr_payload, { margin: 1, width: 220 });
-        setShareQrDataUrl(dataUrl);
-      } catch {
-        setShareQrDataUrl('');
-      }
-    } else {
-      setShareQrDataUrl('');
-    }
-    if (!qrShare && !codeShare) {
-      const firstError = qrResult.status === 'rejected' ? qrResult.reason : codeResult.reason;
-      throw firstError || new Error('Could not prepare sharing options.');
-    }
-    if (!qrShare && codeShare) {
-      setSharingMessage({ status: 'FAILED', message: 'QR could not be prepared. You can still share by code, phone, or saved device.' });
-    }
-    return { qrShare, codeShare };
-  }
-
-  async function openShareModal(item) {
-    setShareModalItem(item);
-    setShareModalData({ qr: null, code: null, capacity: item?.share_capacity || null });
-    setShareOptionsOpen(false);
-    setShareMethodTab('QR');
-    setShareQrDataUrl('');
-    setSharePhoneNumber('');
-    setShareDeviceSearch('');
-    setSharingMessage(null);
-    setShareModalLoading(true);
-    try {
-      const nextSharing = await loadSharing();
-      const latestItem = (nextSharing?.shareable_items || []).find((entry) => entry.id === item.id) || item;
-      const capacity = latestItem?.share_capacity || item?.share_capacity || null;
-      setShareMethodTab((nextSharing?.owner_devices || []).length ? 'DEVICES' : 'QR');
-      if (capacity?.full || Number(capacity?.available_share_slots || 0) <= 0) {
-        setShareModalData({ qr: null, code: null, capacity });
-        return;
-      }
-      setShareModalData({ qr: null, code: null, capacity });
-    } catch (err) {
-      setSharingMessage({ status: 'FAILED', message: err.message || err.detail || 'Could not load sharing options.' });
-    } finally {
-      setShareModalLoading(false);
-    }
-  }
-
-  async function revealShareOptions() {
-    setShareOptionsOpen(true);
-    setSharingMessage(null);
-    if (!shareModalItem?.id || shareModalData.qr || shareModalData.code) return;
-    const capacity = shareModalData.capacity || shareCapacityForItem(shareModalItem) || null;
-    if (capacity?.full || Number(capacity?.available_share_slots || 0) <= 0) return;
-    setShareModalLoading(true);
-    try {
-      await prepareShareInviteOptions(shareModalItem, capacity);
-    } catch (err) {
-      setSharingMessage({ status: 'FAILED', message: err.message || err.detail || 'Could not prepare QR/code. You can still use saved devices or phone sharing.' });
-    } finally {
-      setShareModalLoading(false);
-    }
-  }
-
-  function syncOpenShareModalFromSharing(nextSharing) {
-    if (!shareModalItem?.id || !nextSharing) return;
-    const latestItem = (nextSharing.shareable_items || []).find((entry) => entry.id === shareModalItem.id);
-    if (latestItem) {
-      setShareModalItem((current) => current && current.id === latestItem.id ? { ...current, ...latestItem } : current);
-      setShareModalData((current) => ({ ...current, capacity: latestItem.share_capacity || current.capacity || null }));
-    } else {
-      const activeSharesForOpenItem = (nextSharing.owner_shares || []).filter((share) => share.bag_item_id === shareModalItem.id);
-      if (activeSharesForOpenItem.length) {
-        const latestCapacity = activeSharesForOpenItem[0]?.capacity || null;
-        setShareModalData((current) => ({ ...current, capacity: latestCapacity || current.capacity || null }));
-      }
-    }
-  }
-
-  async function shareByContact(e) {
-    e.preventDefault();
-    await submitShareByContact(false);
-  }
-
-  async function submitShareByContact(confirmExistingTime = false) {
-    if (!shareModalItem?.id) return;
-    if (sharePhoneCooldown > 0 && !confirmExistingTime) return;
-    const contact = normalizePortalContactInput(sharePhoneNumber);
-    if (!portalContactLooksValid(contact)) {
-      setSharingMessage({ status: 'FAILED', message: 'Enter an 11-digit mobile number starting with 09.' });
-      return;
-    }
-    setShareModalLoading(true);
-    if (!confirmExistingTime) setSharePhoneCooldown(60);
-    try {
-      const share = await createShareForItem(shareModalItem, 'CONTACT', { contact_number: contact, confirm_existing_time: confirmExistingTime });
-      setSharePhoneNumber('');
-      setSharingMessage({ status: 'SUCCESS', message: share?.shared_contact_number ? 'Internet pass shared with that registered phone number.' : 'Internet pass shared.' });
-      const latestSharing = await loadSharing();
-      syncOpenShareModalFromSharing(latestSharing);
-    } catch (err) {
-      if (err.status === 409 && !confirmExistingTime) {
-        setShareModalLoading(false);
-        if (window.confirm(err.message || 'That profile already has active internet time. Proceed with sharing another active pass?')) {
-          await submitShareByContact(true);
-        }
-        return;
-      }
-      setSharingMessage({ status: 'FAILED', message: err.message || 'Could not share by phone number.' });
-      if (!confirmExistingTime) setSharePhoneCooldown(0);
-    } finally {
-      setShareModalLoading(false);
-    }
-  }
-
-  async function shareToSavedDevice(device, confirmExistingTime = false) {
-    if (!shareModalItem?.id || !device?.shared_user_id) return;
-    setShareModalLoading(true);
-    try {
-      const data = await publicApi(`/portal/bag/items/${encodeURIComponent(shareModalItem.id)}/shares/saved-device/${encodeURIComponent(device.shared_user_id)}`, {
-        method: 'POST',
-        body: JSON.stringify(payload({ confirm_existing_time: confirmExistingTime }))
-      });
-      if (data.sharing) {
-        setSharing(data.sharing);
-        syncOpenShareModalFromSharing(data.sharing);
-      }
-      setSharingMessage({ status: 'SUCCESS', message: data.message || 'Internet pass shared with the saved device.' });
-      await loadBag();
-      await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session'));
-    } catch (err) {
-      if (err.status === 409 && !confirmExistingTime) {
-        setShareModalLoading(false);
-        if (window.confirm(err.message || 'That profile already has active internet time. Proceed with sharing another active pass?')) {
-          await shareToSavedDevice(device, true);
-        }
-        return;
-      }
-      setSharingMessage({ status: 'FAILED', message: err.message || 'Could not share with this saved device.' });
-    } finally {
-      setShareModalLoading(false);
-    }
-  }
-
-  async function claimShare(mode, value, confirmExistingTime = false) {
-    const cleanValue = String(value || '').trim();
-    if (!cleanValue) {
-      setSharingMessage({ status: 'FAILED', message: 'Enter or scan a sharing code.' });
-      return;
-    }
-    let confirmedExistingTime = confirmExistingTime;
-    if (!confirmedExistingTime && hasRemainingAccess) {
-      confirmedExistingTime = window.confirm('This device already has active internet time. Do you want to add this shared Multi-Pass as another active pass?');
-      if (!confirmedExistingTime) return;
-    }
-    setSharingLoading(true);
-    try {
-      const path = mode === 'QR' ? '/portal/sharing/claim-qr' : '/portal/sharing/claim-code';
-      const data = await publicApi(path, {
-        method: 'POST',
-        body: JSON.stringify(payload(mode === 'QR'
-          ? { share_token: cleanValue, confirm_existing_time: confirmedExistingTime }
-          : { share_code: cleanValue, confirm_existing_time: confirmedExistingTime }))
-      });
-      if (data.sharing) setSharing(data.sharing);
-      if (data.bag) setBag(data.bag);
-      const successMessage = data.message || 'Shared internet pass connected to this profile.';
-      setSharingMessage({ status: data.status || 'SUCCESS', message: successMessage });
-      if ((data.status || 'SUCCESS') === 'SUCCESS') {
-        setPortalToast({
-          key: `share-claim-${Date.now()}`,
-          tone: 'success',
-          title: 'Shared pass connected',
-          message: successMessage,
-        });
-        setSelectedProductCategory(null);
-        setSelectedPhysicalStore(null);
-        setPortalScreen('shop');
-      }
-      setShareClaimCode('');
-      await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session'));
-    } catch (err) {
-      if (err.status === 409 && !confirmedExistingTime) {
-        setSharingLoading(false);
-        if (window.confirm(err.message || 'This device already has active internet time. Proceed with another active shared pass?')) {
-          await claimShare(mode, value, true);
-        }
-        return;
-      }
-      setSharingMessage({ status: 'FAILED', message: err.message || 'Could not claim shared internet.' });
-    } finally {
-      setSharingLoading(false);
-    }
-  }
-
-  async function updateShareStatus(shareId, action) {
-    if (!shareId) return;
-    setSharingLoading(true);
-    try {
-      const data = await publicApi(`/portal/sharing/${encodeURIComponent(shareId)}/${action}`, {
-        method: 'POST',
-        body: JSON.stringify(payload())
-      });
-      const successMessage = action === 'revoke'
-        ? 'Shared device revoked successfully.'
-        : (data.message || 'Sharing updated.');
-      setSharingMessage({ status: 'SUCCESS', message: successMessage });
-      if (action === 'revoke') {
-        setPortalToast({
-          key: `share-revoke-${shareId}-${Date.now()}`,
-          tone: 'success',
-          title: 'Device revoked',
-          message: successMessage,
-        });
-      }
-      const latestSharing = await loadSharing();
-      if (data.sharing && !latestSharing) setSharing(data.sharing);
-      if (shareModalItem?.id) {
-        const latestItem = (latestSharing?.shareable_items || data.sharing?.shareable_items || [])
-          .find((entry) => entry.id === shareModalItem.id);
-        if (latestItem) {
-          setShareModalItem((current) => current && current.id === latestItem.id ? { ...current, ...latestItem } : current);
-          const latestOwnerShares = (latestSharing?.owner_shares || data.sharing?.owner_shares || [])
-            .filter((share) => share.bag_item_id === latestItem.id);
-          const activeCount = latestOwnerShares.filter((share) => share.status === 'ACTIVE' && share.shared_user_id).length;
-          const pendingCount = latestOwnerShares.filter((share) => share.status === 'PENDING_APPROVAL' && share.shared_user_id).length;
-          const allowed = Math.max(1, Number(latestItem.share_capacity?.allowed_devices || latestItem.allowed_devices || 1));
-          const openedShareSlot = Math.max(allowed - 1 - activeCount - pendingCount, 0) > 0;
-          setShareModalData((current) => ({ ...current, capacity: latestItem.share_capacity || null }));
-          if (action === 'revoke' && openedShareSlot) {
-            setShareModalLoading(true);
-            try {
-              await prepareShareInviteOptions(latestItem, latestItem.share_capacity || null);
-            } catch {
-              setShareQrDataUrl('');
-            } finally {
-              setShareModalLoading(false);
-            }
-          }
-        }
-      }
-      await loadBag();
-      await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session'));
-    } catch (err) {
-      setSharingMessage({ status: 'FAILED', message: err.message || 'Sharing update failed.' });
-    } finally {
-      setSharingLoading(false);
-    }
-  }
-
-  async function updateShareDeviceStar(sharedUserId, starred) {
-    if (!sharedUserId) return;
-    setSharingLoading(true);
-    try {
-      const data = await publicApi(`/portal/sharing/devices/${encodeURIComponent(sharedUserId)}/star`, {
-        method: 'POST',
-        body: JSON.stringify(payload({ starred }))
-      });
-      if (data.sharing) setSharing(data.sharing);
-      setPortalToast({
-        key: `share-device-star-${sharedUserId}-${Date.now()}`,
-        tone: 'success',
-        title: starred ? 'Device starred' : 'Device unstarred',
-        message: starred ? 'This device will be prioritized for future Multi-Pass sharing.' : 'This device was removed from future Multi-Pass priority.',
-      });
-    } catch (err) {
-      setSharingMessage({ status: 'FAILED', message: err.message || 'Could not update device priority.' });
-    } finally {
-      setSharingLoading(false);
-    }
-  }
-
-  async function deleteShareDevice(sharedUserId) {
-    if (!sharedUserId) return;
-    if (!window.confirm('Remove this shared device from your profile? Active shared access for this device will be revoked.')) return;
-    setSharingLoading(true);
-    try {
-      const data = await publicApi(`/portal/sharing/devices/${encodeURIComponent(sharedUserId)}/delete`, {
-        method: 'POST',
-        body: JSON.stringify(payload())
-      });
-      if (data.sharing) setSharing(data.sharing);
-      setPortalToast({
-        key: `share-device-delete-${sharedUserId}-${Date.now()}`,
-        tone: 'success',
-        title: 'Device removed',
-        message: 'The shared device was removed.',
-      });
-    } catch (err) {
-      setSharingMessage({ status: 'FAILED', message: err.message || 'Could not remove shared device.' });
-    } finally {
-      setSharingLoading(false);
-    }
-  }
-
-  async function reorderShareDevices(nextDevices) {
-    const sharedUserIds = (nextDevices || []).map((device) => device.shared_user_id).filter(Boolean);
-    if (!sharedUserIds.length) return;
-    setSharingLoading(true);
-    try {
-      const data = await publicApi('/portal/sharing/devices/reorder', {
-        method: 'POST',
-        body: JSON.stringify(payload({ shared_user_ids: sharedUserIds }))
-      });
-      if (data.sharing) setSharing(data.sharing);
-    } catch (err) {
-      setSharingMessage({ status: 'FAILED', message: err.message || 'Could not reorder devices.' });
-    } finally {
-      setSharingLoading(false);
-    }
-  }
-
-  function stopShareQrScanner() {
-    shareQrScanningActiveRef.current = false;
-    if (shareQrScanTimerRef.current) {
-      window.clearTimeout(shareQrScanTimerRef.current);
-      shareQrScanTimerRef.current = null;
-    }
-    if (shareQrStreamRef.current) {
-      shareQrStreamRef.current.getTracks().forEach((track) => track.stop());
-      shareQrStreamRef.current = null;
-    }
-    setShareQrCameraActive(false);
-    setShareQrBox(null);
-  }
-
-  function updateShareQrTrackingBox(barcode) {
-    const video = shareQrVideoRef.current;
+  function updateProfileQrTrackingBox(barcode) {
+    const video = profileQrVideoRef.current;
     const box = barcode?.boundingBox;
     if (!video || !box || !video.videoWidth || !video.videoHeight) {
-      setShareQrBox(null);
+      setProfileQrBox(null);
       return;
     }
     const rect = video.getBoundingClientRect();
     if (!rect.width || !rect.height) {
-      setShareQrBox(null);
+      setProfileQrBox(null);
       return;
     }
     const scale = Math.max(rect.width / video.videoWidth, rect.height / video.videoHeight);
@@ -3226,7 +2825,7 @@ function PortalApp() {
     const renderedHeight = video.videoHeight * scale;
     const offsetX = (rect.width - renderedWidth) / 2;
     const offsetY = (rect.height - renderedHeight) / 2;
-    setShareQrBox({
+    setProfileQrBox({
       left: Math.max(0, Math.min(rect.width, offsetX + box.x * scale)),
       top: Math.max(0, Math.min(rect.height, offsetY + box.y * scale)),
       width: Math.max(18, Math.min(rect.width, box.width * scale)),
@@ -3234,74 +2833,59 @@ function PortalApp() {
     });
   }
 
-  async function openPortalQrScanner(mode = 'SHARE') {
-    setQrScannerMode(mode);
-    setShareQrScannerOpen(true);
-    setShareQrError('');
-    stopShareQrScanner();
+  async function openPortalQrScanner() {
+    setProfileQrScannerOpen(true);
+    setProfileQrError('');
+    stopProfileQrScanner();
     if (!navigator.mediaDevices?.getUserMedia || !('BarcodeDetector' in window)) {
-      setShareQrError(mode === 'PROFILE_LINK'
-        ? 'Camera QR scanning is not supported in this browser. Open net.3jhotspot.com in Google Chrome, then try Scan Profile QR again.'
-        : 'Camera QR scanning is not supported in this browser. Enter the sharing code manually.');
+      setProfileQrError('Camera QR scanning is not supported in this browser. Open net.3jhotspot.com in Google Chrome, then try Scan Profile QR again.');
       return;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-      shareQrStreamRef.current = stream;
-      shareQrScanningActiveRef.current = true;
-      setShareQrCameraActive(true);
+      profileQrStreamRef.current = stream;
+      profileQrScanningActiveRef.current = true;
+      setProfileQrCameraActive(true);
       window.setTimeout(async () => {
-        const video = shareQrVideoRef.current;
-        if (!video || !shareQrScanningActiveRef.current) return;
+        const video = profileQrVideoRef.current;
+        if (!video || !profileQrScanningActiveRef.current) return;
         video.srcObject = stream;
         await video.play().catch(() => {});
         const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
         const scanFrame = async () => {
-          if (!shareQrScanningActiveRef.current || !shareQrVideoRef.current) return;
+          if (!profileQrScanningActiveRef.current || !profileQrVideoRef.current) return;
           try {
-            const codes = await detector.detect(shareQrVideoRef.current);
+            const codes = await detector.detect(profileQrVideoRef.current);
             const detectedCode = codes?.[0] || null;
             const rawValue = detectedCode?.rawValue || '';
-            if (detectedCode) updateShareQrTrackingBox(detectedCode);
-            else setShareQrBox(null);
+            if (detectedCode) updateProfileQrTrackingBox(detectedCode);
+            else setProfileQrBox(null);
             if (rawValue) {
-              shareQrScanningActiveRef.current = false;
-              setShareQrError(mode === 'PROFILE_LINK' ? 'QR detected. Linking this device...' : 'QR detected. Connecting shared pass...');
+              profileQrScanningActiveRef.current = false;
+              setProfileQrError('QR detected. Linking this device...');
               window.setTimeout(async () => {
-                stopShareQrScanner();
-                setShareQrScannerOpen(false);
-                if (mode === 'PROFILE_LINK') {
-                  await confirmExistingProfileLinkFromQr(rawValue);
-                } else {
-                  await claimShare('QR', rawValue);
-                }
+                stopProfileQrScanner();
+                setProfileQrScannerOpen(false);
+                await confirmExistingProfileLinkFromQr(rawValue);
               }, 450);
               return;
             }
           } catch (_err) {
-            setShareQrError(mode === 'PROFILE_LINK'
-              ? 'QR scanner could not read the camera frame. Try again.'
-              : 'QR scanner could not read the camera frame. Enter the code manually if this continues.');
+            setProfileQrError('QR scanner could not read the camera frame. Try again.');
           }
-          shareQrScanTimerRef.current = window.setTimeout(scanFrame, 450);
+          profileQrScanTimerRef.current = window.setTimeout(scanFrame, 450);
         };
         scanFrame();
       }, 150);
     } catch (_err) {
-      stopShareQrScanner();
-      setShareQrError(mode === 'PROFILE_LINK'
-        ? 'Camera permission was denied or no camera is available. Open net.3jhotspot.com in Google Chrome, allow Camera permission, then try Scan Profile QR again.'
-        : 'Camera permission was denied or no camera is available. Enter the code manually.');
+      stopProfileQrScanner();
+      setProfileQrError('Camera permission was denied or no camera is available. Open net.3jhotspot.com in Google Chrome, allow Camera permission, then try Scan Profile QR again.');
     }
-  }
-
-  function openShareQrScanner() {
-    return openPortalQrScanner('SHARE');
   }
 
   function openProfileLinkQrScanner() {
     setExistingProfileMessage('');
-    return openPortalQrScanner('PROFILE_LINK');
+    return openPortalQrScanner();
   }
 
   async function updatePortalNotificationPreference(enabled, intervalSeconds = profile?.portal_notification_interval_seconds || 10) {
@@ -3590,8 +3174,6 @@ function PortalApp() {
   const selectedPaymentMethodRow = onlinePaymentMethods.find((method) => method.id === selectedPaymentMethod) || onlinePaymentMethods[0] || null;
   const canCheckoutOnline = Boolean(payments.enabled && payments.ready_for_checkout && selectedPaymentMethodRow);
   const canCheckoutWithGcash = canCheckoutOnline;
-  const effectivePurchasePassType = purchasePassType || 'SINGLE_DEVICE';
-  const selectedPassLabel = effectivePurchasePassType === 'MULTI_DEVICE' ? t('Multi-Pass') : t('Single Pass');
   const selectedPaymentLabel = selectedPaymentMethodRow?.label || 'Online';
   const visibleProductCategoryGroups = productCategoryGroups;
   const paymentSuccessReady = Boolean(paymentResult?.status === 'PAID' && paymentResult?.fulfillment_status === 'FULFILLED');
@@ -3628,9 +3210,6 @@ function PortalApp() {
   const pendingStoreRequestCount = (storePendingRequests || []).filter((request) => request.status === 'PENDING').length;
   const hasReadyBagItems = queuedBagItems.length > 0;
   const firstReadyBagItem = queuedBagItems[0] || null;
-  const firstReadyBagDeviceLabel = firstReadyBagItem?.device_scope === 'MULTI_DEVICE'
-    ? `${firstReadyBagItem?.allowed_devices || 1} devices`
-    : '1 device';
   const firstReadyBagTimeLabel = formatSeconds(firstReadyBagItem?.remaining_seconds || firstReadyBagItem?.duration_seconds || 0);
   const bagItemCount = activeBagItems.length + queuedBagItems.length + pendingStoreRequestCount;
   const activeRemainingCards = activeBagItems.length ? activeBagItems : [null];
@@ -3693,34 +3272,6 @@ function PortalApp() {
     activeBagItems.length,
     queuedBagItems.length,
   ]);
-
-  useEffect(() => {
-    if (!shareModalItem?.id || !sessionId) return undefined;
-    let stopped = false;
-    let inFlight = false;
-    const pollSharing = async () => {
-      if (stopped || inFlight || document.hidden) return;
-      inFlight = true;
-      try {
-        const nextSharing = await loadSharing({ silent: true });
-        if (nextSharing) syncOpenShareModalFromSharing(nextSharing);
-      } finally {
-        inFlight = false;
-      }
-    };
-    const intervalId = window.setInterval(pollSharing, 3000);
-    const handleVisibility = () => {
-      if (!document.hidden) pollSharing();
-    };
-    window.addEventListener('focus', pollSharing);
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => {
-      stopped = true;
-      window.clearInterval(intervalId);
-      window.removeEventListener('focus', pollSharing);
-      document.removeEventListener('visibilitychange', handleVisibility);
-    };
-  }, [shareModalItem?.id, sessionId]);
 
   useEffect(() => {
     if (!sessionId || portalBooting || portalBlocked || portalScreen === 'landing') return;
@@ -3948,22 +3499,8 @@ function PortalApp() {
     return method.label || id.toUpperCase();
   }
 
-  function selectPortalPassType(nextType) {
-    setPurchasePassType(nextType || 'SINGLE_DEVICE');
-    setSelectedCategoryProductId('');
-    setProductQuantities({});
-    setStoreItemQuantities({});
-    setStorePurchaseMessage(null);
-    setStorePurchaseOption(null);
-    setStorePurchaseResult(null);
-    setStorePurchaseQrDataUrl('');
-    setBarangayPickerOpen(false);
-    setPassTypeHelpOpen(false);
-  }
-
   function selectPortalPurchaseChannel(nextChannel) {
     if (nextChannel === purchaseChannel) return;
-    if (!purchasePassType) setPurchasePassType('SINGLE_DEVICE');
     setPurchaseChannel(nextChannel);
     setSelectedProductCategory(null);
     setSelectedCategoryProductId('');
@@ -3982,10 +3519,7 @@ function PortalApp() {
   }
 
   function resetPortalPurchaseStep(step) {
-    if (step === 'pass') {
-      setPurchasePassType('SINGLE_DEVICE');
-      setPurchaseChannel('');
-    } else if (step === 'channel') {
+    if (step === 'channel') {
       setPurchaseChannel('');
     }
     setSelectedProductCategory(null);
@@ -4263,10 +3797,7 @@ function PortalApp() {
   }
 
   function storeVisibleItems(store) {
-    return storeAvailableItems(store).filter((item) => {
-      if (productPassType(item) !== effectivePurchasePassType) return false;
-      return true;
-    });
+    return storeAvailableItems(store);
   }
 
   function storeItemQuantity(item) {
@@ -4503,73 +4034,6 @@ function PortalApp() {
           />
         )}
         {pendingRows.map((requestRow) => renderStoreRequestRow(requestRow))}
-      </div>
-    );
-  }
-
-  function PortalPassTypeTabs() {
-    const tabs = [
-      {
-        key: 'SINGLE_DEVICE',
-        icon: IconUser,
-        label: t('Single Pass'),
-        hint: t('For one phone or laptop')
-      },
-      {
-        key: 'MULTI_DEVICE',
-        icon: IconUsers,
-        label: t('Multi-Pass'),
-        hint: t('For shared device access')
-      }
-    ];
-    return (
-      <div className="portal-pass-tab-panel">
-        <div className="portal-pass-tab-label-row">
-          <div className="portal-pass-tab-label">{t('Choose pass type')}</div>
-          <div className="portal-pass-help">
-            <button
-              className="portal-pass-help-button"
-              type="button"
-              aria-label={t('Choose pass type')}
-              aria-expanded={passTypeHelpOpen}
-              onClick={() => setPassTypeHelpOpen((open) => !open)}
-              onBlur={() => window.setTimeout(() => setPassTypeHelpOpen(false), 120)}
-            >
-              <IconInfoCircle size={15} />
-            </button>
-            {passTypeHelpOpen && (
-              <div className="portal-pass-help-tooltip" role="tooltip">
-                {tabs.map((tab) => (
-                  <div className="portal-pass-help-row" key={tab.key}>
-                    <strong>{tab.label}</strong>
-                    <span>{tab.hint}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="portal-pass-tabs" role="tablist" aria-label={t('Choose pass type')}>
-          {tabs.map((tab) => {
-            const TabIcon = tab.icon;
-            const active = effectivePurchasePassType === tab.key;
-            return (
-              <button
-                className={`portal-pass-tab ${active ? 'active' : ''}`}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                key={tab.key}
-                onClick={() => selectPortalPassType(tab.key)}
-              >
-                <TabIcon size={17} />
-                <span>
-                  <strong>{tab.label}</strong>
-                </span>
-              </button>
-            );
-          })}
-        </div>
       </div>
     );
   }
@@ -5008,417 +4472,13 @@ function PortalApp() {
     );
   }
 
-  function shareStatusBadgeClass(statusValue) {
-    if (statusValue === 'ACTIVE') return 'bg-green-lt text-green';
-    if (statusValue === 'PENDING_APPROVAL') return 'bg-yellow-lt text-yellow';
-    if (statusValue === 'REVOKED' || statusValue === 'REJECTED') return 'bg-red-lt text-red';
-    return 'bg-secondary-lt text-secondary';
-  }
-
-  function shareItemTimeLabel(share) {
-    const item = share?.item || {};
-    return formatSeconds(item.remaining_seconds || item.duration_seconds || 0);
-  }
-
-  function shareCapacityForItem(item) {
-    if (!item?.id) return {};
-    return item.share_capacity
-      || (sharing?.shareable_items || []).find((entry) => entry.id === item.id)?.share_capacity
-      || {};
-  }
-
-  function ownerSharesForItem(item, statuses = []) {
-    if (!item?.id) return [];
-    const wantedStatuses = new Set(statuses);
-    return (sharing?.owner_shares || []).filter((share) => (
-      share.bag_item_id === item.id
-      && (!wantedStatuses.size || wantedStatuses.has(share.status))
-      && share.shared_user_id
-    ));
-  }
-
-  function activeOwnerSharesForItem(item) {
-    return ownerSharesForItem(item, ['ACTIVE']);
-  }
-
-  function pendingOwnerSharesForItem(item) {
-    return ownerSharesForItem(item, ['PENDING_APPROVAL']);
-  }
-
-  function shareSeatLabelForItem(item) {
-    const capacity = shareCapacityForItem(item);
-    const allowed = Math.max(1, Number(capacity.allowed_devices || item?.allowed_devices || 1));
-    const used = Math.min(allowed, Math.max(1, Number(capacity.used_device_count || (Number(capacity.active_share_count || 0) + 1) || 1)));
-    return `${used}/${allowed}`;
-  }
-
-  function renderShareRow(share, options = {}) {
-    const item = share?.item || {};
-    const isPending = share?.status === 'PENDING_APPROVAL';
-    const isActive = share?.status === 'ACTIVE';
-    const deviceLabel = share.shared_device_name || share.shared_name || share.shared_contact_number || (share.method === 'CODE' ? 'Waiting for code claim' : 'Waiting for scan');
-    return (
-      <div className="portal-share-row" key={share.id}>
-        <div className="portal-share-row-icon">
-          <IconShare size={18} />
-        </div>
-        <div className="portal-share-row-main">
-          <div className="portal-share-row-top">
-            <strong>{item.product_name || 'Shared WiFi pass'}</strong>
-            <span className={`badge ${shareStatusBadgeClass(share.status)}`}>{share.status === 'PENDING_APPROVAL' ? 'Pending' : share.status}</span>
-          </div>
-          <div className="portal-share-row-meta">
-            <span><IconClock size={14} /> {shareItemTimeLabel(share)}</span>
-            <span>|</span>
-            <span>{item.allowed_devices || 1} devices</span>
-            <span>|</span>
-            <span>{share.method}</span>
-          </div>
-          <div className="portal-share-row-meta">
-            {options.received ? (
-              <span>Shared by {share.owner_name || 'another customer'}</span>
-            ) : (
-              <span>{deviceLabel}</span>
-            )}
-          </div>
-          {!options.received && (share.shared_client_mac || share.shared_client_ip || share.shared_ssid) && (
-            <div className="portal-share-row-meta">
-              {share.shared_client_mac && <span>{share.shared_client_mac}</span>}
-              {share.shared_client_ip && <span>{share.shared_client_ip}</span>}
-              {share.shared_ssid && <span>{share.shared_ssid}</span>}
-            </div>
-          )}
-          {options.owner && (
-            <div className="portal-share-row-actions">
-              {isPending && (
-                <>
-                  <button className="btn btn-sm btn-success" type="button" disabled={sharingLoading} onClick={() => updateShareStatus(share.id, 'approve')}>
-                    <IconCircleCheck size={15} className="me-1" />Approve
-                  </button>
-                  <button className="btn btn-sm btn-outline-danger" type="button" disabled={sharingLoading} onClick={() => updateShareStatus(share.id, 'reject')}>
-                    Reject
-                  </button>
-                </>
-              )}
-              {isActive && (
-                <button className="btn btn-sm btn-outline-danger" type="button" disabled={sharingLoading} onClick={() => updateShareStatus(share.id, 'revoke')}>
-                  <IconBan size={15} className="me-1" />Revoke
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  function SharingPanel({ inBag = false } = {}) {
-    const ownerShares = (sharing?.owner_shares || []).filter((share) => share.status === 'ACTIVE' && share.shared_user_id);
-    const pendingApprovals = sharing?.pending_approvals || [];
-    return (
-      <div className="portal-sharing-panel">
-        {sharingMessage && (
-          <PortalCustomerMessage
-            message={sharingMessage.message}
-            tone={sharingMessage.status === 'SUCCESS' ? 'success' : sharingMessage.status === 'PENDING_APPROVAL' ? 'warning' : 'danger'}
-            className="py-2"
-            timeoutMs={portalMessageAutoHideMs}
-            onSuccessNote={queueAvatarCustomerMessage}
-            onDismiss={() => setSharingMessage(null)}
-            dismissKey={`${sharingMessage.status}-${sharingMessage.message}`}
-          />
-        )}
-        {inBag && (
-          <div className="portal-share-claim-card">
-            <div className="portal-share-claim-header">
-              <span className="portal-share-claim-icon"><IconShare size={18} /></span>
-              <div className="portal-share-claim-copy">
-                <strong>Join shared internet</strong>
-                <small>Scan QR code of Multi-Pass owner or enter their sharing code</small>
-              </div>
-            </div>
-            <div className="portal-share-claim-actions">
-              <button className="btn btn-outline-primary" type="button" onClick={openShareQrScanner}>
-                <IconQrcode size={17} className="me-1" />Scan QR
-              </button>
-              <form className="portal-share-code-form" onSubmit={(event) => { event.preventDefault(); claimShare('CODE', shareClaimCode); }}>
-                <input
-                  className="form-control"
-                  value={shareClaimCode}
-                  onChange={(event) => setShareClaimCode(event.target.value.toUpperCase())}
-                  placeholder="Sharing code"
-                  maxLength={16}
-                />
-                <button className="btn btn-primary" type="submit" disabled={sharingLoading}>
-                  {sharingLoading ? 'Checking...' : 'Use Code'}
-                </button>
-              </form>
-            </div>
-          </div>
-        )}
-        {!inBag && (
-          <>
-            {pendingApprovals.length > 0 && (
-              <div className="portal-bag-section">
-                <div className="portal-bag-section-title">Pending approvals</div>
-                {pendingApprovals.map((share) => renderShareRow(share, { owner: true }))}
-              </div>
-            )}
-            <div className="portal-bag-section">
-              <div className="portal-bag-section-title">Shared by me</div>
-              {ownerShares.length ? ownerShares.map((share) => renderShareRow(share, { owner: true })) : (
-                <div className="text-muted small">Active Multi-Pass shares will appear here.</div>
-              )}
-            </div>
-          </>
-        )}
-      </div>
-    );
-  }
-
-  function ProfileSharedDevicesPanel() {
-    const devices = sharing?.owner_devices || [];
-    const search = profileDeviceSearch.trim().toLowerCase();
-    const filteredDevices = devices.filter((device) => {
-      const statusMatch = profileDeviceFilter === 'ALL'
-        || (profileDeviceFilter === 'STARRED' && device.owner_starred)
-        || (profileDeviceFilter === 'UNSTARRED' && !device.owner_starred)
-        || device.status === profileDeviceFilter;
-      if (!statusMatch) return false;
-      if (!search) return true;
-      return [
-        device.shared_device_name,
-        device.shared_name,
-        device.current_client_mac,
-        device.current_client_ip,
-        device.current_ssid,
-        device.shared_client_mac,
-        device.shared_client_ip,
-        device.shared_ssid,
-        device.item?.product_name,
-      ].some((value) => String(value || '').toLowerCase().includes(search));
-    });
-    const shouldShowFilter = devices.length > 5;
-    const hasActiveFilter = Boolean(profileDeviceSearch.trim()) || profileDeviceFilter !== 'ALL';
-    const moveDeviceByDrop = (targetDevice) => {
-      if (!profileDeviceDraggingId || !targetDevice?.shared_user_id || profileDeviceDraggingId === targetDevice.shared_user_id) return;
-      const fromIndex = devices.findIndex((entry) => entry.shared_user_id === profileDeviceDraggingId);
-      const toIndex = devices.findIndex((entry) => entry.shared_user_id === targetDevice.shared_user_id);
-      if (fromIndex < 0 || toIndex < 0) return;
-      const nextDevices = [...devices];
-      const [moved] = nextDevices.splice(fromIndex, 1);
-      nextDevices.splice(toIndex, 0, moved);
-      setProfileDeviceDraggingId('');
-      setSharing((current) => current ? { ...current, owner_devices: nextDevices } : current);
-      reorderShareDevices(nextDevices);
-    };
-    return (
-      <div className="portal-profile-devices">
-        <div className="d-flex justify-content-between align-items-center gap-2 mb-3">
-          <div>
-            <div className="fw-semibold">{t('Multi-Pass devices')}</div>
-            <div className="small text-muted">{t('Devices you shared Multi-Pass internet with.')}</div>
-          </div>
-          <div className="d-flex align-items-center gap-2">
-            {shouldShowFilter && (
-              <button
-                className={`btn btn-sm ${hasActiveFilter ? 'btn-primary' : 'btn-outline-secondary'}`}
-                type="button"
-                onClick={() => setProfileDeviceFilterOpen(true)}
-              >
-                <IconFilter size={16} className="me-1" /> Filter
-              </button>
-            )}
-            <span className="badge bg-secondary-lt text-secondary">{devices.length}</span>
-          </div>
-        </div>
-        {sharingMessage && (
-          <PortalCustomerMessage
-            message={sharingMessage.message}
-            tone={sharingMessage.status === 'SUCCESS' ? 'success' : 'danger'}
-            className="py-2"
-            timeoutMs={portalMessageAutoHideMs}
-            onSuccessNote={queueAvatarCustomerMessage}
-            onDismiss={() => setSharingMessage(null)}
-            dismissKey={`${sharingMessage.status}-${sharingMessage.message}`}
-          />
-        )}
-        {sharingLoading && !devices.length ? (
-          <div className="text-muted small">{t('Loading devices...')}</div>
-        ) : devices.length ? (
-          <div className="portal-profile-device-list">
-            {filteredDevices.map((device) => {
-              const isStarred = Boolean(device.owner_starred);
-              return (
-                <div
-                  className={`portal-profile-device-item ${isStarred ? 'is-starred' : ''} ${profileDeviceDraggingId === device.shared_user_id ? 'is-dragging' : ''}`}
-                  key={device.shared_user_id || device.id}
-                  draggable
-                  onDragStart={() => setProfileDeviceDraggingId(device.shared_user_id)}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    moveDeviceByDrop(device);
-                  }}
-                  onDragEnd={() => setProfileDeviceDraggingId('')}
-                >
-                  <span className="portal-profile-device-drag" title="Drag to reorder"><IconGripVertical size={18} /></span>
-                  <span className="portal-profile-device-icon"><IconWifi size={18} /></span>
-                  <div className="portal-profile-device-main">
-                    <div className="portal-profile-device-title">
-                      <span>{device.shared_device_name || device.shared_name || t('Unknown device')}</span>
-                      <span className={`badge ${shareStatusBadgeClass(device.status)}`}>{device.status === 'PENDING_APPROVAL' ? 'Pending' : device.status}</span>
-                    </div>
-                    <div className="portal-profile-device-meta">
-                      {device.shared_client_mac && <span>{device.shared_client_mac}</span>}
-                      {device.shared_client_ip && <span>{device.shared_client_ip}</span>}
-                      {device.shared_ssid && <span>{device.shared_ssid}</span>}
-                    </div>
-                    <div className="portal-profile-device-meta">
-                      <span>{device.item?.product_name || 'Multi-Pass'}</span>
-                      <span>{shareItemTimeLabel(device)}</span>
-                    </div>
-                    <div className="portal-profile-device-actions">
-                      <button
-                        className={`btn btn-sm ${isStarred ? 'btn-warning' : 'btn-outline-secondary'}`}
-                        type="button"
-                        disabled={sharingLoading}
-                        onClick={() => updateShareDeviceStar(device.shared_user_id, !isStarred)}
-                      >
-                        <IconStar size={15} className="me-1" />{isStarred ? 'Starred' : 'Star'}
-                      </button>
-                      <button className="btn btn-icon btn-sm btn-outline-danger ms-auto" type="button" aria-label="Delete device" disabled={sharingLoading} onClick={() => deleteShareDevice(device.shared_user_id)}>
-                        <IconTrash size={15} />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            {!filteredDevices.length && (
-              <div className="text-muted small">No devices match the current filter.</div>
-            )}
-          </div>
-        ) : (
-          <div className="text-muted small">{t('No Multi-Pass shared devices yet.')}</div>
-        )}
-        {profileDeviceFilterOpen && (
-          <Modal
-            title="Filter devices"
-            onClose={() => setProfileDeviceFilterOpen(false)}
-            size="sm"
-            dialogClassName="portal-profile-modal-dialog"
-            bodyClassName="portal-profile-modal-body"
-            contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
-            lockPageRefresh
-          >
-            <div className="portal-device-filter-modal">
-              <label className="form-label">Search</label>
-              <div className="input-icon mb-3">
-                <span className="input-icon-addon"><IconSearch size={16} /></span>
-                <input
-                  className="form-control"
-                  value={profileDeviceSearch}
-                  onChange={(event) => setProfileDeviceSearch(event.target.value)}
-                  placeholder="Device, MAC, SSID, product"
-                />
-              </div>
-              <label className="form-label">Filter</label>
-              <select className="form-select" value={profileDeviceFilter} onChange={(event) => setProfileDeviceFilter(event.target.value)}>
-                <option value="ALL">All devices</option>
-                <option value="STARRED">Starred first list</option>
-                <option value="UNSTARRED">Not starred</option>
-                <option value="ACTIVE">Active</option>
-                <option value="PENDING_APPROVAL">Pending approval</option>
-                <option value="REVOKED">Revoked</option>
-                <option value="EXPIRED">Expired</option>
-              </select>
-              <div className="d-flex justify-content-end gap-2 mt-3">
-                <button
-                  className="btn"
-                  type="button"
-                  onClick={() => {
-                    setProfileDeviceSearch('');
-                    setProfileDeviceFilter('ALL');
-                  }}
-                >
-                  Clear
-                </button>
-                <button className="btn btn-primary" type="button" onClick={() => setProfileDeviceFilterOpen(false)}>Apply</button>
-              </div>
-            </div>
-          </Modal>
-        )}
-      </div>
-    );
-  }
-
-  function ProfilePage() {
-    return (
-      <div className="portal-history-page portal-profile-page">
-        <div className="portal-history-header">
-          <button className="btn btn-outline-secondary btn-sm" type="button" onClick={() => setPortalScreen('shop')}>
-            <IconChevronLeft size={16} className="me-1" /> Back to portal
-          </button>
-          <div>
-            <div className="portal-history-title">Customer Profile</div>
-            <div className="portal-history-subtitle">{profile?.display_name || 'Profile not set'}</div>
-          </div>
-        </div>
-        <div className={`portal-profile-modal-content portal-profile-page-card ${portalDark ? 'is-dark' : ''}`}>
-          <div className="d-flex align-items-center gap-3 mb-3">
-            <span className="avatar avatar-lg bg-blue-lt text-blue"><IconUser size={26} /></span>
-            <div>
-              <div className="h3 mb-1">{profile?.display_name || t('Profile not set')}</div>
-              <div className="text-muted small">{profile?.contact_number || t('No verified contact number')}</div>
-            </div>
-          </div>
-          <ul className="nav nav-tabs portal-profile-tabs mb-3">
-            <li className="nav-item">
-              <button className={`nav-link ${profileViewTab === 'PROFILE' ? 'active' : ''}`} type="button" onClick={() => setProfileViewTab('PROFILE')}>
-                <IconUser size={16} /> {t('Profile')}
-              </button>
-            </li>
-            <li className="nav-item">
-              <button className={`nav-link ${profileViewTab === 'DEVICES' ? 'active' : ''}`} type="button" onClick={() => { setProfileViewTab('DEVICES'); loadSharing().catch(() => null); }}>
-                <IconWifi size={16} /> {t('Devices')}
-              </button>
-            </li>
-          </ul>
-          {profileViewTab === 'PROFILE' ? (
-            <>
-              <div className="list-group list-group-flush mb-3">
-                <div className="list-group-item d-flex justify-content-between px-0">
-                  <span className="text-muted">{t('Name')}</span>
-                  <strong>{profile?.display_name || '-'}</strong>
-                </div>
-                <div className="list-group-item d-flex justify-content-between px-0">
-                  <span className="text-muted">{t('Contact')}</span>
-                  <strong>{profile?.contact_number || '-'}</strong>
-                </div>
-                <div className="list-group-item d-flex justify-content-between px-0">
-                  <span className="text-muted">{t('Email')}</span>
-                  <strong>{profile?.email || '-'}</strong>
-                </div>
-              </div>
-            </>
-          ) : profileViewTab === 'DEVICES' ? (
-            <ProfileSharedDevicesPanel />
-          ) : null}
-        </div>
-      </div>
-    );
-  }
-
   function BagPage() {
     const queuedItems = bag?.queued_items || [];
-    const historyItems = bag?.history_items || [];
     const autoActivate = bag?.settings?.auto_activate !== false;
     const storeRequestCounts = storeRequestCountsFor(storePendingRequests || []);
     const filteredStoreRequests = filteredStoreRequestRows(storePendingRequests || [], storeRequestFilter, '');
     const recentStoreRequests = filteredStoreRequests.slice(0, 5);
     const renderItem = (item, options = {}) => {
-      const deviceLabel = item.device_scope === 'MULTI_DEVICE' ? `${item.allowed_devices || 1} devices` : '1 device';
       const statusLabel = item.status === 'QUEUED' ? 'UNUSED' : item.status;
       const showStatusBadge = Boolean(statusLabel);
       return (
@@ -5463,7 +4523,7 @@ function PortalApp() {
             <div className="portal-bag-item-bottom-meta">
               <span><IconClock size={14} /> {formatSeconds(item.remaining_seconds || item.duration_seconds || 0)}</span>
               <span className="portal-bag-meta-separator">|</span>
-              <span>{deviceLabel}</span>
+              <span>1 device</span>
             </div>
             {item.product_category_name && (
               <div className="portal-bag-item-meta">
@@ -5508,148 +4568,139 @@ function PortalApp() {
             </div>
           </div>
           <div className={`portal-profile-modal-content portal-bag-page-card ${portalDark ? 'is-dark' : ''}`}>
-          <div className="portal-bag-summary">
-            <span className="portal-bag-summary-icon"><IconWallet size={24} /></span>
-            <div>
-              <div className="fw-semibold">{formatSeconds(bag?.summary?.remaining_seconds || 0)} total in bag</div>
-              <div className="small text-muted">{autoActivate ? 'Saved items stay separate. Drag them to choose what activates first.' : 'Saved items stay separate until you activate one manually.'}</div>
-            </div>
-          </div>
-          <div className="portal-bag-tabbar">
-            <ul className="nav nav-tabs portal-bag-tabs">
-              <li className="nav-item">
-                <button className={`nav-link ${bagTab === 'LIST' ? 'active' : ''}`} type="button" onClick={() => setBagTab('LIST')}>
-                  <IconListDetails size={16} /> List
-                </button>
-              </li>
-              <li className="nav-item">
-                <button className={`nav-link ${bagTab === 'STORES' ? 'active' : ''}`} type="button" onClick={() => setBagTab('STORES')}>
-                  <IconBuildingStore size={16} /> Stores
-                  {pendingStoreRequestCount > 0 && <span className="badge bg-yellow-lt text-yellow ms-1">{pendingStoreRequestCount}</span>}
-                </button>
-              </li>
-              <li className="nav-item">
-                <button className={`nav-link ${bagTab === 'SHARING' ? 'active' : ''}`} type="button" onClick={() => { setBagTab('SHARING'); setSharingMessage(null); loadSharing().catch(() => null); }}>
-                  <IconShare size={16} /> Sharing
-                </button>
-              </li>
-            </ul>
-          </div>
-          {bagTab === 'LIST' ? (
-            <div className="portal-bag-tab-panel">
-              <div className="portal-bag-controls">
-                <label className="portal-bag-auto-row portal-bag-control-card">
-                  <span>
-                    <strong>Auto activate</strong>
-                  </span>
-                  <span className="form-check form-switch m-0">
-                    <input className="form-check-input" type="checkbox" checked={autoActivate} disabled={bagSaving} onChange={(event) => saveBagAutoActivate(event.target.checked)} />
-                  </span>
-                </label>
-                <button className={`portal-bag-auto-row portal-bag-control-card portal-bag-voucher-button ${bagClaimOpen ? 'is-active' : ''}`} type="button" onClick={() => setBagClaimOpen(true)}>
-                  <span>
-                    <strong>Voucher</strong>
-                  </span>
-                  <span className="portal-bag-voucher-icon"><IconKey size={16} /></span>
-                </button>
+            <div className="portal-bag-summary">
+              <span className="portal-bag-summary-icon"><IconWallet size={24} /></span>
+              <div>
+                <div className="fw-semibold">{formatSeconds(bag?.summary?.remaining_seconds || 0)} total in bag</div>
+                <div className="small text-muted">{autoActivate ? 'Saved items stay separate. Drag them to choose what activates first.' : 'Saved items stay separate until you activate one manually.'}</div>
               </div>
-              {bagClaimOpen && (
-                <form className="portal-bag-claim" onSubmit={claimVoucherToBag}>
-                  <div className="portal-bag-claim-title">
-                    <span><IconKey size={18} /></span>
-                    <div>
+            </div>
+            <div className="portal-bag-tabbar">
+              <ul className="nav nav-tabs portal-bag-tabs">
+                <li className="nav-item">
+                  <button className={`nav-link ${bagTab === 'LIST' ? 'active' : ''}`} type="button" onClick={() => setBagTab('LIST')}>
+                    <IconListDetails size={16} /> List
+                  </button>
+                </li>
+                <li className="nav-item">
+                  <button className={`nav-link ${bagTab === 'STORES' ? 'active' : ''}`} type="button" onClick={() => setBagTab('STORES')}>
+                    <IconBuildingStore size={16} /> Stores
+                    {pendingStoreRequestCount > 0 && <span className="badge bg-yellow-lt text-yellow ms-1">{pendingStoreRequestCount}</span>}
+                  </button>
+                </li>
+              </ul>
+            </div>
+            {bagTab === 'LIST' ? (
+              <div className="portal-bag-tab-panel">
+                <div className="portal-bag-controls">
+                  <label className="portal-bag-auto-row portal-bag-control-card">
+                    <span>
+                      <strong>Auto activate</strong>
+                    </span>
+                    <span className="form-check form-switch m-0">
+                      <input className="form-check-input" type="checkbox" checked={autoActivate} disabled={bagSaving} onChange={(event) => saveBagAutoActivate(event.target.checked)} />
+                    </span>
+                  </label>
+                  <button className={`portal-bag-auto-row portal-bag-control-card portal-bag-voucher-button ${bagClaimOpen ? 'is-active' : ''}`} type="button" onClick={() => setBagClaimOpen(true)}>
+                    <span>
                       <strong>Voucher</strong>
-                      <small>Add free, refund, or event vouchers to your bag.</small>
+                    </span>
+                    <span className="portal-bag-voucher-icon"><IconKey size={16} /></span>
+                  </button>
+                </div>
+                {bagClaimOpen && (
+                  <form className="portal-bag-claim" onSubmit={claimVoucherToBag}>
+                    <div className="portal-bag-claim-title">
+                      <span><IconKey size={18} /></span>
+                      <div>
+                        <strong>Voucher</strong>
+                        <small>Add free, refund, or event vouchers to your bag.</small>
+                      </div>
+                      <button
+                        className="btn btn-icon btn-sm btn-outline-secondary ms-auto"
+                        type="button"
+                        aria-label="Close voucher"
+                        onClick={() => {
+                          setBagClaimOpen(false);
+                          setBagClaimMessage(null);
+                        }}
+                      >
+                        <IconX size={16} />
+                      </button>
                     </div>
+                    <div className="portal-bag-claim-row">
+                      <input
+                        className="form-control"
+                        value={bagVoucherCode}
+                        onChange={(event) => {
+                          setBagVoucherCode(event.target.value.toUpperCase());
+                          if (bagClaimMessage) setBagClaimMessage(null);
+                        }}
+                        placeholder="Voucher code"
+                        autoComplete="one-time-code"
+                      />
+                      <button className="btn btn-primary" type="submit" disabled={bagClaiming}>
+                        {bagClaiming ? 'Adding...' : 'Add to Bag'}
+                      </button>
+                    </div>
+                    {bagClaimMessage && (
+                      <PortalCustomerMessage
+                        message={bagClaimMessage.message}
+                        tone={bagClaimMessage.status === 'SUCCESS' ? 'success' : 'danger'}
+                        className="py-2"
+                        timeoutMs={portalMessageAutoHideMs}
+                        onSuccessNote={queueAvatarCustomerMessage}
+                        onDismiss={() => setBagClaimMessage(null)}
+                        dismissKey={`${bagClaimMessage.status}-${bagClaimMessage.message}`}
+                      />
+                    )}
+                  </form>
+                )}
+                <div className="portal-bag-section">
+                  <div className="portal-bag-section-title">Active now</div>
+                  {activeBagItems.length ? activeBagItems.map((item) => renderItem(item)) : <div className="text-muted small">No active bag item right now.</div>}
+                </div>
+                <div className="portal-bag-section">
+                  {queuedItems.length ? queuedItems.map((item) => renderItem(item, { draggable: true, canActivate: true })) : <div className="text-muted small">No saved products. Bought packages will appear here.</div>}
+                </div>
+              </div>
+            ) : bagTab === 'STORES' ? (
+              <div className="portal-bag-tab-panel">
+                <div className="portal-store-request-filter">
+                  {storeRequestFilterOptions.map((status) => (
                     <button
-                      className="btn btn-icon btn-sm btn-outline-secondary ms-auto"
+                      className={`btn btn-sm ${storeRequestFilter === status ? 'btn-primary' : 'btn-outline-secondary'}`}
                       type="button"
-                      aria-label="Close voucher"
+                      key={status}
+                      onClick={() => setStoreRequestFilter(status)}
+                    >
+                      <span>{status}</span>
+                      <span className={`badge ms-1 ${storeRequestFilter === status ? 'bg-white text-primary' : 'bg-secondary-lt text-secondary'}`}>{storeRequestCounts[status] || 0}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="portal-bag-section">
+                  <div className="portal-bag-section-title">Store requests</div>
+                  {recentStoreRequests.length ? (
+                    recentStoreRequests.map((requestRow) => renderStoreRequestRow(requestRow, { hideView: true }))
+                  ) : (
+                    <div className="text-muted small">No store requests in this filter.</div>
+                  )}
+                  {filteredStoreRequests.length > 5 && (
+                    <button
+                      className="btn btn-outline-primary w-100 mt-2"
+                      type="button"
                       onClick={() => {
-                        setBagClaimOpen(false);
-                        setBagClaimMessage(null);
+                        setPortalScreen('bag-stores');
+                        loadStorePendingRequests(sessionId, { background: true }).catch(() => null);
                       }}
                     >
-                      <IconX size={16} />
+                      <IconBuildingStore size={16} className="me-2" /> View all
                     </button>
-                  </div>
-                  <div className="portal-bag-claim-row">
-                    <input
-                      className="form-control"
-                      value={bagVoucherCode}
-                      onChange={(event) => {
-                        setBagVoucherCode(event.target.value.toUpperCase());
-                        if (bagClaimMessage) setBagClaimMessage(null);
-                      }}
-                      placeholder="Voucher code"
-                      autoComplete="one-time-code"
-                    />
-                    <button className="btn btn-primary" type="submit" disabled={bagClaiming}>
-                      {bagClaiming ? 'Adding...' : 'Add to Bag'}
-                    </button>
-                  </div>
-                  {bagClaimMessage && (
-                    <PortalCustomerMessage
-                      message={bagClaimMessage.message}
-                      tone={bagClaimMessage.status === 'SUCCESS' ? 'success' : 'danger'}
-                      className="py-2"
-                      timeoutMs={portalMessageAutoHideMs}
-                      onSuccessNote={queueAvatarCustomerMessage}
-                      onDismiss={() => setBagClaimMessage(null)}
-                      dismissKey={`${bagClaimMessage.status}-${bagClaimMessage.message}`}
-                    />
                   )}
-                </form>
-              )}
-              <div className="portal-bag-section">
-                <div className="portal-bag-section-title">Active now</div>
-                {activeBagItems.length ? activeBagItems.map((item) => renderItem(item)) : <div className="text-muted small">No active bag item right now.</div>}
+                </div>
               </div>
-              <div className="portal-bag-section">
-                {queuedItems.length ? queuedItems.map((item) => renderItem(item, { draggable: true, canActivate: true })) : <div className="text-muted small">No saved products. Bought packages will appear here.</div>}
-              </div>
-            </div>
-          ) : bagTab === 'STORES' ? (
-            <div className="portal-bag-tab-panel">
-              <div className="portal-store-request-filter">
-                {storeRequestFilterOptions.map((status) => (
-                  <button
-                    className={`btn btn-sm ${storeRequestFilter === status ? 'btn-primary' : 'btn-outline-secondary'}`}
-                    type="button"
-                    key={status}
-                    onClick={() => setStoreRequestFilter(status)}
-                  >
-                    <span>{status}</span>
-                    <span className={`badge ms-1 ${storeRequestFilter === status ? 'bg-white text-primary' : 'bg-secondary-lt text-secondary'}`}>{storeRequestCounts[status] || 0}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="portal-bag-section">
-                <div className="portal-bag-section-title">Store requests</div>
-                {recentStoreRequests.length ? (
-                  recentStoreRequests.map((requestRow) => renderStoreRequestRow(requestRow, { hideView: true }))
-                ) : (
-                  <div className="text-muted small">No store requests in this filter.</div>
-                )}
-                {filteredStoreRequests.length > 5 && (
-                  <button
-                    className="btn btn-outline-primary w-100 mt-2"
-                    type="button"
-                    onClick={() => {
-                      setPortalScreen('bag-stores');
-                      loadStorePendingRequests(sessionId, { background: true }).catch(() => null);
-                    }}
-                  >
-                    <IconBuildingStore size={16} className="me-2" /> View all
-                  </button>
-                )}
-              </div>
-            </div>
-	          ) : bagTab === 'SHARING' ? (
-	            <div className="portal-bag-tab-panel">
-	              <SharingPanel inBag />
-	            </div>
-	          ) : null}
+            ) : null}
           </div>
         </div>
         {pendingBagActivationItem && (
@@ -5687,242 +4738,13 @@ function PortalApp() {
     );
   }
 
-  function ShareAccessModal() {
-    if (!shareModalItem) return null;
-    const capacity = shareModalData.qr?.capacity || shareModalData.code?.capacity || shareModalData.capacity || shareCapacityForItem(shareModalItem) || {};
-    const activeShares = activeOwnerSharesForItem(shareModalItem);
-    const pendingShares = pendingOwnerSharesForItem(shareModalItem);
-    const savedShareDevices = [...(sharing?.owner_devices || [])].sort((a, b) => {
-      const starred = Number(Boolean(b.owner_starred)) - Number(Boolean(a.owner_starred));
-      if (starred) return starred;
-      const priorityA = a.owner_priority ?? 999999;
-      const priorityB = b.owner_priority ?? 999999;
-      if (priorityA !== priorityB) return priorityA - priorityB;
-      return String(a.shared_device_name || a.shared_name || '').localeCompare(String(b.shared_device_name || b.shared_name || ''));
-    });
-    const savedDeviceSearchText = shareDeviceSearch.trim().toLowerCase();
-    const filteredSavedShareDevices = savedShareDevices.filter((device) => {
-      if (!savedDeviceSearchText) return true;
-      return [
-        device.shared_device_name,
-        device.shared_name,
-        device.shared_client_mac,
-        device.shared_client_ip,
-        device.shared_ssid,
-        device.item?.product_name,
-      ].some((value) => String(value || '').toLowerCase().includes(savedDeviceSearchText));
-    });
-    const showSavedDeviceSearch = savedShareDevices.length > 5;
-    const baseShareTabs = [
-      ['QR', IconQrcode, 'QR'],
-      ['CODE', IconKey, 'Code'],
-      ['PHONE', IconPhone, 'By Phone'],
-    ];
-    const devicesTab = ['DEVICES', IconUsers, `Devices${savedShareDevices.length ? ` (${savedShareDevices.length})` : ''}`];
-    const shareTabs = savedShareDevices.length ? [devicesTab, ...baseShareTabs] : [...baseShareTabs, devicesTab];
-    const allowedSlots = Number(capacity.allowed_devices || shareModalItem.allowed_devices || 1);
-    const usedSlots = Math.min(allowedSlots, Math.max(1, activeShares.length + 1));
-    const availableShareSlots = Math.max(allowedSlots - 1 - activeShares.length - pendingShares.length, 0);
-    const sharingFull = availableShareSlots <= 0;
+
+  function ProfileQrScannerModal() {
+    if (!profileQrScannerOpen) return null;
     return (
       <Modal
-        title="Share Multi-Pass"
-        onClose={() => setShareModalItem(null)}
-        size="md"
-        dialogClassName="portal-profile-modal-dialog"
-        bodyClassName="portal-profile-modal-body"
-        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
-        lockPageRefresh
-      >
-        <div className="portal-share-modal">
-          <div className="portal-share-modal-product">
-            <span className="portal-share-modal-icon"><IconShare size={22} /></span>
-            <div className="portal-share-modal-product-copy">
-              <strong>{shareModalItem.product_name || 'Multi-Pass'}</strong>
-              <small>{usedSlots}/{allowedSlots} device slots used · {formatSeconds(activeBagItemRemainingSeconds(shareModalItem))} left</small>
-            </div>
-            <span className={`portal-share-seat-badge ${usedSlots >= allowedSlots ? 'is-full' : ''}`}>{usedSlots}/{allowedSlots}</span>
-          </div>
-          {sharingMessage && (
-            <PortalCustomerMessage
-              message={sharingMessage.message}
-              tone={sharingMessage.status === 'SUCCESS' ? 'success' : 'danger'}
-              className="py-2"
-              timeoutMs={portalMessageAutoHideMs}
-              onSuccessNote={queueAvatarCustomerMessage}
-              onDismiss={() => setSharingMessage(null)}
-              dismissKey={`${sharingMessage.status}-${sharingMessage.message}`}
-            />
-          )}
-          <div className="portal-share-device-section">
-            <div className="portal-bag-section-title">Connected devices</div>
-            <div className="portal-share-owner-seat">
-              <span className="portal-share-row-icon"><IconUser size={18} /></span>
-              <div>
-                <strong>{profile?.display_name || 'Your profile'}</strong>
-                <small>Owner device slot</small>
-              </div>
-            </div>
-            {activeShares.length ? activeShares.map((share) => renderShareRow(share, { owner: true })) : (
-              <div className="text-muted small">No shared device is connected yet.</div>
-            )}
-          </div>
-
-          {pendingShares.length > 0 && (
-            <div className="portal-share-device-section">
-              <div className="portal-bag-section-title">Pending approvals</div>
-              {pendingShares.map((share) => renderShareRow(share, { owner: true }))}
-            </div>
-          )}
-
-          {!sharingFull && !shareOptionsOpen && (
-            <button
-              className="btn btn-primary w-100 portal-share-open-button"
-              type="button"
-              onClick={revealShareOptions}
-            >
-              <IconShare size={17} className="me-2" /> Share another device
-            </button>
-          )}
-
-          {sharingFull ? (
-            <div className="portal-share-full-warning">
-              <IconAlertTriangle size={20} />
-              <span>All shared-device slots are already used or reserved. Revoke a connected device first before registering a new one.</span>
-            </div>
-          ) : shareOptionsOpen ? (
-            <>
-              <div className="portal-share-tab-shell">
-                <ul className="nav nav-tabs portal-profile-tabs portal-share-tabs" role="tablist" aria-label="Share options">
-                  {shareTabs.map(([key, TabIcon, label]) => (
-                    <li className="nav-item" role="presentation" key={key}>
-                      <button className={`nav-link ${shareMethodTab === key ? 'active' : ''}`} type="button" role="tab" aria-selected={shareMethodTab === key} onClick={() => setShareMethodTab(key)}>
-                        <TabIcon size={16} /> {label}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-                <div className="text-muted small mt-2">Choose one sharing option below.</div>
-              </div>
-              {shareMethodTab === 'DEVICES' && (
-                <div className="portal-share-method-card">
-                  <div className="portal-share-method-title">
-                    <IconUsers size={18} /> Saved devices
-                  </div>
-                  {showSavedDeviceSearch && (
-                    <div className="input-icon portal-share-device-search">
-                      <span className="input-icon-addon"><IconSearch size={16} /></span>
-                      <input
-                        className="form-control"
-                        value={shareDeviceSearch}
-                        onChange={(event) => setShareDeviceSearch(event.target.value)}
-                        placeholder="Search saved devices"
-                      />
-                    </div>
-                  )}
-                  {savedShareDevices.length ? (
-                    <div className="portal-share-saved-device-list">
-                      {filteredSavedShareDevices.map((device) => {
-                        const shareForItem = [...activeShares, ...pendingShares].find((share) => share.shared_user_id === device.shared_user_id);
-                        const isConnected = shareForItem?.status === 'ACTIVE';
-                        const isPending = shareForItem?.status === 'PENDING_APPROVAL';
-                        const currentMac = device.current_client_mac || device.shared_client_mac || '';
-                        const currentSsid = device.current_ssid || device.shared_ssid || '';
-                        const isOnline = Boolean(device.is_online || device.has_active_time);
-                        return (
-                          <div className={`portal-share-saved-device ${device.owner_starred ? 'is-starred' : ''}`} key={device.shared_user_id || device.id}>
-                            <div className="portal-share-saved-device-row portal-share-saved-device-row-main">
-                              <div className="portal-share-saved-device-name">
-                                <strong>{device.shared_device_name || device.shared_name || 'Unknown device'}</strong>
-                                {device.owner_starred && <span className="badge bg-yellow-lt text-yellow"><IconStar size={13} className="me-1" />Starred</span>}
-                              </div>
-                              <span className={`badge ${isOnline ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{isOnline ? 'Online' : 'Offline'}</span>
-                            </div>
-                            <div className="portal-share-saved-device-mac">
-                              {currentMac || 'No MAC detected'}
-                              {currentSsid && <span>{currentSsid}</span>}
-                            </div>
-                            <div className="portal-share-saved-device-actions">
-                              <button
-                                className={`btn btn-sm ${isConnected ? 'btn-success' : isPending ? 'btn-warning' : 'btn-primary'}`}
-                                type="button"
-                                disabled={shareModalLoading || isConnected || isPending}
-                                onClick={() => shareToSavedDevice(device)}
-                              >
-                                {isConnected ? 'Connected' : isPending ? 'Pending' : 'Share'}
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {!filteredSavedShareDevices.length && (
-                        <div className="text-muted small">No saved devices match your search.</div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-muted small">No saved devices yet. Use QR, code, or phone sharing first; devices will appear here after they are connected.</div>
-                  )}
-                </div>
-              )}
-              {shareMethodTab === 'QR' && (
-                <div className="portal-share-method-card">
-                  <div className="portal-share-method-title">
-                    <IconQrcode size={18} /> QR auto-approve
-                  </div>
-                  {shareModalLoading && !shareQrDataUrl ? (
-                    <div className="text-muted small">Preparing QR...</div>
-                  ) : shareQrDataUrl ? (
-                    <img className="portal-share-qr-image" src={shareQrDataUrl} alt="Sharing QR" />
-                  ) : (
-                    <div className="text-muted small">QR could not be prepared.</div>
-                  )}
-                  <small>Scanning this QR connects the other profile immediately if a device slot is available.</small>
-                </div>
-              )}
-              {shareMethodTab === 'CODE' && (
-                <div className="portal-share-method-card">
-                  <div className="portal-share-method-title">
-                    <IconKey size={18} /> Code needs approval
-                  </div>
-                  <div className="portal-share-code-display">{shareModalData.code?.share_code || '--------'}</div>
-                  <small>The other user enters this code. You approve it here before access starts.</small>
-                </div>
-              )}
-              {shareMethodTab === 'PHONE' && (
-                <form className="portal-share-phone-card" onSubmit={shareByContact}>
-                  <div className="portal-share-method-title">
-                    <IconPhone size={18} /> Share by registered phone
-                  </div>
-                  <div className="input-group">
-                    <input
-                      className="form-control"
-                      value={sharePhoneNumber}
-                      onChange={(event) => setSharePhoneNumber(normalizePortalContactInput(event.target.value))}
-                      placeholder="09XXXXXXXXX"
-                      inputMode="numeric"
-                      maxLength={11}
-                    />
-                    <button className="btn btn-primary" type="submit" disabled={shareModalLoading || sharePhoneCooldown > 0}>
-                      {shareModalLoading ? 'Sharing...' : sharePhoneCooldown > 0 ? `Send Again (${sharePhoneCooldown}s)` : 'Share'}
-                    </button>
-                  </div>
-                  <small>Phone sharing works only if that contact number already has a verified customer profile. We will send them an SMS notice.</small>
-                </form>
-              )}
-            </>
-          ) : null}
-        </div>
-      </Modal>
-    );
-  }
-
-  function ShareQrScannerModal() {
-    if (!shareQrScannerOpen) return null;
-    const profileLinkMode = qrScannerMode === 'PROFILE_LINK';
-    return (
-      <Modal
-        title={profileLinkMode ? t('Scan Profile QR') : t('Scan Sharing QR')}
-        onClose={() => { stopShareQrScanner(); setShareQrScannerOpen(false); }}
+        title={t('Scan Profile QR')}
+        onClose={() => { stopProfileQrScanner(); setProfileQrScannerOpen(false); }}
         size="md"
         dialogClassName="portal-profile-modal-dialog"
         bodyClassName="portal-profile-modal-body"
@@ -5931,37 +4753,22 @@ function PortalApp() {
       >
         <div className="d-grid gap-3">
           <div className="store-owner-qr-scanner">
-            <video ref={shareQrVideoRef} playsInline muted />
-            {shareQrBox && (
+            <video ref={profileQrVideoRef} playsInline muted />
+            {profileQrBox && (
               <span
                 className="store-owner-qr-tracking-box"
                 style={{
-                  left: `${shareQrBox.left}px`,
-                  top: `${shareQrBox.top}px`,
-                  width: `${shareQrBox.width}px`,
-                  height: `${shareQrBox.height}px`,
+                  left: `${profileQrBox.left}px`,
+                  top: `${profileQrBox.top}px`,
+                  width: `${profileQrBox.width}px`,
+                  height: `${profileQrBox.height}px`,
                 }}
               />
             )}
-            {!shareQrCameraActive && <div className="store-owner-qr-placeholder"><IconQrcode size={42} /></div>}
+            {!profileQrCameraActive && <div className="store-owner-qr-placeholder"><IconQrcode size={42} /></div>}
           </div>
-          {shareQrError && <div className="alert alert-warning mb-0">{shareQrError}</div>}
-          {profileLinkMode ? (
-            <div className="text-muted small">{t('Point the camera at the QR generated from the main profile device.')}</div>
-          ) : (
-            <form
-              className="d-flex gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                stopShareQrScanner();
-                setShareQrScannerOpen(false);
-                claimShare('CODE', shareClaimCode);
-              }}
-            >
-              <input className="form-control" value={shareClaimCode} onChange={(event) => setShareClaimCode(event.target.value.toUpperCase())} placeholder="Enter code manually" />
-              <button className="btn btn-primary" type="submit"><IconSearch size={17} /></button>
-            </form>
-          )}
+          {profileQrError && <div className="alert alert-warning mb-0">{profileQrError}</div>}
+          <div className="text-muted small">{t('Point the camera at the QR generated from the main profile device.')}</div>
         </div>
       </Modal>
     );
@@ -6258,7 +5065,6 @@ function PortalApp() {
     setSelectedCategoryProductId('');
     setProductQuantities({});
     setBarangayPickerOpen(false);
-    setPassTypeHelpOpen(false);
   }
 
   function continueCheckoutAfterBrowserReminder() {
@@ -6965,7 +5771,6 @@ function PortalApp() {
 
   function closePhysicalStorePage() {
     setSelectedPhysicalStore(null);
-    setPassTypeHelpOpen(false);
     setStoreItemQuantities({});
     setStorePurchaseMessage(null);
     setStorePurchaseOption(null);
@@ -7021,7 +5826,6 @@ function PortalApp() {
                 )}
               </div>
             )}
-            <PortalPassTypeTabs />
             {storePurchaseMessage && (
               <PortalCustomerMessage
                 message={storePurchaseMessage.message}
@@ -7083,7 +5887,6 @@ function PortalApp() {
                         <div className="portal-product-meta-tags">
                           <span className="badge bg-green-lt text-green"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
                           <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
-                          {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple"><IconUsers size={16} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
                           <span className={`badge ${item.access_scope === 'BARANGAY_ONLY' ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>{item.access_scope === 'BARANGAY_ONLY' ? 'Barangay only' : 'All locations'}</span>
                         </div>
                         {item.access_scope === 'BARANGAY_ONLY' && item.allowed_barangay && <div className="small text-muted mt-2">Allowed in {item.allowed_barangay}</div>}
@@ -7100,7 +5903,7 @@ function PortalApp() {
             ) : (
               <div className="portal-store-empty">
                 <IconShoppingBag size={26} />
-                <strong>No {effectivePurchasePassType === 'MULTI_DEVICE' ? 'shared device' : 'one device'} items in this store yet.</strong>
+                <strong>No store items are available yet.</strong>
                 <small>Ask the store operator for available packages.</small>
               </div>
             )}
@@ -7135,7 +5938,7 @@ function PortalApp() {
 
   function ProductCategoryItemsPage() {
     if (!selectedProductCategory) return null;
-    const categoryItems = (selectedProductCategory.items || []).filter((item) => productPassType(item) === effectivePurchasePassType);
+    const categoryItems = selectedProductCategory.items || [];
     const selectedItem = selectedCategoryProductId ? categoryItems.find((item) => item.id === selectedCategoryProductId) : null;
     const selectedQuantity = selectedItem ? productQuantity(selectedItem) : 0;
     const selectedAmount = selectedItem ? productLineAmount(selectedItem, selectedQuantity) : { total: 0 };
@@ -7185,7 +5988,6 @@ function PortalApp() {
 	        </div>
 	        <div className="portal-store-page-body portal-category-page-body">
 	        {selectedProductCategory.description && <div className="text-muted small">{selectedProductCategory.description}</div>}
-        <PortalPassTypeTabs />
         {!selectedItem ? (
           <div className="portal-category-product-picker">
             {categoryItems.length ? categoryItems.map((item) => (
@@ -7211,9 +6013,6 @@ function PortalApp() {
                 </div>
                 <div className="portal-product-meta-tags">
                   <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
-                  {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple">{item.device_scope_label || productPassLabel(item)}</span>}
-                  {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple"><IconUsers size={16} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
-                  {productPassType(item) !== 'MULTI_DEVICE' && <span className="badge bg-azure-lt text-azure"><IconUser size={16} className="me-1" />1 device</span>}
                 </div>
                 <span className="btn btn-primary w-100 mt-3">
                   {t('Select')}
@@ -7369,8 +6168,6 @@ function PortalApp() {
                       <div className="portal-product-meta-tags">
                         <span className="badge bg-green-lt text-green"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
                         <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
-                        {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple">{item.device_scope_label || productPassLabel(item)}</span>}
-                        {productPassType(item) === 'MULTI_DEVICE' && <span className="badge bg-purple-lt text-purple"><IconUsers size={16} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>}
                       </div>
                       {discountNudge && (
                         <div className="portal-discount-nudge">
@@ -7698,12 +6495,7 @@ function PortalApp() {
 		            <BagStoreRequestsPage />
 		            <PortalFooter />
 		          </>
-		        ) : portalScreen === 'profile' ? (
-		          <>
-		            <ProfilePage />
-		            <PortalFooter />
-		          </>
-		        ) : portalScreen === 'bag' ? (
+			        ) : portalScreen === 'bag' ? (
 		          <>
 		            <BagPage />
 		            <PortalFooter />
@@ -7735,7 +6527,6 @@ function PortalApp() {
             {activeRemainingCards.map((item, index) => {
               const cardHasAccess = item ? activeBagItemRemainingSeconds(item) > 0 : hasRemainingAccess;
               const cardTime = item ? formatCountdown(activeBagItemRemainingSeconds(item)) : remainingDisplay;
-              const canShareItem = Boolean(item && !item.shared_access && item.device_scope === 'MULTI_DEVICE' && Number(item.allowed_devices || 1) > 1 && activeBagItemRemainingSeconds(item) > 0);
               return (
                 <div
                   className={`card portal-remaining-card ${cardHasAccess ? 'is-connected' : 'is-disconnected'} is-clickable`}
@@ -7752,25 +6543,10 @@ function PortalApp() {
                         <span className={`portal-remaining-time ${cardHasAccess ? 'is-connected' : 'is-disconnected'}`}>{cardTime}</span>
                         {item?.product_name && (
                           <div className="portal-remaining-product">
-                            {item.shared_access && <IconShare size={14} className="me-1" />}
                             {item.product_name}
                           </div>
                         )}
                       </div>
-                      {canShareItem && (
-                        <button
-                          className="portal-remaining-share-button"
-                          type="button"
-                          aria-label="Share Multi-Pass"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            openShareModal(item);
-                          }}
-                        >
-                          <span className={`portal-remaining-share-seat ${shareCapacityForItem(item).full ? 'is-full' : ''}`}>{shareSeatLabelForItem(item)}</span>
-                          <IconShare size={17} />
-                        </button>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -7794,8 +6570,6 @@ function PortalApp() {
                   </div>
                   <div className="portal-ready-pass-meta">
                     <span><IconClock size={14} /> {firstReadyBagTimeLabel}</span>
-                    <span className="portal-bag-meta-separator">|</span>
-                    <span>{firstReadyBagDeviceLabel}</span>
                   </div>
                   {firstReadyBagItem?.product_category_name && (
                     <div className="portal-ready-pass-category">
@@ -8065,8 +6839,7 @@ function PortalApp() {
 	      {OutsidePurchaseModal()}
 	      {BrowserReminderCheckoutModal()}
 	      {PortalCoverageModal()}
-	      {ShareAccessModal()}
-	      {ShareQrScannerModal()}
+	      {ProfileQrScannerModal()}
 
       {profileViewOpen && (
         <Modal
@@ -8090,30 +6863,21 @@ function PortalApp() {
                 <IconUser size={16} /> {t('Profile')}
               </button>
             </li>
-            <li className="nav-item">
-              <button className={`nav-link ${profileViewTab === 'DEVICES' ? 'active' : ''}`} type="button" onClick={() => { setProfileViewTab('DEVICES'); loadSharing().catch(() => null); }}>
-                <IconWifi size={16} /> {t('Devices')}
-              </button>
-            </li>
           </ul>
-          {profileViewTab === 'PROFILE' ? (
-            <div className="list-group list-group-flush mb-3">
-              <div className="list-group-item d-flex justify-content-between px-0">
-                <span className="text-muted">{t('Name')}</span>
-                <strong>{profile?.display_name || '-'}</strong>
-              </div>
-              <div className="list-group-item d-flex justify-content-between px-0">
-                <span className="text-muted">{t('Contact')}</span>
-                <strong>{profile?.contact_number || '-'}</strong>
-              </div>
-              <div className="list-group-item d-flex justify-content-between px-0">
-                <span className="text-muted">{t('Email')}</span>
-                <strong>{profile?.email || '-'}</strong>
-              </div>
-	            </div>
-          ) : (
-            <ProfileSharedDevicesPanel />
-          )}
+          <div className="list-group list-group-flush mb-3">
+            <div className="list-group-item d-flex justify-content-between px-0">
+              <span className="text-muted">{t('Name')}</span>
+              <strong>{profile?.display_name || '-'}</strong>
+            </div>
+            <div className="list-group-item d-flex justify-content-between px-0">
+              <span className="text-muted">{t('Contact')}</span>
+              <strong>{profile?.contact_number || '-'}</strong>
+            </div>
+            <div className="list-group-item d-flex justify-content-between px-0">
+              <span className="text-muted">{t('Email')}</span>
+              <strong>{profile?.email || '-'}</strong>
+            </div>
+          </div>
           <div className="d-flex justify-content-end gap-2">
             <button className="btn btn-outline-secondary" type="button" onClick={() => setProfileViewOpen(false)}>{t('Close')}</button>
           </div>
@@ -8297,8 +7061,8 @@ function PortalApp() {
               />
             )}
             {deviceLinkQrDataUrl && (
-              <div className="portal-share-method-card text-center">
-                <img className="portal-share-qr-image" src={deviceLinkQrDataUrl} alt="Profile device QR" />
+              <div className="portal-profile-qr-card text-center">
+                <img className="portal-profile-qr-image" src={deviceLinkQrDataUrl} alt="Profile device QR" />
                 <small>{t('This QR expires in 10 minutes.')}</small>
               </div>
             )}
@@ -8958,14 +7722,13 @@ function CustomerDevicesPage() {
     return `${profileKey}:${deviceKey}`;
   }
   function accessSourceBadgeClass(device = {}) {
-    if (device.access_kind === 'SHARED_MULTIPASS') return 'bg-blue-lt text-blue';
     if (device.access_source === 'Product') return 'bg-green-lt text-green';
     return 'bg-purple-lt text-purple';
   }
   function renderActiveAccessActions(device = {}) {
     return (
       <ActionBadgeGroup className="justify-content-end">
-        <ActionBadgeButton icon={IconClock} label={device.shared_access ? 'Shared pass time is managed from the owner pass' : 'Manage time'} tone="blue" disabled={Boolean(device.shared_access)} onClick={() => { setTimeTarget(device); setTimeForm({ mode: 'add', amount: 5, unit: 'minutes', note: '' }); }} />
+        <ActionBadgeButton icon={IconClock} label="Manage time" tone="blue" onClick={() => { setTimeTarget(device); setTimeForm({ mode: 'add', amount: 5, unit: 'minutes', note: '' }); }} />
         <ActionBadgeButton icon={IconBan} label="Block device" tone="orange" disabled={!device.portal_session_id} onClick={() => blockDevice(device)} />
         <ActionBadgeButton icon={IconTrash} label="Delete access" tone="red" onClick={() => deleteDevice(device)} />
       </ActionBadgeGroup>
@@ -9086,10 +7849,6 @@ function CustomerDevicesPage() {
   async function manageTime(e) {
     e.preventDefault();
     if (!timeTarget?.portal_session_id) return;
-    if (timeTarget?.access_kind === 'SHARED_MULTIPASS') {
-      setError('Shared Multi-Pass time is controlled by the owner pass. Remove the shared pass or manage the owner pass instead.');
-      return;
-    }
     setError('');
     try {
       await request(`/connected-devices/${timeTarget.portal_session_id}/time-adjust`, { method: 'POST', body: JSON.stringify({ amount_seconds: timeAmountSeconds(), note: timeForm.note || null, bag_item_id: timeTarget.bag_item_id || null }) });
@@ -9105,13 +7864,9 @@ function CustomerDevicesPage() {
     if (!window.confirm(`Remove ${accessLabel} from ${row.device_name || row.hostname || row.client_mac || row.client_ip || 'this device'}?`)) return;
     setError('');
     try {
-      if (row.access_kind === 'SHARED_MULTIPASS' && row.share_id) {
-        await request(`/connected-devices/shared-access/${encodeURIComponent(row.share_id)}`, { method: 'DELETE' });
-      } else {
-        const params = new URLSearchParams();
-        if (row.bag_item_id) params.set('bag_item_id', row.bag_item_id);
-        await request(`/connected-devices/${row.portal_session_id || row.id}${params.toString() ? `?${params.toString()}` : ''}`, { method: 'DELETE' });
-      }
+      const params = new URLSearchParams();
+      if (row.bag_item_id) params.set('bag_item_id', row.bag_item_id);
+      await request(`/connected-devices/${row.portal_session_id || row.id}${params.toString() ? `?${params.toString()}` : ''}`, { method: 'DELETE' });
       setMessage('Device access removed.');
       await load();
     } catch (err) {
@@ -9126,8 +7881,7 @@ function CustomerDevicesPage() {
         method: 'POST',
         body: JSON.stringify({
           reason: 'Blocked by operator',
-          bag_item_id: row.bag_item_id || null,
-          share_id: row.access_kind === 'SHARED_MULTIPASS' ? row.share_id || null : null
+          bag_item_id: row.bag_item_id || null
         })
       });
       setMessage('Device blocked.');
@@ -9253,7 +8007,6 @@ function CustomerDevicesPage() {
         <div className="d-flex flex-wrap align-items-center gap-2 mt-2">
           <span className="badge bg-cyan-lt text-cyan"><IconClock size={14} className="me-1" />{formatSeconds(item.duration_seconds)}</span>
           {item.status === 'ACTIVE' && <span className="badge bg-green-lt text-green">{formatSeconds(item.remaining_seconds)} left</span>}
-          <span className="badge bg-purple-lt text-purple"><IconUsers size={14} className="me-1" />{deviceLimitLabel(item.allowed_devices)}</span>
           <span className="badge bg-secondary-lt">{item.source || 'SOURCE'}</span>
           {item.expires_at && <span className={`badge ${item.expired ? 'bg-red-lt text-red' : 'bg-yellow-lt text-yellow'}`}><IconCalendarStats size={14} className="me-1" />Expires {compactDateTime(item.expires_at)}</span>}
         </div>
@@ -9635,7 +8388,6 @@ function CustomerDevicesPage() {
 	                            <>
 	                              <div className="fw-semibold">{firstPass.product_name || firstPass.display_voucher_code || 'Active access'}</div>
 	                              {firstPass.display_voucher_code && <div className="text-muted small"><code>{firstPass.display_voucher_code}</code></div>}
-	                              {firstPass.shared_access && <div className="text-muted small">Shared by {firstPass.owner_name || 'Multi-Pass owner'}</div>}
 	                            </>
 	                          )}
 	                        </td>
@@ -9682,18 +8434,16 @@ function CustomerDevicesPage() {
 	                                  </thead>
 	                                  <tbody>
 	                                    {group.passes.map((pass) => (
-	                                      <tr key={pass.access_id || pass.bag_item_id || pass.share_id}>
+		                                      <tr key={pass.access_id || pass.bag_item_id}>
 	                                        <td>
 	                                          <div className="fw-semibold">{pass.product_name || pass.display_voucher_code || 'Active access'}</div>
 	                                          {pass.product_category_name && <div className="text-muted small">{pass.product_category_name}</div>}
 	                                        </td>
 	                                        <td><span className={`badge ${accessSourceBadgeClass(pass)}`}>{pass.access_source || 'Access'}</span></td>
 	                                        <td>
-	                                          {pass.shared_access ? (
-	                                            <span className="text-muted">Shared by {pass.owner_name || 'Multi-Pass owner'}</span>
-	                                          ) : pass.display_voucher_code ? (
-	                                            <code>{pass.display_voucher_code}</code>
-	                                          ) : (
+		                                          {pass.display_voucher_code ? (
+		                                            <code>{pass.display_voucher_code}</code>
+		                                          ) : (
 	                                            <span className="text-muted">Customer-owned pass</span>
 	                                          )}
 	                                        </td>
@@ -13839,29 +12589,6 @@ function PortalStoreMapPage() {
   );
 }
 
-const PRODUCT_PASS_TYPES = [
-  {
-    key: 'SINGLE_DEVICE',
-    title: 'Personal Pass',
-    subtitle: 'One customer phone or laptop only.',
-    icon: IconUser,
-  },
-  {
-    key: 'MULTI_DEVICE',
-    title: 'Shared Device Pass',
-    subtitle: 'One purchase can be used by several devices.',
-    icon: IconUsers,
-  },
-];
-
-function productPassType(item = {}) {
-  return item.device_scope || (Number(item.allowed_devices || 1) > 1 ? 'MULTI_DEVICE' : 'SINGLE_DEVICE');
-}
-
-function productPassLabel(item = {}) {
-  return productPassType(item) === 'MULTI_DEVICE' ? 'Shared Device Pass' : 'Personal Pass';
-}
-
 function PhysicalStoresPage() {
   const emptyForm = {
     store_name: '',
@@ -13887,8 +12614,6 @@ function PhysicalStoresPage() {
     price: '0',
     duration_value: '1',
     duration_unit: 'hours',
-    device_scope: 'SINGLE_DEVICE',
-    allowed_devices: '1',
     access_scope: 'ALL_LOCATIONS',
     allowed_barangay: '',
     more_info_enabled: false,
@@ -14237,8 +12962,6 @@ function PhysicalStoresPage() {
       price: Number(itemForm.price || 0),
       duration_value: Number(itemForm.duration_value || 1),
       duration_unit: itemForm.duration_unit,
-      device_scope: itemForm.device_scope,
-      allowed_devices: Number(itemForm.allowed_devices || 1),
       access_scope: itemForm.access_scope,
       allowed_barangay: itemForm.access_scope === 'BARANGAY_ONLY' ? itemForm.allowed_barangay.trim() || null : null,
       more_info_enabled: Boolean(itemForm.more_info_enabled),
@@ -14260,8 +12983,6 @@ function PhysicalStoresPage() {
       price: item.price === null || item.price === undefined ? '0' : String(item.price),
       duration_value: item.duration_value === null || item.duration_value === undefined ? '1' : String(item.duration_value),
       duration_unit: item.duration_unit || 'hours',
-      device_scope: item.device_scope || 'SINGLE_DEVICE',
-      allowed_devices: item.allowed_devices === null || item.allowed_devices === undefined ? '1' : String(item.allowed_devices),
       access_scope: item.access_scope || 'ALL_LOCATIONS',
       allowed_barangay: item.allowed_barangay || '',
       more_info_enabled: Boolean(item.more_info_enabled),
@@ -14407,7 +13128,7 @@ function PhysicalStoresPage() {
   const filteredItemCatalog = itemCatalog.filter((item) => {
     const query = itemCatalogSearch.trim().toLowerCase();
     if (!query) return true;
-    return [item.name, item.description, item.device_scope_label, item.access_scope_label, item.allowed_barangay, item.price_display, item.duration_label].filter(Boolean).join(' ').toLowerCase().includes(query);
+    return [item.name, item.description, item.access_scope_label, item.allowed_barangay, item.price_display, item.duration_label].filter(Boolean).join(' ').toLowerCase().includes(query);
   });
   const filteredSites = sites.filter((site) => {
     const query = siteSearchText.trim().toLowerCase();
@@ -14583,7 +13304,7 @@ function PhysicalStoresPage() {
                           </td>
                           <td>
                             <div className="fw-semibold">{item.price_display}</div>
-                            <div className="text-muted small">{item.duration_label} · {item.device_scope_label}{item.device_scope === 'MULTI_DEVICE' ? ` · ${item.allowed_devices_label}` : ''}</div>
+                            <div className="text-muted small">{item.duration_label}</div>
                           </td>
                           <td>
                             <span className={`badge ${item.access_scope === 'BARANGAY_ONLY' ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>{item.access_scope_label}</span>
@@ -14652,29 +13373,6 @@ function PhysicalStoresPage() {
                   <option value="days">Days</option>
                 </select>
               </div>
-              <div className="col-12">
-                <label className="form-label">Pass Type</label>
-                <div className="row g-2">
-                  {PRODUCT_PASS_TYPES.map((type) => {
-                    const Icon = type.icon;
-                    return (
-                      <div className="col-md-6" key={type.key}>
-                        <label className={`physical-store-item-pass ${itemForm.device_scope === type.key ? 'is-selected' : ''}`}>
-                          <input type="radio" checked={itemForm.device_scope === type.key} onChange={() => setItemForm({ ...itemForm, device_scope: type.key, allowed_devices: type.key === 'SINGLE_DEVICE' ? '1' : itemForm.allowed_devices || '2' })} />
-                          <Icon size={18} />
-                          <span>{type.title}</span>
-                        </label>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              {itemForm.device_scope === 'MULTI_DEVICE' && (
-                <div className="col-md-6">
-                  <label className="form-label">Allowed Devices</label>
-                  <input className="form-control" type="number" min="2" max="100" value={itemForm.allowed_devices} onChange={(e) => setItemForm({ ...itemForm, allowed_devices: e.target.value })} />
-                </div>
-              )}
               <div className="col-md-6">
                 <label className="form-label">Access Scope</label>
                 <select className="form-select" value={itemForm.access_scope} onChange={(e) => setItemForm({ ...itemForm, access_scope: e.target.value })}>
@@ -14965,7 +13663,7 @@ function PhysicalStoresPage() {
                               const OptionIcon = option.icon;
                               return (
                                 <div className="col-md-6" key={option.key}>
-                                  <label className={`physical-store-item-pass ${form.commission_type === option.key ? 'is-selected' : ''}`}>
+                                  <label className={`physical-store-option-card ${form.commission_type === option.key ? 'is-selected' : ''}`}>
                                     <input
                                       type="radio"
                                       checked={form.commission_type === option.key}
@@ -15032,7 +13730,7 @@ function PhysicalStoresPage() {
                             <input type="checkbox" checked={(form.item_ids || []).includes(item.id)} onChange={() => toggleStoreItem(item.id)} />
                             <span>
                               <strong>{item.name}</strong>
-                              <small>{item.price_display} · {item.duration_label} · {item.device_scope_label}{item.device_scope === 'MULTI_DEVICE' ? ` · ${item.allowed_devices_label}` : ''}</small>
+                              <small>{item.price_display} · {item.duration_label}</small>
                               <small>{item.access_scope_label}{item.allowed_barangay ? ` · ${item.allowed_barangay}` : ''} · {item.status}</small>
                             </span>
                           </label>
@@ -15134,7 +13832,7 @@ function PhysicalStoresPage() {
                     <div className="physical-store-details-item" key={`details-item-${item.id}`}>
                       <div>
                         <div className="fw-semibold">{item.name}</div>
-                        <div className="text-muted small">{item.duration_label} · {item.device_scope_label} · {item.access_scope_label}</div>
+                        <div className="text-muted small">{item.duration_label} · {item.access_scope_label}</div>
                       </div>
                       <span className="badge bg-blue-lt text-blue">{item.price_display}</span>
                     </div>
@@ -16354,7 +15052,6 @@ function StoreOwnerPortalApp() {
             <div className="store-owner-request-tags">
               <span className="badge bg-green-lt text-green">{requestRow.amount_display}</span>
               <span className="badge bg-blue-lt text-blue">{formatSeconds(requestRow.total_duration_seconds || 0)}</span>
-              <span className="badge bg-purple-lt text-purple">{requestRow.device_scope === 'MULTI_DEVICE' ? `${requestRow.allowed_devices || 1} devices` : '1 device'}</span>
               <span className="badge bg-secondary-lt text-secondary">{requestRow.request_method}</span>
               {completedLabel && (
                 <span className={`badge ${status === 'APPROVED' ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>
@@ -17248,13 +15945,11 @@ function StoreOwnerPortalApp() {
 function ProductItemsPage() {
   const emptyForm = {
     category_id: '',
-    device_scope: 'SINGLE_DEVICE',
     name: '',
     description: '',
     price: '0',
     duration_value: '1',
     duration_unit: 'hours',
-    allowed_devices: '1',
     discounts: [],
     status: 'ACTIVE',
     sort_order: '0'
@@ -17353,15 +16048,13 @@ function ProductItemsPage() {
     setError('');
     setMessage('');
     setSelectedItem(item);
-    setForm({
+      setForm({
       category_id: item.category_id || '',
-      device_scope: productPassType(item),
       name: item.name || '',
       description: item.description || '',
       price: String(item.price ?? 0),
       duration_value: String(item.duration_value ?? 1),
       duration_unit: item.duration_unit || 'hours',
-      allowed_devices: String(item.allowed_devices ?? 1),
       discounts: (item.discounts || []).map((discount, index) => ({
         id: discount.id || `existing-${index}`,
         label: discount.label || '',
@@ -17398,7 +16091,6 @@ function ProductItemsPage() {
   }
 
   function productPayload() {
-    const deviceScope = form.device_scope || 'SINGLE_DEVICE';
     return {
       category_id: form.category_id || null,
       name: form.name.trim(),
@@ -17406,8 +16098,6 @@ function ProductItemsPage() {
       price: Number(form.price || 0),
       duration_value: Number(form.duration_value || 1),
       duration_unit: form.duration_unit,
-      device_scope: deviceScope,
-      allowed_devices: deviceScope === 'SINGLE_DEVICE' ? 1 : Math.max(2, Number(form.allowed_devices || 2)),
       discounts: normalizeProductDiscounts(form.discounts),
       status: form.status,
       sort_order: Number(form.sort_order || 0)
@@ -17649,10 +16339,7 @@ function ProductItemsPage() {
       <KpiCard icon={IconMapPin} label="Barangay Limited" value={summary.barangay_limited_categories || 0} tone="orange" />
       <KpiCard icon={IconCircleCheck} label="Active" value={summary.active || 0} tone="green" />
       <KpiCard icon={IconBan} label="Disabled" value={summary.disabled || 0} tone="red" />
-      <KpiCard icon={IconUser} label="Personal Passes" value={summary.personal_passes || 0} tone="azure" />
-      <KpiCard icon={IconUsers} label="Shared Passes" value={summary.shared_passes || 0} tone="purple" />
       <KpiCard icon={IconCash} label="Lowest Price" value={formatPrice(summary.lowest_price || 0)} tone="yellow" />
-      <KpiCard icon={IconUsers} label="Max Devices" value={summary.max_allowed_devices || 1} tone="purple" />
       <div className="col-12">
         <Card title="Product Categories" subtitle="Drag rows to sort categories. The top category appears first in the captive portal. Barangay-only categories can be bought and used only from matching site Barangays.">
           {categoryReorderSaving && <div className="alert alert-info py-2 mb-3">Saving category order...</div>}
@@ -17745,11 +16432,9 @@ function ProductItemsPage() {
                 <tr>
                   <th>Item</th>
                   <th>Category</th>
-                  <th>Pass Type</th>
                   <th>Price</th>
                   <th>Discount</th>
                   <th>Time</th>
-                  <th>Devices</th>
                   <th>Status</th>
                   <th>Sort</th>
                   <th className="text-end">Actions</th>
@@ -17766,17 +16451,9 @@ function ProductItemsPage() {
                       <div className="fw-semibold">{item.category_name || 'Uncategorized'}</div>
                       <div className="mt-1">{categoryBadge(item)}</div>
                     </td>
-                    <td><span className={`badge ${productPassType(item) === 'MULTI_DEVICE' ? 'bg-purple-lt text-purple' : 'bg-azure-lt text-azure'}`}>{item.device_scope_label || productPassLabel(item)}</span></td>
                     <td className="fw-semibold">{item.price_display || formatPrice(item.price)}</td>
                     <td>{discountBadge(item)}</td>
                     <td><span className="badge bg-blue-lt text-blue"><IconClock size={14} className="me-1" />{durationText(item)}</span></td>
-                    <td>
-                      {productPassType(item) === 'MULTI_DEVICE' ? (
-                        <span className="badge bg-purple-lt text-purple"><IconUsers size={14} className="me-1" />{item.allowed_devices_label || deviceLimitLabel(item.allowed_devices)}</span>
-                      ) : (
-                        <span className="badge bg-azure-lt text-azure"><IconUser size={14} className="me-1" />1 device</span>
-                      )}
-                    </td>
                     <td><span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{item.status}</span></td>
                     <td>{item.sort_order}</td>
                     <td className="text-end">
@@ -17788,7 +16465,7 @@ function ProductItemsPage() {
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={10} className="text-center text-muted py-4">No product items yet. Add a package to display it in the captive portal.</td>
+                    <td colSpan={8} className="text-center text-muted py-4">No product items yet. Add a package to display it in the captive portal.</td>
                   </tr>
                 )}
               </tbody>
@@ -17809,7 +16486,7 @@ function ProductItemsPage() {
               <li className="nav-item" role="presentation">
                 <button className={`nav-link ${productModalStep === 1 ? 'active' : ''}`} type="button" role="tab" onClick={() => setProductModalStep(1)}>
                   <span className="product-step-circle">1</span>
-                  <span>Category & Pass Type</span>
+                  <span>Category</span>
                 </button>
               </li>
               <li className="nav-item" role="presentation">
@@ -17838,29 +16515,6 @@ function ProductItemsPage() {
                     ))}
                   </select>
                   <div className="form-hint mt-2">Discount tiers are configured per product item in Step 3.</div>
-                </div>
-                <div className="col-12">
-                  <label className="form-label">Pass Type</label>
-                  <div className="product-pass-type-grid">
-                    {PRODUCT_PASS_TYPES.map((option) => {
-                      const OptionIcon = option.icon;
-                      const active = form.device_scope === option.key;
-                      return (
-                        <button
-                          key={option.key}
-                          className={`product-pass-type-option ${active ? 'active' : ''}`}
-                          type="button"
-                          onClick={() => setForm({ ...form, device_scope: option.key, allowed_devices: option.key === 'SINGLE_DEVICE' ? '1' : (Number(form.allowed_devices || 1) > 1 ? form.allowed_devices : '2') })}
-                        >
-                          <span className="product-pass-type-icon"><OptionIcon size={22} /></span>
-                          <span>
-                            <strong>{option.title}</strong>
-                            <small>{option.subtitle}</small>
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
                 </div>
               </div>
             ) : productModalStep === 2 ? (
@@ -17895,21 +16549,6 @@ function ProductItemsPage() {
                     <option value="DISABLED">Disabled</option>
                   </select>
                 </div>
-                {form.device_scope === 'MULTI_DEVICE' ? (
-                  <div className="col-md-4">
-                    <label className="form-label">Allowed Devices</label>
-                    <input className="form-control" type="number" min="2" max="100" value={form.allowed_devices} onChange={(e) => setForm({ ...form, allowed_devices: e.target.value })} required />
-                    <div className="form-hint">Shared Device Pass requires at least 2 devices.</div>
-                  </div>
-                ) : (
-                  <div className="col-md-4">
-                    <label className="form-label">Allowed Devices</label>
-                    <div className="form-control-plaintext">
-                      <span className="badge bg-azure-lt text-azure"><IconUser size={14} className="me-1" />1 device</span>
-                    </div>
-                    <div className="form-hint">Personal Pass is always limited to one device.</div>
-                  </div>
-                )}
                 <div className="col-md-4">
                   <label className="form-label">Sort Order</label>
                   <input className="form-control" type="number" min="0" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: e.target.value })} />
@@ -18603,8 +17242,7 @@ function SalesPage() {
 	                    </td>
 		                    <td>
 	                      <div className="fw-semibold">{order.product_name}</div>
-	                      <div className="text-muted small">{deviceLimitLabel(order.allowed_devices)}</div>
-	                    </td>
+		                    </td>
 	                    <td>
 	                      {order.customer_profile_id ? (
 	                        <>
