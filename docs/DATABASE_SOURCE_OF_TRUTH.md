@@ -6,9 +6,10 @@ PostgreSQL remains the source of truth for 3JCentralPisowifi.
 
 - `admins`: admin users.
 - `users`: portal/customer account records.
-- `customer_bag_items`: purchased, store-approved, admin-granted, welcome-gift, and voucher-claimed WiFi pass items.
+- `customer_bag_items`: purchased, store-approved, admin-granted, welcome-gift, voucher-claimed, and IPTV-capable bag items.
 - `customer_bag_events`: activation, consumption, admin adjustment, and other WiFi Bag history.
-- `product_categories` and `product_items`: online WiFi/IPTV package catalog.
+- `iptv_accounts`, `iptv_provisioning_jobs`, and `iptv_login_tokens`: XUI account mapping, provisioning queue/history, and short-lived IPTV web login tokens.
+- `product_categories`, `product_items`, and `product_category_item_assignments`: online WiFi/IPTV package catalog. Items are reusable catalog entries; category assignments decide which items appear in each portal category. The older direct `product_items.category_id` column is retained only for schema compatibility and should stay null for the active workflow.
 - `physical_stores`, store owner tables, store items, and `store_purchase_requests`: physical-store sales and approvals.
 - `sales`: online and physical-store sales reporting.
 - `vouchers`: optional code inventory for events, refunds, and gifts.
@@ -31,6 +32,7 @@ PostgreSQL remains the source of truth for 3JCentralPisowifi.
 The WiFi Bag is the active access ledger.
 
 - Paid PayMongo products create bag items after payment confirmation.
+- IPTV-capable PayMongo products snapshot `product_kind` into `payment_orders` and `customer_bag_items`. `IPTV`-only bag items queue XUI provisioning, not hotspot internet time.
 - Physical Store approvals create bag items after the store owner approves a request, QR, or code.
 - Voucher claims create bag items instead of wallet credit.
 - Admin time adjustments are recorded in `customer_bag_events`.

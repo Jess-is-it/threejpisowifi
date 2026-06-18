@@ -115,6 +115,144 @@ const DEFAULT_PROFILE_GIFT = {
   redeemed_message: 'FREE 1D welcome gift redeemed. You may now use the internet.'
 };
 
+const ITEM_COLOR_PALETTE = [
+  { key: 'coral', label: 'Coral', hex: '#fb7185' },
+  { key: 'orange', label: 'Orange', hex: '#f97316' },
+  { key: 'amber', label: 'Amber', hex: '#f59e0b' },
+  { key: 'gold', label: 'Gold', hex: '#eab308' },
+  { key: 'lime', label: 'Lime', hex: '#84cc16' },
+  { key: 'emerald', label: 'Emerald', hex: '#10b981' },
+  { key: 'mint', label: 'Mint', hex: '#34d399' },
+  { key: 'teal', label: 'Teal', hex: '#14b8a6' },
+  { key: 'aqua', label: 'Aqua', hex: '#06b6d4' },
+  { key: 'sky', label: 'Sky', hex: '#0ea5e9' },
+  { key: 'blue', label: 'Blue', hex: '#3b82f6' },
+  { key: 'indigo', label: 'Indigo', hex: '#6366f1' },
+  { key: 'violet', label: 'Violet', hex: '#8b5cf6' },
+  { key: 'purple', label: 'Purple', hex: '#a855f7' },
+  { key: 'fuchsia', label: 'Fuchsia', hex: '#d946ef' },
+  { key: 'pink', label: 'Pink', hex: '#ec4899' },
+  { key: 'rose', label: 'Rose', hex: '#f43f5e' },
+  { key: 'red', label: 'Red', hex: '#ef4444' },
+  { key: 'slate', label: 'Slate', hex: '#64748b' },
+  { key: 'gray', label: 'Gray', hex: '#6b7280' },
+  { key: 'stone', label: 'Stone', hex: '#78716c' },
+  { key: 'pearl', label: 'Pearl', hex: '#f8fafc' },
+  { key: 'graphite', label: 'Graphite', hex: '#111827' },
+  { key: 'cyan', label: 'Cyan', hex: '#22d3ee' },
+];
+
+const ITEM_COLOR_BY_KEY = ITEM_COLOR_PALETTE.reduce((map, color) => ({ ...map, [color.key]: color }), {});
+
+function normalizeItemColorKey(value) {
+  const key = String(value || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+  if (!key) return '';
+  if (key === 'custom') return 'custom';
+  return ITEM_COLOR_BY_KEY[key] ? key : '';
+}
+
+function normalizeItemColorHex(value) {
+  let text = String(value || '').trim();
+  if (!text) return '';
+  if (!text.startsWith('#')) text = `#${text}`;
+  if (!/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(text)) return '';
+  if (text.length === 4) {
+    text = `#${text.slice(1).split('').map((char) => `${char}${char}`).join('')}`;
+  }
+  return text.toLowerCase();
+}
+
+function itemColorMeta(item = {}) {
+  const key = normalizeItemColorKey(item.color_key || item.item_color_key);
+  if (key && key !== 'custom') return ITEM_COLOR_BY_KEY[key];
+  const customHex = normalizeItemColorHex(item.color_hex || item.item_color_hex);
+  if (customHex) return { key: 'custom', label: 'Custom', hex: customHex };
+  return ITEM_COLOR_PALETTE[0];
+}
+
+function itemColorStyle(item = {}) {
+  const color = itemColorMeta(item);
+  const channels = cssHexToRgb(color.hex, '251,113,133').split(',').map((part) => Number(part.trim()));
+  const luminance = channels.length === 3
+    ? ((0.2126 * channels[0]) + (0.7152 * channels[1]) + (0.0722 * channels[2])) / 255
+    : 0;
+  return {
+    '--portal-item-color': color.hex,
+    '--portal-item-rgb': cssHexToRgb(color.hex, '251,113,133'),
+    '--portal-item-readable-color': luminance > 0.78 ? '#334155' : color.hex,
+  };
+}
+
+function usedItemColorKeys(items = [], excludeId = '') {
+  return new Set((items || [])
+    .filter((item) => !excludeId || item.id !== excludeId)
+    .map((item) => normalizeItemColorKey(item.color_key || item.item_color_key))
+    .filter((key) => key && key !== 'custom'));
+}
+
+function nextItemPaletteColor(items = [], excludeId = '') {
+  const used = usedItemColorKeys(items, excludeId);
+  return ITEM_COLOR_PALETTE.find((color) => !used.has(color.key)) || ITEM_COLOR_PALETTE[0];
+}
+
+function itemColorFormValues(color = ITEM_COLOR_PALETTE[0]) {
+  return {
+    color_key: color.key,
+    color_hex: color.hex,
+  };
+}
+
+function ItemColorPicker({ valueKey, valueHex, usedKeys, onChange, label = 'Item Color' }) {
+  const normalizedKey = normalizeItemColorKey(valueKey);
+  const selected = itemColorMeta({ color_key: normalizedKey, color_hex: valueHex });
+  const allPresetColorsUsed = ITEM_COLOR_PALETTE.every((color) => usedKeys?.has(color.key) || color.key === normalizedKey);
+  const customVisible = allPresetColorsUsed || normalizedKey === 'custom';
+  return (
+    <div className="item-color-picker">
+      <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <label className="form-label mb-0">{label}</label>
+        <span className="item-color-current">
+          <span className="item-color-dot" style={{ backgroundColor: selected.hex }} />
+          {selected.label}
+        </span>
+      </div>
+      <div className="item-color-grid">
+        {ITEM_COLOR_PALETTE.map((color) => {
+          const used = usedKeys?.has(color.key) && color.key !== normalizedKey;
+          return (
+            <button
+              className={`item-color-button ${normalizedKey === color.key ? 'is-selected' : ''}`}
+              type="button"
+              key={color.key}
+              disabled={used}
+              title={used ? `${color.label} is already used by another item` : color.label}
+              onClick={() => onChange({ color_key: color.key, color_hex: color.hex })}
+            >
+              <span className="item-color-button-swatch" style={{ backgroundColor: color.hex }} />
+              <span>{color.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      {customVisible ? (
+        <div className="item-color-custom-row mt-3">
+          <div>
+            <div className="fw-semibold">Custom color</div>
+            <div className="text-muted small">Available because every preset color is already assigned.</div>
+          </div>
+          <input
+            type="color"
+            className="form-control form-control-color"
+            value={normalizeItemColorHex(valueHex) || selected.hex}
+            onChange={(event) => onChange({ color_key: 'custom', color_hex: event.target.value })}
+            aria-label="Custom item color"
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const DEFAULT_PORTAL_AVATAR_NOTES = [
   { id: 'default-disconnected-1', text: 'Internet is just one tap away.', state: 'DISCONNECTED', enabled: true },
   { id: 'default-disconnected-2', text: 'Need WiFi? Pick a package and you are good to go.', state: 'DISCONNECTED', enabled: true },
@@ -549,11 +687,14 @@ const routePages = {
   'long-lat': 'Long Lat',
   'location-management': 'Location Management',
   vouchers: 'Vouchers',
-  'product-items': 'Product Items',
+  'product-items': 'Online Store',
+  'online-store': 'Online Store',
   'physical-stores': 'Physical Stores',
   'physical-stores/store-map': 'Store Map',
   'store-map': 'Store Map',
   sales: 'Sales',
+  iptv: 'IPTV',
+  'iptv-integration': 'IPTV',
   'captive-portal': 'Captive Portal',
   'support-inbox': 'Support Inbox',
   network: 'Network',
@@ -562,6 +703,7 @@ const routePages = {
   'system-settings': 'System Settings',
   'settings/omada-controller': 'Omada Controller',
   'omada-controller': 'Omada Controller',
+  notifications: 'Notifications',
   logs: 'Logs',
   'view-profile': 'View Profile',
   'change-password': 'Change Password',
@@ -583,7 +725,40 @@ function routeForPage(page) {
   if (page === 'List of APs') return '/admin/aps-deployment/list-of-aps';
   if (page === 'Long Lat') return '/admin/aps-deployment/long-lat';
   if (page === 'Store Map') return '/admin/physical-stores/store-map';
+  if (page === 'IPTV') return '/admin/iptv';
+  if (page === 'Online Store' || page === 'Product Items') return '/admin/online-store';
   return `/admin/${slugify(page)}`;
+}
+
+function adminNotificationIcon(item) {
+  if (item?.category === 'SUPPORT_MESSAGE') return IconMessageCircle;
+  if (item?.category === 'A2P_SMS_FAILED') return IconSend;
+  if (item?.category === 'IPTV_LOGIN_FAILED') return IconPlayerPlay;
+  if (item?.severity === 'DANGER' || item?.severity === 'WARNING') return IconAlertTriangle;
+  return IconBell;
+}
+
+function adminNotificationTone(item) {
+  if (item?.severity === 'DANGER') return 'red';
+  if (item?.severity === 'WARNING') return 'yellow';
+  if (item?.category === 'SUPPORT_MESSAGE') return 'orange';
+  if (item?.category === 'IPTV_LOGIN_FAILED') return 'purple';
+  if (item?.severity === 'SUCCESS') return 'green';
+  return 'blue';
+}
+
+function adminNotificationTargetFromUrl(targetUrl, fallbackPage = 'Dashboard') {
+  if (!targetUrl) return { page: fallbackPage || 'Dashboard', path: routeForPage(fallbackPage || 'Dashboard') };
+  try {
+    const url = new URL(targetUrl, window.location.origin);
+    const slug = url.pathname.replace(/\/+$/, '').replace(/^\/admin\/?/, '');
+    return {
+      page: routePages[slug] || fallbackPage || 'Dashboard',
+      path: `${url.pathname}${url.search}`
+    };
+  } catch (_err) {
+    return { page: fallbackPage || 'Dashboard', path: routeForPage(fallbackPage || 'Dashboard') };
+  }
 }
 
 function collectLongLatSites(data = {}) {
@@ -1277,6 +1452,7 @@ function PortalAppLegacy() {
     const ua = navigator.userAgent || '';
     const vendor = navigator.vendor || '';
     if (/\bwv\b/i.test(ua) || /Edg|OPR|SamsungBrowser|DuckDuckGo/i.test(ua)) return false;
+    if (/Version\/\d+(?:\.\d+)?\s+Chrome/i.test(ua)) return false;
     if (/CriOS/i.test(ua)) return true;
     return /Chrome/i.test(ua) && /Google Inc/i.test(vendor || 'Google Inc');
   }
@@ -1497,6 +1673,7 @@ function PortalAppLegacy() {
           portal_session_id: sessionId || localStorage.getItem('centralwifi_portal_session') || null,
           device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || null,
           product_item_id: item.id,
+          product_category_id: item.category_id || item.assigned_category_id || null,
           payment_method: 'gcash',
           purchase_quantity: safeQuantity
         })
@@ -1739,13 +1916,13 @@ function PortalAppLegacy() {
   if (!settings) {
     return (
       <div className="client-portal-page">
-        <div className="client-portal-shell">
-          <div className="client-portal-loading">
-            <div className="spinner-border text-primary" role="status" aria-hidden="true" />
-            <div className="mt-3 text-muted">{t('Loading portal...')}</div>
-          </div>
-        </div>
-      </div>
+	      <div className="client-portal-shell">
+	        <div className="client-portal-loading">
+	          <div className="spinner-border text-primary" role="status" aria-hidden="true" />
+	          <div className="mt-3 text-muted">{t('Loading portal...')}</div>
+	        </div>
+	      </div>
+	    </div>
     );
   }
 
@@ -1761,11 +1938,40 @@ function PortalAppLegacy() {
   );
 }
 
+const PORTAL_THEME_MODE_KEY = 'centralwifi_portal_theme_mode';
+const PORTAL_THEME_MODE_SAVED_AT_KEY = 'centralwifi_portal_theme_mode_saved_at';
+const PORTAL_THEME_OVERRIDE_TTL_MS = 12 * 60 * 60 * 1000;
+
+function readPortalThemeMode() {
+  const stored = localStorage.getItem(PORTAL_THEME_MODE_KEY);
+  if (!['auto', 'light', 'dark'].includes(stored)) return 'auto';
+  if (stored === 'auto') return 'auto';
+  const savedAt = Number(localStorage.getItem(PORTAL_THEME_MODE_SAVED_AT_KEY) || 0);
+  if (!savedAt || Date.now() - savedAt >= PORTAL_THEME_OVERRIDE_TTL_MS) {
+    localStorage.setItem(PORTAL_THEME_MODE_KEY, 'auto');
+    localStorage.removeItem(PORTAL_THEME_MODE_SAVED_AT_KEY);
+    return 'auto';
+  }
+  return stored;
+}
+
+function writePortalThemeMode(mode) {
+  const nextMode = ['auto', 'light', 'dark'].includes(mode) ? mode : 'auto';
+  localStorage.setItem(PORTAL_THEME_MODE_KEY, nextMode);
+  if (nextMode === 'auto') {
+    localStorage.removeItem(PORTAL_THEME_MODE_SAVED_AT_KEY);
+  } else {
+    localStorage.setItem(PORTAL_THEME_MODE_SAVED_AT_KEY, String(Date.now()));
+  }
+  return nextMode;
+}
+
 function PortalApp() {
   function isGoogleChromeBrowser() {
     const ua = navigator.userAgent || '';
     const vendor = navigator.vendor || '';
     if (/\bwv\b/i.test(ua) || /Edg|OPR|SamsungBrowser|DuckDuckGo/i.test(ua)) return false;
+    if (/Version\/\d+(?:\.\d+)?\s+Chrome/i.test(ua)) return false;
     if (/CriOS/i.test(ua)) return true;
     return /Chrome/i.test(ua) && /Google Inc/i.test(vendor || 'Google Inc');
   }
@@ -1791,6 +1997,9 @@ function PortalApp() {
   const [bag, setBag] = useState(null);
   const [bagTab, setBagTab] = useState('LIST');
   const [bagSaving, setBagSaving] = useState(false);
+  const [iptvWatchLoading, setIptvWatchLoading] = useState('');
+  const [iptvChromeOnlyModal, setIptvChromeOnlyModal] = useState(null);
+  const [iptvProfileRequiredItem, setIptvProfileRequiredItem] = useState(null);
   const [bagDraggingItemId, setBagDraggingItemId] = useState('');
   const [bagClaimOpen, setBagClaimOpen] = useState(false);
   const [bagVoucherCode, setBagVoucherCode] = useState('');
@@ -1853,10 +2062,7 @@ function PortalApp() {
   const [portalCoverageZoom, setPortalCoverageZoom] = useState(15);
   const [portalRouteApId, setPortalRouteApId] = useState('');
   const [portalSelectedCoverageApId, setPortalSelectedCoverageApId] = useState('');
-  const [portalDarkOverride, setPortalDarkOverride] = useState(() => {
-    const stored = localStorage.getItem('centralwifi_portal_theme_mode');
-    return ['auto', 'light', 'dark'].includes(stored) ? stored : 'auto';
-  });
+  const [portalDarkOverride, setPortalDarkOverride] = useState(() => readPortalThemeMode());
   const [portalLanguage, setPortalLanguage] = useState(() => localStorage.getItem('centralwifi_portal_language') || 'en');
   const [chromeReminderHidden, setChromeReminderHidden] = useState(false);
   const [themeClock, setThemeClock] = useState(() => Date.now());
@@ -1943,6 +2149,33 @@ function PortalApp() {
   const handoffBridge = params.get('handoff_bridge') === '1';
   const bridgeChecked = params.get('bridge_checked') === '1';
   const rawQueryParams = Object.fromEntries(params.entries());
+  function isCaptivePortalPlaybackBrowser() {
+    const ua = navigator.userAgent || '';
+    const captiveQueryKeys = [
+      'client_mac',
+      'clientMac',
+      'cid',
+      'ap_mac',
+      'apMac',
+      'gateway_mac',
+      'gatewayMac',
+      'ssid',
+      'site',
+      'radioId',
+      'rid',
+      'authToken',
+      'link-login',
+      'link_login',
+      'server-name',
+      'server_name',
+    ];
+    const hasCaptiveQuery = captiveQueryKeys.some((key) => params.has(key));
+    const isAndroidPortalShell = /Android/i.test(ua) && (/\bwv\b/i.test(ua) || /Version\/\d+(?:\.\d+)?\s+Chrome/i.test(ua));
+    const isKnownCaptiveAgent = /CaptiveNetworkSupport|CaptivePortal|CaptivePortalLogin|NetworkPortal|ConnectivityCheck/i.test(ua);
+    if (isGoogleChromeBrowser()) return false;
+    return Boolean(isAndroidPortalShell || isKnownCaptiveAgent || hasCaptiveQuery);
+  }
+
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     if (query.get('purchase_channel') !== 'STORE' || shouldRestoreStorePaymentFromMap(query)) return;
@@ -1951,6 +2184,25 @@ function PortalApp() {
     const nextQuery = query.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}${window.location.hash || ''}`);
   }, []);
+
+  useEffect(() => {
+    if (!selectedPhysicalStore && !selectedProductCategory) return undefined;
+    const scrollToTop = () => {
+      const shell = document.querySelector('.client-portal-shell');
+      if (shell?.scrollTo) shell.scrollTo({ top: 0, behavior: 'auto' });
+      const scroller = document.scrollingElement || document.documentElement;
+      if (scroller?.scrollTo) scroller.scrollTo({ top: 0, behavior: 'auto' });
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    };
+    scrollToTop();
+    const frame = window.requestAnimationFrame(scrollToTop);
+    const timer = window.setTimeout(scrollToTop, 80);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [selectedPhysicalStore?.id, selectedProductCategory?.id]);
+
   useEffect(() => {
     paymentResultRef.current = paymentResult;
   }, [paymentResult]);
@@ -2007,6 +2259,13 @@ function PortalApp() {
 
   function portalProfileConfigured(nextProfile = profile) {
     return Boolean(nextProfile?.configured || nextProfile?.display_name || nextProfile?.contact_number);
+  }
+
+  function requireProfileForIptvItem(item, nextProfile = profile) {
+    if (!portalProductKindUsesIptv(item)) return false;
+    if (portalProfileConfigured(nextProfile)) return false;
+    setIptvProfileRequiredItem(item || {});
+    return true;
   }
 
   function localHandoffBridgeUrl(portalSettings) {
@@ -2355,8 +2614,9 @@ function PortalApp() {
         expires_at: nextStatus?.access_expires_at,
       });
     }
-    const hasUnusedBagItems = Array.isArray(nextStatus?.bag?.queued_items) && nextStatus.bag.queued_items.length > 0;
-    if (paymentOrderFromUrl || Number(nextStatus?.remaining_time_seconds || 0) > 0 || hasUnusedBagItems) setPortalScreen('shop');
+    const hasBagItems = (Array.isArray(nextStatus?.bag?.queued_items) && nextStatus.bag.queued_items.length > 0)
+      || (Array.isArray(nextStatus?.bag?.active_items) && nextStatus.bag.active_items.length > 0);
+    if (paymentOrderFromUrl || Number(nextStatus?.remaining_time_seconds || 0) > 0 || hasBagItems) setPortalScreen('shop');
   }
 
   useEffect(() => {
@@ -2548,8 +2808,9 @@ function PortalApp() {
     } catch {
       currentStatus = status;
     }
+    let currentProfile = currentStatus?.profile || profile;
+    if (requireProfileForIptvItem(item, currentProfile)) return;
     const outside3jNetwork = outsideNetworkConfirmed && portalStatusLooksOutside(currentStatus);
-    let currentProfile = profile;
     if (outside3jNetwork && !portalProfileConfigured(currentProfile)) {
       try {
         const refreshedStatus = await refreshStatus(sessionId || localStorage.getItem('centralwifi_portal_session'), { includeContext: true, quiet: true });
@@ -2586,6 +2847,7 @@ function PortalApp() {
         method: 'POST',
         body: JSON.stringify(payload({
           product_item_id: item.id,
+          product_category_id: item.category_id || item.assigned_category_id || selectedProductCategory?.id || null,
           payment_method: paymentMethod || selectedPaymentMethod || 'gcash',
           purchase_quantity: safeQuantity,
           selected_barangay: barangayOnly ? selectedBarangay : null,
@@ -2683,6 +2945,12 @@ function PortalApp() {
 
   async function activateBagItem(itemId) {
     if (guardPortalBlockedAction()) return;
+    const queuedItem = [
+      ...(bag?.queued_items || []),
+      ...(bag?.active_items || []),
+      ...(bag?.history_items || []),
+    ].find((item) => item.id === itemId);
+    if (queuedItem && requireProfileForIptvItem(queuedItem)) return;
     setBagSaving(true);
     try {
       const data = await publicApi(`/portal/bag/items/${encodeURIComponent(itemId)}/activate`, {
@@ -2717,6 +2985,32 @@ function PortalApp() {
     const itemId = pendingBagActivationItem.id;
     setPendingBagActivationItem(null);
     await activateBagItem(itemId);
+  }
+
+  async function openIptvWatch(item) {
+    if (guardPortalBlockedAction()) return;
+    if (!item?.id) return;
+    if (requireProfileForIptvItem(item)) return;
+    if (isCaptivePortalPlaybackBrowser()) {
+      setIptvChromeOnlyModal(item);
+      return;
+    }
+    setIptvWatchLoading(item.id);
+    try {
+      const data = await publicApi('/portal/iptv/watch', {
+        method: 'POST',
+        body: JSON.stringify(payload({ bag_item_id: item.id }))
+      });
+      if (data?.watch_url) {
+        window.location.href = data.watch_url;
+        return;
+      }
+      setResult({ status: 'FAILED', message: 'IPTV watch link was not returned.' });
+    } catch (err) {
+      setResult({ status: 'FAILED', message: err.message || 'Could not open IPTV.' });
+    } finally {
+      setIptvWatchLoading('');
+    }
   }
 
   function openBagPage() {
@@ -3176,6 +3470,14 @@ function PortalApp() {
   const canCheckoutWithGcash = canCheckoutOnline;
   const selectedPaymentLabel = selectedPaymentMethodRow?.label || 'Online';
   const visibleProductCategoryGroups = productCategoryGroups;
+  const portalProductKind = (item = {}) => item.product_kind || 'WIFI';
+  const portalProductKindUsesIptv = (item = {}) => ['IPTV', 'WIFI_IPTV'].includes(portalProductKind(item));
+  const portalProductKindLabel = (item = {}) => {
+    const kind = portalProductKind(item);
+    if (kind === 'IPTV') return t('IPTV only');
+    if (kind === 'WIFI_IPTV') return t('WiFi + IPTV');
+    return t('WiFi only');
+  };
   const paymentSuccessReady = Boolean(paymentResult?.status === 'PAID' && paymentResult?.fulfillment_status === 'FULFILLED');
   const paymentResultNoticeKey = paymentNoticeKey(paymentResult);
   const paymentResultDismissed = Boolean(
@@ -3210,6 +3512,11 @@ function PortalApp() {
   const pendingStoreRequestCount = (storePendingRequests || []).filter((request) => request.status === 'PENDING').length;
   const hasReadyBagItems = queuedBagItems.length > 0;
   const firstReadyBagItem = queuedBagItems[0] || null;
+  const firstReadyBagItemKind = firstReadyBagItem?.product_kind || 'WIFI';
+  const firstReadyBagItemIsIptvOnly = firstReadyBagItemKind === 'IPTV';
+  const firstReadyBagItemUsesIptv = firstReadyBagItemKind === 'IPTV' || firstReadyBagItemKind === 'WIFI_IPTV';
+  const firstReadyBagItemIptvReady = Boolean(firstReadyBagItem?.iptv_watch_ready || firstReadyBagItem?.iptv_status === 'PROVISIONED');
+  const firstReadyBagItemIptvFailed = Boolean(firstReadyBagItem?.iptv_status === 'FAILED');
   const firstReadyBagTimeLabel = formatSeconds(firstReadyBagItem?.remaining_seconds || firstReadyBagItem?.duration_seconds || 0);
   const bagItemCount = activeBagItems.length + queuedBagItems.length + pendingStoreRequestCount;
   const activeRemainingCards = activeBagItems.length ? activeBagItems : [null];
@@ -3295,6 +3602,17 @@ function PortalApp() {
   useEffect(() => {
     setPortalNotificationPermission(portalNotificationPermissionStatus());
   }, [settings?.portal_notifications?.enabled]);
+
+  useEffect(() => {
+    if (portalDarkOverride === 'auto') return undefined;
+    const savedAt = Number(localStorage.getItem(PORTAL_THEME_MODE_SAVED_AT_KEY) || 0);
+    const remainingMs = Math.max(0, PORTAL_THEME_OVERRIDE_TTL_MS - (Date.now() - savedAt));
+    const timer = window.setTimeout(() => {
+      const nextMode = writePortalThemeMode('auto');
+      setPortalDarkOverride(nextMode);
+    }, remainingMs || 0);
+    return () => window.clearTimeout(timer);
+  }, [portalDarkOverride]);
 
   useEffect(() => {
     if (!profile) return;
@@ -3473,14 +3791,11 @@ function PortalApp() {
 
 	  function togglePortalDarkMode() {
 	    const nextMode = portalDark ? 'light' : 'dark';
-	    setPortalDarkOverride(nextMode);
-	    localStorage.setItem('centralwifi_portal_theme_mode', nextMode);
+	    setPortalDarkOverride(writePortalThemeMode(nextMode));
 	  }
 
 	  function setPortalThemeMode(mode) {
-	    const nextMode = ['auto', 'light', 'dark'].includes(mode) ? mode : 'auto';
-	    setPortalDarkOverride(nextMode);
-	    localStorage.setItem('centralwifi_portal_theme_mode', nextMode);
+	    setPortalDarkOverride(writePortalThemeMode(mode));
 	  }
 
   function setPortalLanguageMode(language) {
@@ -3840,6 +4155,8 @@ function PortalApp() {
   function confirmStoreSelection(store, items = []) {
     const selected = storeSelectedItems(items);
     if (!selected.length) return;
+    const iptvSelection = selected.find(({ item }) => portalProductKindUsesIptv(item));
+    if (iptvSelection && requireProfileForIptvItem(iptvSelection.item)) return;
     const hasActiveTime = Boolean(hasRemainingAccess || activeBagItems.length);
     setStorePurchaseOption({
       store,
@@ -4481,6 +4798,12 @@ function PortalApp() {
     const renderItem = (item, options = {}) => {
       const statusLabel = item.status === 'QUEUED' ? 'UNUSED' : item.status;
       const showStatusBadge = Boolean(statusLabel);
+      const itemKind = item.product_kind || 'WIFI';
+      const itemIsIptvOnly = itemKind === 'IPTV';
+      const itemUsesIptv = itemKind === 'IPTV' || itemKind === 'WIFI_IPTV';
+      const iptvReady = Boolean(item.iptv_watch_ready || item.iptv_status === 'PROVISIONED');
+      const iptvTone = iptvReady ? 'green' : item.iptv_status === 'FAILED' ? 'red' : item.iptv_status === 'MANUAL_REVIEW' ? 'orange' : 'yellow';
+      const iptvStatusLabel = iptvReady ? 'IPTV ready' : item.iptv_status === 'FAILED' ? 'IPTV failed' : item.iptv_status === 'MANUAL_REVIEW' ? 'Manual review' : 'IPTV pending';
       return (
         <div
           className={`portal-bag-item ${options.draggable ? 'is-draggable' : ''}`}
@@ -4523,8 +4846,15 @@ function PortalApp() {
             <div className="portal-bag-item-bottom-meta">
               <span><IconClock size={14} /> {formatSeconds(item.remaining_seconds || item.duration_seconds || 0)}</span>
               <span className="portal-bag-meta-separator">|</span>
-              <span>1 device</span>
+              <span>{itemIsIptvOnly ? 'IPTV entitlement' : '1 device'}</span>
             </div>
+            {itemUsesIptv && (
+              <div className="portal-bag-item-meta">
+                <span><IconPlayerPlay size={14} /> {item.product_kind_label || (itemKind === 'IPTV' ? 'IPTV only' : 'WiFi + IPTV')}</span>
+                <span>All XUI bouquets</span>
+                <span className={`badge bg-${iptvTone}-lt text-${iptvTone}`}>{iptvStatusLabel}</span>
+              </div>
+            )}
             {item.product_category_name && (
               <div className="portal-bag-item-meta">
                 <span>{item.product_category_name}</span>
@@ -4535,6 +4865,14 @@ function PortalApp() {
                 <button className="btn btn-sm btn-outline-primary" type="button" disabled={bagSaving} onClick={() => requestBagItemActivation(item)}>
                   Activate
                 </button>
+              </div>
+            )}
+            {itemUsesIptv && item.status === 'ACTIVE' && (
+              <div className="portal-bag-item-activate-row">
+                <button className="btn btn-sm btn-primary" type="button" disabled={!iptvReady || iptvWatchLoading === item.id} onClick={() => openIptvWatch(item)}>
+                  <IconPlayerPlay size={15} className="me-1" />{iptvWatchLoading === item.id ? 'Opening...' : 'Watch IPTV'}
+                </button>
+                {!iptvReady && <span className="text-muted small">XUI access is being provisioned by the operator system.</span>}
               </div>
             )}
           </div>
@@ -4853,12 +5191,6 @@ function PortalApp() {
 
 		  function renderPortalSettingsModal() {
 		    if (!portalSettingsOpen) return null;
-		    const currentNetworkState = portalNetworkState(status);
-		    const networkLabel = currentNetworkState === 'OUTSIDE'
-		      ? t('Outside 3J WiFi')
-		      : currentNetworkState === 'INSIDE'
-		        ? t('Connected to 3J WiFi')
-		        : t('Network not detected');
 	    return (
 	      <Modal
 	        title={t('3J WiFi Portal Settings')}
@@ -4943,37 +5275,6 @@ function PortalApp() {
 	                <button className={portalLanguage === 'en' ? 'is-active' : ''} type="button" onClick={() => setPortalLanguageMode('en')}>{t('English')}</button>
 	                <button className={portalLanguage === 'tl' ? 'is-active' : ''} type="button" onClick={() => setPortalLanguageMode('tl')}>{t('Tagalog')}</button>
 	              </div>
-	            </div>
-	          </div>
-
-	          <div className="portal-settings-section">
-	            <div className="portal-settings-section-title">
-	              <span><IconUser size={18} /></span>
-	              <strong>{t('Account')}</strong>
-	            </div>
-	            <div className="portal-settings-row">
-	              <span>
-	                <strong>{portalProfileConfigured() ? profileName : t('Profile not set')}</strong>
-	                <small>{profile?.contact_number || t('No verified contact number')}</small>
-	              </span>
-	              <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => { setPortalSettingsOpen(false); portalProfileConfigured() ? openProfileView('PROFILE') : openProfile(); }}>
-	                {portalProfileConfigured() ? t('Open Profile') : t('Set Profile')}
-	              </button>
-	            </div>
-	            <button className="btn btn-outline-secondary w-100" type="button" onClick={() => { setPortalSettingsOpen(false); openBagPage(); }}>
-	              <IconShoppingBag size={17} className="me-2" />{t('Open My WiFi Bag')}
-	            </button>
-	          </div>
-
-	          <div className="portal-settings-section">
-	            <div className="portal-settings-section-title">
-	              <span><IconWifi size={18} /></span>
-	              <strong>{t('Network')}</strong>
-	            </div>
-	            <div className="portal-settings-chip-grid">
-	              <span><IconWifi size={15} />{networkLabel}</span>
-	              <span><IconClock size={15} />{remainingDisplay}</span>
-	              {currentPortalBarangay() && <span><IconMapPin size={15} />{currentPortalBarangay()}</span>}
 	            </div>
 	          </div>
 	        </div>
@@ -5844,6 +6145,7 @@ function PortalApp() {
                     <div
                       className={`portal-store-item-card portal-product-card ${quantity > 0 ? 'is-selected' : ''}`}
                       key={item.id}
+                      style={itemColorStyle(item)}
                       role="button"
                       tabIndex={0}
                       onClick={() => updateStoreItemQuantity(item, quantity + 1)}
@@ -5885,9 +6187,9 @@ function PortalApp() {
                           )}
                         </div>
                         <div className="portal-product-meta-tags">
-                          <span className="badge bg-green-lt text-green"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
-                          <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
-                          <span className={`badge ${item.access_scope === 'BARANGAY_ONLY' ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>{item.access_scope === 'BARANGAY_ONLY' ? 'Barangay only' : 'All locations'}</span>
+                          <span className="badge portal-item-meta-badge"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
+                          <span className="badge portal-item-meta-badge"><IconClock size={16} className="me-1" />{item.duration_label}</span>
+                          <span className="badge portal-item-meta-badge">{item.access_scope === 'BARANGAY_ONLY' ? 'Barangay only' : 'All locations'}</span>
                         </div>
                         {item.access_scope === 'BARANGAY_ONLY' && item.allowed_barangay && <div className="small text-muted mt-2">Allowed in {item.allowed_barangay}</div>}
                         {item.more_info_enabled && item.more_info_text ? (
@@ -5994,6 +6296,7 @@ function PortalApp() {
               <div
                 className="portal-product-select-card"
                 key={item.id}
+                style={itemColorStyle(item)}
                 role="button"
                 tabIndex={0}
                 onClick={() => selectCategoryProduct(item)}
@@ -6012,7 +6315,11 @@ function PortalApp() {
                   <div className="portal-product-select-price">PHP {Number(item.price || 0).toFixed(2)}</div>
                 </div>
                 <div className="portal-product-meta-tags">
-                  <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
+                  <span className="badge portal-item-meta-badge">
+                    {portalProductKindUsesIptv(item) ? <IconPlayerPlay size={16} className="me-1" /> : <IconWifi size={16} className="me-1" />}
+                    {portalProductKindLabel(item)}
+                  </span>
+                  <span className="badge portal-item-meta-badge"><IconClock size={16} className="me-1" />{item.duration_label}</span>
                 </div>
                 <span className="btn btn-primary w-100 mt-3">
                   {t('Select')}
@@ -6127,6 +6434,7 @@ function PortalApp() {
 	                  <div
 	                    className={`card portal-product-card ${quantity > 0 ? 'is-selected' : ''}`}
 	                    key={item.id}
+                      style={itemColorStyle(item)}
                       role="button"
                       tabIndex={0}
                       onClick={() => updateProductQuantity(item, quantity + 1)}
@@ -6166,8 +6474,12 @@ function PortalApp() {
                         </div>
                       </div>
                       <div className="portal-product-meta-tags">
-                        <span className="badge bg-green-lt text-green"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
-                        <span className="badge bg-blue-lt text-blue"><IconClock size={16} className="me-1" />{item.duration_label}</span>
+                        <span className="badge portal-item-meta-badge">
+                          {portalProductKindUsesIptv(item) ? <IconPlayerPlay size={16} className="me-1" /> : <IconWifi size={16} className="me-1" />}
+                          {portalProductKindLabel(item)}
+                        </span>
+                        <span className="badge portal-item-meta-badge"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
+                        <span className="badge portal-item-meta-badge"><IconClock size={16} className="me-1" />{item.duration_label}</span>
                       </div>
                       {discountNudge && (
                         <div className="portal-discount-nudge">
@@ -6356,6 +6668,78 @@ function PortalApp() {
     );
   }
 
+  function IptvProfileRequiredModal() {
+    if (!iptvProfileRequiredItem) return null;
+    const itemName = iptvProfileRequiredItem.product_name || iptvProfileRequiredItem.name || t('IPTV pass');
+    return (
+      <Modal
+        title={t('Set Profile First')}
+        onClose={() => setIptvProfileRequiredItem(null)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className="d-flex align-items-start gap-3">
+          <span className="avatar bg-blue-lt text-blue"><IconId size={24} /></span>
+          <div>
+            <div className="fw-semibold mb-1">{itemName}</div>
+            <div className="text-muted small">
+              {t('Set up your customer profile before buying or watching IPTV. We need your verified profile to create your IPTV account and recover access if your phone changes WiFi or browser.')}
+            </div>
+          </div>
+        </div>
+        <div className="portal-store-purchase-note mt-3">
+          <IconPlayerPlay size={16} />
+          {t('IPTV cannot be purchased, activated, or opened until your profile is set.')}
+        </div>
+        <div className="modal-footer portal-outside-modal-footer px-0 pb-0">
+          <button className="btn portal-outside-modal-cancel" type="button" onClick={() => setIptvProfileRequiredItem(null)}>{t('Not now')}</button>
+          <button
+            className="btn btn-primary portal-outside-modal-primary"
+            type="button"
+            onClick={() => {
+              setIptvProfileRequiredItem(null);
+              window.setTimeout(() => openProfile(), 0);
+            }}
+          >
+            {t('Set Profile')}
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
+  function IptvChromeOnlyModal() {
+    if (!iptvChromeOnlyModal) return null;
+    return (
+      <Modal
+        title={t('Open IPTV in Google Chrome')}
+        onClose={() => setIptvChromeOnlyModal(null)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className="portal-iptv-chrome-modal">
+          <span className="portal-iptv-chrome-logo">
+            <IconBrandChrome size={34} />
+          </span>
+          <div>
+            <div className="portal-iptv-chrome-title">{t('IPTV needs the full Chrome browser')}</div>
+            <div className="portal-iptv-chrome-copy">
+              {t('You are inside the WiFi sign-in window. Video playback and IPTV login can be blocked here. Open Google Chrome, go to net.3jhotspot.com, then tap the Play button again.')}
+            </div>
+            <div className="portal-iptv-chrome-product">{iptvChromeOnlyModal.product_name || iptvChromeOnlyModal.name || t('IPTV pass')}</div>
+          </div>
+        </div>
+        <div className="modal-footer portal-outside-modal-footer px-0 pb-0">
+          <button className="btn portal-outside-modal-cancel" type="button" onClick={() => setIptvChromeOnlyModal(null)}>{t('Close')}</button>
+        </div>
+      </Modal>
+    );
+  }
+
   function PortalBootSkeleton() {
     return (
       <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'}`}>
@@ -6371,18 +6755,18 @@ function PortalApp() {
                 <div className="portal-skeleton-line is-wide portal-skeleton-shimmer" />
               </div>
             </div>
-            <div className="portal-skeleton-panel">
-              <div className="portal-skeleton-icon portal-skeleton-shimmer" />
-              <div className="portal-skeleton-stack">
-                <div className="portal-skeleton-line portal-skeleton-shimmer" />
-                <div className="portal-skeleton-line is-wide portal-skeleton-shimmer" />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
+	            <div className="portal-skeleton-panel">
+	              <div className="portal-skeleton-icon portal-skeleton-shimmer" />
+	              <div className="portal-skeleton-stack">
+	                <div className="portal-skeleton-line portal-skeleton-shimmer" />
+	                <div className="portal-skeleton-line is-wide portal-skeleton-shimmer" />
+	              </div>
+	            </div>
+	          </div>
+	        </div>
+	    </div>
+	  );
+	}
 
   function BlockedPortalContent() {
     return (
@@ -6437,11 +6821,13 @@ function PortalApp() {
           </div>
         </header>
       )}
-	      <div className="portal-float-actions">
-	        <button className="btn btn-primary btn-icon portal-help-fab" type="button" onClick={() => { setHelpOpen(true); setHelpMode(portalBlocked ? 'chat' : 'menu'); loadSupportConversation(); }} title={portalBlocked ? t('Contact Admin') : t('Help')} aria-label={portalBlocked ? t('Contact Admin') : t('Help')}>
-	          <IconHelp size={26} />
-	        </button>
-	      </div>
+	      {!selectedPhysicalStore && !selectedProductCategory && (
+	        <div className="portal-float-actions">
+	          <button className="btn btn-primary btn-icon portal-help-fab" type="button" onClick={() => { setHelpOpen(true); setHelpMode(portalBlocked ? 'chat' : 'menu'); loadSupportConversation(); }} title={portalBlocked ? t('Contact Admin') : t('Help')} aria-label={portalBlocked ? t('Contact Admin') : t('Help')}>
+	            <IconHelp size={26} />
+	          </button>
+	        </div>
+	      )}
 	      {PurchaseSuccessModal()}
       {bagFlyAnimation && (
         <div
@@ -6527,6 +6913,8 @@ function PortalApp() {
             {activeRemainingCards.map((item, index) => {
               const cardHasAccess = item ? activeBagItemRemainingSeconds(item) > 0 : hasRemainingAccess;
               const cardTime = item ? formatCountdown(activeBagItemRemainingSeconds(item)) : remainingDisplay;
+              const cardUsesIptv = Boolean(item && (item.product_kind === 'IPTV' || item.product_kind === 'WIFI_IPTV'));
+              const cardIptvReady = Boolean(item?.iptv_watch_ready || item?.iptv_status === 'PROVISIONED');
               return (
                 <div
                   className={`card portal-remaining-card ${cardHasAccess ? 'is-connected' : 'is-disconnected'} is-clickable`}
@@ -6547,6 +6935,22 @@ function PortalApp() {
                           </div>
                         )}
                       </div>
+                      {cardUsesIptv && (
+                        <button
+                          className="btn btn-icon btn-primary portal-remaining-watch-btn"
+                          type="button"
+                          title={cardIptvReady ? t('Watch IPTV') : t('IPTV provisioning')}
+                          aria-label={cardIptvReady ? t('Watch IPTV') : t('IPTV provisioning')}
+                          disabled={!cardIptvReady || iptvWatchLoading === item.id}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            openIptvWatch(item);
+                          }}
+                        >
+                          <IconPlayerPlay size={18} />
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -6557,19 +6961,36 @@ function PortalApp() {
             {!hasRemainingAccess && hasReadyBagItems && (
               <div className="portal-ready-pass-panel">
                 <div className="portal-ready-pass-header">
-                  <span className="portal-ready-pass-icon"><IconShoppingBag size={20} /></span>
+                  <span className="portal-ready-pass-icon">{firstReadyBagItemUsesIptv ? <IconPlayerPlay size={20} /> : <IconShoppingBag size={20} />}</span>
                   <div>
-                    <div className="portal-ready-pass-eyebrow">{t('Ready to use')}</div>
-                    <div className="portal-ready-pass-title">{t('You have a saved WiFi pass ready to use.')}</div>
+                    <div className="portal-ready-pass-eyebrow">
+                      {firstReadyBagItemIsIptvOnly
+                        ? (firstReadyBagItemIptvReady ? t('Ready to activate') : t('IPTV provisioning'))
+                        : t('Ready to use')}
+                    </div>
+                    <div className="portal-ready-pass-title">
+                      {firstReadyBagItemIsIptvOnly
+                        ? (firstReadyBagItemIptvReady
+                          ? t('Your IPTV pass is ready. Activate it to start the IPTV countdown.')
+                          : firstReadyBagItemIptvFailed
+                            ? t('IPTV access needs operator attention before watching.')
+                            : t('Your IPTV account is being prepared automatically.'))
+                        : t('You have a saved WiFi pass ready to use.')}
+                    </div>
                   </div>
                 </div>
                 <div className="portal-ready-pass-card">
                   <div className="portal-ready-pass-card-topline">
                     <div className="portal-ready-pass-product">{firstReadyBagItem?.product_name || t('WiFi package')}</div>
-                    <span className="badge bg-yellow-lt text-yellow">{t('Unused')}</span>
+                    <span className={`badge ${firstReadyBagItemIptvReady ? 'bg-green-lt text-green' : firstReadyBagItemIptvFailed ? 'bg-red-lt text-red' : 'bg-yellow-lt text-yellow'}`}>
+                      {firstReadyBagItemIsIptvOnly
+                        ? (firstReadyBagItemIptvReady ? t('IPTV ready') : firstReadyBagItemIptvFailed ? t('IPTV failed') : t('IPTV pending'))
+                        : t('Unused')}
+                    </span>
                   </div>
                   <div className="portal-ready-pass-meta">
                     <span><IconClock size={14} /> {firstReadyBagTimeLabel}</span>
+                    {firstReadyBagItemUsesIptv && <span><IconPlayerPlay size={14} /> {firstReadyBagItem?.product_kind_label || t('IPTV')}</span>}
                   </div>
                   {firstReadyBagItem?.product_category_name && (
                     <div className="portal-ready-pass-category">
@@ -6577,14 +6998,25 @@ function PortalApp() {
                     </div>
                   )}
                 </div>
-                <button
-                  className="btn btn-success w-100"
-                  type="button"
-                  disabled={bagSaving || !firstReadyBagItem?.id}
-                  onClick={() => firstReadyBagItem && requestBagItemActivation(firstReadyBagItem)}
-                >
-                  {bagSaving ? t('Activating...') : t('Activate now')}
-                </button>
+                {firstReadyBagItemIsIptvOnly ? (
+                  <button
+                    className="btn btn-primary w-100"
+                    type="button"
+                    disabled={bagSaving || !firstReadyBagItem?.id}
+                    onClick={() => firstReadyBagItem && requestBagItemActivation(firstReadyBagItem)}
+                  >
+                    {bagSaving ? t('Activating...') : t('Activate IPTV')}
+                  </button>
+                ) : (
+                  <button
+                    className="btn btn-success w-100"
+                    type="button"
+                    disabled={bagSaving || !firstReadyBagItem?.id}
+                    onClick={() => firstReadyBagItem && requestBagItemActivation(firstReadyBagItem)}
+                  >
+                    {bagSaving ? t('Activating...') : t('Activate now')}
+                  </button>
+                )}
               </div>
             )}
             <GiftPanel />
@@ -6836,9 +7268,11 @@ function PortalApp() {
 	      {StoreRequestStatusModal()}
 	      {StoreItemMoreInfoModal()}
 	      {renderPortalSettingsModal()}
-	      {OutsidePurchaseModal()}
-	      {BrowserReminderCheckoutModal()}
-	      {PortalCoverageModal()}
+      {OutsidePurchaseModal()}
+      {BrowserReminderCheckoutModal()}
+      {IptvProfileRequiredModal()}
+      {IptvChromeOnlyModal()}
+      {PortalCoverageModal()}
 	      {ProfileQrScannerModal()}
 
       {profileViewOpen && (
@@ -7378,6 +7812,21 @@ function AutoDismissAlert({ message, tone = 'success', onDismiss, timeoutMs = 60
     return () => window.clearTimeout(timer);
   }, [message, onDismiss, timeoutMs]);
   if (!message) return null;
+  if (tone === 'success') {
+    return createPortal(
+      <div className="toast-container position-fixed top-0 end-0 p-3 app-toast-container">
+        <div className="toast show app-tabler-toast app-tabler-toast-success" role="status" aria-live="polite">
+          <div className="toast-header">
+            <span className="badge app-tabler-toast-icon me-2"><IconCircleCheck size={18} /></span>
+            <strong className="me-auto">Success</strong>
+            <button className="btn-close btn-close-white" type="button" aria-label="Close" onClick={onDismiss} />
+          </div>
+          <div className="toast-body">{message}</div>
+        </div>
+      </div>,
+      document.body
+    );
+  }
   return (
     <div className={`alert alert-${tone} auto-dismiss-alert mb-0 d-flex align-items-start justify-content-between gap-3`}>
       <div>{message}</div>
@@ -8241,7 +8690,7 @@ function CustomerDevicesPage() {
       <KpiCard icon={IconWifi} label="Active Devices" value={data.summary?.active || 0} tone="green" />
       <KpiCard icon={IconKey} label="Active Access" value={data.summary?.active_access || 0} tone="purple" />
       <KpiCard icon={IconBan} label="Blocked Devices" value={data.summary?.blocked || 0} tone="red" />
-      {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
       {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
       <div className="col-12">
         <div className="card">
@@ -8975,7 +9424,7 @@ function SitesDeploymentsPage() {
           Sites shows Omada Controller sites plus the local address and map coordinates used for planning WiFi locations. Manage reusable addresses in Location Management first.
         </div>
       </div>
-      {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
       {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
       <div className="col-12">
         <div className="card">
@@ -9949,7 +10398,7 @@ function ListOfApsPage() {
 	          Add APs detects pending Omada APs and submits adoption only. For successful adoption, factory-reset the AP and connect it first to the same office subnet where the Omada Controller is connected. After the AP is added to a site and connected, use the AP row actions to push WiFi config or AP management when you are ready.
 	        </div>
 	      </div>
-      {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
       {error && <div className="col-12"><div className="alert alert-warning">{error}</div></div>}
       {pushResult && Array.isArray(pushResult.results) && (
         <div className="col-12">
@@ -11226,7 +11675,7 @@ function LongLatPage() {
         <div className="card-body p-0">
           {(message || error || savingId) && (
             <div className="p-3 pb-0">
-              {message && <div className="alert alert-success mb-2">{message}</div>}
+              {message && <AutoDismissAlert message={message} onDismiss={() => setMessage('')} />}
               {error && <div className="alert alert-warning mb-2">{error}</div>}
               {savingId && <div className="alert alert-info mb-2">Saving AP coordinates...</div>}
             </div>
@@ -11482,7 +11931,7 @@ function ApClientMapPage() {
         <div className="card-body p-0">
           {(message || error || loading) && (
             <div className="p-3 pb-0">
-              {message && <div className="alert alert-success mb-2">{message}</div>}
+              {message && <AutoDismissAlert message={message} onDismiss={() => setMessage('')} />}
               {error && <div className="alert alert-warning mb-2">{error}</div>}
               {loading && <div className="alert alert-info mb-2">Loading AP and client map...</div>}
             </div>
@@ -11645,7 +12094,7 @@ function LocationManagementPage() {
           Location Management stores reusable addresses for site planning. Search can auto-fill municipality, barangay, latitude, and longitude when the geocoder has a match; manual entry is always available.
         </div>
       </div>
-      {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
       {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
       <KpiCard icon={IconMapPin} label="Locations" value={counts.total} tone="blue" />
       <KpiCard icon={IconDatabase} label="With Coordinates" value={counts.withCoordinates} tone="green" />
@@ -12611,6 +13060,8 @@ function PhysicalStoresPage() {
   const emptyItemForm = {
     name: '',
     description: '',
+    color_key: '',
+    color_hex: '',
     price: '0',
     duration_value: '1',
     duration_unit: 'hours',
@@ -12959,6 +13410,8 @@ function PhysicalStoresPage() {
     return {
       name: itemForm.name.trim(),
       description: itemForm.description.trim() || null,
+      color_key: itemForm.color_key || null,
+      color_hex: itemForm.color_hex || null,
       price: Number(itemForm.price || 0),
       duration_value: Number(itemForm.duration_value || 1),
       duration_unit: itemForm.duration_unit,
@@ -12980,6 +13433,8 @@ function PhysicalStoresPage() {
     setItemForm({
       name: item.name || '',
       description: item.description || '',
+      color_key: item.color_key || item.item_color_key || '',
+      color_hex: item.color_hex || item.item_color_hex || '',
       price: item.price === null || item.price === undefined ? '0' : String(item.price),
       duration_value: item.duration_value === null || item.duration_value === undefined ? '1' : String(item.duration_value),
       duration_unit: item.duration_unit || 'hours',
@@ -12994,7 +13449,7 @@ function PhysicalStoresPage() {
 
   function openNewItem() {
     setEditingItem(null);
-    setItemForm(emptyItemForm);
+    setItemForm({ ...emptyItemForm, ...itemColorFormValues(nextItemPaletteColor(itemCatalog)) });
     setItemMessage('');
     setItemError('');
     setPageTab('ITEMS');
@@ -13298,7 +13753,10 @@ function PhysicalStoresPage() {
                       {filteredItemCatalog.map((item) => (
                         <tr key={item.id}>
                           <td>
-                            <div className="fw-semibold">{item.name}</div>
+                            <div className="item-color-inline">
+                              <span className="item-color-dot" style={{ backgroundColor: itemColorMeta(item).hex }} />
+                              <span className="fw-semibold">{item.name}</span>
+                            </div>
                             {item.description && <div className="text-muted small">{item.description}</div>}
                             {item.more_info_enabled && <span className="badge bg-blue-lt text-blue mt-1">More info enabled</span>}
                           </td>
@@ -13356,6 +13814,14 @@ function PhysicalStoresPage() {
               <div className="col-12">
                 <label className="form-label">Description</label>
                 <textarea className="form-control" rows={2} value={itemForm.description} onChange={(e) => setItemForm({ ...itemForm, description: e.target.value })} />
+              </div>
+              <div className="col-12">
+                <ItemColorPicker
+                  valueKey={itemForm.color_key}
+                  valueHex={itemForm.color_hex}
+                  usedKeys={usedItemColorKeys(itemCatalog, editingItem?.id)}
+                  onChange={(patch) => setItemForm({ ...itemForm, ...patch })}
+                />
               </div>
               <div className="col-md-4">
                 <label className="form-label">Price</label>
@@ -13729,7 +14195,10 @@ function PhysicalStoresPage() {
                           <label className="physical-store-site-choice" key={`store-item-choice-${item.id}`}>
                             <input type="checkbox" checked={(form.item_ids || []).includes(item.id)} onChange={() => toggleStoreItem(item.id)} />
                             <span>
-                              <strong>{item.name}</strong>
+                              <strong className="item-color-inline">
+                                <span className="item-color-dot" style={{ backgroundColor: itemColorMeta(item).hex }} />
+                                {item.name}
+                              </strong>
                               <small>{item.price_display} · {item.duration_label}</small>
                               <small>{item.access_scope_label}{item.allowed_barangay ? ` · ${item.allowed_barangay}` : ''} · {item.status}</small>
                             </span>
@@ -15947,9 +16416,16 @@ function ProductItemsPage() {
     category_id: '',
     name: '',
     description: '',
+    color_key: '',
+    color_hex: '',
     price: '0',
     duration_value: '1',
     duration_unit: 'hours',
+    product_kind: 'WIFI',
+    iptv_package_label: '',
+    iptv_xui_package_id: '',
+    iptv_auto_provision: false,
+    iptv_notes: '',
     discounts: [],
     status: 'ACTIVE',
     sort_order: '0'
@@ -15962,6 +16438,7 @@ function ProductItemsPage() {
     more_info_text: '',
     access_scope: 'ALL_LOCATIONS',
     allowed_barangay: '',
+    item_ids: [],
     status: 'ACTIVE',
     sort_order: '0'
   };
@@ -15975,6 +16452,7 @@ function ProductItemsPage() {
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [categoryForm, setCategoryForm] = useState(emptyCategoryForm);
+  const [pageTab, setPageTab] = useState('CATEGORIES');
   const [categoryImageFile, setCategoryImageFile] = useState(null);
   const [categoryImagePreview, setCategoryImagePreview] = useState('');
   const [draggedCategoryId, setDraggedCategoryId] = useState('');
@@ -15995,6 +16473,27 @@ function ProductItemsPage() {
     const value = Number(item?.duration_value || 0);
     const unit = value === 1 ? String(item?.duration_unit || 'hours').replace(/s$/, '') : item?.duration_unit || 'hours';
     return `${value} ${unit}`;
+  }
+
+  function productKindLabel(kind) {
+    if (kind === 'IPTV') return 'IPTV only';
+    if (kind === 'WIFI_IPTV') return 'WiFi + IPTV';
+    return 'WiFi only';
+  }
+
+  function productKindBadge(item = {}) {
+    const kind = item.product_kind || 'WIFI';
+    if (kind === 'IPTV') {
+      return <span className="badge bg-purple-lt text-purple"><IconPlayerPlay size={14} className="me-1" />IPTV only</span>;
+    }
+    if (kind === 'WIFI_IPTV') {
+      return <span className="badge bg-indigo-lt text-indigo"><IconPlayerPlay size={14} className="me-1" />WiFi + IPTV</span>;
+    }
+    return <span className="badge bg-blue-lt text-blue"><IconWifi size={14} className="me-1" />WiFi only</span>;
+  }
+
+  function productKindUsesIptv(kind) {
+    return ['IPTV', 'WIFI_IPTV'].includes(kind || 'WIFI');
   }
 
   async function load() {
@@ -16030,8 +16529,9 @@ function ProductItemsPage() {
     setError('');
     setMessage('');
     setSelectedItem(null);
-    setForm(emptyForm);
+    setForm({ ...emptyForm, ...itemColorFormValues(nextItemPaletteColor(items)) });
     setProductModalStep(1);
+    setPageTab('ITEMS');
     setModalMode('create');
   }
 
@@ -16049,12 +16549,19 @@ function ProductItemsPage() {
     setMessage('');
     setSelectedItem(item);
       setForm({
-      category_id: item.category_id || '',
+      category_id: '',
       name: item.name || '',
       description: item.description || '',
+      color_key: item.color_key || item.item_color_key || '',
+      color_hex: item.color_hex || item.item_color_hex || '',
       price: String(item.price ?? 0),
       duration_value: String(item.duration_value ?? 1),
       duration_unit: item.duration_unit || 'hours',
+      product_kind: item.product_kind || 'WIFI',
+      iptv_package_label: '',
+      iptv_xui_package_id: '',
+      iptv_auto_provision: false,
+      iptv_notes: item.iptv_notes || '',
       discounts: (item.discounts || []).map((discount, index) => ({
         id: discount.id || `existing-${index}`,
         label: discount.label || '',
@@ -16083,6 +16590,7 @@ function ProductItemsPage() {
       more_info_text: category.more_info_text || '',
       access_scope: category.access_scope || 'ALL_LOCATIONS',
       allowed_barangay: category.allowed_barangay || '',
+      item_ids: Array.isArray(category.item_ids) ? category.item_ids : (category.items || []).map((item) => item.id).filter(Boolean),
       status: category.status || 'ACTIVE',
       sort_order: String(category.sort_order ?? 0)
     });
@@ -16092,20 +16600,23 @@ function ProductItemsPage() {
 
   function productPayload() {
     return {
-      category_id: form.category_id || null,
+      category_id: null,
       name: form.name.trim(),
       description: form.description.trim(),
+      color_key: form.color_key || null,
+      color_hex: form.color_hex || null,
       price: Number(form.price || 0),
       duration_value: Number(form.duration_value || 1),
       duration_unit: form.duration_unit,
+      product_kind: form.product_kind || 'WIFI',
+      iptv_package_label: '',
+      iptv_xui_package_id: '',
+      iptv_auto_provision: false,
+      iptv_notes: productKindUsesIptv(form.product_kind) ? form.iptv_notes.trim() : '',
       discounts: normalizeProductDiscounts(form.discounts),
       status: form.status,
       sort_order: Number(form.sort_order || 0)
     };
-  }
-
-  function selectedProductFormCategory() {
-    return (categories || []).find((category) => category.id === form.category_id) || null;
   }
 
   function newProductDiscount() {
@@ -16188,16 +16699,26 @@ function ProductItemsPage() {
       more_info_text: categoryForm.more_info_text.trim(),
       access_scope: scope,
       allowed_barangay: null,
+      item_ids: categoryForm.item_ids || [],
       discounts: [],
       status: categoryForm.status,
       sort_order: Number(selectedCategory?.sort_order ?? categoryForm.sort_order ?? ((categories || []).length + 1))
     };
   }
 
+  function toggleCategoryItem(itemId) {
+    setCategoryForm((current) => {
+      const existing = new Set(current.item_ids || []);
+      if (existing.has(itemId)) existing.delete(itemId);
+      else existing.add(itemId);
+      return { ...current, item_ids: Array.from(existing) };
+    });
+  }
+
   async function save(e) {
     e.preventDefault();
     setError('');
-    if (productModalStep < 3) {
+    if (productModalStep < 2) {
       setProductModalStep(productModalStep + 1);
       return;
     }
@@ -16323,12 +16844,12 @@ function ProductItemsPage() {
       <div className="col-12">
         <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
           <div>
-            <h2 className="page-title mb-1">Product Items</h2>
-            <div className="text-muted">Group WiFi packages into categories and optionally limit a category to one Barangay.</div>
+            <h2 className="page-title mb-1">Online Store</h2>
+            <div className="text-muted">Create reusable online items first, then assign them to product categories shown in the captive portal.</div>
           </div>
           <div className="d-flex gap-2 flex-wrap">
             <button className="btn btn-outline-primary" type="button" onClick={openCreateCategory}><IconPlus size={18} className="me-2" />Add Category</button>
-            <button className="btn btn-primary" type="button" onClick={openCreate}><IconPlus size={18} className="me-2" />Generate Voucher Product</button>
+            <button className="btn btn-primary" type="button" onClick={openCreate}><IconPlus size={18} className="me-2" />Add Item</button>
           </div>
         </div>
       </div>
@@ -16341,7 +16862,24 @@ function ProductItemsPage() {
       <KpiCard icon={IconBan} label="Disabled" value={summary.disabled || 0} tone="red" />
       <KpiCard icon={IconCash} label="Lowest Price" value={formatPrice(summary.lowest_price || 0)} tone="yellow" />
       <div className="col-12">
-        <Card title="Product Categories" subtitle="Drag rows to sort categories. The top category appears first in the captive portal. Barangay-only categories can be bought and used only from matching site Barangays.">
+        <ul className="nav nav-tabs">
+          <li className="nav-item">
+            <button className={`nav-link ${pageTab === 'CATEGORIES' ? 'active' : ''}`} type="button" onClick={() => setPageTab('CATEGORIES')}>
+              <IconArchive size={16} className="me-1" />Product Categories
+              <span className="badge bg-blue-lt text-blue ms-2">{categories.length}</span>
+            </button>
+          </li>
+          <li className="nav-item">
+            <button className={`nav-link ${pageTab === 'ITEMS' ? 'active' : ''}`} type="button" onClick={() => setPageTab('ITEMS')}>
+              <IconShoppingBag size={16} className="me-1" />Items
+              <span className="badge bg-blue-lt text-blue ms-2">{items.length}</span>
+            </button>
+          </li>
+        </ul>
+      </div>
+      {pageTab === 'CATEGORIES' && (
+      <div className="col-12">
+        <Card title="Product Categories" subtitle="Drag rows to sort categories. Assign reusable items inside each category. The top category appears first in the captive portal.">
           {categoryReorderSaving && <div className="alert alert-info py-2 mb-3">Saving category order...</div>}
           <div className="table-responsive">
             <table className="table table-vcenter card-table">
@@ -16405,7 +16943,15 @@ function ProductItemsPage() {
                       </div>
                     </td>
                     <td>{categoryBadge(category)}</td>
-                    <td><span className="badge bg-blue-lt text-blue">{category.product_count || 0} item{Number(category.product_count || 0) === 1 ? '' : 's'}</span></td>
+                    <td>
+                      <div className="d-flex flex-wrap gap-1">
+                        {(category.items || []).slice(0, 3).map((item) => (
+                          <span className="badge bg-blue-lt text-blue" key={`${category.id}-${item.id}`}>{item.name}</span>
+                        ))}
+                        {(category.items || []).length > 3 && <span className="badge bg-secondary-lt text-secondary">+{(category.items || []).length - 3} more</span>}
+                        {!(category.items || []).length && <span className="badge bg-secondary-lt text-secondary">No items assigned</span>}
+                      </div>
+                    </td>
                     <td><span className={`badge ${category.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{category.status}</span></td>
                     <td className="text-end">
                       <ActionBadgeGroup className="justify-content-end">
@@ -16416,7 +16962,7 @@ function ProductItemsPage() {
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={6} className="text-center text-muted py-4">No categories yet. Product items can still appear as uncategorized packages.</td>
+                    <td colSpan={6} className="text-center text-muted py-4">No categories yet. Create a category, then assign reusable items to display them in the captive portal.</td>
                   </tr>
                 )}
               </tbody>
@@ -16424,14 +16970,17 @@ function ProductItemsPage() {
           </div>
         </Card>
       </div>
+      )}
+      {pageTab === 'ITEMS' && (
       <div className="col-12">
-        <Card title="Product Item List" subtitle="Active items are displayed in the customer portal and portal design preview.">
+        <Card title="Item Catalog" subtitle="Reusable items remain in the system and can be assigned to one or more product categories. Unassigned items are not shown in the captive portal.">
           <div className="table-responsive">
             <table className="table table-vcenter card-table">
               <thead>
                 <tr>
                   <th>Item</th>
-                  <th>Category</th>
+                  <th>Assigned Categories</th>
+                  <th>Access</th>
                   <th>Price</th>
                   <th>Discount</th>
                   <th>Time</th>
@@ -16444,12 +16993,20 @@ function ProductItemsPage() {
                 {items.length ? items.map((item) => (
                   <tr key={item.id}>
                     <td>
-                      <div className="fw-semibold">{item.name}</div>
+                      <div className="item-color-inline">
+                        <span className="item-color-dot" style={{ backgroundColor: itemColorMeta(item).hex }} />
+                        <span className="fw-semibold">{item.name}</span>
+                      </div>
                       {item.description && <div className="text-muted small">{item.description}</div>}
                     </td>
+                    <td><span className="badge bg-cyan-lt text-cyan">{item.assigned_category_count || 0} categor{Number(item.assigned_category_count || 0) === 1 ? 'y' : 'ies'}</span></td>
                     <td>
-                      <div className="fw-semibold">{item.category_name || 'Uncategorized'}</div>
-                      <div className="mt-1">{categoryBadge(item)}</div>
+                      <div>{productKindBadge(item)}</div>
+                      {item.iptv_enabled && (
+                        <div className="text-muted small mt-1">
+                          {item.iptv_package_label || item.iptv_xui_package_id || 'IPTV package pending'}
+                        </div>
+                      )}
                     </td>
                     <td className="fw-semibold">{item.price_display || formatPrice(item.price)}</td>
                     <td>{discountBadge(item)}</td>
@@ -16465,7 +17022,7 @@ function ProductItemsPage() {
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={8} className="text-center text-muted py-4">No product items yet. Add a package to display it in the captive portal.</td>
+                    <td colSpan={9} className="text-center text-muted py-4">No product items yet. Add reusable items first, then assign them to product categories.</td>
                   </tr>
                 )}
               </tbody>
@@ -16473,6 +17030,7 @@ function ProductItemsPage() {
           </div>
         </Card>
       </div>
+      )}
       {modalMode && (
         <Modal
           title={modalMode === 'edit' ? 'Edit Product Item' : 'Add Product Item'}
@@ -16486,38 +17044,17 @@ function ProductItemsPage() {
               <li className="nav-item" role="presentation">
                 <button className={`nav-link ${productModalStep === 1 ? 'active' : ''}`} type="button" role="tab" onClick={() => setProductModalStep(1)}>
                   <span className="product-step-circle">1</span>
-                  <span>Category</span>
+                  <span>Package Details</span>
                 </button>
               </li>
               <li className="nav-item" role="presentation">
                 <button className={`nav-link ${productModalStep === 2 ? 'active' : ''}`} type="button" role="tab" onClick={() => setProductModalStep(2)}>
                   <span className="product-step-circle">2</span>
-                  <span>Package Details</span>
-                </button>
-              </li>
-              <li className="nav-item" role="presentation">
-                <button className={`nav-link ${productModalStep === 3 ? 'active' : ''}`} type="button" role="tab" onClick={() => setProductModalStep(3)}>
-                  <span className="product-step-circle">3</span>
                   <span>Discounts</span>
                 </button>
               </li>
             </ul>
             {productModalStep === 1 ? (
-              <div className="row g-3 product-item-step-body">
-                <div className="col-12">
-                  <label className="form-label">Category</label>
-                  <select className="form-select" value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })}>
-                    <option value="">Uncategorized / All packages</option>
-                    {categories.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}{category.access_scope === 'BARANGAY_ONLY' ? ' · Barangay only' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="form-hint mt-2">Discount tiers are configured per product item in Step 3.</div>
-                </div>
-              </div>
-            ) : productModalStep === 2 ? (
               <div className="row g-3 product-item-step-body">
                 <div className="col-md-8">
                   <label className="form-label">Item Name</label>
@@ -16543,12 +17080,69 @@ function ProductItemsPage() {
                   </select>
                 </div>
                 <div className="col-md-4">
+                  <label className="form-label">Access Type</label>
+                  <select
+                    className="form-select"
+                    value={form.product_kind}
+                    onChange={(e) => {
+                      const nextKind = e.target.value;
+                      setForm({
+                        ...form,
+                        product_kind: nextKind,
+                        iptv_auto_provision: false,
+                        ...(!productKindUsesIptv(nextKind) ? {
+                          iptv_package_label: '',
+                          iptv_xui_package_id: '',
+                          iptv_notes: '',
+                        } : {})
+                      });
+                    }}
+                  >
+                    <option value="WIFI">WiFi only</option>
+                    <option value="WIFI_IPTV">WiFi + IPTV</option>
+                    <option value="IPTV">IPTV only</option>
+                  </select>
+                </div>
+                <div className="col-md-4">
                   <label className="form-label">Status</label>
                   <select className="form-select" value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
                     <option value="ACTIVE">Active</option>
                     <option value="DISABLED">Disabled</option>
                   </select>
                 </div>
+                {productKindUsesIptv(form.product_kind) && (
+                  <div className="col-12">
+                    <div className="card border">
+                      <div className="card-body">
+                        <div className="d-flex align-items-start gap-3">
+                          <span className="avatar bg-purple-lt text-purple"><IconPlayerPlay size={22} /></span>
+                          <div>
+                            <div className="fw-semibold">IPTV Entitlement</div>
+                            <div className="text-muted small">
+                              This product includes IPTV access. XUI provisioning runs when the customer activates the item; active customer lines are reused when IPTV time is still running.
+                            </div>
+                            <div className="mt-2">
+                              <span className="badge bg-purple-lt text-purple me-1">All XUI bouquets</span>
+                              <span className="badge bg-green-lt text-green">Provision on activate</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="row g-3 mt-1">
+                          <div className="col-12">
+                            <label className="form-label">IPTV Notes</label>
+                            <textarea
+                              className="form-control"
+                              rows={2}
+                              value={form.iptv_notes}
+                              onChange={(e) => setForm({ ...form, iptv_notes: e.target.value })}
+                              placeholder="Optional internal notes for XUI account setup."
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 <div className="col-md-4">
                   <label className="form-label">Sort Order</label>
                   <input className="form-control" type="number" min="0" value={form.sort_order} onChange={(e) => setForm({ ...form, sort_order: e.target.value })} />
@@ -16556,6 +17150,14 @@ function ProductItemsPage() {
                 <div className="col-md-8">
                   <label className="form-label">Description</label>
                   <input className="form-control" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Optional short note shown in the portal." />
+                </div>
+                <div className="col-12">
+                  <ItemColorPicker
+                    valueKey={form.color_key}
+                    valueHex={form.color_hex}
+                    usedKeys={usedItemColorKeys(items, selectedItem?.id)}
+                    onChange={(patch) => setForm({ ...form, ...patch })}
+                  />
                 </div>
               </div>
             ) : (
@@ -16643,7 +17245,7 @@ function ProductItemsPage() {
                 </button>
               )}
               <button className="btn btn-primary" type="submit">
-                {productModalStep < 3 ? (
+                {productModalStep < 2 ? (
                   <><IconChevronRight size={18} className="me-2" />Next</>
                 ) : (
                   <><IconDeviceFloppy size={18} className="me-2" />Save Product Item</>
@@ -16715,6 +17317,41 @@ function ProductItemsPage() {
                   </button>
                 </div>
                 <div className="form-hint mt-2">Barangay-only packages ask the customer to choose the Barangay during purchase. The chosen Barangay is then enforced on the created voucher.</div>
+              </div>
+              <div className="col-12">
+                <div className="product-category-assignment-panel">
+                  <div className="physical-store-panel-header">
+                    <div>
+                      <div className="fw-semibold">Assigned Items</div>
+                      <div className="text-muted small">Select reusable items that should appear under this category in the captive portal.</div>
+                    </div>
+                    <span className="badge bg-blue-lt text-blue">{(categoryForm.item_ids || []).length} selected</span>
+                  </div>
+                  <div className="physical-store-assigned-items">
+                    {items.map((item) => (
+                      <label className="physical-store-site-choice" key={`product-category-item-choice-${item.id}`}>
+                        <input type="checkbox" checked={(categoryForm.item_ids || []).includes(item.id)} onChange={() => toggleCategoryItem(item.id)} />
+                        <span>
+                          <strong className="item-color-inline">
+                            <span className="item-color-dot" style={{ backgroundColor: itemColorMeta(item).hex }} />
+                            {item.name}
+                          </strong>
+                          <small>{item.price_display || formatPrice(item.price)} · {durationText(item)} · {productKindLabel(item.product_kind)}</small>
+                          <small>{(item.discounts || []).filter((discount) => discount.enabled).length} discount tier(s) · {item.status}</small>
+                        </span>
+                      </label>
+                    ))}
+                    {!items.length && (
+                      <div className="empty py-4">
+                        <IconShoppingBag size={28} />
+                        <p className="mb-2">No reusable items yet.</p>
+                        <button className="btn btn-primary btn-sm" type="button" onClick={() => { setCategoryModalMode(''); openCreate(); }}>
+                          <IconPlus size={16} className="me-1" />Add item in Items tab
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
               <div className="col-12">
                 <div className="product-category-more-info-panel">
@@ -17505,7 +18142,7 @@ function VouchersPage() {
   }
   return (
     <div className="row row-cards">
-      {message && <div className="col-12"><div className="alert alert-success">{message}</div></div>}
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
       {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
       <div className="col-12">
         <ul className="nav nav-tabs">
@@ -22584,10 +23221,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                         <div>This saves the AP management VLAN/subnet and router path. It does not configure MikroTik until you use Push AP Management Config.</div>
                       </div>
                       {apManagementSaveSuccess && (
-                        <div className="alert alert-success" ref={apManagementSuccessRef} tabIndex={-1}>
-                          <div className="fw-semibold mb-1">AP Management plan saved</div>
-                          <div>{apManagementSaveSuccess}</div>
-                        </div>
+                        <AutoDismissAlert
+                          message={`AP Management plan saved. ${apManagementSaveSuccess}`}
+                          onDismiss={() => setApManagementSaveSuccess('')}
+                        />
                       )}
                       {apManagementError && (
                         <div className="alert alert-danger" ref={apManagementErrorRef} tabIndex={-1}>
@@ -23124,7 +23761,12 @@ function CaptivePortalPage({ mode = 'full' }) {
                         <div className="fw-semibold mb-1">Office AP path plan only</div>
                         <div>This saves how the existing office subnet is transported toward APs. It does not configure MikroTik until you use Push Config and review the exact RouterOS steps.</div>
                       </div>
-                      {officeApPathSaveSuccess && <div className="alert alert-success"><div className="fw-semibold mb-1">Office AP path plan saved</div><div>{officeApPathSaveSuccess}</div></div>}
+                      {officeApPathSaveSuccess && (
+                        <AutoDismissAlert
+                          message={`Office AP path plan saved. ${officeApPathSaveSuccess}`}
+                          onDismiss={() => setOfficeApPathSaveSuccess('')}
+                        />
+                      )}
                       {officeApPathError && <div className="alert alert-danger"><div className="fw-semibold mb-1">Office AP path plan was not saved</div><div>{officeApPathError}</div></div>}
                       <div className="row g-3">
                         <div className="col-md-4">
@@ -26657,6 +27299,854 @@ function PublicEndpointSettingsTab() {
   );
 }
 
+function IptvPage() {
+  const emptyForm = {
+    enabled: false,
+    public_hostname: 'tv.3jhotspot.com',
+    public_url: 'https://tv.3jhotspot.com',
+    internal_web_url: 'http://192.168.50.15',
+    iptv_web_ssh_host: '192.168.50.15',
+    iptv_web_ssh_port: 22,
+    iptv_web_ssh_username: 'root',
+    iptv_web_ssh_auth_type: 'PASSWORD',
+    iptv_web_sudo_mode: 'PASSWORDLESS',
+    iptv_web_ssh_password: '',
+    iptv_web_ssh_private_key: '',
+    iptv_web_ssh_private_key_passphrase: '',
+    xui_base_url: 'http://10.100.100.100',
+    xui_public_url: 'https://xui.3jhotspot.com',
+    xui_public_connector_command: '',
+    xui_server_host: '10.100.100.100',
+    xui_api_mode: 'XUI_ADMIN_API',
+    xui_access_code: '',
+    xui_max_connections: 1,
+    xui_admin_username: '',
+    xui_admin_password: '',
+    xui_api_key: '',
+    iptv_web_integration_secret: '',
+    iptv_token_ttl_minutes: 15,
+    iptv_expiry_warning_minutes: 10,
+    iptv_expiry_stop_seconds: 10,
+    xui_test_username: '',
+    xui_test_password: '',
+    notes: ''
+  };
+  const [config, setConfig] = useState(null);
+  const [form, setForm] = useState(emptyForm);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [xuiApiTesting, setXuiApiTesting] = useState(false);
+  const [sshTesting, setSshTesting] = useState(false);
+  const [tab, setTab] = useState('Status');
+  const [settingsTab, setSettingsTab] = useState('IPTV Web');
+  const [provisioning, setProvisioning] = useState(null);
+  const [provisioningLoading, setProvisioningLoading] = useState(false);
+  const [provisioningAction, setProvisioningAction] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  function hydrate(nextConfig) {
+    setConfig(nextConfig);
+    setForm({
+      ...emptyForm,
+      enabled: Boolean(nextConfig.enabled),
+      public_hostname: nextConfig.public_hostname || emptyForm.public_hostname,
+      public_url: nextConfig.public_url || emptyForm.public_url,
+      internal_web_url: nextConfig.internal_web_url || emptyForm.internal_web_url,
+      iptv_web_ssh_host: nextConfig.iptv_web_ssh_host || emptyForm.iptv_web_ssh_host,
+      iptv_web_ssh_port: nextConfig.iptv_web_ssh_port || emptyForm.iptv_web_ssh_port,
+      iptv_web_ssh_username: nextConfig.iptv_web_ssh_username || emptyForm.iptv_web_ssh_username,
+      iptv_web_ssh_auth_type: nextConfig.iptv_web_ssh_auth_type || emptyForm.iptv_web_ssh_auth_type,
+      iptv_web_sudo_mode: nextConfig.iptv_web_sudo_mode || emptyForm.iptv_web_sudo_mode,
+      iptv_web_ssh_password: '',
+      iptv_web_ssh_private_key: '',
+      iptv_web_ssh_private_key_passphrase: '',
+      xui_base_url: nextConfig.xui_base_url || emptyForm.xui_base_url,
+      xui_public_url: nextConfig.xui_public_url || emptyForm.xui_public_url,
+      xui_public_connector_command: '',
+      xui_server_host: nextConfig.xui_server_host || emptyForm.xui_server_host,
+      xui_api_mode: nextConfig.xui_api_mode || emptyForm.xui_api_mode,
+      xui_access_code: nextConfig.xui_access_code || '',
+      xui_max_connections: nextConfig.xui_max_connections || 1,
+      xui_admin_username: nextConfig.xui_admin_username || '',
+      xui_admin_password: '',
+      xui_api_key: '',
+      iptv_web_integration_secret: '',
+      iptv_token_ttl_minutes: nextConfig.iptv_token_ttl_minutes || 15,
+      iptv_expiry_warning_minutes: nextConfig.iptv_expiry_warning_minutes || 10,
+      iptv_expiry_stop_seconds: nextConfig.iptv_expiry_stop_seconds || 10,
+      xui_test_username: nextConfig.xui_test_username || '',
+      xui_test_password: '',
+      notes: nextConfig.notes || ''
+    });
+  }
+
+  async function loadIptvSettings() {
+    setLoading(true);
+    try {
+      const data = await request('/system-settings/iptv');
+      hydrate(data);
+      setError('');
+    } catch (err) {
+      setError(err.message || 'Could not load IPTV settings.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadIptvSettings(); }, []);
+
+  useEffect(() => {
+    if (tab === 'Provisioning') {
+      loadIptvProvisioning().catch(() => null);
+    }
+  }, [tab]);
+
+  function updateField(key, value) {
+    setForm((current) => {
+      const next = { ...current, [key]: value };
+      if (key === 'public_hostname' && value) {
+        next.public_url = `https://${String(value).replace(/^https?:\/\//, '').replace(/\/.*$/, '')}`;
+      }
+      return next;
+    });
+  }
+
+  async function saveIptvSettings(event) {
+    event.preventDefault();
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const payload = {
+        enabled: form.enabled,
+        public_hostname: form.public_hostname,
+        public_url: form.public_url,
+        internal_web_url: form.internal_web_url,
+        iptv_web_ssh_host: form.iptv_web_ssh_host,
+        iptv_web_ssh_port: Number(form.iptv_web_ssh_port || 22),
+        iptv_web_ssh_username: form.iptv_web_ssh_username,
+        iptv_web_ssh_auth_type: form.iptv_web_ssh_auth_type,
+        iptv_web_sudo_mode: form.iptv_web_sudo_mode,
+        xui_base_url: form.xui_base_url,
+        xui_public_url: form.xui_public_url,
+        xui_public_connector_command: form.xui_public_connector_command,
+        xui_server_host: form.xui_server_host,
+        xui_api_mode: form.xui_api_mode,
+        xui_access_code: form.xui_access_code,
+        xui_max_connections: Number(form.xui_max_connections || 1),
+        xui_admin_username: form.xui_admin_username,
+        iptv_token_ttl_minutes: Number(form.iptv_token_ttl_minutes || 15),
+        iptv_expiry_warning_minutes: Number(form.iptv_expiry_warning_minutes || 10),
+        iptv_expiry_stop_seconds: Number(form.iptv_expiry_stop_seconds || 10),
+        xui_test_username: form.xui_test_username,
+        notes: form.notes
+      };
+      if (form.iptv_web_ssh_password.trim()) payload.iptv_web_ssh_password = form.iptv_web_ssh_password.trim();
+      if (form.iptv_web_ssh_private_key.trim()) payload.iptv_web_ssh_private_key = form.iptv_web_ssh_private_key.trim();
+      if (form.iptv_web_ssh_private_key_passphrase.trim()) payload.iptv_web_ssh_private_key_passphrase = form.iptv_web_ssh_private_key_passphrase.trim();
+      if (form.xui_admin_password.trim()) payload.xui_admin_password = form.xui_admin_password.trim();
+      if (form.xui_api_key.trim()) payload.xui_api_key = form.xui_api_key.trim();
+      if (form.iptv_web_integration_secret.trim()) payload.iptv_web_integration_secret = form.iptv_web_integration_secret.trim();
+      if (form.xui_test_password.trim()) payload.xui_test_password = form.xui_test_password.trim();
+      const data = await request('/system-settings/iptv', {
+        method: 'PATCH',
+        body: JSON.stringify(payload)
+      });
+      hydrate(data);
+      setMessage('IPTV settings saved.');
+    } catch (err) {
+      setError(err.message || 'Could not save IPTV settings.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clearIptvSecret(secret) {
+    const labels = {
+      iptv_web_ssh_password: 'IPTV web SSH password',
+      iptv_web_ssh_private_key: 'IPTV web SSH private key',
+      iptv_web_ssh_private_key_passphrase: 'IPTV web SSH private key passphrase',
+      xui_admin_password: 'XUI admin password',
+      xui_api_key: 'XUI API key',
+      xui_public_tunnel_token: 'XUI Cloudflare tunnel token',
+      iptv_web_integration_secret: 'IPTV web integration secret',
+      xui_test_password: 'XUI test line password'
+    };
+    if (!window.confirm(`Remove saved ${labels[secret]}?`)) return;
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request('/system-settings/iptv', {
+        method: 'PATCH',
+        body: JSON.stringify({ [`clear_${secret}`]: true })
+      });
+      hydrate(data);
+      setMessage(`${labels[secret]} removed.`);
+    } catch (err) {
+      setError(err.message || 'Could not clear IPTV secret.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function testIptvConnection() {
+    setTesting(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request('/system-settings/iptv/test', { method: 'POST' });
+      hydrate(data);
+      const status = data.last_test_result?.status || 'UNKNOWN';
+      setMessage(`IPTV connectivity test completed: ${status}.`);
+    } catch (err) {
+      setError(err.message || 'Could not test IPTV connection.');
+    } finally {
+      setTesting(false);
+    }
+  }
+
+  async function testXuiApi() {
+    setXuiApiTesting(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request('/system-settings/iptv/test-xui-api', { method: 'POST' });
+      hydrate(data);
+      const status = data.last_xui_api_test_result?.status || 'UNKNOWN';
+      setMessage(`XUI API test completed: ${status}.`);
+    } catch (err) {
+      setError(err.message || 'Could not test XUI API.');
+    } finally {
+      setXuiApiTesting(false);
+    }
+  }
+
+  async function testIptvSsh() {
+    setSshTesting(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request('/system-settings/iptv/test-ssh', { method: 'POST' });
+      hydrate(data);
+      const status = data.last_ssh_test_result?.status || 'UNKNOWN';
+      setMessage(`IPTV web SSH test completed: ${status}.`);
+    } catch (err) {
+      setError(err.message || 'Could not test IPTV web SSH.');
+    } finally {
+      setSshTesting(false);
+    }
+  }
+
+  async function loadIptvProvisioning() {
+    setProvisioningLoading(true);
+    try {
+      const data = await request('/iptv/provisioning');
+      setProvisioning(data);
+      setError('');
+      return data;
+    } catch (err) {
+      setError(err.message || 'Could not load IPTV provisioning queue.');
+      return null;
+    } finally {
+      setProvisioningLoading(false);
+    }
+  }
+
+  async function runPendingIptvJobs() {
+    setProvisioningAction('run-pending');
+    setMessage('');
+    setError('');
+    try {
+      const data = await request('/iptv/provisioning/run-pending', { method: 'POST' });
+      setProvisioning(data.provisioning || null);
+      const results = data.results || [];
+      const ok = results.filter((item) => item.status === 'PROVISIONED').length;
+      const failed = results.filter((item) => item.status === 'FAILED').length;
+      setMessage(`IPTV provisioning run completed: ${ok} provisioned, ${failed} failed.`);
+    } catch (err) {
+      setError(err.message || 'Could not run IPTV provisioning.');
+    } finally {
+      setProvisioningAction('');
+    }
+  }
+
+  async function retryIptvJob(jobId) {
+    setProvisioningAction(jobId);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request(`/iptv/provisioning/jobs/${encodeURIComponent(jobId)}/retry`, { method: 'POST', body: JSON.stringify({ force: true }) });
+      setProvisioning(data.provisioning || null);
+      setMessage(data.status === 'PROVISIONED' ? 'IPTV job provisioned.' : data.error || 'IPTV job retry completed.');
+    } catch (err) {
+      setError(err.message || 'Could not retry IPTV job.');
+    } finally {
+      setProvisioningAction('');
+    }
+  }
+
+  function checkBadge(check) {
+    const status = check?.status || 'NOT CHECKED';
+    const tone = status === 'SUCCESS' ? 'green' : status === 'FAILED' ? 'red' : status === 'WARNING' ? 'yellow' : 'secondary';
+    const label = check?.http_status ? `${status} · HTTP ${check.http_status}` : status;
+    return <span className={`badge bg-${tone}-lt text-${tone}`}>{label}</span>;
+  }
+
+	  if (loading) return <div className="empty">Loading IPTV settings...</div>;
+
+  const requirements = config?.requirements || {};
+  const lastTest = config?.last_test_result || null;
+  const checks = lastTest?.checks || {};
+  const overallTone = lastTest?.status === 'SUCCESS' ? 'green' : lastTest?.status === 'FAILED' ? 'red' : lastTest?.status === 'WARNING' ? 'yellow' : 'secondary';
+  const xuiApiTest = config?.last_xui_api_test_result || null;
+  const xuiApiChecks = xuiApiTest?.checks || {};
+  const xuiApiTone = xuiApiTest?.status === 'SUCCESS' ? 'green' : xuiApiTest?.status === 'FAILED' ? 'red' : xuiApiTest?.status === 'WARNING' ? 'yellow' : 'secondary';
+		  const sshTest = config?.last_ssh_test_result || null;
+	  const sshTone = sshTest?.status === 'SUCCESS' ? 'green' : sshTest?.status === 'FAILED' ? 'red' : sshTest?.status === 'WARNING' ? 'yellow' : 'secondary';
+		  const cloudflare = config?.cloudflare_public_hostname || {};
+		  const iptvTabs = ['Status', 'Provisioning', 'Settings', 'Logs'];
+		  const iptvSettingsTabs = ['IPTV Web', 'XUI'];
+		  const provisioningSummary = provisioning?.summary || {};
+		  const provisioningJobs = provisioning?.jobs || [];
+		  const provisioningAccounts = provisioning?.accounts || [];
+		  const logRows = [
+		    {
+		      action: 'URL Connectivity Test',
+		      status: lastTest?.status || 'NOT CHECKED',
+		      created_at: lastTest?.checked_at || '',
+		      output_text: lastTest ? JSON.stringify(lastTest.checks || {}, null, 2) : ''
+		    },
+		    {
+		      action: 'XUI API Test',
+		      status: xuiApiTest?.status || 'NOT CHECKED',
+		      created_at: xuiApiTest?.checked_at || '',
+		      output_text: xuiApiTest ? JSON.stringify(xuiApiTest.checks || {}, null, 2) : ''
+		    },
+		    {
+	      action: 'IPTV Web SSH Test',
+	      status: sshTest?.status || 'NOT CHECKED',
+	      created_at: sshTest?.checked_at || '',
+	      output_text: sshTest ? (sshTest.output || sshTest.error || JSON.stringify(sshTest, null, 2)) : ''
+	    }
+	  ];
+
+  return (
+    <div className="row row-cards">
+	      <div className="col-12">
+	        {message && <AutoDismissAlert message={message} onDismiss={() => setMessage('')} />}
+	        {error && <div className="alert alert-danger auto-dismiss-alert">{error}</div>}
+	      </div>
+	      <div className="col-12">
+	        <div className="alert alert-info mb-0">
+	          IPTV publishes the web player through Cloudflare while keeping the XUI server private. SSH settings are used only for diagnostics and future managed web-app checks.
+	        </div>
+	      </div>
+	      <div className="col-12">
+	        <ul className="nav nav-tabs">
+	          {iptvTabs.map((item) => (
+	            <li className="nav-item" key={item}>
+	              <button className={`nav-link ${tab === item ? 'active' : ''}`} type="button" onClick={() => setTab(item)}>{item}</button>
+	            </li>
+	          ))}
+	        </ul>
+	      </div>
+
+	      {tab === 'Status' && <>
+	        <KpiCard icon={IconShieldLock} label="IPTV Public URL" value={requirements.public_url ? 'Configured' : 'Missing'} tone={requirements.public_url ? 'green' : 'orange'} />
+	        <KpiCard icon={IconServer} label="IPTV Web App" value={requirements.internal_web_url ? 'Configured' : 'Missing'} tone={requirements.internal_web_url ? 'green' : 'orange'} />
+	        <KpiCard icon={IconDatabase} label="XUI Server" value={requirements.xui_base_url ? 'Configured' : 'Missing'} tone={requirements.xui_base_url ? 'green' : 'orange'} />
+	        <KpiCard icon={IconCloudUpload} label="XUI Tunnel" value={requirements.xui_public_url ? 'Configured' : 'Missing'} tone={requirements.xui_public_url ? 'green' : 'orange'} />
+	        <KpiCard icon={IconKey} label="XUI Tunnel Token" value={requirements.xui_public_tunnel_token ? 'Saved' : 'Missing'} tone={requirements.xui_public_tunnel_token ? 'green' : 'orange'} />
+	        <KpiCard icon={IconKey} label="Token Bridge" value={requirements.iptv_web_integration_secret ? 'Configured' : 'Missing'} tone={requirements.iptv_web_integration_secret ? 'green' : 'orange'} />
+	        <div className="col-12 col-xl-8">
+	          <Card title="IPTV Overview" subtitle="Current public hostname, internal web app, and private XUI target.">
+	            <div className="row g-3">
+	              <div className="col-md-6"><div className="text-muted">Public IPTV URL</div><div className="h3 text-truncate" title={form.public_url}>{form.public_url || 'Not configured'}</div></div>
+	              <div className="col-md-6"><div className="text-muted">Internal IPTV Web URL</div><div className="h3 text-truncate" title={form.internal_web_url}>{form.internal_web_url || 'Not configured'}</div></div>
+	              <div className="col-md-6"><div className="text-muted">XUI Private URL</div><div className="h3 text-truncate" title={form.xui_base_url}>{form.xui_base_url || 'Not configured'}</div></div>
+	              <div className="col-md-6"><div className="text-muted">XUI Browser Tunnel URL</div><div className="h3 text-truncate" title={form.xui_public_url}>{form.xui_public_url || 'Not configured'}</div></div>
+	              <div className="col-md-6"><div className="text-muted">XUI Tunnel Token</div><div className="h3 text-truncate">{config?.xui_public_tunnel_token_configured ? `Saved: ${config.xui_public_tunnel_token_hint || 'hidden'}` : 'Not configured'}</div></div>
+	              <div className="col-md-6"><div className="text-muted">SSH Target</div><div className="h3 text-truncate" title={`${form.iptv_web_ssh_username}@${form.iptv_web_ssh_host}:${form.iptv_web_ssh_port}`}>{form.iptv_web_ssh_host || 'Not configured'}</div></div>
+	              <div className="col-12">
+	                <div className="btn-list">
+		                  <button className="btn btn-primary" type="button" disabled={testing} onClick={testIptvConnection} title="Checks HTTP/HTTPS reachability for IPTV Web, public IPTV URL, XUI base URL, and optional XUI player API test line."><IconRefresh size={18} className="me-2" />{testing ? 'Testing URLs...' : 'Test Web/XUI URLs'}</button>
+		                  <button className="btn btn-outline-primary" type="button" disabled={xuiApiTesting} onClick={testXuiApi} title="Read-only test for XUI base URL and saved disposable test line through player_api.php."><IconDatabase size={18} className="me-2" />{xuiApiTesting ? 'Testing XUI API...' : 'Test XUI API'}</button>
+		                  <button className="btn" type="button" disabled={sshTesting} onClick={testIptvSsh} title="Checks whether the system can log in to the IPTV web server over SSH and run read-only diagnostics."><IconServer size={18} className="me-2" />{sshTesting ? 'Testing SSH...' : 'Test SSH Login'}</button>
+	                  {form.public_url ? <a className="btn" href={form.public_url} target="_blank" rel="noreferrer"><IconExternalLink size={18} className="me-2" />Open IPTV URL</a> : <button className="btn" type="button" disabled><IconExternalLink size={18} className="me-2" />Open IPTV URL</button>}
+	                </div>
+	              </div>
+	            </div>
+	          </Card>
+	        </div>
+	      </>}
+
+	      {tab === 'Provisioning' && <>
+	        <KpiCard icon={IconClock} label="Pending Jobs" value={provisioningSummary.pending || 0} tone={(provisioningSummary.pending || 0) ? 'yellow' : 'green'} />
+	        <KpiCard icon={IconRefresh} label="Running Jobs" value={provisioningSummary.running || 0} tone={(provisioningSummary.running || 0) ? 'blue' : 'secondary'} />
+	        <KpiCard icon={IconCircleCheck} label="Provisioned" value={provisioningSummary.provisioned || 0} tone="green" />
+	        <KpiCard icon={IconAlertTriangle} label="Failed Jobs" value={provisioningSummary.failed || 0} tone={(provisioningSummary.failed || 0) ? 'red' : 'secondary'} />
+	        <div className="col-12">
+	          <Card title="XUI Provisioning Queue" subtitle="Queued IPTV purchases provision only on activation. If a customer already has active IPTV time, the active XUI line is reused.">
+	            <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+	              <div className="text-muted small">Customer browsers receive only short-lived 3J watch tokens. Raw XUI passwords stay server-side.</div>
+	              <div className="btn-list">
+	                <button className="btn btn-outline-primary btn-sm" type="button" disabled={provisioningLoading} onClick={loadIptvProvisioning}>
+	                  <IconRefresh size={16} className="me-1" />{provisioningLoading ? 'Loading...' : 'Refresh'}
+	                </button>
+	                <button className="btn btn-primary btn-sm" type="button" disabled={provisioningAction === 'run-pending'} onClick={runPendingIptvJobs}>
+	                  <IconPlayerPlay size={16} className="me-1" />{provisioningAction === 'run-pending' ? 'Running...' : 'Run Pending'}
+	                </button>
+	              </div>
+	            </div>
+	            <div className="table-responsive">
+	              <table className="table card-table table-vcenter">
+	                <thead>
+	                  <tr>
+	                    <th>Customer</th>
+	                    <th>Product</th>
+	                    <th>XUI Line</th>
+	                    <th>Status</th>
+	                    <th>Target Expiry</th>
+	                    <th>Attempts</th>
+	                    <th>Error</th>
+	                    <th className="text-end">Actions</th>
+	                  </tr>
+	                </thead>
+	                <tbody>
+	                  {provisioningJobs.length ? provisioningJobs.map((job) => {
+	                    const tone = job.status === 'PROVISIONED' ? 'green' : job.status === 'FAILED' ? 'red' : job.status === 'RUNNING' ? 'blue' : 'yellow';
+	                    return (
+	                      <tr key={job.id}>
+	                        <td>
+	                          <div className="fw-semibold">{job.customer_name || 'Customer'}</div>
+	                          <div className="text-muted small">{job.contact_number || job.user_id}</div>
+	                        </td>
+	                        <td>
+	                          <div>{job.product_name || 'IPTV item'}</div>
+	                          <div className="text-muted small">{job.product_kind || 'IPTV'} · {formatSeconds(job.requested_duration_seconds || 0)}</div>
+	                        </td>
+	                        <td>{job.xui_username || '-'}</td>
+	                        <td><span className={`badge bg-${tone}-lt text-${tone}`}>{job.status}</span></td>
+	                        <td>{job.target_expires_at ? formatPortalDateTime(job.target_expires_at) : '-'}</td>
+	                        <td>{job.attempts || 0}</td>
+	                        <td className="text-truncate" style={{ maxWidth: 260 }} title={job.last_error || ''}>{job.last_error || '-'}</td>
+	                        <td className="text-end">
+	                          <button className="btn btn-sm btn-outline-primary" type="button" disabled={provisioningAction === job.id} onClick={() => retryIptvJob(job.id)}>
+	                            <IconRefresh size={15} className="me-1" />{provisioningAction === job.id ? 'Retrying...' : 'Retry'}
+	                          </button>
+	                        </td>
+	                      </tr>
+	                    );
+	                  }) : (
+	                    <tr><td colSpan="8"><div className="empty">No IPTV provisioning jobs yet.</div></td></tr>
+	                  )}
+	                </tbody>
+	              </table>
+	            </div>
+	          </Card>
+	        </div>
+	        <div className="col-12">
+	          <Card title="IPTV Accounts" subtitle="XUI lines are reused while the customer still has active IPTV time. A new line is created only when activating IPTV without an active reusable line.">
+	            <div className="table-responsive">
+	              <table className="table card-table table-vcenter">
+	                <thead>
+	                  <tr>
+	                    <th>XUI Username</th>
+	                    <th>Status</th>
+	                    <th>All Bouquets</th>
+	                    <th>Max Connections</th>
+	                    <th>Expires</th>
+	                    <th>Last Provisioned</th>
+	                    <th>Error</th>
+	                  </tr>
+	                </thead>
+	                <tbody>
+	                  {provisioningAccounts.length ? provisioningAccounts.map((account) => {
+	                    const tone = account.status === 'PROVISIONED' ? 'green' : account.status === 'FAILED' ? 'red' : 'yellow';
+	                    return (
+	                      <tr key={account.id}>
+	                        <td className="fw-semibold">{account.xui_username || '-'}</td>
+	                        <td><span className={`badge bg-${tone}-lt text-${tone}`}>{account.status}</span></td>
+	                        <td>{account.all_bouquets ? 'Yes' : 'No'}</td>
+	                        <td>{account.max_connections || 1}</td>
+	                        <td>{account.expires_at ? formatPortalDateTime(account.expires_at) : '-'}</td>
+	                        <td>{account.last_provisioned_at ? formatPortalDateTime(account.last_provisioned_at) : '-'}</td>
+	                        <td className="text-truncate" style={{ maxWidth: 320 }} title={account.last_error || ''}>{account.last_error || '-'}</td>
+	                      </tr>
+	                    );
+	                  }) : (
+	                    <tr><td colSpan="7"><div className="empty">No IPTV accounts created yet.</div></td></tr>
+	                  )}
+	                </tbody>
+	              </table>
+	            </div>
+	          </Card>
+	        </div>
+	      </>}
+
+	      {tab === 'Settings' && <div className="col-12 col-xl-8">
+        <Card title="IPTV Settings" subtitle="Configure the IPTV web app, private XUI server, and account automation.">
+          <form onSubmit={saveIptvSettings}>
+	            <div className="row g-4">
+	              <div className="col-12">
+	                <div className="alert alert-info mb-0">
+	                  IPTV customers access the web player through a public HTTPS hostname. XUI stays private; IPTV products provision when activated, reuse active customer lines when possible, and delete the XUI line after the last active IPTV pass is consumed.
+	                </div>
+	              </div>
+	              <div className="col-12">
+	                <ul className="nav nav-tabs">
+	                  {iptvSettingsTabs.map((item) => (
+	                    <li className="nav-item" key={item}>
+	                      <button className={`nav-link ${settingsTab === item ? 'active' : ''}`} type="button" onClick={() => setSettingsTab(item)}>{item}</button>
+	                    </li>
+	                  ))}
+	                </ul>
+	              </div>
+	              <div className="col-12">
+	                <div className="d-flex align-items-center gap-2 border-bottom pb-2">
+	                  <IconPlayerPlay size={22} className="text-primary" />
+	                  <div className="fw-bold">Feature Status</div>
+	                </div>
+	              </div>
+	              <div className="col-12">
+	                <label className="form-check form-switch">
+	                  <input className="form-check-input" type="checkbox" checked={form.enabled} onChange={(e) => updateField('enabled', e.target.checked)} />
+	                  <span className="form-check-label">Enable IPTV integration</span>
+	                </label>
+	                <div className="text-muted small mt-1">When enabled, IPTV purchases queue XUI provisioning. All bouquets are assigned by the XUI panel default.</div>
+	              </div>
+
+	              {settingsTab === 'IPTV Web' && <>
+	              <div className="col-12">
+	                <div className="d-flex align-items-center gap-2 border-bottom pb-2">
+	                  <IconCloudUpload size={22} className="text-primary" />
+	                  <div className="fw-bold">Public IPTV Web App</div>
+	                  <IconInfoCircle size={17} className="text-muted" title="Recommended Cloudflare hostname: tv.3jhotspot.com. It should point to the IPTV web app, not directly to XUI." />
+	                </div>
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Public Hostname</label>
+                <input className="form-control" value={form.public_hostname} onChange={(e) => updateField('public_hostname', e.target.value)} />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Public IPTV URL</label>
+                <input className="form-control" value={form.public_url} onChange={(e) => updateField('public_url', e.target.value)} />
+              </div>
+	              <div className="col-12">
+	                <label className="form-label">Internal IPTV Web URL</label>
+	                <input className="form-control" value={form.internal_web_url} onChange={(e) => updateField('internal_web_url', e.target.value)} />
+	                <div className="form-hint">Customer local URL: <code>http://192.168.50.15</code>. The IPTV web server should reverse-proxy port 80 to its Next app on <code>127.0.0.1:3000</code>.</div>
+	              </div>
+	              <div className="col-md-6">
+	                <label className="form-label">IPTV Web Integration Secret</label>
+	                <input
+	                  className="form-control"
+	                  type="password"
+	                  value={form.iptv_web_integration_secret}
+	                  placeholder={config?.iptv_web_integration_secret_configured ? `Saved: ${config.iptv_web_integration_secret_hint}` : 'Shared only with IPTV web server'}
+	                  onChange={(e) => updateField('iptv_web_integration_secret', e.target.value)}
+	                />
+	                <div className="form-hint">The IPTV web server uses this to resolve short-lived 3J watch tokens. Customers never receive XUI credentials.</div>
+	                {config?.iptv_web_integration_secret_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearIptvSecret('iptv_web_integration_secret')}>Clear saved integration secret</button>}
+	              </div>
+	              <div className="col-md-3">
+	                <label className="form-label">Watch Token TTL</label>
+	                <input className="form-control" type="number" min="1" max="120" value={form.iptv_token_ttl_minutes} onChange={(e) => updateField('iptv_token_ttl_minutes', e.target.value)} />
+	                <div className="form-hint">Minutes before a generated watch link expires.</div>
+	              </div>
+	              <div className="col-md-3">
+	                <label className="form-label">Expiry Warning</label>
+	                <input className="form-control" type="number" min="1" max="120" value={form.iptv_expiry_warning_minutes} onChange={(e) => updateField('iptv_expiry_warning_minutes', e.target.value)} />
+	                <div className="form-hint">Minutes before IPTV expiry to show the player warning toast.</div>
+	              </div>
+	              <div className="col-md-3">
+	                <label className="form-label">Player Stop Window</label>
+	                <input className="form-control" type="number" min="1" max="300" value={form.iptv_expiry_stop_seconds} onChange={(e) => updateField('iptv_expiry_stop_seconds', e.target.value)} />
+	                <div className="form-hint">Seconds before expiry to stop playback and return customers to the portal.</div>
+	              </div>
+
+		              <div className="col-12">
+		                <div className="d-flex align-items-center gap-2 border-bottom pb-2">
+		                  <IconServer size={22} className="text-primary" />
+		                  <div className="fw-bold">IPTV Web Server SSH</div>
+		                  <IconInfoCircle size={17} className="text-muted" title="SSH is optional for Cloudflare routing if the tunnel can already reach the IPTV web URL. Save it only for diagnostics and future managed deploy checks." />
+		                </div>
+	              </div>
+		              <div className="col-md-3">
+		                <label className="form-label">SSH Host</label>
+		                <input className="form-control" value={form.iptv_web_ssh_host} onChange={(e) => updateField('iptv_web_ssh_host', e.target.value)} />
+		              </div>
+		              <div className="col-md-2">
+		                <label className="form-label">SSH Port</label>
+		                <input className="form-control" type="number" min="1" max="65535" value={form.iptv_web_ssh_port} onChange={(e) => updateField('iptv_web_ssh_port', e.target.value)} />
+		              </div>
+		              <div className="col-md-3">
+		                <label className="form-label">SSH Username</label>
+		                <input className="form-control" value={form.iptv_web_ssh_username} onChange={(e) => updateField('iptv_web_ssh_username', e.target.value)} />
+		              </div>
+		              <div className="col-md-2">
+		                <label className="form-label">Auth Type</label>
+		                <select className="form-select" value={form.iptv_web_ssh_auth_type} onChange={(e) => updateField('iptv_web_ssh_auth_type', e.target.value)}>
+		                  <option value="PASSWORD">Password</option>
+		                  <option value="PRIVATE_KEY">Private Key</option>
+		                </select>
+		              </div>
+		              <div className="col-md-2">
+		                <label className="form-label">Sudo Mode</label>
+		                <select className="form-select" value={form.iptv_web_sudo_mode} onChange={(e) => updateField('iptv_web_sudo_mode', e.target.value)}>
+		                  <option value="PASSWORDLESS">passwordless sudo</option>
+		                  <option value="SUDO_PASSWORD">sudo with password</option>
+		                  <option value="NONE">no sudo</option>
+		                </select>
+		              </div>
+		              {form.iptv_web_ssh_auth_type === 'PASSWORD' && <div className="col-md-4">
+		                <label className="form-label">SSH Password / Root Password</label>
+		                <input
+		                  className="form-control"
+	                  type="password"
+	                  value={form.iptv_web_ssh_password}
+	                  placeholder={config?.iptv_web_ssh_password_configured ? `Saved: ${config.iptv_web_ssh_password_hint}` : 'Save for diagnostics'}
+		                  onChange={(e) => updateField('iptv_web_ssh_password', e.target.value)}
+		                />
+		                {config?.iptv_web_ssh_password_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearIptvSecret('iptv_web_ssh_password')}>Clear saved SSH password</button>}
+		              </div>}
+			              {form.iptv_web_ssh_auth_type === 'PRIVATE_KEY' && <>
+		                <div className="col-md-8">
+		                  <label className="form-label">Private Key</label>
+		                  <textarea
+		                    className="form-control"
+		                    rows="5"
+		                    value={form.iptv_web_ssh_private_key}
+		                    placeholder={config?.iptv_web_ssh_private_key_configured ? `Saved: ${config.iptv_web_ssh_private_key_hint}` : 'Paste private key for diagnostics'}
+		                    onChange={(e) => updateField('iptv_web_ssh_private_key', e.target.value)}
+		                  />
+		                  {config?.iptv_web_ssh_private_key_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearIptvSecret('iptv_web_ssh_private_key')}>Clear saved private key</button>}
+		                </div>
+		                <div className="col-md-4">
+		                  <label className="form-label">Private Key Passphrase</label>
+		                  <input
+		                    className="form-control"
+		                    type="password"
+		                    value={form.iptv_web_ssh_private_key_passphrase}
+		                    placeholder={config?.iptv_web_ssh_private_key_passphrase_configured ? `Saved: ${config.iptv_web_ssh_private_key_passphrase_hint}` : 'Optional'}
+		                    onChange={(e) => updateField('iptv_web_ssh_private_key_passphrase', e.target.value)}
+		                  />
+			                  {config?.iptv_web_ssh_private_key_passphrase_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearIptvSecret('iptv_web_ssh_private_key_passphrase')}>Clear saved passphrase</button>}
+			                </div>
+			              </>}
+			              <div className="col-12">
+			                <div className="alert alert-warning mb-0">SSH settings are for diagnostics and future controlled IPTV web app checks only. This page does not install, restart, or modify the IPTV web server yet.</div>
+			              </div>
+	              </>}
+
+	              {settingsTab === 'XUI' && <>
+		              <div className="col-12">
+		                <div className="d-flex align-items-center gap-2 border-bottom pb-2">
+	                  <IconDatabase size={22} className="text-primary" />
+	                  <div className="fw-bold">Private XUI Server</div>
+	                  <IconInfoCircle size={17} className="text-muted" title="XUI should remain internal/private. The customer browser should not receive XUI admin credentials or direct panel URLs." />
+	                </div>
+	              </div>
+	              <div className="col-md-4">
+	                <label className="form-label">API Mode</label>
+	                <select className="form-select" value={form.xui_api_mode} onChange={(e) => updateField('xui_api_mode', e.target.value)}>
+	                  {(config?.xui_api_modes || []).map((mode) => <option value={mode.id} key={mode.id}>{mode.label}</option>)}
+	                </select>
+	              </div>
+	              <div className="col-md-4">
+	                <label className="form-label">XUI Server Host</label>
+	                <input className="form-control" value={form.xui_server_host} onChange={(e) => updateField('xui_server_host', e.target.value)} />
+	              </div>
+	              <div className="col-md-6">
+	                <label className="form-label">XUI Private Base URL</label>
+	                <input className="form-control" value={form.xui_base_url} onChange={(e) => updateField('xui_base_url', e.target.value)} />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">XUI Browser Tunnel URL</label>
+                <input className="form-control" value={form.xui_public_url} onChange={(e) => updateField('xui_public_url', e.target.value)} placeholder="https://xui.3jhotspot.com" />
+                <div className="form-hint">Cloudflare hostname that customer browsers use for XUI streams and artwork when outside the 3J AP network.</div>
+              </div>
+              <div className="col-12">
+                <label className="form-label">XUI Cloudflare Connector Command / Token</label>
+                <textarea
+                  className="form-control font-monospace"
+                  rows="4"
+                  value={form.xui_public_connector_command}
+                  onChange={(e) => updateField('xui_public_connector_command', e.target.value)}
+                  placeholder={config?.xui_public_tunnel_token_configured ? 'Leave blank to keep saved token' : 'cloudflared tunnel run --token ey...'}
+                />
+                <div className="form-hint">
+                  Store the XUI One tunnel token here. The connector still needs to run on the XUI One server. Saved token: {config?.xui_public_tunnel_token_hint || 'none'}.
+                </div>
+                {config?.xui_public_tunnel_token_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearIptvSecret('xui_public_tunnel_token')}>Clear saved tunnel token</button>}
+              </div>
+              <div className="col-md-3">
+                <label className="form-label">XUI Access Code</label>
+                <input className="form-control" value={form.xui_access_code} onChange={(e) => updateField('xui_access_code', e.target.value)} placeholder="Optional" />
+                <div className="form-hint">Optional path used by some XUI admin APIs before <code>api.php</code>.</div>
+              </div>
+              <div className="col-md-3">
+                <label className="form-label">Max Connections</label>
+                <input className="form-control" type="number" min="1" max="20" value={form.xui_max_connections} onChange={(e) => updateField('xui_max_connections', e.target.value)} />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label">XUI Admin Username</label>
+                <input className="form-control" value={form.xui_admin_username} onChange={(e) => updateField('xui_admin_username', e.target.value)} />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label">XUI Admin Password</label>
+                <input className="form-control" type="password" value={form.xui_admin_password} placeholder={config?.xui_admin_password_configured ? `Saved: ${config.xui_admin_password_hint}` : 'Save for future automation'} onChange={(e) => updateField('xui_admin_password', e.target.value)} />
+                {config?.xui_admin_password_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearIptvSecret('xui_admin_password')}>Clear saved password</button>}
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">XUI API Key / Token</label>
+                <input className="form-control" type="password" value={form.xui_api_key} placeholder={config?.xui_api_key_configured ? `Saved: ${config.xui_api_key_hint}` : 'Optional; depends on XUI panel API'} onChange={(e) => updateField('xui_api_key', e.target.value)} />
+                {config?.xui_api_key_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearIptvSecret('xui_api_key')}>Clear saved API key</button>}
+              </div>
+	              <div className="col-12">
+	                <div className="alert alert-info mb-0">No XUI package or bouquet is selected here. New IPTV lines are created with the XUI panel default bouquet assignment, which should be configured to include all bouquets.</div>
+	              </div>
+
+	              <div className="col-12">
+	                <div className="d-flex align-items-center gap-2 border-bottom pb-2">
+	                  <IconUser size={22} className="text-primary" />
+	                  <div className="fw-bold">XUI Player API Test Account</div>
+	                  <IconInfoCircle size={17} className="text-muted" title="Use an existing disposable XUI line to verify player_api.php connectivity. This does not create or modify accounts." />
+	                </div>
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Test Line Username</label>
+                <input className="form-control" value={form.xui_test_username} onChange={(e) => updateField('xui_test_username', e.target.value)} />
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Test Line Password</label>
+	                <input className="form-control" type="password" value={form.xui_test_password} placeholder={config?.xui_test_password_configured ? `Saved: ${config.xui_test_password_hint}` : 'Optional test line password'} onChange={(e) => updateField('xui_test_password', e.target.value)} />
+	                {config?.xui_test_password_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={() => clearIptvSecret('xui_test_password')}>Clear saved test password</button>}
+	              </div>
+	              </>}
+	              <div className="col-12">
+	                <label className="form-label">Notes</label>
+                <textarea className="form-control" rows="3" value={form.notes} onChange={(e) => updateField('notes', e.target.value)} placeholder="XUI panel version, IPTV web app notes, stream category rules, or account naming rules." />
+              </div>
+              <div className="col-12 text-end">
+                <div className="btn-list justify-content-end">
+                  <button className="btn btn-primary" disabled={saving}>
+                    <IconDeviceFloppy size={18} className="me-2" />{saving ? 'Saving...' : 'Save IPTV Settings'}
+                  </button>
+		                  <button className="btn btn-outline-primary" type="button" disabled={testing} onClick={testIptvConnection} title="Checks HTTP/HTTPS reachability for IPTV Web, public IPTV URL, XUI base URL, and optional XUI player API test line.">
+		                    <IconRefresh size={18} className="me-2" />{testing ? 'Testing URLs...' : 'Test Web/XUI URLs'}
+		                  </button>
+		                  <button className="btn btn-outline-primary" type="button" disabled={xuiApiTesting} onClick={testXuiApi} title="Read-only test for XUI base URL and saved disposable test line through player_api.php.">
+		                    <IconDatabase size={18} className="me-2" />{xuiApiTesting ? 'Testing XUI API...' : 'Test XUI API'}
+		                  </button>
+			                  <button className="btn btn-outline-secondary" type="button" disabled={sshTesting} onClick={testIptvSsh} title="Checks whether the system can log in to the IPTV web server over SSH and run read-only diagnostics.">
+			                    <IconServer size={18} className="me-2" />{sshTesting ? 'Testing SSH...' : 'Test SSH Login'}
+		                  </button>
+	                </div>
+	              </div>
+            </div>
+          </form>
+        </Card>
+	      </div>}
+
+	      {tab === 'Status' && <div className="col-12 col-xl-4">
+        <div className="row row-cards">
+	          <div className="col-12">
+	            <Card title="Cloudflare Hostname" subtitle="Add this public hostname in your existing Cloudflare Tunnel.">
+	              <div className="border rounded p-3 bg-light">
+	                <div className="small"><strong>Subdomain:</strong> {cloudflare.subdomain || 'tv'}</div>
+	                <div className="small"><strong>Hostname:</strong> {cloudflare.hostname || form.public_hostname}</div>
+	                <div className="small"><strong>Type:</strong> {cloudflare.service_type || 'HTTP'}</div>
+	                <div className="small"><strong>URL:</strong> {cloudflare.service_url || form.internal_web_url}</div>
+	              </div>
+	              <div className="alert alert-warning small mt-3 mb-0">
+	                Do not point Cloudflare directly to <code>{form.xui_base_url || 'XUI'}</code>. Only the IPTV web app should be public.
+	              </div>
+            </Card>
+          </div>
+          <div className="col-12">
+			            <Card title="Connection Status" subtitle="Run Test Web/XUI URLs for reachability, Test XUI API for the saved test line, and Test SSH Login only for SSH diagnostics.">
+		              <div className="public-endpoint-status-list">
+		                <div><span className="text-muted">Last URL test</span><span className={`badge bg-${overallTone}-lt text-${overallTone}`}>{lastTest?.status || 'NOT CHECKED'}</span></div>
+		                <div><span className="text-muted">Internal IPTV web</span>{checkBadge(checks.internal_web)}</div>
+		                <div><span className="text-muted">Public IPTV web</span>{checkBadge(checks.public_web)}</div>
+		                <div><span className="text-muted">XUI base</span>{checkBadge(checks.xui_base)}</div>
+		                <div><span className="text-muted">XUI browser tunnel</span>{checkBadge(checks.xui_public)}</div>
+		                <div><span className="text-muted">XUI player API</span>{checkBadge(checks.xui_player_api)}</div>
+		                <div><span className="text-muted">Admin API automation</span>{checkBadge(checks.admin_api)}</div>
+		                <div><span className="text-muted">Last XUI API test</span><span className={`badge bg-${xuiApiTone}-lt text-${xuiApiTone}`}>{xuiApiTest?.status || 'NOT CHECKED'}</span></div>
+		                <div><span className="text-muted">XUI API base</span>{checkBadge(xuiApiChecks.xui_base)}</div>
+		                <div><span className="text-muted">XUI API test line</span>{checkBadge(xuiApiChecks.xui_player_api)}</div>
+			                <div><span className="text-muted">IPTV web SSH login</span><span className={`badge bg-${sshTone}-lt text-${sshTone}`}>{sshTest?.status || 'NOT CHECKED'}</span></div>
+		              </div>
+		              {lastTest?.checked_at && <div className="text-muted small mt-3">Last checked: {formatPortalDateTime(lastTest.checked_at)}</div>}
+		              {xuiApiTest?.checked_at && <div className="text-muted small mt-1">Last XUI API checked: {formatPortalDateTime(xuiApiTest.checked_at)}</div>}
+		              {sshTest?.checked_at && <div className="text-muted small mt-1">Last SSH checked: {formatPortalDateTime(sshTest.checked_at)}</div>}
+	              {sshTest?.output && (
+	                <pre className="public-endpoint-log mt-3 mb-0">{sshTest.output}</pre>
+	              )}
+	              {sshTest?.error && <div className="alert alert-danger py-2 mt-3 mb-0">{sshTest.error}</div>}
+		              {Object.values(checks).some((item) => item?.error || item?.message) && (
+	                <div className="mt-3 d-grid gap-2">
+	                  {Object.entries(checks).map(([key, item]) => (item?.error || item?.message) ? (
+	                    <div className="alert alert-light py-2 mb-0" key={key}>
+	                      <strong>{key.replaceAll('_', ' ')}:</strong> {item.error || item.message}
+	                    </div>
+	                  ) : null)}
+	                </div>
+	              )}
+		              {Object.values(xuiApiChecks).some((item) => item?.error || item?.message) && (
+	                <div className="mt-3 d-grid gap-2">
+	                  {Object.entries(xuiApiChecks).map(([key, item]) => (item?.error || item?.message) ? (
+	                    <div className="alert alert-light py-2 mb-0" key={`xui-${key}`}>
+	                      <strong>XUI {key.replaceAll('_', ' ')}:</strong> {item.error || item.message}
+	                    </div>
+	                  ) : null)}
+	                </div>
+	              )}
+	            </Card>
+          </div>
+	          <div className="col-12">
+	            <Card title="IPTV Safety Model">
+	              <div className="d-flex flex-column gap-3">
+                <div className="d-flex gap-2">
+                  <IconShoppingBag size={22} className="text-primary flex-shrink-0" />
+                  <div><strong>Product access type</strong><div className="text-muted small">Product Items can be Internet only, IPTV only, or Internet + IPTV.</div></div>
+                </div>
+                <div className="d-flex gap-2">
+                  <IconUser size={22} className="text-primary flex-shrink-0" />
+                  <div><strong>XUI account mapping</strong><div className="text-muted small">Activation reuses the customer's active XUI line when IPTV time remains; otherwise a new line is created.</div></div>
+                </div>
+                <div className="d-flex gap-2">
+                  <IconShieldLock size={22} className="text-primary flex-shrink-0" />
+                  <div><strong>Token auto-login</strong><div className="text-muted small">Customers open IPTV using short-lived 3J tokens. Raw XUI credentials are resolved only by the IPTV web server.</div></div>
+                </div>
+	              </div>
+	            </Card>
+	          </div>
+	        </div>
+	      </div>}
+	      {tab === 'Logs' && <div className="col-12">
+	        <Card title="IPTV Logs / Test Output" subtitle="Recent IPTV connectivity and SSH diagnostic output. Secrets are never printed here.">
+	          {logRows.map((row) => (
+	            <div className="border rounded p-3 mb-3" key={row.action}>
+	              <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+	                <div className="fw-semibold">{row.action}</div>
+	                <span className={`badge bg-${row.status === 'SUCCESS' ? 'green' : row.status === 'FAILED' ? 'red' : row.status === 'WARNING' ? 'yellow' : 'secondary'}-lt text-${row.status === 'SUCCESS' ? 'green' : row.status === 'FAILED' ? 'red' : row.status === 'WARNING' ? 'yellow' : 'secondary'}`}>{row.status}</span>
+	              </div>
+	              {row.created_at && <div className="text-muted small mb-2">{formatPortalDateTime(row.created_at)}</div>}
+	              {row.output_text ? <pre className="public-endpoint-log mb-0">{row.output_text}</pre> : <div className="empty">No output yet.</div>}
+	            </div>
+	          ))}
+	        </Card>
+	      </div>}
+	    </div>
+	  );
+	}
+
 function PaymentSettingsTab() {
   const emptyForm = {
     enabled: false,
@@ -27438,7 +28928,7 @@ function A2PMessagingSettingsTab() {
               <button type="button" className="btn btn-outline-primary w-100 mb-3" onClick={checkCredits} disabled={checkingCredits}>
                 <IconRefresh size={18} className="me-2" />{checkingCredits ? 'Checking credits...' : 'Retrieve Current Credits'}
               </button>
-              {creditMessage && <div className="alert alert-success py-2">{creditMessage}</div>}
+              {creditMessage && <AutoDismissAlert message={creditMessage} onDismiss={() => setCreditMessage('')} />}
               {creditError && <div className="alert alert-danger py-2">{creditError}</div>}
               {config?.last_credit_error && <div className="alert alert-warning py-2">{config.last_credit_error}</div>}
               {config?.last_credit_response && (
@@ -27480,7 +28970,7 @@ function A2PMessagingSettingsTab() {
                 <button className="btn btn-primary w-100" disabled={sendingTest || !testForm.destination.trim() || !testForm.message_text.trim()}>
                   <IconBell size={18} className="me-2" />{sendingTest ? 'Sending...' : 'Send Test SMS'}
                 </button>
-                {testMessage && <div className="alert alert-success py-2 mt-3">{testMessage}</div>}
+                {testMessage && <AutoDismissAlert message={testMessage} onDismiss={() => setTestMessage('')} />}
                 {testError && <div className="alert alert-danger py-2 mt-3">{testError}</div>}
                 {(config?.last_test_send_status || config?.last_test_send_response || config?.last_test_send_error) && (
                   <div className="mt-3 border rounded p-2">
@@ -28208,7 +29698,7 @@ function OmadaControllerPage({ refresh }) {
               </div>
             </div>
           </form>
-          {sshResult && <div className="alert alert-success mt-3 mb-0">SSH reachable. Secrets were not displayed or logged.</div>}
+          {sshResult && <AutoDismissAlert message="SSH reachable. Secrets were not displayed or logged." onDismiss={() => setSshResult(null)} />}
         </Card>
       </div>}
 
@@ -28623,7 +30113,7 @@ const nav = [
   },
   { page: 'Location Management', icon: IconMapPin, tone: 'green' },
   { page: 'Vouchers', icon: IconKey, tone: 'yellow' },
-  { page: 'Product Items', icon: IconListDetails, tone: 'green' },
+  { page: 'Online Store', icon: IconListDetails, tone: 'green' },
   {
     page: 'Physical Stores',
     icon: IconBuildingStore,
@@ -28634,6 +30124,7 @@ const nav = [
     ]
   },
   { page: 'Sales', icon: IconCalendarStats, tone: 'green' },
+  { page: 'IPTV', icon: IconPlayerPlay, tone: 'purple' },
   { page: 'Captive Portal', icon: IconWifi, tone: 'blue' },
   { page: 'Support Inbox', icon: IconMessageCircle, tone: 'orange' },
   { page: 'Network', icon: IconRouter, tone: 'purple' },
@@ -28643,6 +30134,7 @@ const nav = [
 ];
 
 const profilePages = {
+  'Notifications': { icon: IconBell, tone: 'blue' },
   'View Profile': { icon: IconId, tone: 'blue' },
   'Change Password': { icon: IconKey, tone: 'blue' },
   'MikroTik Scan Result': { icon: IconSearch, tone: 'blue' }
@@ -28652,6 +30144,236 @@ const flatNav = nav.flatMap((item) => item.children ? [item, ...item.children] :
 
 function pageMeta(page) {
   return flatNav.find((item) => item.page === page) || profilePages[page] || { icon: IconShieldLock, tone: 'blue' };
+}
+
+function NotificationsPage({ onNavigate }) {
+  const [rows, setRows] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [categories, setCategories] = useState([]);
+  const [pagination, setPagination] = useState({ page: 1, page_size: 20, total: 0, total_pages: 1 });
+  const [filters, setFilters] = useState({ q: '', status: '', category: '', severity: '' });
+  const [pageSize, setPageSize] = useState(20);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function loadNotifications(nextPage = pagination.page, nextFilters = filters, nextPageSize = pageSize) {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(nextPage),
+        page_size: String(nextPageSize),
+        include_support: 'true'
+      });
+      Object.entries(nextFilters).forEach(([key, value]) => {
+        if (value) params.set(key, value);
+      });
+      const data = await request(`/admin/notifications?${params.toString()}`);
+      setRows(data.items || []);
+      setSummary(data.summary || {});
+      setCategories(data.categories || []);
+      setPagination({
+        page: Number(data.page || nextPage),
+        page_size: Number(data.page_size || nextPageSize),
+        total: Number(data.total || 0),
+        total_pages: Number(data.total_pages || 1)
+      });
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadNotifications(1, filters, pageSize);
+  }, [filters.status, filters.category, filters.severity, pageSize]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => loadNotifications(1, filters, pageSize), 300);
+    return () => window.clearTimeout(timer);
+  }, [filters.q]);
+
+  async function markNotificationRead(item) {
+    if (!item || String(item.id || '').startsWith('support-') || item.status !== 'UNREAD') return;
+    await request(`/admin/notifications/${encodeURIComponent(item.id)}/read`, { method: 'POST' });
+    window.dispatchEvent(new CustomEvent('admin-notification-refresh'));
+    await loadNotifications(pagination.page, filters, pageSize);
+  }
+
+  async function markAllRead() {
+    await request('/admin/notifications/read-all', { method: 'POST' });
+    window.dispatchEvent(new CustomEvent('admin-notification-refresh'));
+    await loadNotifications(1, filters, pageSize);
+  }
+
+  async function openNotification(item) {
+    await markNotificationRead(item).catch(() => {});
+    const target = adminNotificationTargetFromUrl(item.target_url, item.target_page);
+    onNavigate?.(target.page, false, target.path);
+  }
+
+  function updateFilter(key, value) {
+    setFilters((current) => ({ ...current, [key]: value }));
+  }
+
+  const kpis = [
+    { label: 'Unread', value: summary.unread || 0, icon: IconBell, tone: 'red' },
+    { label: 'IPTV Login Failed', value: summary.iptv_failed_unread || 0, icon: IconPlayerPlay, tone: 'purple' },
+    { label: 'SMS Failed', value: summary.a2p_failed_unread || 0, icon: IconSend, tone: 'orange' },
+    { label: 'Today', value: summary.today || 0, icon: IconClock, tone: 'blue' }
+  ];
+
+  return (
+    <div className="admin-notifications-page">
+      <div className="page-header d-print-none">
+        <div className="row align-items-center">
+          <div className="col">
+            <div className="page-pretitle">Admin profile</div>
+            <h2 className="page-title">Notifications</h2>
+            <div className="text-muted">System alerts, IPTV login failures, SMS failures, and unread support message alerts.</div>
+          </div>
+          <div className="col-auto ms-auto d-flex gap-2">
+            <button className="btn btn-outline-secondary" type="button" onClick={() => loadNotifications(pagination.page, filters, pageSize)} disabled={loading}>
+              <IconRefresh size={17} className="me-2" />Refresh
+            </button>
+            <button className="btn btn-primary" type="button" onClick={markAllRead} disabled={loading || !(summary.unread || 0)}>
+              <IconCircleCheck size={17} className="me-2" />Mark System Read
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="row row-cards mb-3">
+        {kpis.map((kpi) => {
+          const Icon = kpi.icon;
+          return (
+            <div className="col-12 col-sm-6 col-xl-3" key={kpi.label}>
+              <div className="card card-sm">
+                <div className="card-body d-flex align-items-center gap-3">
+                  <span className={`badge bg-${kpi.tone}-lt text-${kpi.tone} admin-page-kpi-icon`}><Icon size={22} /></span>
+                  <div className="flex-fill">
+                    <div className="text-muted small">{kpi.label}</div>
+                    <div className="h2 mb-0">{kpi.value}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <h3 className="card-title mb-1">Notification History</h3>
+            <div className="text-muted small">Showing {rows.length ? ((pagination.page - 1) * pagination.page_size) + 1 : 0}-{Math.min(pagination.page * pagination.page_size, pagination.total)} of {pagination.total}</div>
+          </div>
+        </div>
+        <div className="card-body border-bottom">
+          <div className="row g-2 align-items-end">
+            <div className="col-12 col-lg-4">
+              <label className="form-label">Search</label>
+              <div className="input-icon">
+                <span className="input-icon-addon"><IconSearch size={17} /></span>
+                <input className="form-control" value={filters.q} onChange={(event) => updateFilter('q', event.target.value)} placeholder="Search title, message, category..." />
+              </div>
+            </div>
+            <div className="col-6 col-lg-2">
+              <label className="form-label">Status</label>
+              <select className="form-select" value={filters.status} onChange={(event) => updateFilter('status', event.target.value)}>
+                <option value="">All</option>
+                <option value="UNREAD">Unread</option>
+                <option value="READ">Read</option>
+              </select>
+            </div>
+            <div className="col-6 col-lg-2">
+              <label className="form-label">Severity</label>
+              <select className="form-select" value={filters.severity} onChange={(event) => updateFilter('severity', event.target.value)}>
+                <option value="">All</option>
+                <option value="DANGER">Danger</option>
+                <option value="WARNING">Warning</option>
+                <option value="INFO">Info</option>
+                <option value="SUCCESS">Success</option>
+              </select>
+            </div>
+            <div className="col-6 col-lg-2">
+              <label className="form-label">Category</label>
+              <select className="form-select" value={filters.category} onChange={(event) => updateFilter('category', event.target.value)}>
+                <option value="">All</option>
+                {categories.map((item) => (
+                  <option key={item.category} value={item.category}>{item.category} ({item.count})</option>
+                ))}
+                {!categories.some((item) => item.category === 'IPTV_LOGIN_FAILED') && <option value="IPTV_LOGIN_FAILED">IPTV_LOGIN_FAILED</option>}
+              </select>
+            </div>
+            <div className="col-6 col-lg-2">
+              <label className="form-label">Show</label>
+              <select className="form-select" value={pageSize} onChange={(event) => setPageSize(Number(event.target.value))}>
+                {[20, 50, 100, 200].map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+        {error && <div className="alert alert-danger m-3">{error}</div>}
+        <div className="table-responsive">
+          <table className="table table-vcenter card-table">
+            <thead>
+              <tr>
+                <th>Notification</th>
+                <th>Category</th>
+                <th>Severity</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th className="w-1">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((item) => {
+                const Icon = adminNotificationIcon(item);
+                const tone = adminNotificationTone(item);
+                return (
+                  <tr key={item.id} className={item.status === 'UNREAD' ? 'table-warning-subtle' : ''}>
+                    <td>
+                      <div className="d-flex align-items-start gap-3">
+                        <span className={`badge bg-${tone}-lt text-${tone} admin-notification-icon`}><Icon size={18} /></span>
+                        <div>
+                          <div className="fw-bold">{item.title}</div>
+                          <div className="text-muted small">{item.message || 'No message.'}</div>
+                          {item.target_page && <div className="text-muted small mt-1">Target: {item.target_page}</div>}
+                        </div>
+                      </div>
+                    </td>
+                    <td><span className="badge bg-secondary-lt text-secondary">{item.category || 'SYSTEM'}</span></td>
+                    <td><span className={`badge bg-${tone}-lt text-${tone}`}>{item.severity || 'INFO'}</span></td>
+                    <td><span className={`badge ${item.status === 'UNREAD' ? 'bg-red-lt text-red' : 'bg-green-lt text-green'}`}>{item.status}</span></td>
+                    <td className="text-muted">{formatPortalDateTime(item.created_at)}</td>
+                    <td>
+                      <div className="btn-list flex-nowrap">
+                        <button className="btn btn-icon btn-outline-primary" type="button" onClick={() => openNotification(item)} title="Open target"><IconExternalLink size={17} /></button>
+                        {!String(item.id || '').startsWith('support-') && item.status === 'UNREAD' && (
+                          <button className="btn btn-icon btn-outline-success" type="button" onClick={() => markNotificationRead(item)} title="Mark read"><IconCircleCheck size={17} /></button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!rows.length && !loading && <tr><td colSpan="6" className="text-center text-muted py-5">No notifications match the selected filters.</td></tr>}
+              {loading && !rows.length && <tr><td colSpan="6" className="text-center text-muted py-5">Loading notifications...</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div className="card-footer d-flex align-items-center justify-content-between gap-2">
+          <div className="text-muted small">Page {pagination.page} of {pagination.total_pages}</div>
+          <div className="btn-list">
+            <button className="btn btn-outline-secondary" type="button" disabled={loading || pagination.page <= 1} onClick={() => loadNotifications(pagination.page - 1, filters, pageSize)}>Previous</button>
+            <button className="btn btn-outline-secondary" type="button" disabled={loading || pagination.page >= pagination.total_pages} onClick={() => loadNotifications(pagination.page + 1, filters, pageSize)}>Next</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnreadCount = 0 }) {
@@ -28737,6 +30459,7 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnread
               </button>
               {!collapsed && profileOpen && (
                 <div className="sidebar-user-menu">
+                  <button className="dropdown-item" onClick={() => setActivePage('Notifications')}><IconBell size={18} className="me-2" />Notifications</button>
                   <button className="dropdown-item" onClick={() => setActivePage('View Profile')}><IconId size={18} className="me-2" />View Profile</button>
                   <button className="dropdown-item" onClick={() => setActivePage('Change Password')}><IconKey size={18} className="me-2" />Change Password</button>
                   <div className="dropdown-divider" />
@@ -28756,6 +30479,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
   const [items, setItems] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [a2pFailureCount, setA2PFailureCount] = useState(0);
+  const [iptvFailureCount, setIptvFailureCount] = useState(0);
   const [supportCount, setSupportCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -28767,6 +30491,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
       setItems(data.items || []);
       setUnreadCount(Number(data.unread_count || 0));
       setA2PFailureCount(Number(data.a2p_failure_unread_count || 0));
+      setIptvFailureCount(Number(data.iptv_failure_unread_count || 0));
       setSupportCount(Number(data.support_unread_count || 0));
       onSupportCountChange?.(Number(data.support_unread_count || 0));
       setError('');
@@ -28799,6 +30524,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
   function notificationIcon(item) {
     if (item.category === 'SUPPORT_MESSAGE') return IconMessageCircle;
     if (item.category === 'A2P_SMS_FAILED') return IconSend;
+    if (item.category === 'IPTV_LOGIN_FAILED') return IconPlayerPlay;
     if (item.severity === 'DANGER' || item.severity === 'WARNING') return IconAlertTriangle;
     return IconBell;
   }
@@ -28807,6 +30533,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
     if (item.severity === 'DANGER') return 'red';
     if (item.severity === 'WARNING') return 'yellow';
     if (item.category === 'SUPPORT_MESSAGE') return 'orange';
+    if (item.category === 'IPTV_LOGIN_FAILED') return 'purple';
     if (item.severity === 'SUCCESS') return 'green';
     return 'blue';
   }
@@ -28847,7 +30574,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
             <div className="admin-notification-header">
               <div>
                 <div className="h3 mb-1">Notifications</div>
-                <div className="text-muted small">SMS failures and customer messages that need attention.</div>
+                <div className="text-muted small">System alerts, IPTV login failures, SMS failures, and customer messages.</div>
               </div>
               <button className="btn btn-icon" type="button" onClick={() => setOpen(false)} aria-label="Close notifications"><IconX size={18} /></button>
             </div>
@@ -28856,6 +30583,11 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
                 <IconBell size={18} />
                 <span>Unread</span>
                 <strong>{unreadCount}</strong>
+              </div>
+              <div className="admin-notification-kpi">
+                <IconPlayerPlay size={18} />
+                <span>IPTV Failed</span>
+                <strong>{iptvFailureCount}</strong>
               </div>
               <div className="admin-notification-kpi">
                 <IconSend size={18} />
@@ -28870,7 +30602,10 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
             </div>
             <div className="d-flex align-items-center justify-content-between gap-2 px-3 py-2 border-bottom">
               <button className="btn btn-sm btn-outline-secondary" type="button" onClick={loadNotifications} disabled={loading}><IconRefresh size={16} className="me-1" />Refresh</button>
-              <button className="btn btn-sm btn-outline-primary" type="button" onClick={markAllRead} disabled={loading || unreadCount === supportCount}>Mark system read</button>
+              <div className="btn-list">
+                <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => { setOpen(false); onNavigate('Notifications'); }}>View all</button>
+                <button className="btn btn-sm btn-outline-primary" type="button" onClick={markAllRead} disabled={loading || unreadCount === supportCount}>Mark system read</button>
+              </div>
             </div>
             {error && <div className="alert alert-danger m-3 py-2">{error}</div>}
             <div className="admin-notification-list">
@@ -29067,16 +30802,18 @@ function App() {
             {page === 'List of APs' && <ListOfApsPage />}
             {page === 'Location Management' && <LocationManagementPage />}
             {page === 'Vouchers' && <VouchersPage />}
-            {page === 'Product Items' && <ProductItemsPage />}
-            {page === 'Physical Stores' && <PhysicalStoresPage />}
-            {page === 'Sales' && <SalesPage />}
-            {page === 'Captive Portal' && <CaptivePortalPage />}
+            {(page === 'Online Store' || page === 'Product Items') && <ProductItemsPage />}
+	            {page === 'Physical Stores' && <PhysicalStoresPage />}
+	            {page === 'Sales' && <SalesPage />}
+	            {page === 'IPTV' && <IptvPage />}
+	            {page === 'Captive Portal' && <CaptivePortalPage />}
             {page === 'Support Inbox' && <SupportInboxPage />}
             {page === 'Network' && <NetworkPage refresh={refresh} />}
             {page === 'MikroTik Scan Result' && <MikroTikScanResultPage />}
             {page === 'System Settings' && <SystemSettingsPage refresh={refresh} />}
             {page === 'Omada Controller' && <OmadaControllerPage refresh={refresh} />}
             {page === 'Logs' && <SimplePage title="Logs" endpoint="/audit-logs" columns={['action', 'target_type', 'target_id', 'details', 'created_at']} />}
+            {page === 'Notifications' && <NotificationsPage onNavigate={navigatePage} />}
             {['View Profile', 'Change Password'].includes(page) && <ProfilePage onSaved={refresh} />}
             </div>
           </div>

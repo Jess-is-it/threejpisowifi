@@ -10,3 +10,4 @@ cryptography==43.0.3
 paramiko==3.5.0
 requests==2.32.3
 pywebpush==2.0.3
+PyMySQL==1.1.1

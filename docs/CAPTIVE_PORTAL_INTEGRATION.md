@@ -153,9 +153,11 @@ Client authorized but no internet:
 - Confirm the SSID VLAN matches the station VLAN.
 
 PayMongo checkout:
-- Product Items shown in the captive portal can start a PayMongo hosted checkout when System Settings -> Payments is enabled and the active Test/Live mode has keys saved.
+- Product Categories shown in the captive portal contain assigned reusable Product Items. Only active items assigned to active categories are customer-visible.
+- Assigned Product Items can start a PayMongo hosted checkout when System Settings -> Payments is enabled and the active Test/Live mode has keys saved.
 - A PayMongo redirect back to `/portal` is only a status hint. 3JCentralPisowifi grants access only after the backend confirms the checkout is paid, either from `/api/payments/paymongo/webhook` with a valid `Paymongo-Signature` or from a server-side PayMongo order reconciliation check.
 - Successful webhook fulfillment creates a customer WiFi Bag item for the Product Item duration and then uses the same Omada authorization path as normal WiFi pass activation.
+- IPTV-only Product Items activate IPTV entitlement time, queue XUI provisioning, and do not use the Omada authorization path. WiFi + IPTV products still use Omada for WiFi and also queue XUI provisioning.
 - Valid signed PayMongo webhooks are acknowledged with HTTP 200 after being recorded. If local fulfillment fails, the event is marked failed for operator review rather than returning HTTP 500 to PayMongo.
 - If the webhook secret is not configured, customers can reach PayMongo checkout but access remains pending after payment until the webhook is configured and delivered.
 

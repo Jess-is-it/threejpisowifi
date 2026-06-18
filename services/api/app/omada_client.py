@@ -1383,7 +1383,7 @@ class OmadaApiClient:
             "ssidList": ssid_ids,
             "networkList": [],
             "authType": 4,
-            "httpsRedirectEnable": bool(payload.get("httpsRedirectEnable", True)),
+            "httpsRedirectEnable": bool(payload.get("httpsRedirectEnable", False)),
             "landingPage": 1,
             "pageType": 1,
             "externalPortal": {
@@ -1505,7 +1505,7 @@ class OmadaApiClient:
             "portal_summary": portals_summary,
         }
 
-    def pre_auth_access_status_if_supported(self, site_id: str, portal_url: str) -> dict:
+    def pre_auth_access_status_if_supported(self, site_id: str, portal_url: str, extra_hosts: Optional[list[str]] = None) -> dict:
         self.login()
         if not self.controller_id:
             self.discover_controller_id()
@@ -1518,7 +1518,7 @@ class OmadaApiClient:
         required_url_hosts = []
         required_ip_hosts = []
         controller_host = urlparse(self.base_url).hostname
-        for host in (portal_host, controller_host, "checkout.paymongo.com", "api.paymongo.com", "paymongo.com"):
+        for host in (portal_host, controller_host, "checkout.paymongo.com", "api.paymongo.com", "paymongo.com", *(extra_hosts or [])):
             clean_host = str(host or "").strip()
             if not clean_host:
                 continue
@@ -1590,14 +1590,14 @@ class OmadaApiClient:
             "hostName": controller_host,
             "autoRefresh": False,
             "autoPortalIpEnable": False,
-            "portalHttpsRedirect": True,
+            "portalHttpsRedirect": False,
         })
         response, patch_summary = self._patch_json_candidates([setting_path], {"webPort": web_port}, timeout=25)
         data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
         return {
             "controller_host": controller_host,
             "manual_portal_url": True,
-            "portal_https_redirect": True,
+            "portal_https_redirect": False,
             "web_port": web_port,
             "read_summary": read_summary,
             "response_summary": patch_summary,
@@ -1626,7 +1626,7 @@ class OmadaApiClient:
                 results.append({"ssid": ssid_name, "status": "FAILED", "message": str(exc), "response_summary": exc.response_summary})
         return {"results": results, "failed": [item for item in results if item.get("status") == "FAILED"]}
 
-    def ensure_pre_auth_access_for_portal(self, site_id: str, portal_url: str) -> dict:
+    def ensure_pre_auth_access_for_portal(self, site_id: str, portal_url: str, extra_hosts: Optional[list[str]] = None) -> dict:
         self.login()
         if not self.controller_id:
             self.discover_controller_id()
@@ -1650,9 +1650,18 @@ class OmadaApiClient:
             except ValueError:
                 if clean_host not in required_url_hosts:
                     required_url_hosts.append(clean_host)
-        for host in ("checkout.paymongo.com", "api.paymongo.com", "paymongo.com"):
+        for host in ("checkout.paymongo.com", "api.paymongo.com", "paymongo.com", *(extra_hosts or [])):
             if host not in required_url_hosts:
-                required_url_hosts.append(host)
+                clean_host = str(host or "").strip()
+                if not clean_host:
+                    continue
+                try:
+                    ipaddress.ip_address(clean_host)
+                    if clean_host not in required_ip_hosts:
+                        required_ip_hosts.append(clean_host)
+                except ValueError:
+                    if clean_host.lower() not in [item.lower() for item in required_url_hosts]:
+                        required_url_hosts.append(clean_host)
         resolved_portal_ips = []
         for host in [portal_host]:
             for address in resolve_ipv4_hosts(host):

@@ -50,6 +50,19 @@ URL: http://proxy:80
 
 The `http://proxy:80` value is intentional because `cloudflared` runs inside the same Docker network as the app reverse proxy.
 
+## IPTV Public Hostname
+
+IPTV uses the same Cloudflare Tunnel connector but points to the IPTV web app instead of the captive portal proxy:
+
+```text
+Subdomain: tv
+Domain: 3jhotspot.com
+Type: HTTP
+URL: http://192.168.50.15:3000
+```
+
+Do not route the IPTV web hostname directly to the private XUI admin/provisioning server at `10.100.100.100`. `tv.3jhotspot.com` should expose only the IPTV web/player application. If outside-network playback needs XUI media URLs, use a separate XUI playback tunnel hostname such as `xui.3jhotspot.com` and manage it from IPTV web admin -> Settings -> XUI HTTPS, not from Secrets.
+
 ## Security
 
 - The tunnel token is sensitive and is stored encrypted.

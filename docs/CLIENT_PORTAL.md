@@ -44,7 +44,10 @@ Verified customer profiles add a second recovery path. The customer can use Repo
 ## Customer Bag
 
 - Paid Product Items are stored as separate bag items instead of being merged into one timer.
+- Customer-visible online packages come from Product Categories. Admins create reusable Product Items first, then assign them to categories; unassigned items stay hidden from the portal.
 - The portal shows My WiFi Bag with the active package, queued packages, and consumption history.
+- Product Items can be WiFi-only, IPTV-only, or WiFi + IPTV. IPTV-only items appear as IPTV bag items, queue XUI provisioning, and do not activate hotspot internet time.
+- Provisioned IPTV items show a `Watch IPTV` action. The portal creates a short-lived 3J token and redirects to the IPTV web app `/watch` handoff; raw XUI credentials are never exposed inside the captive portal.
 - Customers can drag queued items to choose which package activates next.
 - Auto Activate can be enabled per customer. When enabled, the next queued item starts 10 seconds before the current item ends for a smoother transition.
 - Bag history records whether Auto Activate was enabled when an item was consumed.

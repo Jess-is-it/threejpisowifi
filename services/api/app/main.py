@@ -416,9 +416,16 @@ class ProductItemPayload(BaseModel):
     category_id: Optional[str] = None
     name: str = Field(min_length=1, max_length=120)
     description: Optional[str] = Field(default=None, max_length=500)
+    color_key: Optional[str] = Field(default=None, max_length=40)
+    color_hex: Optional[str] = Field(default=None, max_length=20)
     price: float = Field(default=0, ge=0, le=1_000_000)
     duration_value: int = Field(default=1, ge=1, le=100_000)
     duration_unit: str = Field(default="hours", max_length=20)
+    product_kind: str = Field(default="WIFI", max_length=20)
+    iptv_package_label: Optional[str] = Field(default=None, max_length=160)
+    iptv_xui_package_id: Optional[str] = Field(default=None, max_length=160)
+    iptv_auto_provision: bool = False
+    iptv_notes: Optional[str] = Field(default=None, max_length=1000)
     use_category_discounts: bool = True
     enabled_category_discount_ids: Optional[list[str]] = None
     discounts: list[ProductDiscountPayload] = Field(default_factory=list)
@@ -442,6 +449,7 @@ class ProductCategoryPayload(BaseModel):
     more_info_text: Optional[str] = Field(default=None, max_length=4000)
     access_scope: str = Field(default="ALL_LOCATIONS", max_length=40)
     allowed_barangay: Optional[str] = Field(default=None, max_length=120)
+    item_ids: list[str] = Field(default_factory=list)
     discounts: list[ProductCategoryDiscountPayload] = Field(default_factory=list)
     status: str = Field(default="ACTIVE", max_length=20)
     sort_order: int = Field(default=0, ge=0, le=1_000_000)
@@ -484,6 +492,8 @@ class PhysicalStorePayload(BaseModel):
 class PhysicalStoreItemPayload(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: Optional[str] = Field(default=None, max_length=500)
+    color_key: Optional[str] = Field(default=None, max_length=40)
+    color_hex: Optional[str] = Field(default=None, max_length=20)
     price: float = Field(default=0, ge=0, le=1_000_000)
     duration_value: int = Field(default=1, ge=1, le=100_000)
     duration_unit: str = Field(default="hours", max_length=20)
@@ -631,6 +641,7 @@ class PortalRedeemRequest(PortalSessionRequest):
 
 class PortalPaymentCheckoutRequest(PortalSessionRequest):
     product_item_id: str
+    product_category_id: Optional[str] = None
     payment_method: str = Field(default="gcash", max_length=40)
     purchase_quantity: int = Field(default=1, ge=1, le=365)
     selected_barangay: Optional[str] = Field(default=None, max_length=120)
@@ -667,6 +678,10 @@ class PortalBagActivateRequest(PortalSessionRequest):
 
 class PortalBagClaimVoucherRequest(PortalSessionRequest):
     voucher_code: str = Field(min_length=1, max_length=64)
+
+
+class PortalIptvWatchRequest(PortalSessionRequest):
+    bag_item_id: str
 
 
 class PortalProfileOtpRequest(PortalSessionRequest):
@@ -1032,6 +1047,75 @@ class PublicEndpointSettingsPayload(BaseModel):
     connector_command: Optional[str] = Field(default=None, max_length=8000)
     tunnel_token: Optional[str] = Field(default=None, max_length=8000)
     clear_tunnel_token: bool = False
+
+
+class IptvSettingsPayload(BaseModel):
+    enabled: Optional[bool] = None
+    public_hostname: Optional[str] = Field(default=None, max_length=253)
+    public_url: Optional[str] = Field(default=None, max_length=500)
+    internal_web_url: Optional[str] = Field(default=None, max_length=500)
+    iptv_web_ssh_host: Optional[str] = Field(default=None, max_length=253)
+    iptv_web_ssh_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    iptv_web_ssh_username: Optional[str] = Field(default=None, max_length=200)
+    iptv_web_ssh_auth_type: Optional[str] = Field(default=None, max_length=40)
+    iptv_web_sudo_mode: Optional[str] = Field(default=None, max_length=40)
+    iptv_web_ssh_password: Optional[str] = Field(default=None, max_length=500)
+    clear_iptv_web_ssh_password: bool = False
+    iptv_web_ssh_private_key: Optional[str] = Field(default=None, max_length=20000)
+    clear_iptv_web_ssh_private_key: bool = False
+    iptv_web_ssh_private_key_passphrase: Optional[str] = Field(default=None, max_length=500)
+    clear_iptv_web_ssh_private_key_passphrase: bool = False
+    xui_base_url: Optional[str] = Field(default=None, max_length=500)
+    xui_public_url: Optional[str] = Field(default=None, max_length=500)
+    xui_public_connector_command: Optional[str] = Field(default=None, max_length=8000)
+    xui_public_tunnel_token: Optional[str] = Field(default=None, max_length=8000)
+    clear_xui_public_tunnel_token: bool = False
+    xui_server_host: Optional[str] = Field(default=None, max_length=253)
+    xui_line_repair_db_enabled: Optional[bool] = None
+    xui_line_repair_db_host: Optional[str] = Field(default=None, max_length=253)
+    xui_line_repair_db_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    xui_line_repair_db_name: Optional[str] = Field(default=None, max_length=120)
+    xui_line_repair_db_username: Optional[str] = Field(default=None, max_length=120)
+    xui_line_repair_db_password: Optional[str] = Field(default=None, max_length=500)
+    clear_xui_line_repair_db_password: bool = False
+    xui_api_mode: Optional[str] = Field(default=None, max_length=40)
+    xui_access_code: Optional[str] = Field(default=None, max_length=200)
+    xui_max_connections: Optional[int] = Field(default=None, ge=1, le=20)
+    xui_admin_username: Optional[str] = Field(default=None, max_length=200)
+    xui_admin_password: Optional[str] = Field(default=None, max_length=500)
+    clear_xui_admin_password: bool = False
+    xui_api_key: Optional[str] = Field(default=None, max_length=1000)
+    clear_xui_api_key: bool = False
+    iptv_web_integration_secret: Optional[str] = Field(default=None, max_length=500)
+    clear_iptv_web_integration_secret: bool = False
+    iptv_token_ttl_minutes: Optional[int] = Field(default=None, ge=1, le=120)
+    iptv_expiry_warning_minutes: Optional[int] = Field(default=None, ge=1, le=120)
+    iptv_expiry_stop_seconds: Optional[int] = Field(default=None, ge=1, le=300)
+    xui_test_username: Optional[str] = Field(default=None, max_length=200)
+    xui_test_password: Optional[str] = Field(default=None, max_length=500)
+    clear_xui_test_password: bool = False
+    notes: Optional[str] = Field(default=None, max_length=1500)
+
+
+class IptvProvisioningRetryPayload(BaseModel):
+    run_now: bool = True
+    force: bool = False
+
+
+class IptvTokenResolvePayload(BaseModel):
+    token: str = Field(min_length=16, max_length=500)
+    integration_secret: str = Field(min_length=8, max_length=500)
+
+
+class IptvLoginFailureReportPayload(BaseModel):
+    token: Optional[str] = Field(default=None, max_length=500)
+    integration_secret: str = Field(min_length=8, max_length=500)
+    stage: Optional[str] = Field(default=None, max_length=80)
+    reason_code: Optional[str] = Field(default=None, max_length=80)
+    message: Optional[str] = Field(default=None, max_length=1000)
+    source_url: Optional[str] = Field(default=None, max_length=500)
+    checked_urls: list[str] = Field(default_factory=list)
+    metadata: Optional[dict] = None
 
 
 class A2PMessagingTestSendPayload(BaseModel):
@@ -1862,28 +1946,66 @@ def normalize_public_endpoint_path(value) -> str:
     return path or "/portal"
 
 
+def clean_cloudflare_tunnel_token_candidate(value: Optional[str]) -> str:
+    return normalize_public_endpoint_text(value, 8000).strip().strip("\"'")
+
+
+def is_likely_cloudflare_tunnel_token(value: Optional[str]) -> bool:
+    token = clean_cloudflare_tunnel_token_candidate(value)
+    if not token or len(token) < 80 or re.search(r"\s", token):
+        return False
+    if not re.match(r"^[A-Za-z0-9._=-]+$", token):
+        return False
+    if re.match(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$", token):
+        return True
+    return token.startswith("eyJ") or len(token) >= 120
+
+
 def extract_cloudflare_tunnel_token(value: Optional[str]) -> str:
     text = normalize_public_endpoint_text(value, 8000)
     if not text:
         return ""
-    token = ""
+
     try:
         parts = shlex.split(text)
     except ValueError:
         parts = text.split()
     for index, part in enumerate(parts):
         if part == "--token" and index + 1 < len(parts):
-            token = parts[index + 1]
-            break
+            token = clean_cloudflare_tunnel_token_candidate(parts[index + 1])
+            if is_likely_cloudflare_tunnel_token(token):
+                return token
         if part.startswith("--token="):
-            token = part.split("=", 1)[1]
-            break
-    if not token and len(text) >= 80 and not re.search(r"\s", text):
-        token = text
-    token = token.strip().strip("\"'")
-    if token and (len(token) < 80 or re.search(r"\s", token)):
+            token = clean_cloudflare_tunnel_token_candidate(part.split("=", 1)[1])
+            if is_likely_cloudflare_tunnel_token(token):
+                return token
+        if index >= 2 and parts[index - 2:index] == ["service", "install"]:
+            token = clean_cloudflare_tunnel_token_candidate(part)
+            if is_likely_cloudflare_tunnel_token(token):
+                return token
+
+    candidates = [
+        clean_cloudflare_tunnel_token_candidate(match)
+        for match in re.findall(r"[A-Za-z0-9._=-]{80,}", text)
+    ]
+    valid_candidates = [candidate for candidate in candidates if is_likely_cloudflare_tunnel_token(candidate)]
+    if valid_candidates:
+        return sorted(
+            valid_candidates,
+            key=lambda candidate: (
+                1 if candidate.startswith("eyJ") else 0,
+                1 if "." in candidate else 0,
+                len(candidate),
+            ),
+            reverse=True,
+        )[0]
+
+    raw_candidate = clean_cloudflare_tunnel_token_candidate(text)
+    if is_likely_cloudflare_tunnel_token(raw_candidate):
+        return raw_candidate
+    if len(text) >= 80:
         raise HTTPException(status_code=400, detail="Cloudflare tunnel token was found but does not look valid. Paste the full connector command or raw token.")
-    return token
+    return ""
 
 
 def mask_public_endpoint_secret(value: Optional[str]) -> Optional[str]:
@@ -1953,9 +2075,46 @@ def cloudflared_binary_path() -> Optional[str]:
     return shutil.which("cloudflared")
 
 
+def cloudflared_processes() -> list[dict]:
+    matches: list[dict] = []
+    token_file = str(PUBLIC_ENDPOINT_TOKEN_FILE)
+    proc_root = Path("/proc")
+    if not proc_root.exists():
+        return matches
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            pid = int(entry.name)
+            raw = (entry / "cmdline").read_bytes()
+        except Exception:
+            continue
+        if not raw:
+            continue
+        parts = [part.decode(errors="replace") for part in raw.split(b"\x00") if part]
+        if not parts:
+            continue
+        command = " ".join(parts)
+        if "cloudflared" not in parts[0] and "cloudflared" not in command:
+            continue
+        if token_file not in command:
+            continue
+        matches.append({"pid": pid, "command": command})
+    return sorted(matches, key=lambda item: item["pid"])
+
+
 def cloudflared_process_running() -> bool:
     global CLOUDFLARED_PROCESS
-    return CLOUDFLARED_PROCESS is not None and CLOUDFLARED_PROCESS.poll() is None
+    if CLOUDFLARED_PROCESS is not None and CLOUDFLARED_PROCESS.poll() is None:
+        return True
+    return bool(cloudflared_processes())
+
+
+def cloudflared_current_pid() -> Optional[int]:
+    if CLOUDFLARED_PROCESS is not None and CLOUDFLARED_PROCESS.poll() is None:
+        return CLOUDFLARED_PROCESS.pid
+    processes = cloudflared_processes()
+    return processes[0]["pid"] if processes else None
 
 
 def read_cloudflared_log_tail(line_count: int = 80) -> list[str]:
@@ -2008,7 +2167,7 @@ def public_endpoint_status(include_checks: bool = True) -> dict:
         "cloudflared_installed": bool(binary),
         "cloudflared_path": binary,
         "cloudflared_running": running,
-        "cloudflared_pid": CLOUDFLARED_PROCESS.pid if running else None,
+        "cloudflared_pid": cloudflared_current_pid() if running else None,
         "cloudflared_exit_code": exit_code,
         "process_started_at": CLOUDFLARED_PROCESS_STARTED_AT,
         "last_started_at": store.get("last_started_at"),
@@ -2034,6 +2193,2080 @@ def public_endpoint_status(include_checks: bool = True) -> dict:
             result["public_dns_check"] = dns_status
             result["public_service_check"] = public_endpoint_check_url(f"https://{store.get('public_hostname')}/health")
     return result
+
+
+IPTV_DEFAULT_SETTINGS = {
+    "enabled": False,
+    "public_hostname": "tv.3jhotspot.com",
+    "public_url": "https://tv.3jhotspot.com",
+    "internal_web_url": "http://192.168.50.15",
+    "iptv_web_ssh_host": "192.168.50.15",
+    "iptv_web_ssh_port": 22,
+    "iptv_web_ssh_username": "root",
+    "iptv_web_ssh_auth_type": "PASSWORD",
+    "iptv_web_sudo_mode": "PASSWORDLESS",
+    "xui_base_url": "http://10.100.100.100",
+    "xui_public_url": "https://xui.3jhotspot.com",
+    "xui_server_host": "10.100.100.100",
+    "xui_line_repair_db_enabled": False,
+    "xui_line_repair_db_host": "10.100.100.100",
+    "xui_line_repair_db_port": 3306,
+    "xui_line_repair_db_name": "xui",
+    "xui_line_repair_db_username": "",
+    "xui_api_mode": "XUI_ADMIN_API",
+    "xui_access_code": "",
+    "xui_max_connections": 1,
+    "xui_admin_username": "",
+    "xui_test_username": "",
+    "iptv_token_ttl_minutes": 15,
+    "iptv_expiry_warning_minutes": 10,
+    "iptv_expiry_stop_seconds": 10,
+    "notes": "",
+    "last_test_result": None,
+    "last_tested_at": None,
+    "last_xui_api_test_result": None,
+    "last_xui_api_tested_at": None,
+    "last_ssh_test_result": None,
+    "last_ssh_tested_at": None,
+}
+IPTV_API_MODES = {"XUI_ADMIN_API", "PLAYER_API_TEST", "MANUAL"}
+IPTV_SSH_AUTH_TYPES = {"PASSWORD", "PRIVATE_KEY"}
+IPTV_SUDO_MODES = {"PASSWORDLESS", "SUDO_PASSWORD", "NONE"}
+
+
+def normalize_iptv_text(value, max_length: int = 500) -> str:
+    return normalize_public_endpoint_text(value, max_length)
+
+
+def normalize_iptv_hostname(value, fallback: str = "") -> str:
+    return normalize_public_endpoint_hostname(value, fallback)
+
+
+def normalize_iptv_url(value, fallback: str = "", *, required: bool = False) -> str:
+    text = normalize_iptv_text(value or fallback, 500).rstrip("/")
+    if not text:
+        if required:
+            raise HTTPException(status_code=400, detail="IPTV URL is required")
+        return ""
+    parsed = urlparse(text)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="IPTV URLs must be valid http or https URLs")
+    return text
+
+
+def normalize_iptv_api_mode(value) -> str:
+    mode = normalize_iptv_text(value or IPTV_DEFAULT_SETTINGS["xui_api_mode"], 40).upper()
+    return mode if mode in IPTV_API_MODES else IPTV_DEFAULT_SETTINGS["xui_api_mode"]
+
+
+def normalize_iptv_ssh_auth_type(value) -> str:
+    mode = normalize_iptv_text(value or IPTV_DEFAULT_SETTINGS["iptv_web_ssh_auth_type"], 40).upper()
+    return mode if mode in IPTV_SSH_AUTH_TYPES else IPTV_DEFAULT_SETTINGS["iptv_web_ssh_auth_type"]
+
+
+def normalize_iptv_sudo_mode(value) -> str:
+    mode = normalize_iptv_text(value or IPTV_DEFAULT_SETTINGS["iptv_web_sudo_mode"], 40).upper()
+    return mode if mode in IPTV_SUDO_MODES else IPTV_DEFAULT_SETTINGS["iptv_web_sudo_mode"]
+
+
+def mask_iptv_secret(value: Optional[str]) -> Optional[str]:
+    return mask_public_endpoint_secret(value)
+
+
+def iptv_store() -> dict:
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'iptv_xui'")
+    value = row["value"] if row and isinstance(row["value"], dict) else {}
+    store = {**IPTV_DEFAULT_SETTINGS, **value}
+    store["enabled"] = bool(store.get("enabled"))
+    store["public_hostname"] = normalize_iptv_hostname(store.get("public_hostname"), IPTV_DEFAULT_SETTINGS["public_hostname"])
+    store["public_url"] = normalize_iptv_url(store.get("public_url"), f"https://{store['public_hostname']}", required=False)
+    store["internal_web_url"] = normalize_iptv_url(store.get("internal_web_url"), IPTV_DEFAULT_SETTINGS["internal_web_url"], required=False)
+    store["iptv_web_ssh_host"] = normalize_iptv_hostname(store.get("iptv_web_ssh_host"), IPTV_DEFAULT_SETTINGS["iptv_web_ssh_host"])
+    try:
+        store["iptv_web_ssh_port"] = min(max(int(store.get("iptv_web_ssh_port") or 22), 1), 65535)
+    except (TypeError, ValueError):
+        store["iptv_web_ssh_port"] = 22
+    store["iptv_web_ssh_username"] = normalize_iptv_text(store.get("iptv_web_ssh_username"), 200)
+    store["iptv_web_ssh_auth_type"] = normalize_iptv_ssh_auth_type(store.get("iptv_web_ssh_auth_type"))
+    store["iptv_web_sudo_mode"] = normalize_iptv_sudo_mode(store.get("iptv_web_sudo_mode"))
+    store["xui_base_url"] = normalize_iptv_url(store.get("xui_base_url"), IPTV_DEFAULT_SETTINGS["xui_base_url"], required=False)
+    store["xui_public_url"] = normalize_iptv_url(store.get("xui_public_url"), IPTV_DEFAULT_SETTINGS["xui_public_url"], required=False)
+    store["xui_server_host"] = normalize_iptv_hostname(store.get("xui_server_host"), IPTV_DEFAULT_SETTINGS["xui_server_host"])
+    store["xui_line_repair_db_enabled"] = bool(store.get("xui_line_repair_db_enabled"))
+    store["xui_line_repair_db_host"] = normalize_iptv_hostname(store.get("xui_line_repair_db_host"), store["xui_server_host"] or IPTV_DEFAULT_SETTINGS["xui_line_repair_db_host"])
+    try:
+        store["xui_line_repair_db_port"] = min(max(int(store.get("xui_line_repair_db_port") or 3306), 1), 65535)
+    except (TypeError, ValueError):
+        store["xui_line_repair_db_port"] = 3306
+    store["xui_line_repair_db_name"] = normalize_iptv_text(store.get("xui_line_repair_db_name") or "xui", 120)
+    store["xui_line_repair_db_username"] = normalize_iptv_text(store.get("xui_line_repair_db_username"), 120)
+    store["xui_api_mode"] = normalize_iptv_api_mode(store.get("xui_api_mode"))
+    store["xui_access_code"] = normalize_iptv_text(store.get("xui_access_code"), 200).strip("/")
+    try:
+        store["xui_max_connections"] = min(max(int(store.get("xui_max_connections") or 1), 1), 20)
+    except (TypeError, ValueError):
+        store["xui_max_connections"] = 1
+    store["xui_admin_username"] = normalize_iptv_text(store.get("xui_admin_username"), 200)
+    store["xui_test_username"] = normalize_iptv_text(store.get("xui_test_username"), 200)
+    try:
+        store["iptv_token_ttl_minutes"] = min(max(int(store.get("iptv_token_ttl_minutes") or 15), 1), 120)
+    except (TypeError, ValueError):
+        store["iptv_token_ttl_minutes"] = 15
+    try:
+        store["iptv_expiry_warning_minutes"] = min(max(int(store.get("iptv_expiry_warning_minutes") or 10), 1), 120)
+    except (TypeError, ValueError):
+        store["iptv_expiry_warning_minutes"] = 10
+    try:
+        store["iptv_expiry_stop_seconds"] = min(max(int(store.get("iptv_expiry_stop_seconds") or 10), 1), 300)
+    except (TypeError, ValueError):
+        store["iptv_expiry_stop_seconds"] = 10
+    store["notes"] = normalize_iptv_text(store.get("notes"), 1500)
+    return store
+
+
+def save_iptv_store(store: dict):
+    clean = {
+        "enabled": bool(store.get("enabled")),
+        "public_hostname": normalize_iptv_hostname(store.get("public_hostname"), IPTV_DEFAULT_SETTINGS["public_hostname"]),
+        "public_url": normalize_iptv_url(store.get("public_url"), "", required=False),
+        "internal_web_url": normalize_iptv_url(store.get("internal_web_url"), "", required=False),
+        "iptv_web_ssh_host": normalize_iptv_hostname(store.get("iptv_web_ssh_host"), ""),
+        "iptv_web_ssh_port": min(max(int(store.get("iptv_web_ssh_port") or 22), 1), 65535),
+        "iptv_web_ssh_username": normalize_iptv_text(store.get("iptv_web_ssh_username"), 200),
+        "iptv_web_ssh_auth_type": normalize_iptv_ssh_auth_type(store.get("iptv_web_ssh_auth_type")),
+        "iptv_web_sudo_mode": normalize_iptv_sudo_mode(store.get("iptv_web_sudo_mode")),
+        "iptv_web_ssh_password_encrypted": store.get("iptv_web_ssh_password_encrypted"),
+        "iptv_web_ssh_private_key_encrypted": store.get("iptv_web_ssh_private_key_encrypted"),
+        "iptv_web_ssh_private_key_passphrase_encrypted": store.get("iptv_web_ssh_private_key_passphrase_encrypted"),
+        "xui_base_url": normalize_iptv_url(store.get("xui_base_url"), "", required=False),
+        "xui_public_url": normalize_iptv_url(store.get("xui_public_url"), "", required=False),
+        "xui_public_tunnel_token_encrypted": store.get("xui_public_tunnel_token_encrypted"),
+        "xui_server_host": normalize_iptv_hostname(store.get("xui_server_host"), ""),
+        "xui_line_repair_db_enabled": bool(store.get("xui_line_repair_db_enabled")),
+        "xui_line_repair_db_host": normalize_iptv_hostname(store.get("xui_line_repair_db_host"), ""),
+        "xui_line_repair_db_port": min(max(int(store.get("xui_line_repair_db_port") or 3306), 1), 65535),
+        "xui_line_repair_db_name": normalize_iptv_text(store.get("xui_line_repair_db_name") or "xui", 120),
+        "xui_line_repair_db_username": normalize_iptv_text(store.get("xui_line_repair_db_username"), 120),
+        "xui_line_repair_db_password_encrypted": store.get("xui_line_repair_db_password_encrypted"),
+        "xui_api_mode": normalize_iptv_api_mode(store.get("xui_api_mode")),
+        "xui_access_code": normalize_iptv_text(store.get("xui_access_code"), 200).strip("/"),
+        "xui_max_connections": min(max(int(store.get("xui_max_connections") or 1), 1), 20),
+        "xui_admin_username": normalize_iptv_text(store.get("xui_admin_username"), 200),
+        "xui_admin_password_encrypted": store.get("xui_admin_password_encrypted"),
+        "xui_api_key_encrypted": store.get("xui_api_key_encrypted"),
+        "iptv_web_integration_secret_encrypted": store.get("iptv_web_integration_secret_encrypted"),
+        "iptv_token_ttl_minutes": min(max(int(store.get("iptv_token_ttl_minutes") or 15), 1), 120),
+        "iptv_expiry_warning_minutes": min(max(int(store.get("iptv_expiry_warning_minutes") or 10), 1), 120),
+        "iptv_expiry_stop_seconds": min(max(int(store.get("iptv_expiry_stop_seconds") or 10), 1), 300),
+        "xui_test_username": normalize_iptv_text(store.get("xui_test_username"), 200),
+        "xui_test_password_encrypted": store.get("xui_test_password_encrypted"),
+        "notes": normalize_iptv_text(store.get("notes"), 1500),
+        "last_test_result": store.get("last_test_result"),
+        "last_tested_at": store.get("last_tested_at"),
+        "last_xui_api_test_result": store.get("last_xui_api_test_result"),
+        "last_xui_api_tested_at": store.get("last_xui_api_tested_at"),
+        "last_ssh_test_result": store.get("last_ssh_test_result"),
+        "last_ssh_tested_at": store.get("last_ssh_tested_at"),
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES ('iptv_xui', %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (Json(clean),),
+            )
+
+
+def public_iptv_settings(include_checks: bool = False) -> dict:
+    store = iptv_store()
+    admin_password = decrypt_secret(store.get("xui_admin_password_encrypted"))
+    api_key = decrypt_secret(store.get("xui_api_key_encrypted"))
+    integration_secret = decrypt_secret(store.get("iptv_web_integration_secret_encrypted"))
+    test_password = decrypt_secret(store.get("xui_test_password_encrypted"))
+    xui_public_tunnel_token = decrypt_secret(store.get("xui_public_tunnel_token_encrypted"))
+    xui_line_repair_db_password = decrypt_secret(store.get("xui_line_repair_db_password_encrypted"))
+    iptv_web_ssh_password = decrypt_secret(store.get("iptv_web_ssh_password_encrypted"))
+    iptv_web_ssh_private_key = decrypt_secret(store.get("iptv_web_ssh_private_key_encrypted"))
+    iptv_web_ssh_private_key_passphrase = decrypt_secret(store.get("iptv_web_ssh_private_key_passphrase_encrypted"))
+    result = {
+        "enabled": bool(store.get("enabled")),
+        "public_hostname": store.get("public_hostname"),
+        "public_url": store.get("public_url"),
+        "internal_web_url": store.get("internal_web_url"),
+        "iptv_web_ssh_host": store.get("iptv_web_ssh_host"),
+        "iptv_web_ssh_port": store.get("iptv_web_ssh_port"),
+        "iptv_web_ssh_username": store.get("iptv_web_ssh_username"),
+        "iptv_web_ssh_auth_type": store.get("iptv_web_ssh_auth_type"),
+        "iptv_web_sudo_mode": store.get("iptv_web_sudo_mode"),
+        "iptv_web_ssh_password_configured": bool(iptv_web_ssh_password),
+        "iptv_web_ssh_password_hint": mask_iptv_secret(iptv_web_ssh_password),
+        "iptv_web_ssh_private_key_configured": bool(iptv_web_ssh_private_key),
+        "iptv_web_ssh_private_key_hint": mask_iptv_secret(iptv_web_ssh_private_key),
+        "iptv_web_ssh_private_key_passphrase_configured": bool(iptv_web_ssh_private_key_passphrase),
+        "iptv_web_ssh_private_key_passphrase_hint": mask_iptv_secret(iptv_web_ssh_private_key_passphrase),
+        "xui_base_url": store.get("xui_base_url"),
+        "xui_public_url": store.get("xui_public_url"),
+        "xui_public_tunnel_token_configured": bool(xui_public_tunnel_token),
+        "xui_public_tunnel_token_hint": mask_iptv_secret(xui_public_tunnel_token),
+        "xui_server_host": store.get("xui_server_host"),
+        "xui_line_repair_db_enabled": bool(store.get("xui_line_repair_db_enabled")),
+        "xui_line_repair_db_host": store.get("xui_line_repair_db_host"),
+        "xui_line_repair_db_port": store.get("xui_line_repair_db_port"),
+        "xui_line_repair_db_name": store.get("xui_line_repair_db_name"),
+        "xui_line_repair_db_username": store.get("xui_line_repair_db_username"),
+        "xui_line_repair_db_password_configured": bool(xui_line_repair_db_password),
+        "xui_line_repair_db_password_hint": mask_iptv_secret(xui_line_repair_db_password),
+        "xui_api_mode": store.get("xui_api_mode"),
+        "xui_access_code": store.get("xui_access_code"),
+        "xui_max_connections": int(store.get("xui_max_connections") or 1),
+        "xui_api_modes": [
+            {"id": "XUI_ADMIN_API", "label": "XUI Admin API", "description": "Provision XUI lines when IPTV items activate; reuse an active customer line while IPTV time remains."},
+            {"id": "PLAYER_API_TEST", "label": "Player API Test", "description": "Checks an existing IPTV line through player_api.php only."},
+            {"id": "MANUAL", "label": "Manual", "description": "Save URLs but keep XUI account automation disabled."},
+        ],
+        "xui_admin_username": store.get("xui_admin_username"),
+        "xui_admin_password_configured": bool(admin_password),
+        "xui_admin_password_hint": mask_iptv_secret(admin_password),
+        "xui_api_key_configured": bool(api_key),
+        "xui_api_key_hint": mask_iptv_secret(api_key),
+        "iptv_web_integration_secret_configured": bool(integration_secret),
+        "iptv_web_integration_secret_hint": mask_iptv_secret(integration_secret),
+        "iptv_token_ttl_minutes": int(store.get("iptv_token_ttl_minutes") or 15),
+        "iptv_expiry_warning_minutes": int(store.get("iptv_expiry_warning_minutes") or 10),
+        "iptv_expiry_stop_seconds": int(store.get("iptv_expiry_stop_seconds") or 10),
+        "xui_test_username": store.get("xui_test_username"),
+        "xui_test_password_configured": bool(test_password),
+        "xui_test_password_hint": mask_iptv_secret(test_password),
+        "notes": store.get("notes"),
+        "last_test_result": store.get("last_test_result"),
+        "last_tested_at": store.get("last_tested_at"),
+        "last_xui_api_test_result": store.get("last_xui_api_test_result"),
+        "last_xui_api_tested_at": store.get("last_xui_api_tested_at"),
+        "last_ssh_test_result": store.get("last_ssh_test_result"),
+        "last_ssh_tested_at": store.get("last_ssh_tested_at"),
+        "phase": "IPTV_2_XUI_AUTO_PROVISIONING",
+        "requirements": {
+            "public_url": bool(store.get("public_url")),
+            "internal_web_url": bool(store.get("internal_web_url")),
+            "iptv_web_ssh": bool(
+                store.get("iptv_web_ssh_host")
+                and store.get("iptv_web_ssh_username")
+                and (
+                    (store.get("iptv_web_ssh_auth_type") == "PASSWORD" and iptv_web_ssh_password)
+                    or (store.get("iptv_web_ssh_auth_type") == "PRIVATE_KEY" and iptv_web_ssh_private_key)
+                )
+            ),
+            "xui_base_url": bool(store.get("xui_base_url")),
+            "xui_public_url": bool(store.get("xui_public_url")),
+            "xui_public_tunnel_token": bool(xui_public_tunnel_token),
+            "xui_line_repair_db": bool(
+                store.get("xui_line_repair_db_enabled")
+                and store.get("xui_line_repair_db_host")
+                and store.get("xui_line_repair_db_username")
+                and xui_line_repair_db_password
+            ),
+            "xui_admin_credentials": bool(store.get("xui_admin_username") and admin_password),
+            "xui_api_key": bool(api_key),
+            "iptv_web_integration_secret": bool(integration_secret),
+            "xui_test_line": bool(store.get("xui_test_username") and test_password),
+        },
+        "cloudflare_public_hostname": {
+            "subdomain": (store.get("public_hostname") or "").split(".")[0] if store.get("public_hostname") else "tv",
+            "hostname": store.get("public_hostname"),
+            "service_type": "HTTP",
+            "service_url": store.get("internal_web_url") or IPTV_DEFAULT_SETTINGS["internal_web_url"],
+        },
+        "security_notes": [
+            "Expose only the IPTV web app publicly; keep XUI private.",
+            "XUI credentials are encrypted and are never returned to the browser.",
+            "Customer auto-login should use short-lived 3J tokens, not raw XUI credentials.",
+        ],
+    }
+    if include_checks:
+        result["connectivity"] = iptv_connectivity_checks(store)
+    return result
+
+
+def iptv_http_check(url: str, *, allow_redirects: bool = False, timeout: int = 8, params: Optional[dict] = None) -> dict:
+    if not url:
+        return {"status": "SKIPPED", "message": "URL is not configured."}
+    started = time.perf_counter()
+    try:
+        response = requests.get(url, params=params, timeout=timeout, allow_redirects=allow_redirects)
+        latency_ms = int(round((time.perf_counter() - started) * 1000))
+        content_type = response.headers.get("content-type", "")
+        payload = None
+        if "application/json" in content_type.lower():
+            try:
+                payload = response.json()
+            except Exception:
+                payload = None
+        return {
+            "status": "SUCCESS" if response.status_code < 500 else "WARNING",
+            "http_status": response.status_code,
+            "latency_ms": latency_ms,
+            "content_type": normalize_iptv_text(content_type, 120),
+            "json_detected": isinstance(payload, dict),
+            "json_keys": list(payload.keys())[:12] if isinstance(payload, dict) else [],
+        }
+    except Exception as exc:
+        return {"status": "FAILED", "error": normalize_iptv_text(str(exc), 500)}
+
+
+def iptv_connectivity_checks(store: Optional[dict] = None) -> dict:
+    current = store or iptv_store()
+    admin_api_check = {"status": "SKIPPED", "message": "Save XUI access code and API key to validate provisioning API."}
+    if current.get("xui_access_code") and decrypt_secret(current.get("xui_api_key_encrypted")):
+        admin_result = iptv_xui_access_api_request(current, "get_bouquets", timeout=12)
+        admin_rows = iptv_xui_rows(admin_result.get("payload_raw"))
+        admin_api_check = {
+            "status": "SUCCESS" if admin_result.get("status") == "SUCCESS" and admin_rows else "FAILED",
+            "http_status": admin_result.get("http_status"),
+            "latency_ms": admin_result.get("latency_ms"),
+            "row_count": len(admin_rows),
+            "message": "XUI access-code API returned bouquets." if admin_rows else admin_result.get("error") or "XUI access-code API did not return bouquets.",
+        }
+    checks = {
+        "internal_web": iptv_http_check(current.get("internal_web_url")),
+        "public_web": iptv_http_check(current.get("public_url")),
+        "xui_base": iptv_http_check(current.get("xui_base_url")),
+        "xui_public": iptv_http_check(current.get("xui_public_url")),
+        "xui_player_api": {"status": "SKIPPED", "message": "Save an XUI test username/password to validate player_api.php."},
+        "admin_api": admin_api_check,
+    }
+    test_username = normalize_iptv_text(current.get("xui_test_username"), 200)
+    test_password = decrypt_secret(current.get("xui_test_password_encrypted"))
+    if current.get("xui_base_url") and test_username and test_password:
+        checks["xui_player_api"] = iptv_http_check(
+            f"{current['xui_base_url']}/player_api.php",
+            params={"username": test_username, "password": test_password},
+            allow_redirects=False,
+            timeout=10,
+        )
+        if checks["xui_player_api"].get("json_detected"):
+            checks["xui_player_api"]["message"] = "player_api.php returned JSON. Confirm user_info/auth if this test line should be valid."
+    return checks
+
+
+def iptv_player_api_check(base_url: str, username: str, password: Optional[str]) -> dict:
+    if not base_url:
+        return {"status": "FAILED", "error": "XUI Base URL is not configured."}
+    if not username or not password:
+        return {"status": "SKIPPED", "message": "Save an XUI test line username/password before running the XUI API test."}
+
+    started = time.perf_counter()
+    try:
+        response = requests.get(
+            f"{base_url.rstrip('/')}/player_api.php",
+            params={"username": username, "password": password},
+            timeout=12,
+            allow_redirects=False,
+        )
+        latency_ms = int(round((time.perf_counter() - started) * 1000))
+        content_type = normalize_iptv_text(response.headers.get("content-type", ""), 120)
+        payload = None
+        try:
+            payload = response.json()
+        except Exception:
+            payload = None
+        if response.status_code >= 500:
+            return {
+                "status": "FAILED",
+                "http_status": response.status_code,
+                "latency_ms": latency_ms,
+                "content_type": content_type,
+                "error": "XUI player_api.php returned a server error.",
+            }
+        if not isinstance(payload, dict):
+            return {
+                "status": "FAILED",
+                "http_status": response.status_code,
+                "latency_ms": latency_ms,
+                "content_type": content_type,
+                "error": "XUI player_api.php did not return JSON.",
+            }
+        user_info = payload.get("user_info") if isinstance(payload.get("user_info"), dict) else {}
+        server_info = payload.get("server_info") if isinstance(payload.get("server_info"), dict) else {}
+        auth_value = user_info.get("auth")
+        auth_ok = str(auth_value).lower() in {"1", "true", "yes"}
+        enabled_value = str(user_info.get("status") or user_info.get("enabled") or "").lower()
+        status = "SUCCESS" if auth_ok else "WARNING"
+        message = "XUI player_api.php authenticated the saved test line." if auth_ok else "XUI player_api.php returned JSON, but the test line is not authenticated."
+        if response.status_code >= 400 and not auth_ok:
+            status = "FAILED"
+            message = "XUI player_api.php rejected the saved test line."
+        return {
+            "status": status,
+            "http_status": response.status_code,
+            "latency_ms": latency_ms,
+            "content_type": content_type,
+            "json_detected": True,
+            "json_keys": list(payload.keys())[:12],
+            "user_info_keys": list(user_info.keys())[:12],
+            "server_info_keys": list(server_info.keys())[:12],
+            "user_auth": bool(auth_ok),
+            "user_status": normalize_iptv_text(enabled_value, 80),
+            "message": message,
+        }
+    except Exception as exc:
+        return {"status": "FAILED", "error": normalize_iptv_text(str(exc), 500)}
+
+
+def run_iptv_xui_api_test() -> dict:
+    store = iptv_store()
+    tested_at = datetime.now(timezone.utc).isoformat()
+    test_username = normalize_iptv_text(store.get("xui_test_username"), 200)
+    test_password = decrypt_secret(store.get("xui_test_password_encrypted"))
+    admin_result = iptv_xui_access_api_request(store, "get_bouquets", timeout=12) if store.get("xui_access_code") and decrypt_secret(store.get("xui_api_key_encrypted")) else {"status": "SKIPPED", "message": "Save XUI access code and API key to validate provisioning API."}
+    admin_rows = iptv_xui_rows(admin_result.get("payload_raw"))
+    checks = {
+        "xui_base": iptv_http_check(store.get("xui_base_url"), timeout=10),
+        "xui_public": iptv_http_check(store.get("xui_public_url"), timeout=10),
+        "xui_player_api": iptv_player_api_check(store.get("xui_base_url"), test_username, test_password),
+        "xui_admin_api": {
+            "status": "SUCCESS" if admin_result.get("status") == "SUCCESS" and admin_rows else admin_result.get("status", "FAILED"),
+            "http_status": admin_result.get("http_status"),
+            "latency_ms": admin_result.get("latency_ms"),
+            "row_count": len(admin_rows),
+            "message": "XUI access-code API returned bouquets." if admin_rows else admin_result.get("error") or admin_result.get("message") or "XUI access-code API did not return bouquets.",
+        },
+    }
+    overall = "SUCCESS"
+    required_checks = [checks.get("xui_base"), checks.get("xui_player_api"), checks.get("xui_admin_api")]
+    if any((item or {}).get("status") == "FAILED" for item in required_checks):
+        overall = "FAILED"
+    elif any((item or {}).get("status") in {"WARNING", "SKIPPED"} for item in required_checks):
+        overall = "WARNING"
+    result = {
+        "status": overall,
+        "checked_at": tested_at,
+        "checks": checks,
+        "message": "XUI API checks completed.",
+    }
+    store["last_xui_api_test_result"] = result
+    store["last_xui_api_tested_at"] = tested_at
+    save_iptv_store(store)
+    return result
+
+
+def run_iptv_connectivity_test() -> dict:
+    store = iptv_store()
+    checks = iptv_connectivity_checks(store)
+    tested_at = datetime.now(timezone.utc).isoformat()
+    overall = "SUCCESS"
+    blocking = [checks.get("internal_web"), checks.get("xui_base")]
+    if any((item or {}).get("status") == "FAILED" for item in blocking):
+        overall = "FAILED"
+    elif any((item or {}).get("status") in {"FAILED", "WARNING"} for item in checks.values()):
+        overall = "WARNING"
+    result = {
+        "status": overall,
+        "checked_at": tested_at,
+        "checks": checks,
+        "message": "IPTV connectivity checks completed.",
+    }
+    store["last_test_result"] = result
+    store["last_tested_at"] = tested_at
+    save_iptv_store(store)
+    return result
+
+
+def run_iptv_web_ssh_test() -> dict:
+    store = iptv_store()
+    host = store.get("iptv_web_ssh_host")
+    port = int(store.get("iptv_web_ssh_port") or 22)
+    username = normalize_iptv_text(store.get("iptv_web_ssh_username"), 200)
+    auth_type = normalize_iptv_ssh_auth_type(store.get("iptv_web_ssh_auth_type"))
+    sudo_mode = normalize_iptv_sudo_mode(store.get("iptv_web_sudo_mode"))
+    password = decrypt_secret(store.get("iptv_web_ssh_password_encrypted"))
+    private_key = decrypt_secret(store.get("iptv_web_ssh_private_key_encrypted"))
+    private_key_passphrase = decrypt_secret(store.get("iptv_web_ssh_private_key_passphrase_encrypted"))
+    if not host:
+        raise HTTPException(status_code=400, detail="IPTV web SSH host is required.")
+    if not username:
+        raise HTTPException(status_code=400, detail="IPTV web SSH username is required.")
+    if auth_type == "PASSWORD" and not password:
+        raise HTTPException(status_code=400, detail="Save the IPTV web SSH password first.")
+    if auth_type == "PRIVATE_KEY" and not private_key:
+        raise HTTPException(status_code=400, detail="Save the IPTV web SSH private key first.")
+
+    started = time.perf_counter()
+    tested_at = datetime.now(timezone.utc).isoformat()
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        kwargs = {
+            "hostname": host,
+            "port": port,
+            "username": username,
+            "timeout": 10,
+            "banner_timeout": 10,
+            "auth_timeout": 10,
+            "look_for_keys": False,
+            "allow_agent": False,
+        }
+        if auth_type == "PRIVATE_KEY":
+            key_file = io.StringIO(private_key)
+            try:
+                kwargs["pkey"] = paramiko.RSAKey.from_private_key(key_file, password=private_key_passphrase)
+            except paramiko.SSHException:
+                key_file.seek(0)
+                kwargs["pkey"] = paramiko.Ed25519Key.from_private_key(key_file, password=private_key_passphrase)
+        else:
+            kwargs["password"] = password
+        client.connect(
+            **kwargs
+        )
+        command = (
+            "hostname; "
+            "whoami; "
+            "uname -srm 2>/dev/null || true; "
+            "command -v curl 2>/dev/null || true; "
+            "curl -I -m 5 http://127.0.0.1:3000 2>/dev/null | head -8 || true"
+        )
+        exit_code, output = run_ssh(client, command, sudo_mode="NONE", timeout=15)
+        result = {
+            "status": "SUCCESS" if exit_code == 0 else "WARNING",
+            "checked_at": tested_at,
+            "latency_ms": int(round((time.perf_counter() - started) * 1000)),
+            "exit_code": exit_code,
+            "host": host,
+            "port": port,
+            "username": username,
+            "auth_type": auth_type,
+            "sudo_mode": sudo_mode,
+            "output": redact(normalize_iptv_text(output, 2500)),
+            "message": "SSH connected. Output is sanitized and limited.",
+        }
+    except Exception as exc:
+        result = {
+            "status": "FAILED",
+            "checked_at": tested_at,
+            "latency_ms": int(round((time.perf_counter() - started) * 1000)),
+            "host": host,
+            "port": port,
+            "username": username,
+            "auth_type": auth_type,
+            "sudo_mode": sudo_mode,
+            "error": normalize_iptv_text(str(exc), 600),
+        }
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+    store["last_ssh_test_result"] = result
+    store["last_ssh_tested_at"] = tested_at
+    save_iptv_store(store)
+    return result
+
+
+def iptv_token_hash(token: str) -> str:
+    return sha256((token or "").encode("utf-8")).hexdigest()
+
+
+def parse_uuid_or_400(value: str, label: str = "id") -> str:
+    try:
+        return str(uuid.UUID(str(value)))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid {label}.") from exc
+
+
+def iptv_generate_username(user_id: str) -> str:
+    compact = re.sub(r"[^a-zA-Z0-9]", "", str(user_id or ""))[:10].lower()
+    return f"3j{compact}{secrets.token_hex(3)}"
+
+
+def iptv_generate_password() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(12))
+
+
+IPTV_XUI_REQUIRED_OUTPUT_IDS = ["1", "2", "3"]
+
+
+def iptv_xui_endpoint_candidates(store: dict) -> list[str]:
+    base = normalize_iptv_url(store.get("xui_base_url"), "", required=True).rstrip("/")
+    candidates = []
+    access_code = normalize_iptv_text(store.get("xui_access_code"), 200).strip("/")
+    if access_code:
+        candidates.append(f"{base}/{access_code}/")
+        candidates.append(f"{base}/{access_code}/api.php")
+    candidates.extend([f"{base}/api.php", f"{base}/admin/api.php"])
+    unique = []
+    seen = set()
+    for url in candidates:
+        if url not in seen:
+            seen.add(url)
+            unique.append(url)
+    return unique
+
+
+def iptv_xui_success(payload) -> bool:
+    if isinstance(payload, dict):
+        status_text = str(payload.get("status") or "").lower()
+        if status_text and status_text.startswith("status_") and status_text != "status_success":
+            return False
+        result = payload.get("result")
+        if isinstance(result, bool):
+            return result
+        if str(result).lower() in {"1", "true", "success", "ok"}:
+            return True
+        if status_text in {"success", "ok", "created", "updated", "status_success"}:
+            return True
+        if not status_text and (isinstance(payload.get("user_info"), dict) or isinstance(payload.get("data"), dict)):
+            return True
+        if isinstance(payload.get("data"), list) and status_text in {"status_success", "success", "ok"}:
+            return True
+    return False
+
+
+def iptv_xui_extract_user_id(payload) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    candidates = [
+        payload.get("user_id"),
+        payload.get("id"),
+        (payload.get("user_info") or {}).get("id") if isinstance(payload.get("user_info"), dict) else None,
+        (payload.get("user_info") or {}).get("user_id") if isinstance(payload.get("user_info"), dict) else None,
+        (payload.get("data") or {}).get("id") if isinstance(payload.get("data"), dict) else None,
+        (payload.get("data") or {}).get("user_id") if isinstance(payload.get("data"), dict) else None,
+        (payload.get("data") or {}).get("line_id") if isinstance(payload.get("data"), dict) else None,
+    ]
+    for value in candidates:
+        clean = normalize_iptv_text(value, 80)
+        if clean:
+            return clean
+    return None
+
+
+def iptv_xui_user_form(username: str, password: str, target_expires_at: datetime, max_connections: int = 1) -> dict:
+    exp_date = int(target_expires_at.timestamp())
+    output_ids = [str(value) for value in IPTV_XUI_REQUIRED_OUTPUT_IDS]
+    return {
+        "user_data[username]": username,
+        "user_data[password]": password,
+        "user_data[exp_date]": str(exp_date),
+        "user_data[max_connections]": str(max_connections),
+        "user_data[enabled]": "1",
+        "user_data[is_trial]": "0",
+        "user_data[is_restreamer]": "0",
+        "user_data[restreamer]": "0",
+        "user_data[admin_enabled]": "1",
+        "user_data[allowed_outputs]": json.dumps(output_ids),
+        "user_data[allowed_output_formats]": json.dumps(output_ids),
+        "user_data[output_formats]": json.dumps(output_ids),
+    }
+
+
+def iptv_xui_duration_label(duration_seconds: int) -> str:
+    seconds = max(int(duration_seconds or 0), 60)
+    if seconds < 3600:
+        return f"{max(1, math.ceil(seconds / 60))}minutes"
+    if seconds < 86400:
+        return f"{max(1, math.ceil(seconds / 3600))}hours"
+    return f"{max(1, math.ceil(seconds / 86400))}days"
+
+
+def iptv_xui_direct_user_params(username: str, password: str, target_expires_at: datetime, max_connections: int = 1, bouquet_ids: Optional[list[str]] = None, duration_seconds: Optional[int] = None) -> dict:
+    output_ids = [str(value) for value in IPTV_XUI_REQUIRED_OUTPUT_IDS]
+    params = {
+        "username": username,
+        "password": password,
+        "max_connections": str(max_connections),
+        "enabled": "1",
+        "admin_enabled": "1",
+        "trial": "0",
+        "is_restreamer": "0",
+        "restreamer": "0",
+        "allowed_outputs": json.dumps(output_ids),
+        "allowed_output_formats": json.dumps(output_ids),
+        "output_formats": json.dumps(output_ids),
+        "allowed_outputs_selected": json.dumps(output_ids),
+    }
+    params["_form_items"] = [
+        ("allowed_outputs[]", output_id) for output_id in output_ids
+    ] + [
+        ("allowed_output_formats[]", output_id) for output_id in output_ids
+    ] + [
+        ("output_formats[]", output_id) for output_id in output_ids
+    ] + [
+        ("allowed_outputs_selected[]", output_id) for output_id in output_ids
+    ]
+    clean_bouquets = [str(value) for value in (bouquet_ids or []) if normalize_iptv_text(value, 40)]
+    if clean_bouquets:
+        params["bouquets_selected"] = json.dumps(clean_bouquets)
+    return params
+
+
+def iptv_xui_parse_id_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        parsed = []
+        for item in value:
+            if isinstance(item, dict):
+                clean = normalize_iptv_text(item.get("id") or item.get("output_id") or item.get("format_id"), 80)
+            else:
+                clean = normalize_iptv_text(item, 80)
+            if clean and clean not in parsed:
+                parsed.append(clean)
+        return parsed
+    raw = normalize_iptv_text(value, 1600)
+    if not raw:
+        return []
+    try:
+        decoded = json.loads(raw)
+        parsed = iptv_xui_parse_id_list(decoded)
+        if parsed:
+            return parsed
+    except Exception:
+        pass
+    parsed = []
+    for part in re.split(r"[,|;\\s]+", raw.strip("[](){}\"' ")):
+        clean = normalize_iptv_text(part.strip("\"' "), 80)
+        if clean and clean not in parsed:
+            parsed.append(clean)
+    return parsed
+
+
+def iptv_xui_line_access_outputs(line: Optional[dict]) -> list[str]:
+    if not isinstance(line, dict):
+        return []
+    output_fields = [
+        "allowed_outputs",
+        "allowed_output_formats",
+        "output_formats",
+        "allowed_outputs_selected",
+        "allowed_output_ids",
+    ]
+    outputs = []
+    for field in output_fields:
+        for output_id in iptv_xui_parse_id_list(line.get(field)):
+            if output_id not in outputs:
+                outputs.append(output_id)
+    return outputs
+
+
+def iptv_xui_line_is_restreamer(line: Optional[dict]) -> bool:
+    if not isinstance(line, dict):
+        return False
+    for field in ("is_restreamer", "restreamer"):
+        value = line.get(field)
+        if isinstance(value, bool):
+            return value
+        clean = normalize_iptv_text(value, 40).lower()
+        if clean in {"1", "true", "yes", "enabled", "on"}:
+            return True
+        if clean in {"0", "false", "no", "disabled", "off"}:
+            return False
+    return False
+
+
+def iptv_xui_line_repair_db_configured(store: dict) -> bool:
+    return bool(
+        store.get("xui_line_repair_db_enabled")
+        and store.get("xui_line_repair_db_host")
+        and store.get("xui_line_repair_db_username")
+        and decrypt_secret(store.get("xui_line_repair_db_password_encrypted"))
+    )
+
+
+def iptv_xui_line_repair_db_connection(store: dict):
+    try:
+        import pymysql
+    except Exception as exc:
+        raise RuntimeError("PyMySQL is not installed in the API container.") from exc
+    password = decrypt_secret(store.get("xui_line_repair_db_password_encrypted"))
+    if not iptv_xui_line_repair_db_configured(store):
+        raise RuntimeError("XUI line repair DB settings are not configured.")
+    return pymysql.connect(
+        host=store.get("xui_line_repair_db_host"),
+        port=int(store.get("xui_line_repair_db_port") or 3306),
+        user=store.get("xui_line_repair_db_username"),
+        password=password,
+        database=store.get("xui_line_repair_db_name") or "xui",
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        connect_timeout=5,
+        read_timeout=8,
+        write_timeout=8,
+        autocommit=True,
+    )
+
+
+def iptv_xui_line_repair_db_get_line(store: dict, username: str, xui_user_id: Optional[str] = None) -> dict:
+    if not iptv_xui_line_repair_db_configured(store):
+        return {"status": "SKIPPED", "message": "XUI line repair DB is not configured."}
+    clean_username = normalize_iptv_text(username, 200)
+    clean_xui_user_id = normalize_iptv_text(xui_user_id, 80)
+    where = "username = %s"
+    params = [clean_username]
+    if clean_xui_user_id and clean_xui_user_id.isdigit():
+        where = "(id = %s OR username = %s)"
+        params = [int(clean_xui_user_id), clean_username]
+    try:
+        with iptv_xui_line_repair_db_connection(store) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT id, username, is_restreamer, allowed_outputs, bouquet, exp_date,
+                           max_connections, admin_enabled, enabled
+                    FROM `lines`
+                    WHERE {where}
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    params,
+                )
+                line = cur.fetchone()
+        if not line:
+            return {"status": "FAILED", "error": "XUI line was not found in the repair DB."}
+        return {"status": "SUCCESS", "line": sanitize_summary(line), "line_raw": line}
+    except Exception as exc:
+        return {"status": "FAILED", "error": normalize_iptv_text(str(exc), 700)}
+
+
+def iptv_xui_repair_line_access(store: dict, username: str, xui_user_id: Optional[str] = None) -> dict:
+    if not iptv_xui_line_repair_db_configured(store):
+        return {"status": "SKIPPED", "message": "XUI line repair DB is not configured."}
+    lookup = iptv_xui_line_repair_db_get_line(store, username, xui_user_id)
+    if lookup.get("status") != "SUCCESS":
+        return lookup
+    line = lookup.get("line_raw") or {}
+    line_id = line.get("id")
+    if not line_id:
+        return {"status": "FAILED", "error": "XUI line id was not found for repair."}
+    try:
+        with iptv_xui_line_repair_db_connection(store) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE `lines`
+                    SET is_restreamer = 0,
+                        allowed_outputs = %s
+                    WHERE id = %s
+                    LIMIT 1
+                    """,
+                    (json.dumps([int(value) for value in IPTV_XUI_REQUIRED_OUTPUT_IDS]), int(line_id)),
+                )
+    except Exception as exc:
+        return {"status": "FAILED", "error": normalize_iptv_text(str(exc), 700)}
+    updated = iptv_xui_line_repair_db_get_line(store, username, str(line_id))
+    if updated.get("status") == "SUCCESS":
+        return {"status": "SUCCESS", "line": updated.get("line"), "xui_user_id": str(line_id)}
+    return updated
+
+
+def iptv_xui_validate_line_ready(store: dict, username: str, xui_user_id: Optional[str] = None) -> dict:
+    line = None
+    if username:
+        line = iptv_xui_find_line_by_username(store, username)
+    if not line:
+        return {
+            "status": "FAILED",
+            "error": "XUI line was created but could not be read back for Access Output validation.",
+        }
+    outputs = iptv_xui_line_access_outputs(line)
+    is_restreamer = iptv_xui_line_is_restreamer(line)
+    db_readback = None
+    if (not outputs or is_restreamer) and iptv_xui_line_repair_db_configured(store):
+        db_readback = iptv_xui_line_repair_db_get_line(store, username, xui_user_id)
+        if db_readback.get("status") == "SUCCESS":
+            line = db_readback.get("line_raw") or db_readback.get("line") or line
+            outputs = iptv_xui_line_access_outputs(line)
+            is_restreamer = iptv_xui_line_is_restreamer(line)
+    errors = []
+    if is_restreamer:
+        errors.append("Restreamer is enabled")
+    if not outputs:
+        errors.append("Access Output is empty")
+    if errors:
+        return {
+            "status": "FAILED",
+            "error": f"XUI line is not ready for customer playback: {', '.join(errors)}. Set Access Output on the XUI line and keep Restreamer disabled.",
+            "line": sanitize_summary(line),
+            "db_readback": sanitize_summary(db_readback or {}),
+        }
+    return {
+        "status": "SUCCESS",
+        "xui_user_id": normalize_iptv_text(xui_user_id or line.get("id") or line.get("user_id"), 80),
+        "allowed_outputs": outputs,
+        "is_restreamer": is_restreamer,
+        "line": sanitize_summary(line),
+    }
+
+
+def iptv_xui_rows(payload) -> list[dict]:
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, list):
+            return [row for row in data if isinstance(row, dict)]
+        if isinstance(data, dict):
+            return [data]
+    return []
+
+
+def iptv_xui_access_api_request(store: dict, action: str, params: Optional[dict] = None, *, method: str = "GET", timeout: int = 18) -> dict:
+    api_key = decrypt_secret(store.get("xui_api_key_encrypted"))
+    access_code = normalize_iptv_text(store.get("xui_access_code"), 200).strip("/")
+    base = normalize_iptv_url(store.get("xui_base_url"), "", required=True).rstrip("/")
+    if not access_code:
+        return {
+            "status": "FAILED",
+            "error": "XUI access code is required for automatic IPTV provisioning. Save the access code from the IPTV web XUI Integration settings.",
+        }
+    if not api_key:
+        return {
+            "status": "FAILED",
+            "error": "XUI API key is required for automatic IPTV provisioning.",
+        }
+    parsed_base = urlparse(base)
+    base_candidates = [base]
+    if parsed_base.scheme in {"http", "https"}:
+        alternate_scheme = "https" if parsed_base.scheme == "http" else "http"
+        alternate_base = urlunparse((alternate_scheme, parsed_base.netloc, parsed_base.path.rstrip("/"), "", "", "")).rstrip("/")
+        if alternate_base and alternate_base not in base_candidates:
+            base_candidates.append(alternate_base)
+    request_params = {"api_key": api_key, "action": normalize_iptv_text(action, 80)}
+    extra_form_items = []
+    if params:
+        clean_params = dict(params)
+        extra_form_items = clean_params.pop("_form_items", []) or []
+        request_params.update(clean_params)
+    request_payload = list(request_params.items()) + list(extra_form_items) if extra_form_items else request_params
+    errors = []
+    for candidate_base in base_candidates:
+        endpoint = f"{candidate_base.rstrip('/')}/{access_code}/"
+        started = time.perf_counter()
+        try:
+            if method.upper() == "POST":
+                response = requests.post(endpoint, data=request_payload, timeout=timeout, verify=False, allow_redirects=False)
+            else:
+                response = requests.get(endpoint, params=request_payload, timeout=timeout, verify=False, allow_redirects=False)
+            latency_ms = int(round((time.perf_counter() - started) * 1000))
+            content_type = response.headers.get("content-type", "")
+            try:
+                payload = response.json()
+            except Exception:
+                payload = {"raw": normalize_iptv_text(response.text, 1600)}
+            summary = {
+                "endpoint": endpoint.replace(access_code, "<access_code>"),
+                "action": normalize_iptv_text(action, 80),
+                "http_status": response.status_code,
+                "latency_ms": latency_ms,
+                "content_type": normalize_iptv_text(content_type, 120),
+                "payload": sanitize_summary(payload),
+            }
+            read_payload_ok = action.startswith("get_") and (
+                isinstance(payload, list)
+                or (isinstance(payload, dict) and "raw" not in payload and ("data" in payload or "status" in payload or "result" in payload))
+            )
+            if response.status_code < 400 and (iptv_xui_success(payload) or read_payload_ok):
+                return {"status": "SUCCESS", **summary, "payload_raw": payload}
+            errors.append({**summary, "error": "XUI response did not confirm success."})
+        except Exception as exc:
+            errors.append({
+                "endpoint": endpoint.replace(access_code, "<access_code>"),
+                "action": normalize_iptv_text(action, 80),
+                "error": normalize_iptv_text(str(exc), 600),
+            })
+    return {
+        "status": "FAILED",
+        "error": "XUI access-code API rejected all known scheme variants.",
+        "attempts": sanitize_summary(errors),
+    }
+
+
+def iptv_xui_all_bouquet_ids(store: dict) -> list[str]:
+    result = iptv_xui_access_api_request(store, "get_bouquets", timeout=20)
+    if result.get("status") not in {"SUCCESS", "WARNING"}:
+        return []
+    rows = iptv_xui_rows(result.get("payload_raw"))
+    ids = []
+    for row in rows:
+        clean_id = normalize_iptv_text(row.get("id") or row.get("bouquet_id"), 40)
+        if clean_id:
+            ids.append(clean_id)
+    return sorted(set(ids), key=lambda value: int(value) if str(value).isdigit() else str(value))
+
+
+def iptv_xui_find_line_by_username(store: dict, username: str) -> Optional[dict]:
+    clean_username = normalize_iptv_text(username, 200)
+    if not clean_username:
+        return None
+    for params in ({"search": clean_username}, {"username": clean_username}, {}):
+        result = iptv_xui_access_api_request(store, "get_lines", params=params, timeout=20)
+        if result.get("status") not in {"SUCCESS", "WARNING"}:
+            continue
+        for row in iptv_xui_rows(result.get("payload_raw")):
+            if normalize_iptv_text(row.get("username"), 200) == clean_username:
+                return row
+    return None
+
+
+def iptv_xui_direct_line_request(store: dict, action: str, params: dict) -> dict:
+    result = iptv_xui_access_api_request(store, action, params=params, method="POST", timeout=24)
+    if result.get("status") == "SUCCESS":
+        xui_user_id = iptv_xui_extract_user_id(result.get("payload_raw"))
+        if not xui_user_id and params.get("username"):
+            line = iptv_xui_find_line_by_username(store, params.get("username"))
+            xui_user_id = normalize_iptv_text((line or {}).get("id") or (line or {}).get("user_id"), 80)
+        return {**result, "xui_user_id": xui_user_id}
+    return result
+
+
+def iptv_xui_delete_line_request(store: dict, account: dict) -> dict:
+    username = normalize_iptv_text(account.get("xui_username"), 200)
+    xui_user_id = normalize_iptv_text(account.get("xui_user_id"), 80)
+    if normalize_iptv_text(store.get("xui_access_code"), 200).strip("/"):
+        if not xui_user_id and username:
+            line = iptv_xui_find_line_by_username(store, username)
+            xui_user_id = normalize_iptv_text((line or {}).get("id") or (line or {}).get("user_id"), 80)
+        attempts = []
+        delete_param_candidates = []
+        if xui_user_id:
+            delete_param_candidates.extend([{"id": xui_user_id}, {"user_id": xui_user_id}])
+        if username:
+            delete_param_candidates.append({"username": username})
+        for params in delete_param_candidates:
+            result = iptv_xui_direct_line_request(store, "delete_line", params)
+            attempts.append(sanitize_summary(result))
+            if result.get("status") == "SUCCESS":
+                return {**result, "xui_user_id": xui_user_id}
+        return {
+            "status": "FAILED",
+            "error": "XUI access-code API did not confirm line deletion.",
+            "attempts": sanitize_summary(attempts),
+        }
+
+    api_key = decrypt_secret(store.get("xui_api_key_encrypted"))
+    admin_username = normalize_iptv_text(store.get("xui_admin_username"), 200)
+    admin_password = decrypt_secret(store.get("xui_admin_password_encrypted"))
+    params = {"action": "user", "sub": "delete"}
+    if xui_user_id:
+        params["user_id"] = xui_user_id
+    elif username:
+        params["username"] = username
+    if api_key:
+        params["api_key"] = api_key
+    auth = (admin_username, admin_password) if admin_username and admin_password else None
+    errors = []
+    for endpoint in iptv_xui_endpoint_candidates(store):
+        started = time.perf_counter()
+        try:
+            response = requests.post(endpoint, params=params, data={}, timeout=18, auth=auth, allow_redirects=False)
+            latency_ms = int(round((time.perf_counter() - started) * 1000))
+            try:
+                payload = response.json()
+            except Exception:
+                payload = {"raw": normalize_iptv_text(response.text, 1200)}
+            summary = {
+                "endpoint": endpoint,
+                "http_status": response.status_code,
+                "latency_ms": latency_ms,
+                "payload": sanitize_summary(payload),
+            }
+            if response.status_code < 500 and iptv_xui_success(payload):
+                return {"status": "SUCCESS", **summary, "xui_user_id": xui_user_id}
+            errors.append({**summary, "error": "XUI response did not confirm deletion."})
+        except Exception as exc:
+            errors.append({"endpoint": endpoint, "error": normalize_iptv_text(str(exc), 600)})
+    return {
+        "status": "FAILED",
+        "error": "XUI admin API rejected line deletion.",
+        "attempts": sanitize_summary(errors),
+    }
+
+
+def iptv_xui_admin_user_request(store: dict, sub: str, form_data: dict, *, xui_user_id: Optional[str] = None) -> dict:
+    if normalize_iptv_text(store.get("xui_access_code"), 200).strip("/"):
+        username = form_data.get("user_data[username]")
+        password = form_data.get("user_data[password]")
+        try:
+            target_expires_at = datetime.fromtimestamp(int(form_data.get("user_data[exp_date]")), timezone.utc)
+        except Exception:
+            target_expires_at = datetime.now(timezone.utc) + timedelta(days=1)
+        max_connections = int(form_data.get("user_data[max_connections]") or store.get("xui_max_connections") or 1)
+        try:
+            duration_seconds = max(int((target_expires_at - datetime.now(timezone.utc)).total_seconds()), 60)
+        except Exception:
+            duration_seconds = 86400
+        bouquet_ids = iptv_xui_all_bouquet_ids(store)
+        direct_params = iptv_xui_direct_user_params(username, password, target_expires_at, max_connections=max_connections, bouquet_ids=bouquet_ids, duration_seconds=duration_seconds)
+        direct_action = "edit_line" if sub == "edit" and xui_user_id else "create_line"
+        if xui_user_id:
+            direct_params["id"] = str(xui_user_id)
+        result = iptv_xui_direct_line_request(store, direct_action, direct_params)
+        if result.get("status") == "SUCCESS":
+            repair = iptv_xui_repair_line_access(store, username, result.get("xui_user_id"))
+            validation = iptv_xui_validate_line_ready(store, username, result.get("xui_user_id"))
+            if validation.get("status") != "SUCCESS":
+                return {
+                    "status": "FAILED",
+                    "error": validation.get("error") or "XUI line did not pass playback validation.",
+                    "attempts": [sanitize_summary(result), sanitize_summary(repair), sanitize_summary(validation)],
+                }
+            result["xui_user_id"] = validation.get("xui_user_id") or result.get("xui_user_id")
+            result["line_repair"] = sanitize_summary(repair)
+            result["line_validation"] = sanitize_summary(validation)
+            result["bouquet_ids"] = bouquet_ids
+            return result
+        if direct_action == "create_line" and username:
+            line = iptv_xui_find_line_by_username(store, username)
+            if line:
+                edit_params = {**direct_params, "id": str(line.get("id") or line.get("user_id"))}
+                result = iptv_xui_direct_line_request(store, "edit_line", edit_params)
+                if result.get("status") == "SUCCESS":
+                    repair = iptv_xui_repair_line_access(store, username, normalize_iptv_text(line.get("id") or line.get("user_id"), 80) or result.get("xui_user_id"))
+                    validation = iptv_xui_validate_line_ready(store, username, normalize_iptv_text(line.get("id") or line.get("user_id"), 80) or result.get("xui_user_id"))
+                    if validation.get("status") != "SUCCESS":
+                        return {
+                            "status": "FAILED",
+                            "error": validation.get("error") or "XUI line did not pass playback validation.",
+                            "attempts": [sanitize_summary(result), sanitize_summary(repair), sanitize_summary(validation)],
+                        }
+                    result["xui_user_id"] = validation.get("xui_user_id") or normalize_iptv_text(line.get("id") or line.get("user_id"), 80) or result.get("xui_user_id")
+                    result["line_repair"] = sanitize_summary(repair)
+                    result["line_validation"] = sanitize_summary(validation)
+                    result["bouquet_ids"] = bouquet_ids
+                    return result
+        return {
+            "status": "FAILED",
+            "error": result.get("error") or "XUI access-code API did not confirm line provisioning.",
+            "attempts": [sanitize_summary(result)],
+        }
+
+    api_key = decrypt_secret(store.get("xui_api_key_encrypted"))
+    admin_username = normalize_iptv_text(store.get("xui_admin_username"), 200)
+    admin_password = decrypt_secret(store.get("xui_admin_password_encrypted"))
+    params = {"action": "user", "sub": sub}
+    if xui_user_id:
+        params["user_id"] = xui_user_id
+    if api_key:
+        params["api_key"] = api_key
+    auth = (admin_username, admin_password) if admin_username and admin_password else None
+    errors = []
+    for endpoint in iptv_xui_endpoint_candidates(store):
+        started = time.perf_counter()
+        try:
+            response = requests.post(endpoint, params=params, data=form_data, timeout=18, auth=auth, allow_redirects=False)
+            latency_ms = int(round((time.perf_counter() - started) * 1000))
+            content_type = response.headers.get("content-type", "")
+            payload = None
+            try:
+                payload = response.json()
+            except Exception:
+                payload = {"raw": normalize_iptv_text(response.text, 1200)}
+            summary = {
+                "endpoint": endpoint,
+                "http_status": response.status_code,
+                "latency_ms": latency_ms,
+                "content_type": normalize_iptv_text(content_type, 120),
+                "payload": sanitize_summary(payload),
+            }
+            if response.status_code < 500 and iptv_xui_success(payload):
+                return {"status": "SUCCESS", **summary, "xui_user_id": iptv_xui_extract_user_id(payload)}
+            errors.append({**summary, "error": "XUI response did not confirm success."})
+        except Exception as exc:
+            errors.append({"endpoint": endpoint, "error": normalize_iptv_text(str(exc), 600)})
+    return {
+        "status": "FAILED",
+        "error": "XUI admin API rejected all known endpoint paths.",
+        "attempts": sanitize_summary(errors),
+    }
+
+
+def iptv_account_public(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return None
+    return {
+        "id": str(row["id"]),
+        "user_id": str(row["user_id"]),
+        "bag_item_id": str(row["bag_item_id"]) if row.get("bag_item_id") else None,
+        "xui_user_id": row.get("xui_user_id"),
+        "xui_username": row.get("xui_username"),
+        "status": row.get("status"),
+        "all_bouquets": bool(row.get("all_bouquets")),
+        "max_connections": int(row.get("max_connections") or 1),
+        "expires_at": row.get("expires_at"),
+        "deletion_requested_at": row.get("deletion_requested_at"),
+        "deletion_eligible_at": row.get("deletion_eligible_at"),
+        "deletion_reason": row.get("deletion_reason"),
+        "last_provisioned_at": row.get("last_provisioned_at"),
+        "last_error": row.get("last_error"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def iptv_job_public(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return None
+    return {
+        "id": str(row["id"]),
+        "user_id": str(row["user_id"]),
+        "bag_item_id": str(row["bag_item_id"]),
+        "payment_order_id": str(row["payment_order_id"]) if row.get("payment_order_id") else None,
+        "iptv_account_id": str(row["iptv_account_id"]) if row.get("iptv_account_id") else None,
+        "action": row.get("action"),
+        "status": row.get("status"),
+        "attempts": int(row.get("attempts") or 0),
+        "requested_duration_seconds": int(row.get("requested_duration_seconds") or 0),
+        "target_expires_at": row.get("target_expires_at"),
+        "xui_username": row.get("xui_username"),
+        "last_error": row.get("last_error"),
+        "product_name": row.get("product_name"),
+        "product_kind": row.get("product_kind") or "WIFI",
+        "iptv_status": row.get("iptv_status"),
+        "customer_name": row.get("customer_name") or row.get("full_name") or "Customer",
+        "contact_number": row.get("contact_number"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+        "completed_at": row.get("completed_at"),
+    }
+
+
+def link_iptv_bag_item_to_account(cur, bag_item: dict, account: dict) -> dict:
+    current_expiry = aware_utc(account.get("expires_at"))
+    cur.execute(
+        """
+        UPDATE customer_bag_items
+        SET iptv_status = CASE WHEN %s = 'PROVISIONED' THEN 'PROVISIONED' ELSE iptv_status END,
+            iptv_account_id = %s,
+            iptv_account_username = %s,
+            iptv_account_expires_at = %s,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (account.get("status"), account["id"], account["xui_username"], current_expiry, bag_item["id"]),
+    )
+    return cur.fetchone()
+
+
+def reusable_active_iptv_account_for_bag_item(cur, bag_item: dict) -> Optional[dict]:
+    if not bag_item.get("user_id") or not bag_item.get("id"):
+        return None
+    cur.execute(
+        """
+        SELECT a.*
+        FROM customer_bag_items i
+        JOIN iptv_accounts a ON a.id = i.iptv_account_id
+        WHERE i.user_id = %s
+          AND i.id <> %s
+          AND i.status = 'ACTIVE'
+          AND i.active_until IS NOT NULL
+          AND i.active_until > now()
+          AND i.iptv_status = 'PROVISIONED'
+          AND i.iptv_account_id IS NOT NULL
+          AND a.status = 'PROVISIONED'
+          AND a.xui_username IS NOT NULL
+        ORDER BY i.active_until DESC, a.last_provisioned_at DESC NULLS LAST, a.updated_at DESC
+        LIMIT 1
+        FOR UPDATE OF a
+        """,
+        (bag_item["user_id"], bag_item["id"]),
+    )
+    return cur.fetchone()
+
+
+def active_iptv_items_using_account(cur, account_id, exclude_bag_item_id=None) -> list[dict]:
+    if not account_id:
+        return []
+    clauses = [
+        "iptv_account_id = %s",
+        "status = 'ACTIVE'",
+        "active_until IS NOT NULL",
+        "active_until > now()",
+        "product_kind IN ('IPTV', 'WIFI_IPTV')",
+    ]
+    params = [account_id]
+    if exclude_bag_item_id:
+        clauses.append("id <> %s")
+        params.append(exclude_bag_item_id)
+    cur.execute(
+        f"""
+        SELECT *
+        FROM customer_bag_items
+        WHERE {' AND '.join(clauses)}
+        ORDER BY active_until DESC
+        FOR UPDATE
+        """,
+        tuple(params),
+    )
+    return cur.fetchall()
+
+
+def ensure_iptv_account_for_bag_item(cur, bag_item: dict) -> dict:
+    if bag_item.get("iptv_account_id"):
+        cur.execute("SELECT * FROM iptv_accounts WHERE id = %s FOR UPDATE", (bag_item["iptv_account_id"],))
+        account = cur.fetchone()
+        if account and account.get("status") not in {"DELETED", "PENDING_DELETE"}:
+            return account
+    reusable_account = reusable_active_iptv_account_for_bag_item(cur, bag_item)
+    if reusable_account:
+        link_iptv_bag_item_to_account(cur, bag_item, reusable_account)
+        create_customer_bag_event(
+            cur,
+            bag_item["user_id"],
+            bag_item["id"],
+            bag_item.get("portal_session_id"),
+            "IPTV_ACCOUNT_REUSED",
+            "Existing active XUI line reused for this IPTV item.",
+            metadata={"xui_username": reusable_account.get("xui_username"), "reused_account_id": str(reusable_account["id"])},
+        )
+        return reusable_account
+    cur.execute("SELECT * FROM iptv_accounts WHERE bag_item_id = %s FOR UPDATE", (bag_item["id"],))
+    account = cur.fetchone()
+    if account and account.get("status") not in {"DELETED", "PENDING_DELETE"}:
+        return account
+    username = iptv_generate_username(str(bag_item.get("id") or bag_item.get("user_id")))
+    password = iptv_generate_password()
+    for _ in range(10):
+        cur.execute("SELECT 1 FROM iptv_accounts WHERE xui_username = %s", (username,))
+        if not cur.fetchone():
+            break
+        username = iptv_generate_username(str(bag_item.get("id") or bag_item.get("user_id")))
+    cur.execute(
+        """
+        INSERT INTO iptv_accounts(user_id, bag_item_id, xui_username, xui_password_encrypted, status)
+        VALUES (%s, %s, %s, %s, 'PENDING')
+        RETURNING *
+        """,
+        (bag_item["user_id"], bag_item["id"], username, encrypt_secret(password)),
+    )
+    account = cur.fetchone()
+    cur.execute(
+        """
+        UPDATE customer_bag_items
+        SET iptv_account_id = %s,
+            iptv_account_username = %s,
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (account["id"], account["xui_username"], bag_item["id"]),
+    )
+    return account
+
+
+def ensure_iptv_account_for_user(cur, user_id) -> dict:
+    cur.execute(
+        """
+        SELECT *
+        FROM iptv_accounts
+        WHERE user_id = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (user_id,),
+    )
+    account = cur.fetchone()
+    if account:
+        return account
+    raise RuntimeError("IPTV account lookup now requires a bag item.")
+
+
+def enqueue_iptv_provisioning_job(cur, bag_item: dict, target_expires_at: Optional[datetime] = None, action: str = "CREATE") -> Optional[dict]:
+    if not product_kind_requires_iptv(bag_item.get("product_kind")):
+        return None
+    account = ensure_iptv_account_for_bag_item(cur, bag_item)
+    requested_duration_seconds = max(int(bag_item.get("duration_seconds") or bag_item.get("remaining_seconds") or 0), 1)
+    clean_target_expires_at = aware_utc(target_expires_at) or aware_utc(bag_item.get("active_until"))
+    if not clean_target_expires_at:
+        clean_target_expires_at = datetime.now(timezone.utc) + timedelta(seconds=requested_duration_seconds)
+    clean_action = normalize_iptv_text(action, 40).upper()
+    if clean_action not in {"CREATE", "EXTEND"}:
+        clean_action = "CREATE"
+    cur.execute(
+        """
+        INSERT INTO iptv_provisioning_jobs(
+            user_id, bag_item_id, payment_order_id, iptv_account_id, action, status,
+            requested_duration_seconds, target_expires_at, xui_username
+        )
+        VALUES (%s, %s, %s, %s, %s, 'PENDING', %s, %s, %s)
+        ON CONFLICT (bag_item_id) DO UPDATE
+        SET status = 'PENDING',
+            action = EXCLUDED.action,
+            requested_duration_seconds = EXCLUDED.requested_duration_seconds,
+            target_expires_at = EXCLUDED.target_expires_at,
+            iptv_account_id = EXCLUDED.iptv_account_id,
+            xui_username = EXCLUDED.xui_username,
+            last_error = NULL,
+            completed_at = NULL,
+            updated_at = now()
+        RETURNING *
+        """,
+        (
+            bag_item["user_id"],
+            bag_item["id"],
+            bag_item.get("payment_order_id"),
+            account["id"],
+            clean_action,
+            requested_duration_seconds,
+            clean_target_expires_at,
+            account["xui_username"],
+        ),
+    )
+    return cur.fetchone()
+
+
+def process_iptv_provisioning_job(cur, job: dict) -> dict:
+    store = iptv_store()
+    if normalize_iptv_api_mode(store.get("xui_api_mode")) == "MANUAL" or not store.get("enabled"):
+        error = "IPTV automation is disabled. Job is waiting for manual provisioning."
+        cur.execute(
+            """
+            UPDATE iptv_provisioning_jobs
+            SET status = 'FAILED', attempts = attempts + 1, last_error = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (error, job["id"]),
+        )
+        updated_job = cur.fetchone()
+        cur.execute("UPDATE customer_bag_items SET iptv_status = 'MANUAL_REVIEW', updated_at = now() WHERE id = %s", (job["bag_item_id"],))
+        return {"status": "FAILED", "error": error, "job": updated_job}
+    cur.execute("SELECT * FROM iptv_accounts WHERE id = %s FOR UPDATE", (job["iptv_account_id"],))
+    account = cur.fetchone()
+    if not account:
+        raise RuntimeError("IPTV account record was not found for this job.")
+    password = decrypt_secret(account.get("xui_password_encrypted"))
+    if not password:
+        raise RuntimeError("IPTV account password could not be decrypted.")
+    target_expires_at = aware_utc(job.get("target_expires_at")) or (datetime.now(timezone.utc) + timedelta(seconds=max(int(job.get("requested_duration_seconds") or 1), 1)))
+    max_connections = int(store.get("xui_max_connections") or account.get("max_connections") or 1)
+    form_data = iptv_xui_user_form(account["xui_username"], password, target_expires_at, max_connections=max_connections)
+    request_summary = {
+        "action": job.get("action") or "CREATE",
+        "username": account["xui_username"],
+        "target_expires_at": target_expires_at.isoformat(),
+        "max_connections": max_connections,
+        "bouquet_assignment": "PANEL_DEFAULT_ALL_BOUQUETS",
+        "required_access_outputs": IPTV_XUI_REQUIRED_OUTPUT_IDS,
+        "restreamer": "DISABLED",
+    }
+    cur.execute(
+        """
+        UPDATE iptv_provisioning_jobs
+        SET status = 'RUNNING',
+            attempts = attempts + 1,
+            last_request_json = %s,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (Json(sanitize_summary(request_summary)), job["id"]),
+    )
+    job = cur.fetchone()
+    sub = "edit" if account.get("xui_user_id") else "create"
+    result = iptv_xui_admin_user_request(store, sub, form_data, xui_user_id=account.get("xui_user_id"))
+    if result.get("status") != "SUCCESS" and sub == "edit":
+        result = iptv_xui_admin_user_request(store, "create", form_data)
+    if result.get("status") == "SUCCESS":
+        xui_user_id = result.get("xui_user_id") or account.get("xui_user_id")
+        xui_account_expires_at = None
+        cur.execute(
+            """
+            UPDATE iptv_accounts
+            SET status = 'PROVISIONED',
+                xui_user_id = COALESCE(%s, xui_user_id),
+                all_bouquets = true,
+                max_connections = %s,
+                expires_at = %s,
+                last_provisioned_at = now(),
+                last_error = NULL,
+                last_response_json = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (xui_user_id, max_connections, xui_account_expires_at, Json(sanitize_summary(result)), account["id"]),
+        )
+        account = cur.fetchone()
+        cur.execute(
+            """
+            UPDATE customer_bag_items
+            SET iptv_status = 'PROVISIONED',
+                iptv_account_id = %s,
+                iptv_account_username = %s,
+                iptv_account_expires_at = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (account["id"], account["xui_username"], xui_account_expires_at, job["bag_item_id"]),
+        )
+        bag_item = cur.fetchone()
+        cur.execute(
+            """
+            UPDATE iptv_provisioning_jobs
+            SET status = 'PROVISIONED',
+                target_expires_at = %s,
+                xui_username = %s,
+                last_error = NULL,
+                last_response_json = %s,
+                completed_at = now(),
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (target_expires_at, account["xui_username"], Json(sanitize_summary(result)), job["id"]),
+        )
+        updated_job = cur.fetchone()
+        create_customer_bag_event(cur, bag_item["user_id"], bag_item["id"], bag_item.get("portal_session_id"), "IPTV_PROVISIONED", "IPTV account provisioned in XUI.", metadata={"xui_username": account["xui_username"], "expires_at": None, "line_expiry": "NEVER_EXPIRE", "local_access_until": target_expires_at.isoformat(), "all_bouquets": True})
+        return {"status": "PROVISIONED", "job": updated_job, "account": account, "bag_item": bag_item, "result": sanitize_summary(result)}
+    error = result.get("error") or "XUI provisioning failed."
+    cur.execute(
+        """
+        UPDATE iptv_accounts
+        SET status = 'FAILED',
+            last_error = %s,
+            last_response_json = %s,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (error, Json(sanitize_summary(result)), account["id"]),
+    )
+    account = cur.fetchone()
+    cur.execute(
+        """
+        UPDATE customer_bag_items
+        SET iptv_status = 'FAILED',
+            iptv_account_id = %s,
+            iptv_account_username = %s,
+            iptv_account_expires_at = %s,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (account["id"], account["xui_username"], account.get("expires_at"), job["bag_item_id"]),
+    )
+    bag_item = cur.fetchone()
+    cur.execute(
+        """
+        UPDATE iptv_provisioning_jobs
+        SET status = 'FAILED',
+            last_error = %s,
+            last_response_json = %s,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (error, Json(sanitize_summary(result)), job["id"]),
+    )
+    updated_job = cur.fetchone()
+    create_customer_bag_event(cur, bag_item["user_id"], bag_item["id"], bag_item.get("portal_session_id"), "IPTV_PROVISION_FAILED", error, metadata={"result": sanitize_summary(result)})
+    return {"status": "FAILED", "error": error, "job": updated_job, "account": account, "bag_item": bag_item}
+
+
+def ensure_iptv_account_covers_bag_item(cur, bag_item: dict, reason: str = "WATCH") -> dict:
+    if not product_kind_requires_iptv(bag_item.get("product_kind")):
+        return {"status": "NOT_REQUIRED", "bag_item": bag_item}
+    target_expires_at = aware_utc(bag_item.get("active_until")) or aware_utc(bag_item.get("iptv_account_expires_at"))
+    now = datetime.now(timezone.utc)
+    if not target_expires_at or target_expires_at <= now:
+        return {"status": "EXPIRED", "bag_item": bag_item, "error": "IPTV bag item has no active time left."}
+
+    account = None
+    if bag_item.get("iptv_account_id"):
+        cur.execute("SELECT * FROM iptv_accounts WHERE id = %s FOR UPDATE", (bag_item["iptv_account_id"],))
+        account = cur.fetchone()
+    if not account:
+        account = ensure_iptv_account_for_bag_item(cur, bag_item)
+    current_expiry = aware_utc(account.get("expires_at"))
+    if account.get("status") == "PROVISIONED" and (current_expiry is None or current_expiry + timedelta(seconds=5) >= target_expires_at):
+        if bag_item.get("iptv_account_id") != account["id"] or bag_item.get("iptv_account_expires_at") != current_expiry:
+            cur.execute(
+                """
+                UPDATE customer_bag_items
+                SET iptv_status = 'PROVISIONED',
+                    iptv_account_id = %s,
+                    iptv_account_username = %s,
+                    iptv_account_expires_at = %s,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (account["id"], account["xui_username"], current_expiry, bag_item["id"]),
+            )
+            bag_item = cur.fetchone()
+        return {"status": "COVERED", "account": account, "bag_item": bag_item}
+
+    requested_duration_seconds = max(int((target_expires_at - now).total_seconds()), int(bag_item.get("remaining_seconds") or bag_item.get("duration_seconds") or 1), 1)
+    job = enqueue_iptv_provisioning_job(
+        cur,
+        {**bag_item, "duration_seconds": requested_duration_seconds, "remaining_seconds": requested_duration_seconds, "iptv_account_id": account["id"]},
+        target_expires_at=target_expires_at,
+        action="EXTEND",
+    )
+    result = process_iptv_provisioning_job(cur, job)
+    if result.get("status") == "PROVISIONED":
+        create_customer_bag_event(
+            cur,
+            bag_item["user_id"],
+            bag_item["id"],
+            bag_item.get("portal_session_id"),
+            "IPTV_EXPIRY_SYNCED",
+            "IPTV account expiry was synced with active bag time.",
+            metadata={"reason": reason, "target_expires_at": target_expires_at.isoformat()},
+        )
+    return result
+
+
+def iptv_line_deletion_grace_seconds(store: Optional[dict] = None) -> int:
+    try:
+        notice_settings = iptv_runtime_notice_settings(store)
+        stop_seconds = int(notice_settings.get("stop_seconds") or 10)
+    except Exception:
+        stop_seconds = 10
+    return min(max(stop_seconds + 60, 90), 300)
+
+
+def schedule_iptv_line_deletion_for_bag_item(cur, bag_item: dict, reason: str = "CONSUMED") -> dict:
+    if not bag_item or not product_kind_requires_iptv(bag_item.get("product_kind")):
+        return {"status": "NOT_REQUIRED"}
+    account_id = bag_item.get("iptv_account_id")
+    if not account_id:
+        return {"status": "SKIPPED", "message": "No IPTV account was linked to this bag item."}
+    cur.execute("SELECT * FROM iptv_accounts WHERE id = %s FOR UPDATE", (account_id,))
+    account = cur.fetchone()
+    if not account:
+        return {"status": "SKIPPED", "message": "IPTV account record was not found."}
+    if account.get("status") == "DELETED":
+        return {"status": "SKIPPED", "message": "IPTV line was already deleted."}
+
+    grace_seconds = iptv_line_deletion_grace_seconds()
+    deletion_eligible_at = datetime.now(timezone.utc) + timedelta(seconds=grace_seconds)
+    cur.execute(
+        """
+        UPDATE iptv_login_tokens
+        SET expires_at = LEAST(expires_at, now())
+        WHERE bag_item_id = %s
+          AND expires_at > now()
+        """,
+        (bag_item["id"],),
+    )
+    other_active_items = active_iptv_items_using_account(cur, account["id"], bag_item["id"])
+    if other_active_items:
+        cur.execute(
+            """
+            UPDATE customer_bag_items
+            SET iptv_status = 'DELETED',
+                iptv_account_expires_at = LEAST(COALESCE(iptv_account_expires_at, now()), now()),
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (bag_item["id"],),
+        )
+        bag_item = cur.fetchone()
+        create_customer_bag_event(
+            cur,
+            bag_item["user_id"],
+            bag_item["id"],
+            bag_item.get("portal_session_id"),
+            "IPTV_LINE_RETAINED",
+            "IPTV pass ended, but the XUI line is still used by another active IPTV pass.",
+            metadata={
+                "reason": reason,
+                "xui_username": account.get("xui_username"),
+                "other_active_item_count": len(other_active_items),
+            },
+        )
+        return {
+            "status": "RETAINED_ACTIVE_REUSE",
+            "account": account,
+            "bag_item": bag_item,
+            "other_active_item_count": len(other_active_items),
+        }
+    cur.execute(
+        """
+        UPDATE iptv_accounts
+        SET status = 'PENDING_DELETE',
+            expires_at = LEAST(COALESCE(expires_at, now()), now()),
+            deletion_requested_at = COALESCE(deletion_requested_at, now()),
+            deletion_eligible_at = CASE
+                WHEN deletion_eligible_at IS NULL OR deletion_eligible_at > %s THEN %s
+                ELSE deletion_eligible_at
+            END,
+            deletion_reason = %s,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (deletion_eligible_at, deletion_eligible_at, reason, account["id"]),
+    )
+    account = cur.fetchone()
+    cur.execute(
+        """
+        UPDATE customer_bag_items
+        SET iptv_status = 'DELETED',
+            iptv_account_expires_at = LEAST(COALESCE(iptv_account_expires_at, now()), now()),
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (bag_item["id"],),
+    )
+    bag_item = cur.fetchone()
+    create_customer_bag_event(
+        cur,
+        bag_item["user_id"],
+        bag_item["id"],
+        bag_item.get("portal_session_id"),
+        "IPTV_LINE_DELETE_SCHEDULED",
+        "IPTV access stopped locally. XUI line deletion was delayed briefly so the player can close cleanly.",
+        metadata={
+            "reason": reason,
+            "xui_username": account.get("xui_username"),
+            "grace_seconds": grace_seconds,
+            "deletion_eligible_at": deletion_eligible_at.isoformat(),
+        },
+    )
+    return {
+        "status": "PENDING_DELETE",
+        "account": account,
+        "bag_item": bag_item,
+        "deletion_eligible_at": deletion_eligible_at,
+        "grace_seconds": grace_seconds,
+    }
+
+
+def delete_iptv_line_for_bag_item(cur, bag_item: dict, reason: str = "CONSUMED") -> dict:
+    if not bag_item or not product_kind_requires_iptv(bag_item.get("product_kind")):
+        return {"status": "NOT_REQUIRED"}
+    account_id = bag_item.get("iptv_account_id")
+    if not account_id:
+        return {"status": "SKIPPED", "message": "No IPTV account was linked to this bag item."}
+    cur.execute("SELECT * FROM iptv_accounts WHERE id = %s FOR UPDATE", (account_id,))
+    account = cur.fetchone()
+    if not account:
+        return {"status": "SKIPPED", "message": "IPTV account record was not found."}
+    if account.get("status") == "DELETED":
+        return {"status": "SKIPPED", "message": "IPTV line was already deleted."}
+    other_active_items = active_iptv_items_using_account(cur, account["id"], bag_item["id"])
+    if other_active_items:
+        cur.execute(
+            """
+            UPDATE iptv_login_tokens
+            SET expires_at = LEAST(expires_at, now())
+            WHERE bag_item_id = %s
+              AND expires_at > now()
+            """,
+            (bag_item["id"],),
+        )
+        cur.execute(
+            """
+            UPDATE customer_bag_items
+            SET iptv_status = 'DELETED',
+                iptv_account_expires_at = LEAST(COALESCE(iptv_account_expires_at, now()), now()),
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (bag_item["id"],),
+        )
+        bag_item = cur.fetchone()
+        cur.execute(
+            """
+            UPDATE iptv_accounts
+            SET status = 'PROVISIONED',
+                deletion_requested_at = NULL,
+                deletion_eligible_at = NULL,
+                deletion_reason = NULL,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (account["id"],),
+        )
+        account = cur.fetchone()
+        create_customer_bag_event(
+            cur,
+            bag_item["user_id"],
+            bag_item["id"],
+            bag_item.get("portal_session_id"),
+            "IPTV_LINE_DELETE_SKIPPED",
+            "XUI line deletion skipped because another active IPTV pass still uses it.",
+            metadata={"reason": reason, "other_active_item_count": len(other_active_items), "xui_username": account.get("xui_username")},
+        )
+        return {"status": "RETAINED_ACTIVE_REUSE", "account": account, "bag_item": bag_item, "other_active_item_count": len(other_active_items)}
+    store = iptv_store()
+    if normalize_iptv_api_mode(store.get("xui_api_mode")) == "MANUAL" or not store.get("enabled"):
+        error = "IPTV automation is disabled. XUI line deletion is waiting for operator review."
+        cur.execute(
+            """
+            UPDATE iptv_accounts
+            SET last_error = %s,
+                deletion_eligible_at = now() + interval '5 minutes',
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (error, account["id"]),
+        )
+        create_customer_bag_event(cur, bag_item["user_id"], bag_item["id"], bag_item.get("portal_session_id"), "IPTV_LINE_DELETE_SKIPPED", error, metadata={"reason": reason})
+        return {"status": "SKIPPED", "error": error, "account": account}
+    result = iptv_xui_delete_line_request(store, account)
+    if result.get("status") == "SUCCESS":
+        cur.execute(
+            """
+            UPDATE iptv_login_tokens
+            SET expires_at = LEAST(expires_at, now())
+            WHERE bag_item_id = %s
+              AND expires_at > now()
+            """,
+            (bag_item["id"],),
+        )
+        cur.execute(
+            """
+            UPDATE iptv_accounts
+            SET status = 'DELETED',
+                expires_at = LEAST(COALESCE(expires_at, now()), now()),
+                deletion_requested_at = COALESCE(deletion_requested_at, now()),
+                deletion_eligible_at = COALESCE(deletion_eligible_at, now()),
+                deletion_reason = COALESCE(deletion_reason, %s),
+                last_error = NULL,
+                last_response_json = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (reason, Json(sanitize_summary(result)), account["id"]),
+        )
+        account = cur.fetchone()
+        cur.execute(
+            """
+            UPDATE customer_bag_items
+            SET iptv_status = 'DELETED',
+                iptv_account_expires_at = LEAST(COALESCE(iptv_account_expires_at, now()), now()),
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (bag_item["id"],),
+        )
+        bag_item = cur.fetchone()
+        create_customer_bag_event(cur, bag_item["user_id"], bag_item["id"], bag_item.get("portal_session_id"), "IPTV_LINE_DELETED", "XUI line deleted after IPTV time was consumed or removed.", metadata={"reason": reason, "xui_username": account.get("xui_username")})
+        return {"status": "DELETED", "account": account, "bag_item": bag_item, "result": sanitize_summary(result)}
+    error = result.get("error") or "XUI line deletion failed."
+    cur.execute(
+        """
+        UPDATE iptv_accounts
+        SET last_error = %s,
+            last_response_json = %s,
+            deletion_eligible_at = now() + interval '60 seconds',
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (error, Json(sanitize_summary(result)), account["id"]),
+    )
+    account = cur.fetchone()
+    create_customer_bag_event(cur, bag_item["user_id"], bag_item["id"], bag_item.get("portal_session_id"), "IPTV_LINE_DELETE_FAILED", error, metadata={"reason": reason, "result": sanitize_summary(result)})
+    return {"status": "FAILED", "error": error, "account": account, "result": sanitize_summary(result)}
+
+
+def process_pending_iptv_line_deletions_once(limit: int = 25) -> list[dict]:
+    cur_limit = min(max(int(limit or 25), 1), 100)
+    results = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT i.*, a.deletion_reason AS account_deletion_reason
+                FROM iptv_accounts a
+                JOIN customer_bag_items i ON i.id = a.bag_item_id
+                WHERE a.status = 'PENDING_DELETE'
+                  AND a.deletion_eligible_at IS NOT NULL
+                  AND a.deletion_eligible_at <= now()
+                ORDER BY a.deletion_eligible_at ASC, a.updated_at ASC
+                LIMIT %s
+                FOR UPDATE OF a SKIP LOCKED
+                """,
+                (cur_limit,),
+            )
+            rows = cur.fetchall()
+            for row in rows:
+                reason = normalize_iptv_text(row.get("account_deletion_reason") or "PENDING_DELETE_DUE", 80)
+                results.append(sanitize_summary(delete_iptv_line_for_bag_item(cur, row, reason)))
+    return results
+
+
+def iptv_provisioning_rows(status: Optional[str] = None, limit: int = 300) -> list[dict]:
+    clauses = []
+    params = []
+    if status:
+        clauses.append("j.status = %s")
+        params.append(normalize_iptv_text(status, 40).upper())
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = fetch_all(
+        f"""
+        SELECT j.*,
+               i.product_name,
+               i.product_kind,
+               i.iptv_status,
+               p.display_name AS customer_name,
+               p.contact_number,
+               u.full_name
+        FROM iptv_provisioning_jobs j
+        JOIN customer_bag_items i ON i.id = j.bag_item_id
+        LEFT JOIN portal_customer_profiles p ON p.user_id = j.user_id
+        LEFT JOIN users u ON u.id = j.user_id
+        {where}
+        ORDER BY
+          CASE j.status WHEN 'PENDING' THEN 0 WHEN 'RUNNING' THEN 1 WHEN 'FAILED' THEN 2 ELSE 3 END,
+          j.updated_at DESC
+        LIMIT %s
+        """,
+        tuple(params + [limit]),
+    )
+    return [iptv_job_public(row) for row in rows]
+
+
+def iptv_accounts_rows(limit: int = 300) -> list[dict]:
+    rows = fetch_all(
+        """
+        SELECT a.*
+        FROM iptv_accounts a
+        ORDER BY
+          CASE a.status WHEN 'FAILED' THEN 0 WHEN 'PENDING' THEN 1 WHEN 'PROVISIONED' THEN 2 ELSE 3 END,
+          a.updated_at DESC
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    return [iptv_account_public(row) for row in rows]
+
+
+def iptv_provisioning_payload() -> dict:
+    jobs = iptv_provisioning_rows()
+    accounts = iptv_accounts_rows()
+    return {
+        "summary": {
+            "pending": len([job for job in jobs if job["status"] == "PENDING"]),
+            "running": len([job for job in jobs if job["status"] == "RUNNING"]),
+            "provisioned": len([job for job in jobs if job["status"] == "PROVISIONED"]),
+            "failed": len([job for job in jobs if job["status"] == "FAILED"]),
+            "accounts": len(accounts),
+        },
+        "jobs": jobs,
+        "accounts": accounts,
+        "settings": public_iptv_settings(),
+    }
+
+
+def iptv_watch_base_url_for_presence(store: dict, network_presence: Optional[dict] = None) -> tuple[str, str]:
+    presence = network_presence or {}
+    local_url = normalize_iptv_url(store.get("internal_web_url"), IPTV_DEFAULT_SETTINGS["internal_web_url"], required=False)
+    public_url = normalize_iptv_url(store.get("public_url"), IPTV_DEFAULT_SETTINGS["public_url"], required=False)
+    if presence.get("connected_to_3j_ap") is True and local_url:
+        return local_url, "LOCAL_3J_NETWORK"
+    if public_url:
+        return public_url, "PUBLIC_HTTPS"
+    return local_url or IPTV_DEFAULT_SETTINGS["internal_web_url"], "LOCAL_FALLBACK"
+
+
+def iptv_watch_url_from_base(base_url: str, token: str) -> str:
+    parsed_watch_base_url = urlparse(base_url)
+    base_path = parsed_watch_base_url.path.rstrip("/")
+    watch_url = urlunparse(
+        (
+            parsed_watch_base_url.scheme,
+            parsed_watch_base_url.netloc,
+            f"{base_path}/watch" if base_path else "/watch",
+            "",
+            "",
+            "",
+        )
+    )
+    separator = "&" if "?" in watch_url else "?"
+    return f"{watch_url}{separator}threej_token={quote(token)}"
+
+
+def create_iptv_watch_token(cur, session: dict, bag_item: dict, account: dict, network_presence: Optional[dict] = None) -> dict:
+    store = iptv_store()
+    ttl_minutes = int(store.get("iptv_token_ttl_minutes") or 15)
+    token = secrets.token_urlsafe(36)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+    cur.execute(
+        """
+        INSERT INTO iptv_login_tokens(token_hash, user_id, bag_item_id, iptv_account_id, expires_at)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING *
+        """,
+        (iptv_token_hash(token), session["user_id"], bag_item["id"], account["id"], expires_at),
+    )
+    token_row = cur.fetchone()
+    watch_base_url, route_mode = iptv_watch_base_url_for_presence(store, network_presence)
+    public_base_url = normalize_iptv_url(store.get("public_url"), IPTV_DEFAULT_SETTINGS["public_url"], required=False)
+    local_base_url = normalize_iptv_url(store.get("internal_web_url"), IPTV_DEFAULT_SETTINGS["internal_web_url"], required=False)
+    fallback_watch_url = None
+    if route_mode == "LOCAL_3J_NETWORK" and public_base_url:
+        fallback_watch_url = iptv_watch_url_from_base(public_base_url, token)
+    elif route_mode.startswith("PUBLIC_HTTPS") and local_base_url:
+        fallback_watch_url = iptv_watch_url_from_base(local_base_url, token)
+    return {
+        "token": token,
+        "expires_at": token_row["expires_at"],
+        "watch_url": iptv_watch_url_from_base(watch_base_url, token),
+        "fallback_watch_url": fallback_watch_url,
+        "ttl_minutes": ttl_minutes,
+        "route_mode": route_mode,
+    }
+
+
+def iptv_integration_secret() -> str:
+    store = iptv_store()
+    secret = decrypt_secret(store.get("iptv_web_integration_secret_encrypted"))
+    if not secret:
+        raise HTTPException(status_code=400, detail="IPTV web integration secret is not configured.")
+    return secret
+
+
+def iptv_runtime_notice_settings(store: Optional[dict] = None) -> dict:
+    store = store or iptv_store()
+    try:
+        warning_minutes = min(max(int(store.get("iptv_expiry_warning_minutes") or 10), 1), 120)
+    except (TypeError, ValueError):
+        warning_minutes = 10
+    try:
+        stop_seconds = min(max(int(store.get("iptv_expiry_stop_seconds") or 10), 1), 300)
+    except (TypeError, ValueError):
+        stop_seconds = 10
+    return {
+        "warning_seconds": warning_minutes * 60,
+        "warning_minutes": warning_minutes,
+        "stop_seconds": stop_seconds,
+        "portal_url": current_captive_portal_url(),
+    }
+
+
+def iptv_pre_auth_hosts() -> list[str]:
+    """Hosts Omada should allow before portal authorization for IPTV-only access."""
+    hosts = []
+    try:
+        store = iptv_store()
+    except Exception:
+        store = IPTV_DEFAULT_SETTINGS
+    for value in (
+        (store or {}).get("internal_web_url") or IPTV_DEFAULT_SETTINGS["internal_web_url"],
+        (store or {}).get("public_url") or IPTV_DEFAULT_SETTINGS["public_url"],
+        (store or {}).get("public_hostname") or IPTV_DEFAULT_SETTINGS["public_hostname"],
+    ):
+        parsed = urlparse(value if "://" in str(value or "") else f"http://{value or ''}")
+        host = (parsed.hostname or str(value or "")).strip()
+        if host and host.lower() not in [item.lower() for item in hosts]:
+            hosts.append(host)
+    return hosts
 
 
 def start_cloudflared_connector() -> dict:
@@ -2085,13 +4318,34 @@ def start_cloudflared_connector() -> dict:
 def stop_cloudflared_connector() -> dict:
     global CLOUDFLARED_PROCESS, CLOUDFLARED_PROCESS_STARTED_AT
     with CLOUDFLARED_LOCK:
-        if cloudflared_process_running():
+        if CLOUDFLARED_PROCESS is not None and CLOUDFLARED_PROCESS.poll() is None:
             CLOUDFLARED_PROCESS.terminate()
             try:
                 CLOUDFLARED_PROCESS.wait(timeout=8)
             except subprocess.TimeoutExpired:
                 CLOUDFLARED_PROCESS.kill()
                 CLOUDFLARED_PROCESS.wait(timeout=3)
+        for process in cloudflared_processes():
+            pid = process.get("pid")
+            if not pid or pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, 15)
+            except ProcessLookupError:
+                continue
+            except Exception:
+                continue
+        deadline = time.monotonic() + 8
+        while cloudflared_processes() and time.monotonic() < deadline:
+            time.sleep(0.2)
+        for process in cloudflared_processes():
+            pid = process.get("pid")
+            if not pid or pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, 9)
+            except Exception:
+                pass
         CLOUDFLARED_PROCESS = None
         CLOUDFLARED_PROCESS_STARTED_AT = None
         store = public_endpoint_store()
@@ -2826,6 +5080,11 @@ def payment_order_status_payload(order: Optional[dict]) -> dict:
         "amount_centavos": order["amount_centavos"],
         "currency": order["currency"],
         "product_name": order["product_name"],
+        "product_kind": order.get("product_kind") or "WIFI",
+        "product_kind_label": product_kind_label(order.get("product_kind")),
+        "iptv_enabled": product_kind_requires_iptv(order.get("product_kind")),
+        "iptv_package_label": order.get("iptv_package_label"),
+        "iptv_xui_package_id": order.get("iptv_xui_package_id"),
         "product_category_name": order.get("product_category_name"),
         "product_category_access_scope": order.get("product_category_access_scope") or "ALL_LOCATIONS",
         "product_category_barangay": order.get("product_category_barangay"),
@@ -2944,6 +5203,73 @@ def create_admin_notification(
     except Exception as exc:
         print(f"admin notification log failed: {exc}")
         return None
+
+
+def create_iptv_login_failure_notification(
+    *,
+    token: Optional[str] = None,
+    stage: str = "TOKEN_HANDOFF",
+    reason_code: str = "IPTV_LOGIN_FAILED",
+    message: str = "",
+    source_url: str = "",
+    checked_urls: Optional[list[str]] = None,
+    metadata: Optional[dict] = None,
+    request: Optional[Request] = None,
+    severity: str = "DANGER",
+) -> Optional[str]:
+    clean_stage = normalize_payment_text(stage, 80).upper() or "TOKEN_HANDOFF"
+    clean_reason = normalize_payment_text(reason_code, 80).upper() or "IPTV_LOGIN_FAILED"
+    clean_message = normalize_payment_text(message, 1000) or "Customer IPTV login could not be completed."
+    token_hash = iptv_token_hash(token) if token else ""
+    fingerprint = normalize_payment_text(f"{clean_stage}:{clean_reason}:{token_hash[:24] or 'NO_TOKEN'}", 120)
+    try:
+        existing = fetch_one(
+            """
+            SELECT id
+            FROM admin_notifications
+            WHERE category = 'IPTV_LOGIN_FAILED'
+              AND related_id = %s
+              AND created_at > now() - interval '5 minutes'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (fingerprint,),
+        )
+        if existing:
+            return str(existing["id"])
+    except Exception:
+        pass
+
+    request_ip = ""
+    request_user_agent = ""
+    if request is not None:
+        try:
+            request_ip = request.client.host if request.client else ""
+            request_user_agent = request.headers.get("user-agent", "")
+        except Exception:
+            request_ip = ""
+            request_user_agent = ""
+
+    return create_admin_notification(
+        "IPTV_LOGIN_FAILED",
+        severity,
+        "IPTV customer login failed",
+        clean_message,
+        "IPTV",
+        "/admin/iptv?tab=Logs",
+        "iptv_login_tokens",
+        fingerprint,
+        {
+            "stage": clean_stage,
+            "reason_code": clean_reason,
+            "source_url": normalize_payment_text(source_url, 500),
+            "checked_urls": sanitize_summary(checked_urls or []),
+            "token_hash_prefix": token_hash[:16] if token_hash else "",
+            "request_ip": request_ip,
+            "user_agent": normalize_payment_text(request_user_agent, 500),
+            **sanitize_summary(metadata or {}),
+        },
+    )
 
 
 def record_a2p_message_log(
@@ -8482,10 +10808,21 @@ def bag_item_public(row: Optional[dict]) -> Optional[dict]:
         remaining = max(int((active_until - now).total_seconds()), 0)
     metadata = row.get("metadata_json") or {}
     admin_created = bool(row.get("source") == "MANUAL" and (metadata.get("admin_created") or row.get("admin_created_by")))
+    product_kind = normalize_product_kind(row.get("product_kind"))
     return {
         "id": str(row["id"]),
         "product_name": row.get("product_name"),
         "product_category_name": row.get("product_category_name"),
+        "product_kind": product_kind,
+        "product_kind_label": product_kind_label(product_kind),
+        "iptv_enabled": product_kind_requires_iptv(product_kind),
+        "iptv_status": row.get("iptv_status") or "NOT_REQUIRED",
+        "iptv_watch_ready": bool(product_kind_requires_iptv(product_kind) and row.get("iptv_status") == "PROVISIONED" and row.get("iptv_account_id")),
+        "iptv_account_id": str(row["iptv_account_id"]) if row.get("iptv_account_id") else None,
+        "iptv_package_label": row.get("iptv_package_label") or "",
+        "iptv_xui_package_id": row.get("iptv_xui_package_id") or "",
+        "iptv_account_username": row.get("iptv_account_username") or "",
+        "iptv_account_expires_at": row.get("iptv_account_expires_at"),
         "source": row.get("source"),
         "status": row.get("status"),
         "priority": int(row.get("priority") or 0),
@@ -8701,9 +11038,12 @@ def customer_bag_payload(cur, user_id) -> dict:
           AND status = 'ACTIVE'
           AND active_until IS NOT NULL
           AND active_until <= now()
+        RETURNING *
         """,
         (history_user_ids,),
     )
+    for consumed in cur.fetchall():
+        schedule_iptv_line_deletion_for_bag_item(cur, consumed, "BAG_PAYLOAD_EXPIRED")
     cur.execute(
         """
         SELECT *
@@ -8784,14 +11124,24 @@ def create_customer_bag_item_from_payment(cur, order: dict, session: dict, user:
         "discount_amount_centavos": order.get("discount_amount_centavos") or 0,
         "outside_network_purchase": bool(order.get("outside_network_purchase")),
     }
+    product_kind = normalize_product_kind(order.get("product_kind"))
+    iptv_status = "PENDING" if product_kind_requires_iptv(product_kind) else "NOT_REQUIRED"
+    if product_kind_requires_iptv(product_kind):
+        metadata["iptv"] = {
+            "status": iptv_status,
+            "package_label": order.get("iptv_package_label"),
+            "xui_package_id": order.get("iptv_xui_package_id"),
+            "provisioning": "Provisioned when activated. If the customer already has active IPTV time, the active XUI line is reused.",
+        }
     cur.execute(
         """
         INSERT INTO customer_bag_items(
             user_id, portal_session_id, payment_order_id, product_item_id, product_category_id,
             product_name, product_category_name, source, status, priority, duration_seconds, remaining_seconds,
-            access_scope, allowed_barangay, purchase_quantity, amount_centavos, currency, metadata_json
+            access_scope, allowed_barangay, purchase_quantity, amount_centavos, currency,
+            product_kind, iptv_status, iptv_package_label, iptv_xui_package_id, metadata_json
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'PAYMENT', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'PAYMENT', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING *
         """,
         (
@@ -8810,6 +11160,10 @@ def create_customer_bag_item_from_payment(cur, order: dict, session: dict, user:
             int(order.get("purchase_quantity") or 1),
             order.get("amount_centavos"),
             order.get("currency") or "PHP",
+            product_kind,
+            iptv_status,
+            normalize_payment_text(order.get("iptv_package_label"), 160) or None,
+            normalize_payment_text(order.get("iptv_xui_package_id"), 160) or None,
             Json(sanitize_summary(metadata)),
         ),
     )
@@ -8971,6 +11325,8 @@ def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active
     now = datetime.now(timezone.utc)
     candidates = []
     for item in active_items or []:
+        if not product_kind_grants_hotspot(item.get("product_kind")):
+            continue
         active_until = aware_utc(item.get("active_until"))
         if active_until and active_until > now:
             candidates.append((active_until, item))
@@ -9007,13 +11363,66 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
         return {"status": "SUCCESS", "message": "Bag item is already active.", "item": item, "authorization": {"status": "ALREADY_ACTIVE"}}
     if item.get("status") != "QUEUED":
         return {"status": "FAILED", "error": "Only queued bag items can be activated."}
+    product_kind = normalize_product_kind(item.get("product_kind"))
+    remaining_seconds = max(int(item.get("remaining_seconds") or item.get("duration_seconds") or 0), 1)
+    active_until = datetime.now(timezone.utc) + timedelta(seconds=remaining_seconds)
+    if product_kind_is_iptv_only(product_kind):
+        try:
+            coverage = ensure_iptv_account_covers_bag_item(cur, {**item, "active_until": active_until}, reason=reason)
+            if coverage.get("status") in {"COVERED", "PROVISIONED"}:
+                item = coverage.get("bag_item") or item
+            else:
+                return {
+                    "status": "FAILED",
+                    "error": coverage.get("error") or "IPTV access could not be provisioned for this pass.",
+                    "item": item,
+                    "authorization": {"status": "IPTV_PROVISIONING_FAILED"},
+                }
+        except Exception as exc:
+            error = normalize_iptv_text(str(exc), 700)
+            create_customer_bag_event(cur, item["user_id"], item["id"], session.get("id"), "IPTV_ACTIVATION_FAILED", error, metadata={"reason": reason})
+            return {"status": "FAILED", "error": error or "IPTV provisioning failed.", "item": item, "authorization": {"status": "IPTV_PROVISIONING_FAILED"}}
+        settings = ensure_customer_bag_settings(cur, item["user_id"])
+        overlap = bag_overlap_seconds()
+        cur.execute(
+            """
+            UPDATE customer_bag_items
+            SET status = 'ACTIVE',
+                portal_session_id = %s,
+                remaining_seconds = %s,
+                activated_at = COALESCE(activated_at, now()),
+                active_until = %s,
+                auto_activate_snapshot = %s,
+                overlap_seconds_snapshot = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (session.get("id"), remaining_seconds, active_until, bool(settings.get("auto_activate")), overlap, item["id"]),
+        )
+        active_item = cur.fetchone()
+        create_customer_bag_event(
+            cur,
+            item["user_id"],
+            active_item["id"],
+            session.get("id"),
+            "IPTV_ITEM_ACTIVATED",
+            "IPTV entitlement activated.",
+            bool(settings.get("auto_activate")),
+            overlap,
+            {"reason": reason, "watch_ready": True},
+        )
+        return {
+            "status": "SUCCESS",
+            "message": "IPTV pass activated.",
+            "item": active_item,
+            "authorization": {"status": "IPTV_ONLY_NO_HOTSPOT_AUTHORIZATION"},
+        }
     if session.get("source") not in {"OMADA", "MIKROTIK"}:
         return {"status": "QUEUED", "message": "Connect to a 3J WiFi AP to activate this item.", "item": item, "authorization": {"status": "WAITING_FOR_3J_AP"}}
     network_presence = portal_network_presence(session, request) if request else {"connected_to_3j_ap": False}
     if require_current_network and network_presence.get("connected_to_3j_ap") is not True:
         return {"status": "QUEUED", "message": "Connect to a 3J WiFi AP to activate this item.", "item": item, "authorization": {"status": "WAITING_FOR_3J_AP"}}
-    remaining_seconds = max(int(item.get("remaining_seconds") or item.get("duration_seconds") or 0), 1)
-    active_until = datetime.now(timezone.utc) + timedelta(seconds=remaining_seconds)
     voucher = ensure_bag_item_voucher(cur, item)
     portal_payload = payment_fulfillment_payload_from_session(session, voucher["code"])
     authorization = {"status": "NOT_REQUIRED"}
@@ -9054,6 +11463,25 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
         (session["id"], remaining_seconds, active_until, bool(settings.get("auto_activate")), overlap, item["id"]),
     )
     active_item = cur.fetchone()
+    iptv_coverage = {"status": "NOT_REQUIRED"}
+    if product_kind_requires_iptv(product_kind):
+        try:
+            iptv_coverage = ensure_iptv_account_covers_bag_item(cur, active_item, reason=reason)
+            if iptv_coverage.get("status") in {"COVERED", "PROVISIONED"}:
+                active_item = iptv_coverage.get("bag_item") or active_item
+            else:
+                create_customer_bag_event(
+                    cur,
+                    item["user_id"],
+                    active_item["id"],
+                    session["id"],
+                    "IPTV_ACTIVATION_FAILED",
+                    iptv_coverage.get("error") or "IPTV provisioning failed for this WiFi + IPTV item.",
+                    metadata={"reason": reason, "coverage": sanitize_summary(iptv_coverage)},
+                )
+        except Exception as exc:
+            iptv_coverage = {"status": "FAILED", "error": normalize_iptv_text(str(exc), 700)}
+            create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "IPTV_ACTIVATION_FAILED", iptv_coverage["error"], metadata={"reason": reason})
     next_status = "ACCESS_GRANTED" if session["source"] in {"OMADA", "MIKROTIK"} else "VOUCHER_REDEEMED"
     omada_status = "AUTHORIZED" if session["source"] == "OMADA" else ("MANUAL_TEST" if session["source"] == "MANUAL_TEST" else "NOT_REQUIRED")
     mikrotik_status = "AUTHORIZED" if session["source"] == "MIKROTIK" else ("MANUAL_TEST" if session["source"] == "MANUAL_TEST" else "NOT_REQUIRED")
@@ -9075,8 +11503,8 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
         (voucher["id"], item["user_id"], next_status, omada_status, mikrotik_status, session_access_until, session["id"]),
     )
     session.update(cur.fetchone())
-    create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "ITEM_ACTIVATED", "Product item activated.", bool(settings.get("auto_activate")), overlap, {"reason": reason, "authorization": sanitize_summary(authorization)})
-    return {"status": "SUCCESS", "message": "Product item activated.", "item": active_item, "authorization": sanitize_summary(authorization)}
+    create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "ITEM_ACTIVATED", "Product item activated.", bool(settings.get("auto_activate")), overlap, {"reason": reason, "authorization": sanitize_summary(authorization), "iptv_coverage": sanitize_summary(iptv_coverage)})
+    return {"status": "SUCCESS", "message": "Product item activated.", "item": active_item, "authorization": sanitize_summary(authorization), "iptv": sanitize_summary(iptv_coverage)}
 
 
 def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> dict:
@@ -9119,20 +11547,22 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
             )
             consumed = cur.fetchone()
             create_customer_bag_event(cur, session["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item fully consumed.", bool(settings.get("auto_activate")), overlap)
+            schedule_iptv_line_deletion_for_bag_item(cur, consumed, "SESSION_REFRESH_CONSUMED")
         else:
             active["remaining_seconds"] = active_remaining
             current_active.append(active)
 
     active_for_device = current_active
+    internet_active_for_device = [item for item in current_active if product_kind_grants_hotspot(item.get("product_kind"))]
 
-    if active_for_device and session.get("source") in {"OMADA", "MIKROTIK"} and on_3j_network:
-        gateway_sync = ensure_gateway_authorization_for_active_bag_items(cur, session, active_for_device, request, "ACTIVE_ITEM_REFRESH")
+    if internet_active_for_device and session.get("source") in {"OMADA", "MIKROTIK"} and on_3j_network:
+        gateway_sync = ensure_gateway_authorization_for_active_bag_items(cur, session, internet_active_for_device, request, "ACTIVE_ITEM_REFRESH")
         if gateway_sync.get("status") == "SUCCESS":
             cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
             session = cur.fetchone()
-    if active_for_device and session.get("source") in {"OMADA", "MIKROTIK"}:
+    if internet_active_for_device and session.get("source") in {"OMADA", "MIKROTIK"}:
         latest_active_until = None
-        for active in active_for_device:
+        for active in internet_active_for_device:
             active_until = aware_utc(active.get("active_until"))
             if active_until and active_until > now:
                 latest_active_until = max(latest_active_until, active_until) if latest_active_until else active_until
@@ -9154,14 +11584,11 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
             )
             session = cur.fetchone()
 
-    should_activate_next = bool(settings.get("auto_activate")) and session.get("source") in {"OMADA", "MIKROTIK"} and on_3j_network
-    overlap_ready = False
-    if active_for_device and len(active_for_device) == 1 and overlap > 0:
-        active_until = aware_utc(active_for_device[0].get("active_until"))
-        if active_until:
-            active_remaining = max(int((active_until - now).total_seconds()), 0)
-            overlap_ready = 0 < active_remaining <= overlap
-    if should_activate_next and (not active_for_device or overlap_ready):
+    should_activate_next = bool(settings.get("auto_activate")) and (
+        (session.get("source") in {"OMADA", "MIKROTIK"} and on_3j_network)
+        or session.get("user_id")
+    )
+    if should_activate_next:
         cur.execute(
             """
             SELECT *
@@ -9177,13 +11604,29 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
         )
         next_item = cur.fetchone()
         if next_item:
-            activation = activate_customer_bag_item(cur, next_item, session, request, "AUTO_OVERLAP" if overlap_ready else "AUTO")
-            cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
-            session = cur.fetchone()
+            next_grants_hotspot = product_kind_grants_hotspot(next_item.get("product_kind"))
+            next_requires_iptv = product_kind_requires_iptv(next_item.get("product_kind"))
+            relevant_active = [
+                item
+                for item in active_for_device
+                if (next_grants_hotspot and product_kind_grants_hotspot(item.get("product_kind")))
+                or (next_requires_iptv and product_kind_requires_iptv(item.get("product_kind")))
+            ]
+            overlap_ready = False
+            if relevant_active and len(relevant_active) == 1 and overlap > 0:
+                active_until = aware_utc(relevant_active[0].get("active_until"))
+                if active_until:
+                    active_remaining = max(int((active_until - now).total_seconds()), 0)
+                    overlap_ready = 0 < active_remaining <= overlap
+            if not relevant_active or overlap_ready:
+                activation = activate_customer_bag_item(cur, next_item, session, request, "AUTO_OVERLAP" if overlap_ready else "AUTO")
+                cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
+                session = cur.fetchone()
     return {"session": session, "bag": customer_bag_payload(cur, session.get("user_id")), "activation": activation}
 
 
 def process_customer_bag_auto_activation_once():
+    process_pending_iptv_line_deletions_once()
     with get_conn() as conn:
         with conn.cursor() as cur:
             overlap = bag_overlap_seconds()
@@ -9237,6 +11680,7 @@ def process_customer_bag_auto_activation_once():
                     )
                     consumed = cur.fetchone()
                     create_customer_bag_event(cur, active["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item fully consumed by auto activation worker.", True, overlap)
+                    schedule_iptv_line_deletion_for_bag_item(cur, consumed, "AUTO_WORKER_CONSUMED")
                     active = None
                 elif remaining > overlap:
                     continue
@@ -9909,7 +12353,11 @@ def public_captive_portal_settings(row=None):
         "custom_html": "",
         "custom_css": "",
         "product_items": product_item_rows(active_only=True),
-        "product_categories": group_product_items_by_category(product_item_rows(active_only=True), product_category_rows(active_only=True)),
+        "product_categories": [
+            category
+            for category in attach_product_items_to_categories(product_category_rows(active_only=True), active_only=True)
+            if category.get("items")
+        ],
         "portal_barangays": public_portal_barangays(),
         "ap_coverage_summary": public_ap_coverage_summary(),
         "created_at": row["created_at"],
@@ -10233,10 +12681,8 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
                 elif not details.get("all_portal_enabled"):
                     missing = [item.get("ssid") for item in details.get("ssids", []) if not item.get("portal_enabled")]
                     status["portal_error"] = f"SSID not attached to Omada portal: {', '.join(missing)}" if missing else "Desired SSIDs are not attached to an enabled external portal."
-                elif not details.get("all_https_redirect_enabled"):
-                    status["portal_error"] = "Omada portal profile is attached, but HTTPS Redirection is disabled."
                 try:
-                    pre_auth = portal_client.pre_auth_access_status_if_supported(site_id, portal_url)
+                    pre_auth = portal_client.pre_auth_access_status_if_supported(site_id, portal_url, extra_hosts=iptv_pre_auth_hosts())
                     status["pre_auth_access"] = sanitize_summary(pre_auth)
                     status["pre_auth_ready"] = bool(pre_auth.get("ready"))
                     if not pre_auth.get("ready"):
@@ -10257,8 +12703,8 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
             {"key": "portal_url_https", "label": "Portal URL uses HTTPS", "passed": portal_url_https, "message": portal_url if portal_url_https else f"Current portal URL is not HTTPS: {portal_url or '-'}"},
             {"key": "desired_ssids", "label": "Site SSIDs configured", "passed": bool(desired_ssids), "message": ", ".join(desired_ssids) if desired_ssids else "Configure the captive SSID names for this site."},
             {"key": "ssid_portal_binding", "label": "SSID attached to External Portal", "passed": bool(status.get("portal_enabled")), "message": status.get("portal_error") or "Desired SSID(s) are attached to Omada External Portal."},
-            {"key": "https_redirect", "label": "HTTPS Redirection enabled", "passed": bool(status.get("https_redirect_enabled")), "message": "HTTPS Redirection is enabled." if status.get("https_redirect_enabled") else "Enable HTTPS Redirection in the Omada portal profile or re-sync from this system."},
-            {"key": "pre_auth_access", "label": "Pre-auth access allows portal/payment hosts", "passed": bool(status.get("pre_auth_ready")), "message": status.get("pre_auth_error") or "Pre-auth access includes portal and payment hosts."},
+            {"key": "https_redirect_disabled", "label": "Omada HTTPS Redirect disabled", "passed": not bool(status.get("https_redirect_enabled")), "message": "Omada HTTPS Redirect is disabled to avoid TP-Link self-signed certificate warnings." if not status.get("https_redirect_enabled") else "Disable Omada HTTPS Redirect; keep the external portal URL on HTTPS instead."},
+            {"key": "pre_auth_access", "label": "Pre-auth access allows portal/payment/IPTV hosts", "passed": bool(status.get("pre_auth_ready")), "message": status.get("pre_auth_error") or "Pre-auth access includes portal, payment, and IPTV hosts."},
         ]
         status["readiness_checks"] = checks
         failed_required = [item for item in checks if not item.get("passed")]
@@ -10291,8 +12737,6 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
             reason = f"AP status is {row.get('deployment_status') or 'unknown'}."
         elif not site_status.get("portal_enabled"):
             reason = site_status.get("portal_error") or "SSID is not attached to the Omada portal."
-        elif not site_status.get("https_redirect_enabled"):
-            reason = "HTTPS Redirection is disabled for this Omada portal profile."
         elif not site_status.get("pre_auth_ready"):
             reason = site_status.get("pre_auth_error") or "Pre-auth access is incomplete."
         aps.append({
@@ -10567,6 +13011,67 @@ def station_portal_host_ip(portal_url: Optional[str]) -> Optional[str]:
         return str(ip_address(host))
     except ValueError:
         return None
+
+
+def station_iptv_local_web_host_ip() -> Optional[str]:
+    try:
+        store = iptv_store()
+        local_url = normalize_iptv_url(store.get("internal_web_url"), IPTV_DEFAULT_SETTINGS["internal_web_url"], required=False)
+        parsed = urlparse(local_url if "://" in str(local_url or "") else f"http://{local_url or ''}")
+        host = parsed.hostname
+        if not host:
+            return None
+        return str(ip_address(host))
+    except Exception:
+        return None
+
+
+def station_iptv_xui_host_ip() -> Optional[str]:
+    try:
+        store = iptv_store()
+        candidates = [
+            normalize_iptv_url(store.get("xui_base_url"), IPTV_DEFAULT_SETTINGS["xui_base_url"], required=False),
+            store.get("xui_server_host"),
+        ]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            parsed = urlparse(candidate if "://" in str(candidate or "") else f"http://{candidate or ''}")
+            host = parsed.hostname or str(candidate or "").strip()
+            if not host:
+                continue
+            try:
+                return str(ip_address(host))
+            except ValueError:
+                continue
+    except Exception:
+        return None
+    return None
+
+
+def station_router_ip_for_direct_host(router_id: Optional[str], host_ip: Optional[str]) -> Optional[str]:
+    if not router_id or not host_ip:
+        return None
+    try:
+        target = ip_address(host_ip)
+    except ValueError:
+        return None
+    try:
+        scan = latest_mikrotik_scan_row(str(router_id))
+        snapshot = scan.get("sanitized_snapshot_json") if scan else {}
+        for row in mikrotik_snapshot_items(snapshot or {}, "ip_addresses"):
+            address_text = str(row.get("address") or "").strip()
+            if not address_text:
+                continue
+            try:
+                iface = ip_interface(address_text)
+            except ValueError:
+                continue
+            if target.version == iface.ip.version and target in iface.network:
+                return str(iface.ip)
+    except Exception:
+        return None
+    return None
 
 
 def station_portal_access_ports(portal_url: Optional[str]) -> str:
@@ -11082,7 +13587,11 @@ def portal_settings():
     branding = public_branding()
     portal_settings_row = public_captive_portal_settings()
     product_items = product_item_rows(active_only=True)
-    product_categories = group_product_items_by_category(product_items, product_category_rows(active_only=True))
+    product_categories = [
+        category
+        for category in attach_product_items_to_categories(product_category_rows(active_only=True), active_only=True)
+        if category.get("items")
+    ]
     return {
         "portal_title": branding["portal_title"],
         "portal_subtitle": branding["portal_subtitle"] or "Buy a WiFi pass to connect",
@@ -12619,11 +15128,12 @@ def portal_status(portal_session_id: str, request: Request, quiet: bool = False)
             profile = portal_profile_for_user(cur, session.get("user_id"))
             access_view = portal_access_view(session, user_identity, redemption)
             bag_active_items = bag.get("active_items") or []
-            if bag_active_items:
+            internet_bag_active_items = [item for item in bag_active_items if product_kind_grants_hotspot(item.get("product_kind"))]
+            if internet_bag_active_items:
                 now_utc = datetime.now(timezone.utc)
                 latest_active_until = None
                 bag_remaining = 0
-                for active_item in bag_active_items:
+                for active_item in internet_bag_active_items:
                     active_until = aware_utc(active_item.get("active_until"))
                     if active_until and active_until > now_utc:
                         latest_active_until = max(latest_active_until, active_until) if latest_active_until else active_until
@@ -12810,6 +15320,10 @@ def activate_portal_bag_item(item_id: str, payload: PortalBagActivateRequest, re
             item = cur.fetchone()
             if not item:
                 raise HTTPException(status_code=404, detail="Bag item not found.")
+            if product_kind_requires_iptv(item.get("product_kind")):
+                profile = portal_profile_for_user(cur, user["id"])
+                if not portal_profile_is_configured(profile):
+                    raise HTTPException(status_code=400, detail="Set your customer profile before activating IPTV access.")
             result = activate_customer_bag_item(cur, item, session, request, "MANUAL")
             if result.get("status") == "FAILED":
                 raise HTTPException(status_code=400, detail=result.get("error") or "Could not activate this bag item.")
@@ -12870,6 +15384,336 @@ def claim_portal_bag_voucher(payload: PortalBagClaimVoucherRequest, request: Req
             }
 
 
+@app.post("/api/portal/iptv/watch")
+def create_portal_iptv_watch_session(payload: PortalIptvWatchRequest, request: Request):
+    clean_item_id = parse_uuid_or_400(payload.bag_item_id, "bag item")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            enforce_portal_device_not_blocked(cur, session, payload, request, "IPTV_WATCH")
+            user = ensure_portal_user(cur, session)
+            cur.execute(
+                """
+                SELECT *
+                FROM customer_bag_items
+                WHERE id = %s
+                  AND user_id = %s
+                  AND status = 'ACTIVE'
+                FOR UPDATE
+                """,
+                (clean_item_id, user["id"]),
+            )
+            bag_item = cur.fetchone()
+            if not bag_item:
+                raise HTTPException(status_code=404, detail="Activate this IPTV pass first before watching.")
+            product_kind = normalize_product_kind(bag_item.get("product_kind"))
+            if not product_kind_requires_iptv(product_kind):
+                raise HTTPException(status_code=400, detail="This item does not include IPTV access.")
+            profile = portal_profile_for_user(cur, user["id"])
+            if not portal_profile_is_configured(profile):
+                raise HTTPException(status_code=400, detail="Set your customer profile before watching IPTV.")
+            if bag_item.get("iptv_status") != "PROVISIONED" or not bag_item.get("iptv_account_id"):
+                raise HTTPException(status_code=400, detail="IPTV access is not ready yet. Please ask the operator to check provisioning.")
+            cur.execute("SELECT * FROM iptv_accounts WHERE id = %s", (bag_item["iptv_account_id"],))
+            account = cur.fetchone()
+            if not account or account.get("status") != "PROVISIONED":
+                raise HTTPException(status_code=400, detail="IPTV account is not ready yet.")
+            now = datetime.now(timezone.utc)
+            active_until = aware_utc(bag_item.get("active_until"))
+            if not active_until or active_until <= now:
+                raise HTTPException(status_code=400, detail="IPTV access has expired.")
+            expires_at = aware_utc(account.get("expires_at"))
+            if expires_at and expires_at + timedelta(seconds=5) < active_until:
+                try:
+                    coverage = ensure_iptv_account_covers_bag_item(cur, bag_item, reason="WATCH")
+                except Exception as exc:
+                    raise HTTPException(status_code=400, detail=normalize_iptv_text(str(exc), 700) or "IPTV account expiry could not be synced.") from exc
+                if coverage.get("status") in {"COVERED", "PROVISIONED"}:
+                    account = coverage.get("account") or account
+                    bag_item = coverage.get("bag_item") or bag_item
+                    expires_at = aware_utc(account.get("expires_at"))
+                else:
+                    raise HTTPException(status_code=400, detail=coverage.get("error") or "IPTV access could not be synced.")
+            if expires_at and expires_at <= now:
+                raise HTTPException(status_code=400, detail="IPTV access has expired.")
+            network_presence = portal_network_presence(session, request, payload)
+            token = create_iptv_watch_token(cur, session, bag_item, account, network_presence)
+            cur.execute(
+                """
+                UPDATE customer_bag_items
+                SET iptv_watch_url = %s,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (token["watch_url"], bag_item["id"]),
+            )
+            bag_item = cur.fetchone()
+            create_customer_bag_event(
+                cur,
+                user["id"],
+                bag_item["id"],
+                session["id"],
+                "IPTV_WATCH_TOKEN_CREATED",
+                "Short-lived IPTV watch token created.",
+                metadata={"expires_at": token["expires_at"].isoformat() if token.get("expires_at") else None},
+            )
+            return {
+                "status": "SUCCESS",
+                "watch_url": token["watch_url"],
+                "fallback_watch_url": token.get("fallback_watch_url"),
+                "route_mode": token.get("route_mode"),
+                "network_presence": network_presence,
+                "token_expires_at": token["expires_at"],
+                "ttl_minutes": token["ttl_minutes"],
+                "account": iptv_account_public(account),
+                "bag_item": bag_item_public(bag_item),
+            }
+
+
+@app.post("/api/iptv/session/status")
+def check_iptv_login_token_status(payload: IptvTokenResolvePayload):
+    expected_secret = iptv_integration_secret()
+    provided_secret = payload.integration_secret or ""
+    if not hmac.compare_digest(provided_secret, expected_secret):
+        raise HTTPException(status_code=403, detail="Invalid IPTV integration secret.")
+    notice_settings = iptv_runtime_notice_settings()
+    token_hash = iptv_token_hash(payload.token)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT t.*, a.xui_username, a.expires_at AS account_expires_at,
+                       a.status AS account_status, a.all_bouquets, a.max_connections,
+                       i.product_name, i.product_kind, i.iptv_status, i.status AS bag_status,
+                       i.active_until AS bag_active_until
+                FROM iptv_login_tokens t
+                JOIN iptv_accounts a ON a.id = t.iptv_account_id
+                JOIN customer_bag_items i ON i.id = t.bag_item_id
+                WHERE t.token_hash = %s
+                """,
+                (token_hash,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {
+                    "status": "REVOKED",
+                    "allowed": False,
+                    "reason_code": "TOKEN_NOT_FOUND",
+                    "message": "IPTV access is no longer available.",
+                    "remaining_seconds": 0,
+                    "warning_seconds": notice_settings["warning_seconds"],
+                    "warning_minutes": notice_settings["warning_minutes"],
+                    "stop_seconds": notice_settings["stop_seconds"],
+                    "warning_active": False,
+                    "force_stop": True,
+                    "portal_url": notice_settings["portal_url"],
+                }
+            now = datetime.now(timezone.utc)
+            bag_active_until = aware_utc(row.get("bag_active_until"))
+            account_expiry = aware_utc(row.get("account_expires_at"))
+            reason_code = None
+            message = None
+            allowed = True
+            if row.get("bag_status") != "ACTIVE":
+                allowed = False
+                reason_code = "ACCESS_NOT_ACTIVE"
+                message = "This IPTV pass is no longer active."
+            elif row.get("iptv_status") != "PROVISIONED" or row.get("account_status") != "PROVISIONED":
+                allowed = False
+                reason_code = "LINE_REVOKED"
+                message = "This IPTV line was removed or is no longer provisioned."
+            elif not bag_active_until or bag_active_until <= now:
+                allowed = False
+                reason_code = "ACCESS_EXPIRED"
+                message = "Your IPTV access time is fully consumed."
+            elif account_expiry and account_expiry <= now:
+                allowed = False
+                reason_code = "LINE_EXPIRED"
+                message = "This IPTV line has expired."
+            remaining_seconds = max(int((bag_active_until - now).total_seconds()), 0) if bag_active_until else 0
+            warning_seconds = int(notice_settings["warning_seconds"])
+            stop_seconds = int(notice_settings["stop_seconds"])
+            warning_active = bool(allowed and warning_seconds > 0 and remaining_seconds <= warning_seconds)
+            force_stop = bool(allowed and stop_seconds > 0 and remaining_seconds <= stop_seconds)
+            return {
+                "status": "STOPPING" if force_stop else ("ACTIVE" if allowed else "RESTRICTED"),
+                "allowed": allowed,
+                "reason_code": reason_code,
+                "message": message or "IPTV access is active.",
+                "remaining_seconds": remaining_seconds if allowed else 0,
+                "warning_seconds": warning_seconds,
+                "warning_minutes": int(notice_settings["warning_minutes"]),
+                "stop_seconds": stop_seconds,
+                "warning_active": warning_active,
+                "force_stop": force_stop,
+                "portal_url": notice_settings["portal_url"],
+                "access_expires_at": bag_active_until,
+                "account_expires_at": account_expiry,
+                "product_name": row.get("product_name"),
+                "product_kind": row.get("product_kind") or "IPTV",
+                "xui_username": row.get("xui_username"),
+                "all_bouquets": bool(row.get("all_bouquets")),
+                "max_connections": int(row.get("max_connections") or 1),
+            }
+
+
+@app.post("/api/iptv/session/login-failure")
+def report_iptv_login_failure(payload: IptvLoginFailureReportPayload, request: Request):
+    expected_secret = iptv_integration_secret()
+    provided_secret = payload.integration_secret or ""
+    if not hmac.compare_digest(provided_secret, expected_secret):
+        raise HTTPException(status_code=403, detail="Invalid IPTV integration secret.")
+    notification_id = create_iptv_login_failure_notification(
+        token=payload.token,
+        stage=payload.stage or "IPTV_WEB_HANDOFF",
+        reason_code=payload.reason_code or "IPTV_WEB_LOGIN_FAILED",
+        message=payload.message or "The IPTV web app could not complete customer login.",
+        source_url=payload.source_url or "",
+        checked_urls=payload.checked_urls,
+        metadata=payload.metadata or {},
+        request=request,
+        severity="DANGER",
+    )
+    return {"status": "OK", "notification_id": notification_id}
+
+
+@app.post("/api/iptv/session/resolve")
+def resolve_iptv_login_token(payload: IptvTokenResolvePayload, request: Request):
+    expected_secret = iptv_integration_secret()
+    provided_secret = payload.integration_secret or ""
+    if not hmac.compare_digest(provided_secret, expected_secret):
+        raise HTTPException(status_code=403, detail="Invalid IPTV integration secret.")
+    token_hash = iptv_token_hash(payload.token)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT t.*, a.xui_username, a.xui_password_encrypted, a.expires_at AS account_expires_at,
+                       a.status AS account_status, a.all_bouquets, a.max_connections,
+                       i.product_name, i.product_kind, i.iptv_status, i.active_until AS bag_active_until,
+                       p.display_name, p.contact_number, p.email
+                FROM iptv_login_tokens t
+                JOIN iptv_accounts a ON a.id = t.iptv_account_id
+                JOIN customer_bag_items i ON i.id = t.bag_item_id
+                LEFT JOIN portal_customer_profiles p ON p.user_id = t.user_id
+                WHERE t.token_hash = %s
+                  AND t.expires_at > now()
+                FOR UPDATE OF t
+                """,
+                (token_hash,),
+            )
+            row = cur.fetchone()
+            if not row:
+                create_iptv_login_failure_notification(
+                    token=payload.token,
+                    stage="HOTSPOT_TOKEN_RESOLVE",
+                    reason_code="TOKEN_NOT_FOUND",
+                    message="IPTV token was not found or has expired while a customer attempted to open IPTV.",
+                    request=request,
+                    severity="WARNING",
+                )
+                raise HTTPException(status_code=404, detail="IPTV token was not found or has expired.")
+            if row.get("account_status") != "PROVISIONED" or row.get("iptv_status") != "PROVISIONED":
+                create_iptv_login_failure_notification(
+                    token=payload.token,
+                    stage="HOTSPOT_TOKEN_RESOLVE",
+                    reason_code="ACCOUNT_NOT_PROVISIONED",
+                    message="IPTV token resolved, but the linked XUI account or bag item is not provisioned.",
+                    metadata={
+                        "account_status": row.get("account_status"),
+                        "iptv_status": row.get("iptv_status"),
+                        "bag_item_id": str(row.get("bag_item_id") or ""),
+                        "user_id": str(row.get("user_id") or ""),
+                    },
+                    request=request,
+                    severity="DANGER",
+                )
+                raise HTTPException(status_code=400, detail="IPTV account is not provisioned.")
+            now = datetime.now(timezone.utc)
+            account_expiry = aware_utc(row.get("account_expires_at"))
+            bag_active_until = aware_utc(row.get("bag_active_until"))
+            if account_expiry and account_expiry <= now and bag_active_until and bag_active_until > now:
+                cur.execute("SELECT * FROM customer_bag_items WHERE id = %s FOR UPDATE", (row["bag_item_id"],))
+                repair_item = cur.fetchone()
+                if repair_item:
+                    try:
+                        repair_result = ensure_iptv_account_covers_bag_item(cur, repair_item, reason="TOKEN_RESOLVE")
+                    except Exception as exc:
+                        create_iptv_login_failure_notification(
+                            token=payload.token,
+                            stage="HOTSPOT_TOKEN_RESOLVE",
+                            reason_code="ACCOUNT_REPAIR_FAILED",
+                            message=normalize_iptv_text(str(exc), 700) or "IPTV account expiry could not be synced during customer login.",
+                            metadata={
+                                "bag_item_id": str(row.get("bag_item_id") or ""),
+                                "user_id": str(row.get("user_id") or ""),
+                            },
+                            request=request,
+                            severity="DANGER",
+                        )
+                        raise HTTPException(status_code=400, detail=normalize_iptv_text(str(exc), 700) or "IPTV account expiry could not be synced.") from exc
+                    repair_account = repair_result.get("account") if repair_result.get("status") in {"COVERED", "PROVISIONED"} else None
+                    if repair_account:
+                        row["account_expires_at"] = repair_account.get("expires_at")
+                        row["xui_username"] = repair_account.get("xui_username") or row.get("xui_username")
+                        row["xui_password_encrypted"] = repair_account.get("xui_password_encrypted") or row.get("xui_password_encrypted")
+                        account_expiry = aware_utc(repair_account.get("expires_at"))
+            if account_expiry and account_expiry <= now:
+                create_iptv_login_failure_notification(
+                    token=payload.token,
+                    stage="HOTSPOT_TOKEN_RESOLVE",
+                    reason_code="ACCOUNT_EXPIRED",
+                    message="IPTV token resolved, but the linked XUI account is expired.",
+                    metadata={
+                        "account_expires_at": row.get("account_expires_at"),
+                        "bag_active_until": row.get("bag_active_until"),
+                        "bag_item_id": str(row.get("bag_item_id") or ""),
+                        "user_id": str(row.get("user_id") or ""),
+                    },
+                    request=request,
+                    severity="WARNING",
+                )
+                raise HTTPException(status_code=400, detail="IPTV account has expired.")
+            password = decrypt_secret(row.get("xui_password_encrypted"))
+            if not password:
+                create_iptv_login_failure_notification(
+                    token=payload.token,
+                    stage="HOTSPOT_TOKEN_RESOLVE",
+                    reason_code="ACCOUNT_PASSWORD_UNAVAILABLE",
+                    message="IPTV token resolved, but the XUI account credential could not be decrypted.",
+                    metadata={
+                        "bag_item_id": str(row.get("bag_item_id") or ""),
+                        "user_id": str(row.get("user_id") or ""),
+                    },
+                    request=request,
+                    severity="DANGER",
+                )
+                raise HTTPException(status_code=500, detail="IPTV account credential is unavailable.")
+            cur.execute("UPDATE iptv_login_tokens SET used_at = now() WHERE id = %s", (row["id"],))
+            store = iptv_store()
+            return {
+                "status": "SUCCESS",
+                "xui_base_url": store.get("xui_base_url"),
+                "xui_public_url": store.get("xui_public_url"),
+                "xui_server_host": store.get("xui_server_host"),
+                "username": row.get("xui_username"),
+                "password": password,
+                "expires_at": row.get("bag_active_until") or row.get("account_expires_at"),
+                "access_expires_at": row.get("bag_active_until"),
+                "account_expires_at": row.get("account_expires_at"),
+                "all_bouquets": bool(row.get("all_bouquets")),
+                "max_connections": int(row.get("max_connections") or 1),
+                "product_name": row.get("product_name"),
+                "product_kind": row.get("product_kind") or "IPTV",
+                "customer": {
+                    "display_name": row.get("display_name"),
+                    "contact_number": row.get("contact_number"),
+                    "email": row.get("email"),
+                },
+            }
+
+
 
 def payment_checkout_method(store: dict, value: str) -> str:
     method = normalize_payment_text(value or "gcash", 40).lower()
@@ -12918,17 +15762,10 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
             customer_contact = normalize_payment_text((profile or {}).get("contact_number") or user.get("phone_number"), 32) or None
             cur.execute(
                 """
-                SELECT p.*,
-                       c.name AS category_name,
-                       c.description AS category_description,
-                       c.access_scope AS category_access_scope,
-                       c.allowed_barangay AS category_allowed_barangay,
-                       c.status AS category_status
+                SELECT p.*
                 FROM product_items p
-                LEFT JOIN product_categories c ON c.id = p.category_id
                 WHERE p.id = %s
                   AND p.status = 'ACTIVE'
-                  AND (c.id IS NULL OR c.status = 'ACTIVE')
                 """,
                 (payload.product_item_id,),
             )
@@ -12936,8 +15773,37 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
             if not product:
                 raise HTTPException(status_code=404, detail="Product item not found or disabled")
             product["discounts"] = product_item_discount_rows([str(product["id"])], active_only=True)
+            product_kind = normalize_product_kind(product.get("product_kind"))
+            if product_kind_requires_iptv(product_kind) and not portal_profile_is_configured(profile):
+                raise HTTPException(status_code=400, detail="Set your customer profile before buying IPTV. IPTV access needs a verified profile for account creation and recovery.")
             site_row = site_deployment_for_portal_context(session, payload)
             current_barangay = normalize_barangay_label((site_row or {}).get("barangay"))
+            selected_category_id = normalize_product_category_id(payload.product_category_id) or normalize_product_category_id(product.get("category_id"))
+            category_row = None
+            if selected_category_id:
+                cur.execute(
+                    """
+                    SELECT c.*
+                    FROM product_categories c
+                    JOIN product_category_item_assignments pcia ON pcia.category_id = c.id
+                    WHERE c.id = %s
+                      AND pcia.item_id = %s
+                      AND c.status = 'ACTIVE'
+                      AND pcia.status = 'ACTIVE'
+                    """,
+                    (selected_category_id, product["id"]),
+                )
+                category_row = cur.fetchone()
+                if not category_row:
+                    raise HTTPException(status_code=400, detail="Selected product category is not available for this item.")
+            elif product.get("category_id"):
+                category_row = product_category_for_payload(cur, product.get("category_id"), active_only=True)
+            if category_row:
+                product["category_id"] = category_row["id"]
+                product["category_name"] = category_row.get("name")
+                product["category_description"] = category_row.get("description")
+                product["category_access_scope"] = category_row.get("access_scope")
+                product["category_allowed_barangay"] = category_row.get("allowed_barangay")
             category_access_scope = normalize_product_access_scope(product.get("category_access_scope") or "ALL_LOCATIONS")
             selected_barangay = normalize_barangay_label(payload.selected_barangay)
             legacy_category_barangay = normalize_barangay_label(product.get("category_allowed_barangay"))
@@ -12968,7 +15834,9 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     status, fulfillment_status, payment_method, amount_centavos, base_amount_centavos,
                     purchase_quantity, discount_type, discount_value, discount_amount_centavos, currency, product_name,
                     product_description, duration_seconds, product_category_id,
-                    product_category_name, product_category_access_scope, product_category_barangay, client_mac, client_ip, user_agent,
+                    product_category_name, product_category_access_scope, product_category_barangay,
+                    product_kind, iptv_package_label, iptv_xui_package_id,
+                    client_mac, client_ip, user_agent,
                     customer_name, customer_email, customer_contact_number, outside_network_purchase
                 )
                 VALUES (
@@ -12976,6 +15844,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     'PENDING', 'PENDING', %s, %s, %s,
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
+                    %s, %s, %s,
                     %s, %s, %s, NULLIF(%s, '')::inet, %s,
                     %s, %s, %s, %s
                 )
@@ -13002,6 +15871,9 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     product.get("category_name"),
                     category_access_scope,
                     category_barangay,
+                    product_kind,
+                    normalize_payment_text(product.get("iptv_package_label"), 160) or None,
+                    normalize_payment_text(product.get("iptv_xui_package_id"), 160) or None,
                     session.get("client_mac") or session.get("omada_client_mac") or session.get("mikrotik_client_mac"),
                     str(session.get("client_ip") or public_ip(request) or ""),
                     request.headers.get("user-agent"),
@@ -13051,6 +15923,10 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     "discount_amount_centavos": order.get("discount_amount_centavos") or 0,
                     "currency": order["currency"],
                     "product_name": order["product_name"],
+                    "product_kind": order.get("product_kind") or "WIFI",
+                    "product_kind_label": product_kind_label(order.get("product_kind")),
+                    "iptv_enabled": product_kind_requires_iptv(order.get("product_kind")),
+                    "iptv_package_label": order.get("iptv_package_label"),
                     "product_category_name": order.get("product_category_name"),
                     "product_category_access_scope": order.get("product_category_access_scope"),
                     "product_category_barangay": order.get("product_category_barangay"),
@@ -13222,15 +16098,22 @@ def fulfill_paid_payment_order(cur, order: dict, request: Request):
     activation = {"status": "QUEUED", "message": "Payment item saved to customer bag."}
     cur.execute(
         """
-        SELECT id
+        SELECT id, product_kind
         FROM customer_bag_items
         WHERE user_id = %s AND status = 'ACTIVE'
-        LIMIT 1
         """,
         (user["id"],),
     )
-    active_exists = bool(cur.fetchone())
-    if bool(settings.get("auto_activate")) and not active_exists and not bool(order.get("outside_network_purchase")):
+    active_rows = cur.fetchall()
+    product_kind = normalize_product_kind(bag_item.get("product_kind"))
+    if product_kind_is_iptv_only(product_kind):
+        active_exists = any(product_kind_requires_iptv(row.get("product_kind")) for row in active_rows)
+    elif product_kind_grants_hotspot(product_kind):
+        active_exists = any(product_kind_grants_hotspot(row.get("product_kind")) for row in active_rows)
+    else:
+        active_exists = bool(active_rows)
+    can_auto_activate = product_kind_is_iptv_only(product_kind) or (product_kind_grants_hotspot(product_kind) and not bool(order.get("outside_network_purchase")))
+    if bool(settings.get("auto_activate")) and can_auto_activate and not active_exists:
         activation = activate_customer_bag_item(cur, bag_item, session, request, "PAYMENT_FULFILLMENT", require_current_network=False)
         if activation.get("status") == "SUCCESS":
             bag_item = activation["item"]
@@ -13264,7 +16147,10 @@ def fulfill_paid_payment_order(cur, order: dict, request: Request):
         (voucher_id, user["id"], order["id"]),
     )
     fulfilled_order = cur.fetchone()
-    message = "Payment received. Internet access activated." if activation.get("status") == "SUCCESS" else "Payment received. Package saved to your bag."
+    if product_kind_is_iptv_only(bag_item.get("product_kind")):
+        message = "Payment received. IPTV pass activated." if activation.get("status") == "SUCCESS" else "Payment received. IPTV pass saved to your bag."
+    else:
+        message = "Payment received. Internet access activated." if activation.get("status") == "SUCCESS" else "Payment received. Package saved to your bag."
     create_portal_event(cur, session["id"], "PAYMENT_FULFILLMENT_SUCCESS", request, message, raw_context={"payment_order_id": order["public_order_id"], "bag_item_id": str(bag_item["id"]), "activation": sanitize_summary(activation)})
     fulfilled_order["_bag_item"] = bag_item
     return {"status": "FULFILLED", "order": fulfilled_order, "bag_item": bag_item, "activation": sanitize_summary(activation)}
@@ -13778,11 +16664,147 @@ def voucher_summary():
 
 PRODUCT_DURATION_UNITS = {"minutes", "hours", "days"}
 PRODUCT_ITEM_STATUSES = {"ACTIVE", "DISABLED"}
+PRODUCT_ITEM_KINDS = {"WIFI", "IPTV", "WIFI_IPTV"}
 PRODUCT_DISCOUNT_TYPES = {"PERCENT", "FIXED"}
 PRODUCT_CATEGORY_ACCESS_SCOPES = {"ALL_LOCATIONS", "BARANGAY_ONLY"}
 PRODUCT_CATEGORY_STATUSES = {"ACTIVE", "DISABLED"}
 PHYSICAL_STORE_STATUSES = {"SETUP", "ACTIVE", "DISABLED"}
 PHYSICAL_STORE_COMMISSION_TYPES = {"PERCENT_OF_SALES", "FIXED_MONTHLY"}
+ITEM_COLOR_PALETTE = [
+    {"key": "coral", "label": "Coral", "hex": "#fb7185"},
+    {"key": "orange", "label": "Orange", "hex": "#f97316"},
+    {"key": "amber", "label": "Amber", "hex": "#f59e0b"},
+    {"key": "gold", "label": "Gold", "hex": "#eab308"},
+    {"key": "lime", "label": "Lime", "hex": "#84cc16"},
+    {"key": "emerald", "label": "Emerald", "hex": "#10b981"},
+    {"key": "mint", "label": "Mint", "hex": "#34d399"},
+    {"key": "teal", "label": "Teal", "hex": "#14b8a6"},
+    {"key": "aqua", "label": "Aqua", "hex": "#06b6d4"},
+    {"key": "sky", "label": "Sky", "hex": "#0ea5e9"},
+    {"key": "blue", "label": "Blue", "hex": "#3b82f6"},
+    {"key": "indigo", "label": "Indigo", "hex": "#6366f1"},
+    {"key": "violet", "label": "Violet", "hex": "#8b5cf6"},
+    {"key": "purple", "label": "Purple", "hex": "#a855f7"},
+    {"key": "fuchsia", "label": "Fuchsia", "hex": "#d946ef"},
+    {"key": "pink", "label": "Pink", "hex": "#ec4899"},
+    {"key": "rose", "label": "Rose", "hex": "#f43f5e"},
+    {"key": "red", "label": "Red", "hex": "#ef4444"},
+    {"key": "slate", "label": "Slate", "hex": "#64748b"},
+    {"key": "gray", "label": "Gray", "hex": "#6b7280"},
+    {"key": "stone", "label": "Stone", "hex": "#78716c"},
+    {"key": "pearl", "label": "Pearl", "hex": "#f8fafc"},
+    {"key": "graphite", "label": "Graphite", "hex": "#111827"},
+    {"key": "cyan", "label": "Cyan", "hex": "#22d3ee"},
+]
+ITEM_COLOR_BY_KEY = {item["key"]: item for item in ITEM_COLOR_PALETTE}
+ITEM_COLOR_TABLES = {"product_items", "physical_store_items"}
+ITEM_COLOR_CUSTOM_KEY = "custom"
+ITEM_COLOR_HEX_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def normalize_item_color_key(value: Optional[str]) -> Optional[str]:
+    key = normalize_payment_text(value, 40).lower().replace(" ", "-").replace("_", "-")
+    if not key:
+        return None
+    if key == ITEM_COLOR_CUSTOM_KEY:
+        return ITEM_COLOR_CUSTOM_KEY
+    return key if key in ITEM_COLOR_BY_KEY else None
+
+
+def normalize_item_color_hex(value: Optional[str]) -> Optional[str]:
+    text = normalize_payment_text(value, 20)
+    if not text:
+        return None
+    if not text.startswith("#"):
+        text = f"#{text}"
+    if not ITEM_COLOR_HEX_RE.match(text):
+        return None
+    if len(text) == 4:
+        text = "#" + "".join(char * 2 for char in text[1:])
+    return text.lower()
+
+
+def item_color_used_keys(table_name: str, exclude_item_id: Optional[str] = None) -> set[str]:
+    if table_name not in ITEM_COLOR_TABLES:
+        return set()
+    params = []
+    exclude_clause = ""
+    if exclude_item_id:
+        exclude_clause = "AND id <> %s"
+        params.append(str(exclude_item_id))
+    rows = fetch_all(
+        f"""
+        SELECT DISTINCT item_color_key
+        FROM {table_name}
+        WHERE COALESCE(item_color_key, '') <> ''
+          {exclude_clause}
+        """
+    , tuple(params))
+    return {
+        key
+        for key in (normalize_item_color_key(row.get("item_color_key")) for row in rows)
+        if key and key in ITEM_COLOR_BY_KEY
+    }
+
+
+def next_item_palette_color(table_name: str, exclude_item_id: Optional[str] = None) -> dict:
+    used = item_color_used_keys(table_name, exclude_item_id)
+    for color in ITEM_COLOR_PALETTE:
+        if color["key"] not in used:
+            return color
+    return ITEM_COLOR_PALETTE[0]
+
+
+def item_color_values(payload, table_name: str, current: Optional[dict] = None) -> dict:
+    exclude_id = str(current["id"]) if current and current.get("id") else None
+    requested_key = normalize_item_color_key(getattr(payload, "color_key", None))
+    requested_hex = normalize_item_color_hex(getattr(payload, "color_hex", None))
+    if requested_key in ITEM_COLOR_BY_KEY:
+        color = ITEM_COLOR_BY_KEY[requested_key]
+        return {"item_color_key": color["key"], "item_color_hex": color["hex"]}
+    used = item_color_used_keys(table_name, exclude_id)
+    all_presets_used = all(color["key"] in used for color in ITEM_COLOR_PALETTE)
+    current_key = normalize_item_color_key((current or {}).get("item_color_key"))
+    current_hex = normalize_item_color_hex((current or {}).get("item_color_hex"))
+    if requested_hex and (all_presets_used or current_key == ITEM_COLOR_CUSTOM_KEY):
+        return {"item_color_key": ITEM_COLOR_CUSTOM_KEY, "item_color_hex": requested_hex}
+    if current_key in ITEM_COLOR_BY_KEY:
+        color = ITEM_COLOR_BY_KEY[current_key]
+        return {"item_color_key": color["key"], "item_color_hex": color["hex"]}
+    if current_key == ITEM_COLOR_CUSTOM_KEY and current_hex:
+        return {"item_color_key": ITEM_COLOR_CUSTOM_KEY, "item_color_hex": current_hex}
+    color = next_item_palette_color(table_name, exclude_id)
+    return {"item_color_key": color["key"], "item_color_hex": color["hex"]}
+
+
+def serialize_item_color(row) -> dict:
+    key = normalize_item_color_key(row.get("item_color_key") if row else None)
+    hex_value = normalize_item_color_hex(row.get("item_color_hex") if row else None)
+    if key in ITEM_COLOR_BY_KEY:
+        color = ITEM_COLOR_BY_KEY[key]
+        return {
+            "color_key": color["key"],
+            "color_hex": color["hex"],
+            "item_color_key": color["key"],
+            "item_color_hex": color["hex"],
+            "color_label": color["label"],
+        }
+    if hex_value:
+        return {
+            "color_key": ITEM_COLOR_CUSTOM_KEY,
+            "color_hex": hex_value,
+            "item_color_key": ITEM_COLOR_CUSTOM_KEY,
+            "item_color_hex": hex_value,
+            "color_label": "Custom",
+        }
+    color = ITEM_COLOR_PALETTE[0]
+    return {
+        "color_key": color["key"],
+        "color_hex": color["hex"],
+        "item_color_key": color["key"],
+        "item_color_hex": color["hex"],
+        "color_label": color["label"],
+    }
 
 
 def normalize_product_duration_unit(value: Optional[str]) -> str:
@@ -13807,6 +16829,44 @@ def normalize_product_status(value: Optional[str]) -> str:
     if status not in PRODUCT_ITEM_STATUSES:
         raise HTTPException(status_code=400, detail="Product status must be ACTIVE or DISABLED.")
     return status
+
+
+def normalize_product_kind(value: Optional[str]) -> str:
+    kind = (value or "WIFI").strip().upper().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "INTERNET": "WIFI",
+        "WIFI_ONLY": "WIFI",
+        "IPTV_ONLY": "IPTV",
+        "TV": "IPTV",
+        "WIFI+IPTV": "WIFI_IPTV",
+        "WIFI_AND_IPTV": "WIFI_IPTV",
+        "INTERNET_WITH_IPTV": "WIFI_IPTV",
+    }
+    kind = aliases.get(kind, kind)
+    if kind not in PRODUCT_ITEM_KINDS:
+        raise HTTPException(status_code=400, detail="Product access type must be WiFi, IPTV, or WiFi + IPTV.")
+    return kind
+
+
+def product_kind_label(kind: Optional[str]) -> str:
+    normalized = normalize_product_kind(kind)
+    if normalized == "IPTV":
+        return "IPTV only"
+    if normalized == "WIFI_IPTV":
+        return "WiFi + IPTV"
+    return "WiFi only"
+
+
+def product_kind_requires_iptv(kind: Optional[str]) -> bool:
+    return normalize_product_kind(kind) in {"IPTV", "WIFI_IPTV"}
+
+
+def product_kind_grants_hotspot(kind: Optional[str]) -> bool:
+    return normalize_product_kind(kind) in {"WIFI", "WIFI_IPTV"}
+
+
+def product_kind_is_iptv_only(kind: Optional[str]) -> bool:
+    return normalize_product_kind(kind) == "IPTV"
 
 
 def normalize_product_category_status(value: Optional[str]) -> str:
@@ -14335,9 +17395,17 @@ def product_category_rows(active_only: bool = False) -> list[dict]:
     where = "WHERE c.status = 'ACTIVE'" if active_only else ""
     rows = fetch_all(
         f"""
-        SELECT c.*, COALESCE(count(p.id), 0) AS product_count
+        SELECT c.*,
+               COALESCE(
+                   COUNT(pcia.item_id) FILTER (
+                       WHERE pcia.status = 'ACTIVE'
+                         AND p.status = 'ACTIVE'
+                   ),
+                   0
+               ) AS product_count
         FROM product_categories c
-        LEFT JOIN product_items p ON p.category_id = c.id
+        LEFT JOIN product_category_item_assignments pcia ON pcia.category_id = c.id
+        LEFT JOIN product_items p ON p.id = pcia.item_id
         {where}
         GROUP BY c.id
         ORDER BY c.sort_order ASC, c.name ASC, c.created_at DESC
@@ -14358,6 +17426,46 @@ def product_category_for_payload(cur, category_id: Optional[str], active_only: b
     return category
 
 
+def normalize_product_category_item_ids(item_ids: list[str]) -> list[str]:
+    clean_ids: list[str] = []
+    seen = set()
+    for item_id in item_ids or []:
+        if not item_id:
+            continue
+        try:
+            clean_id = str(uuid.UUID(str(item_id)))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="One selected product item is invalid.") from exc
+        if clean_id not in seen:
+            seen.add(clean_id)
+            clean_ids.append(clean_id)
+    return clean_ids
+
+
+def replace_product_category_item_assignments(cur, category_id: str, item_ids: list[str]) -> None:
+    clean_item_ids = normalize_product_category_item_ids(item_ids)
+    cur.execute("DELETE FROM product_category_item_assignments WHERE category_id = %s", (category_id,))
+    if not clean_item_ids:
+        return
+    cur.execute("SELECT id FROM product_items WHERE id = ANY(%s::uuid[])", (clean_item_ids,))
+    found_ids = {str(row["id"]) for row in cur.fetchall()}
+    missing = [item_id for item_id in clean_item_ids if item_id not in found_ids]
+    if missing:
+        raise HTTPException(status_code=400, detail="One selected product item no longer exists.")
+    for index, item_id in enumerate(clean_item_ids, start=1):
+        cur.execute(
+            """
+            INSERT INTO product_category_item_assignments(category_id, item_id, status, sort_order)
+            VALUES (%s, %s, 'ACTIVE', %s)
+            ON CONFLICT (category_id, item_id) DO UPDATE
+            SET status = 'ACTIVE',
+                sort_order = EXCLUDED.sort_order,
+                updated_at = now()
+            """,
+            (category_id, item_id, index),
+        )
+
+
 def serialize_product_item(row) -> dict:
     if not row:
         return {}
@@ -14373,9 +17481,16 @@ def serialize_product_item(row) -> dict:
     enabled_category_discount_ids = row.get("enabled_category_discount_ids")
     if enabled_category_discount_ids is not None and not isinstance(enabled_category_discount_ids, list):
         enabled_category_discount_ids = []
+    product_kind = normalize_product_kind(row.get("product_kind"))
+    iptv_enabled = product_kind_requires_iptv(product_kind)
+    color = serialize_item_color(row)
     return {
         "id": str(row["id"]),
         "category_id": str(row["category_id"]) if row.get("category_id") else None,
+        "assigned_category_id": str(row["assigned_category_id"]) if row.get("assigned_category_id") else None,
+        "assignment_status": row.get("assignment_status") or None,
+        "assignment_sort_order": int(row.get("assignment_sort_order") or 0),
+        "assigned_category_count": int(row.get("assigned_category_count") or 0),
         "category_name": row.get("category_name") or "Uncategorized",
         "category_description": row.get("category_description") or "",
         "category_image_url": row.get("category_image_url") or "",
@@ -14386,12 +17501,20 @@ def serialize_product_item(row) -> dict:
         "category_restricted": category_access_scope == "BARANGAY_ONLY",
         "name": row["name"],
         "description": row.get("description") or "",
+        **color,
         "price": price,
         "price_display": f"PHP {price:,.2f}",
         "duration_value": row["duration_value"],
         "duration_unit": duration_unit,
         "duration_seconds": product_duration_seconds(row["duration_value"], duration_unit),
         "duration_label": product_duration_label(row["duration_value"], duration_unit),
+        "product_kind": product_kind,
+        "product_kind_label": product_kind_label(product_kind),
+        "iptv_enabled": iptv_enabled,
+        "iptv_package_label": row.get("iptv_package_label") or "",
+        "iptv_xui_package_id": row.get("iptv_xui_package_id") or "",
+        "iptv_auto_provision": bool(row.get("iptv_auto_provision")),
+        "iptv_notes": row.get("iptv_notes") or "",
         "use_category_discounts": bool(use_category_discounts),
         "enabled_category_discount_ids": enabled_category_discount_ids,
         "category_discounts": category_discounts,
@@ -14409,21 +17532,23 @@ def serialize_product_item(row) -> dict:
 
 
 def product_item_rows(active_only: bool = False) -> list[dict]:
-    where = "WHERE p.status = 'ACTIVE' AND (c.id IS NULL OR c.status = 'ACTIVE')" if active_only else ""
+    where = "WHERE p.status = 'ACTIVE'" if active_only else ""
     rows = fetch_all(
         f"""
         SELECT p.*,
-               c.name AS category_name,
-               c.description AS category_description,
-               c.image_url AS category_image_url,
-               c.access_scope AS category_access_scope,
-               c.allowed_barangay AS category_allowed_barangay,
-               c.status AS category_status,
-               c.sort_order AS category_sort_order
+               NULL::uuid AS assigned_category_id,
+               NULL::text AS assignment_status,
+               0::int AS assignment_sort_order,
+               COALESCE(assigned.category_count, 0)::int AS assigned_category_count
         FROM product_items p
-        LEFT JOIN product_categories c ON c.id = p.category_id
+        LEFT JOIN (
+            SELECT item_id, COUNT(*)::int AS category_count
+            FROM product_category_item_assignments
+            WHERE status = 'ACTIVE'
+            GROUP BY item_id
+        ) assigned ON assigned.item_id = p.id
         {where}
-        ORDER BY COALESCE(c.sort_order, 999999) ASC, c.name ASC, p.sort_order ASC, p.price ASC, p.created_at DESC
+        ORDER BY p.sort_order ASC, p.price ASC, p.name ASC, p.created_at DESC
         """
     )
     item_ids = sorted({str(row["id"]) for row in rows if row.get("id")})
@@ -14436,6 +17561,70 @@ def product_item_rows(active_only: bool = False) -> list[dict]:
         row["category_discounts"] = []
         serialized.append(serialize_product_item(row))
     return serialized
+
+
+def product_category_item_rows(category_ids: Optional[list[str]] = None, active_only: bool = False) -> dict[str, list[dict]]:
+    if category_ids is not None:
+        ids = [str(category_id) for category_id in category_ids if category_id]
+        if not ids:
+            return {}
+        active_clause = "AND p.status = 'ACTIVE' AND pcia.status = 'ACTIVE' AND c.status = 'ACTIVE'" if active_only else ""
+        rows = fetch_all(
+            f"""
+            SELECT p.*,
+                   c.id AS category_id,
+                   c.id AS assigned_category_id,
+                   c.name AS category_name,
+                   c.description AS category_description,
+                   c.image_url AS category_image_url,
+                   c.access_scope AS category_access_scope,
+                   c.allowed_barangay AS category_allowed_barangay,
+                   c.status AS category_status,
+                   c.sort_order AS category_sort_order,
+                   pcia.status AS assignment_status,
+                   pcia.sort_order AS assignment_sort_order,
+                   COALESCE(assigned.category_count, 0)::int AS assigned_category_count
+            FROM product_category_item_assignments pcia
+            JOIN product_items p ON p.id = pcia.item_id
+            JOIN product_categories c ON c.id = pcia.category_id
+            LEFT JOIN (
+                SELECT item_id, COUNT(*)::int AS category_count
+                FROM product_category_item_assignments
+                WHERE status = 'ACTIVE'
+                GROUP BY item_id
+            ) assigned ON assigned.item_id = p.id
+            WHERE pcia.category_id = ANY(%s::uuid[])
+              {active_clause}
+            ORDER BY c.sort_order ASC, pcia.sort_order ASC, p.sort_order ASC, p.price ASC, p.name ASC, p.created_at DESC
+            """,
+            (ids,),
+        )
+        item_ids = sorted({str(row["id"]) for row in rows if row.get("id")})
+        discount_map: dict[str, list[dict]] = {}
+        for discount in product_item_discount_rows(item_ids, active_only=active_only):
+            discount_map.setdefault(discount["product_item_id"], []).append(discount)
+        grouped: dict[str, list[dict]] = {}
+        for row in rows:
+            row["discounts"] = discount_map.get(str(row["id"]), [])
+            row["category_discounts"] = []
+            grouped.setdefault(str(row["assigned_category_id"]), []).append(serialize_product_item(row))
+        return grouped
+    return {"catalog": product_item_rows(active_only=active_only)}
+
+
+def attach_product_items_to_categories(categories: list[dict], active_only: bool = False) -> list[dict]:
+    category_ids = [category["id"] for category in categories if category.get("id")]
+    item_map = product_category_item_rows(category_ids, active_only=active_only)
+    attached = []
+    for category in categories:
+        items = item_map.get(category["id"], [])
+        attached.append({
+            **category,
+            "items": items,
+            "item_ids": [item["id"] for item in items],
+            "product_count": len(items),
+        })
+    return attached
 
 
 def group_product_items_by_category(items: list[dict], categories: Optional[list[dict]] = None) -> list[dict]:
@@ -14889,6 +18078,7 @@ def serialize_physical_store_item(row) -> dict:
     access_scope = normalize_product_access_scope(row.get("access_scope") or "ALL_LOCATIONS")
     allowed_barangay = normalize_barangay_label(row.get("allowed_barangay"))
     price = float(row.get("price") or 0)
+    color = serialize_item_color(row)
     return {
         "id": str(row["id"]),
         "store_id": str(row["store_id"]) if row.get("store_id") else None,
@@ -14896,6 +18086,7 @@ def serialize_physical_store_item(row) -> dict:
         "assignment_status": row.get("assignment_status") or None,
         "name": row.get("name") or "",
         "description": row.get("description") or "",
+        **color,
         "price": price,
         "price_display": f"PHP {price:,.2f}",
         "duration_value": int(row.get("duration_value") or 1),
@@ -14955,7 +18146,7 @@ def physical_store_item_catalog_rows(active_only: bool = False) -> list[dict]:
     return physical_store_item_rows(None, active_only=active_only).get("catalog", [])
 
 
-def physical_store_item_payload_values(payload: PhysicalStoreItemPayload) -> dict:
+def physical_store_item_payload_values(payload: PhysicalStoreItemPayload, current: Optional[dict] = None) -> dict:
     duration_unit = normalize_product_duration_unit(payload.duration_unit)
     access_scope = normalize_product_access_scope(payload.access_scope)
     name = re.sub(r"\s+", " ", payload.name.strip())
@@ -14964,9 +18155,11 @@ def physical_store_item_payload_values(payload: PhysicalStoreItemPayload) -> dic
     allowed_barangay = normalize_barangay_label(payload.allowed_barangay)
     if access_scope == "BARANGAY_ONLY" and not allowed_barangay:
         raise HTTPException(status_code=400, detail="Choose the Barangay where this store item is allowed.")
+    color = item_color_values(payload, "physical_store_items", current)
     return {
         "name": name,
         "description": normalize_payment_text(payload.description, 500) or None,
+        **color,
         "price": payload.price,
         "duration_value": int(payload.duration_value),
         "duration_unit": duration_unit,
@@ -16951,6 +20144,7 @@ def adjust_portal_session_time(
         raise HTTPException(status_code=400, detail="This device has no active voucher or product item to manage.")
 
     affected_bag_item_ids = []
+    iptv_line_results = []
     actual_delta_seconds = 0
     if target_bag_items:
         for item in target_bag_items:
@@ -16977,6 +20171,8 @@ def adjust_portal_session_time(
             )
             updated_item = cur.fetchone()
             affected_bag_item_ids.append(str(updated_item["id"]))
+            if finished and product_kind_requires_iptv(updated_item.get("product_kind")):
+                iptv_line_results.append(sanitize_summary(schedule_iptv_line_deletion_for_bag_item(cur, updated_item, "ADMIN_ACCESS_REMOVED")))
             create_customer_bag_event(
                 cur,
                 item["user_id"],
@@ -16994,7 +20190,7 @@ def adjust_portal_session_time(
             )
         cur.execute(
             """
-            SELECT max(access_until) AS access_until
+            SELECT max(active_until) AS access_until
             FROM customer_bag_items
             WHERE portal_session_id = %s
               AND status = 'ACTIVE'
@@ -17060,6 +20256,7 @@ def adjust_portal_session_time(
         "remaining_time_seconds": max(int((aware_utc(updated.get("access_expires_at")) - now).total_seconds()), 0),
         "actual_delta_seconds": actual_delta_seconds,
         "affected_bag_item_ids": affected_bag_item_ids,
+        "iptv_line_results": iptv_line_results,
         "omada_sync": sanitize_summary(omada_sync),
     }
 
@@ -17482,17 +20679,18 @@ def get_physical_store_item_catalog(admin=Depends(current_admin)):
 
 @app.post("/api/physical-store-items")
 def create_physical_store_catalog_item(payload: PhysicalStoreItemPayload, admin=Depends(current_admin)):
-    values = physical_store_item_payload_values(payload)
+    values = physical_store_item_payload_values(payload, current)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO physical_store_items(
                     store_id, name, description, price, duration_value, duration_unit,
+                    item_color_key, item_color_hex,
                     access_scope, allowed_barangay, more_info_enabled, more_info_text,
                     status, sort_order, created_by_admin_id
                 )
-                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -17501,6 +20699,8 @@ def create_physical_store_catalog_item(payload: PhysicalStoreItemPayload, admin=
                     values["price"],
                     values["duration_value"],
                     values["duration_unit"],
+                    values["item_color_key"],
+                    values["item_color_hex"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -17531,6 +20731,8 @@ def update_physical_store_catalog_item(item_id: str, payload: PhysicalStoreItemP
                     price = %s,
                     duration_value = %s,
                     duration_unit = %s,
+                    item_color_key = %s,
+                    item_color_hex = %s,
                     access_scope = %s,
                     allowed_barangay = %s,
                     more_info_enabled = %s,
@@ -17547,6 +20749,8 @@ def update_physical_store_catalog_item(item_id: str, payload: PhysicalStoreItemP
                     values["price"],
                     values["duration_value"],
                     values["duration_unit"],
+                    values["item_color_key"],
+                    values["item_color_hex"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -17594,10 +20798,11 @@ def create_physical_store_item(store_id: str, payload: PhysicalStoreItemPayload,
                 """
                 INSERT INTO physical_store_items(
                     store_id, name, description, price, duration_value, duration_unit,
+                    item_color_key, item_color_hex,
                     access_scope, allowed_barangay, more_info_enabled, more_info_text,
                     status, sort_order, created_by_admin_id
                 )
-                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -17606,6 +20811,8 @@ def create_physical_store_item(store_id: str, payload: PhysicalStoreItemPayload,
                     values["price"],
                     values["duration_value"],
                     values["duration_unit"],
+                    values["item_color_key"],
+                    values["item_color_hex"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -17644,7 +20851,7 @@ def update_physical_store_item(store_id: str, item_id: str, payload: PhysicalSto
     )
     if not current:
         raise HTTPException(status_code=404, detail="Store item not found.")
-    values = physical_store_item_payload_values(payload)
+    values = physical_store_item_payload_values(payload, current)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -17655,6 +20862,8 @@ def update_physical_store_item(store_id: str, item_id: str, payload: PhysicalSto
                     price = %s,
                     duration_value = %s,
                     duration_unit = %s,
+                    item_color_key = %s,
+                    item_color_hex = %s,
                     access_scope = %s,
                     allowed_barangay = %s,
                     more_info_enabled = %s,
@@ -17671,6 +20880,8 @@ def update_physical_store_item(store_id: str, item_id: str, payload: PhysicalSto
                     values["price"],
                     values["duration_value"],
                     values["duration_unit"],
+                    values["item_color_key"],
+                    values["item_color_hex"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -18782,11 +21993,11 @@ def store_portal_customer_buy_item(user_id: str, payload: StorePortalCustomerBuy
 @app.get("/api/product-items")
 def get_product_items(admin=Depends(current_admin)):
     items = product_item_rows(active_only=False)
-    categories = product_category_rows(active_only=False)
+    categories = attach_product_items_to_categories(product_category_rows(active_only=False), active_only=False)
     return {
         "items": items,
         "categories": categories,
-        "category_groups": group_product_items_by_category(items, categories),
+        "category_groups": [category for category in categories if category.get("items")],
         "summary": {
             "total": len(items),
             "active": len([item for item in items if item["status"] == "ACTIVE"]),
@@ -18801,9 +22012,9 @@ def get_product_items(admin=Depends(current_admin)):
 
 @app.get("/api/portal/product-items")
 def get_public_product_items():
-    items = product_item_rows(active_only=True)
-    categories = product_category_rows(active_only=True)
-    return {"items": items, "categories": group_product_items_by_category(items, categories)}
+    categories = attach_product_items_to_categories(product_category_rows(active_only=True), active_only=True)
+    items = [item for category in categories for item in (category.get("items") or [])]
+    return {"items": items, "categories": [category for category in categories if category.get("items")]}
 
 
 @app.get("/api/product-categories")
@@ -18843,9 +22054,11 @@ def create_product_category(payload: ProductCategoryPayload, admin=Depends(curre
             )
             row = cur.fetchone()
             replace_product_category_discounts(cur, str(row["id"]), payload.discounts)
+            replace_product_category_item_assignments(cur, str(row["id"]), payload.item_ids)
     row["discounts"] = product_category_discount_rows([str(row["id"])], active_only=False)
+    row = attach_product_items_to_categories([serialize_product_category(row)], active_only=False)[0]
     audit(admin["id"], "create_product_category", "product_categories", str(row["id"]), {"name": row["name"], "access_scope": row["access_scope"], "allowed_barangay": row.get("allowed_barangay")})
-    return serialize_product_category(row)
+    return row
 
 
 @app.put("/api/product-categories/reorder")
@@ -18912,9 +22125,11 @@ def update_product_category(category_id: str, payload: ProductCategoryPayload, a
             )
             row = cur.fetchone()
             replace_product_category_discounts(cur, str(row["id"]), payload.discounts)
+            replace_product_category_item_assignments(cur, str(row["id"]), payload.item_ids)
     row["discounts"] = product_category_discount_rows([str(row["id"])], active_only=False)
+    serialized = attach_product_items_to_categories([serialize_product_category(row)], active_only=False)[0]
     audit(admin["id"], "update_product_category", "product_categories", category_id, {"name": row["name"], "access_scope": row["access_scope"], "status": row["status"]})
-    return serialize_product_category(row)
+    return serialized
 
 
 PRODUCT_CATEGORY_IMAGE_MAX_BYTES = 2 * 1024 * 1024
@@ -18995,22 +22210,43 @@ def delete_product_category(category_id: str, admin=Depends(current_admin)):
 def create_product_item(payload: ProductItemPayload, admin=Depends(current_admin)):
     duration_unit = normalize_product_duration_unit(payload.duration_unit)
     status = normalize_product_status(payload.status)
+    product_kind = normalize_product_kind(payload.product_kind)
+    color = item_color_values(payload, "product_items")
+    iptv_package_label = normalize_payment_text(payload.iptv_package_label, 160) or None
+    iptv_xui_package_id = normalize_payment_text(payload.iptv_xui_package_id, 160) or None
+    iptv_notes = normalize_payment_text(payload.iptv_notes, 1000) or None
+    if not product_kind_requires_iptv(product_kind):
+        iptv_package_label = None
+        iptv_xui_package_id = None
+        iptv_notes = None
     with get_conn() as conn:
         with conn.cursor() as cur:
-            category = product_category_for_payload(cur, payload.category_id)
             cur.execute(
                 """
-                INSERT INTO product_items(category_id, name, description, price, duration_value, duration_unit, use_category_discounts, enabled_category_discount_ids, discount_enabled, discount_min_quantity, discount_type, discount_value, status, sort_order, created_by_admin_id)
-                VALUES (%s, %s, %s, %s, %s, %s, FALSE, NULL, FALSE, NULL, NULL, 0, %s, %s, %s)
+                INSERT INTO product_items(
+                    category_id, name, description, price, duration_value, duration_unit,
+                    item_color_key, item_color_hex,
+                    product_kind, iptv_package_label, iptv_xui_package_id, iptv_auto_provision, iptv_notes,
+                    use_category_discounts, enabled_category_discount_ids, discount_enabled, discount_min_quantity,
+                    discount_type, discount_value, status, sort_order, created_by_admin_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL, FALSE, NULL, NULL, 0, %s, %s, %s)
                 RETURNING *
                 """,
                 (
-                    category["id"] if category else None,
+                    None,
                     payload.name.strip(),
                     (payload.description or "").strip() or None,
                     payload.price,
                     payload.duration_value,
                     duration_unit,
+                    color["item_color_key"],
+                    color["item_color_hex"],
+                    product_kind,
+                    iptv_package_label,
+                    iptv_xui_package_id,
+                    bool(payload.iptv_auto_provision and False),
+                    iptv_notes,
                     status,
                     payload.sort_order,
                     admin["id"],
@@ -19019,14 +22255,8 @@ def create_product_item(payload: ProductItemPayload, admin=Depends(current_admin
             row = cur.fetchone()
             replace_product_item_discounts(cur, str(row["id"]), payload.discounts)
             row["discounts"] = product_item_discount_rows([str(row["id"])], active_only=False)
-            if category:
-                row["category_name"] = category["name"]
-                row["category_description"] = category.get("description")
-                row["category_image_url"] = category.get("image_url")
-                row["category_access_scope"] = category.get("access_scope")
-                row["category_allowed_barangay"] = category.get("allowed_barangay")
-                row["category_discounts"] = []
-    audit(admin["id"], "create_product_item", "product_items", str(row["id"]), {"name": row["name"], "price": float(row["price"]), "duration": product_duration_label(row["duration_value"], row["duration_unit"])})
+            row["category_discounts"] = []
+    audit(admin["id"], "create_product_item", "product_items", str(row["id"]), {"name": row["name"], "price": float(row["price"]), "duration": product_duration_label(row["duration_value"], row["duration_unit"]), "product_kind": product_kind})
     return serialize_product_item(row)
 
 
@@ -19037,18 +22267,33 @@ def update_product_item(item_id: str, payload: ProductItemPayload, admin=Depends
         raise HTTPException(status_code=404, detail="Product item not found")
     duration_unit = normalize_product_duration_unit(payload.duration_unit)
     status = normalize_product_status(payload.status)
+    product_kind = normalize_product_kind(payload.product_kind)
+    color = item_color_values(payload, "product_items", current)
+    iptv_package_label = normalize_payment_text(payload.iptv_package_label, 160) or None
+    iptv_xui_package_id = normalize_payment_text(payload.iptv_xui_package_id, 160) or None
+    iptv_notes = normalize_payment_text(payload.iptv_notes, 1000) or None
+    if not product_kind_requires_iptv(product_kind):
+        iptv_package_label = None
+        iptv_xui_package_id = None
+        iptv_notes = None
     with get_conn() as conn:
         with conn.cursor() as cur:
-            category = product_category_for_payload(cur, payload.category_id)
             cur.execute(
                 """
                 UPDATE product_items
-                SET category_id = %s,
+                SET category_id = NULL,
                     name = %s,
                     description = %s,
                     price = %s,
                     duration_value = %s,
                     duration_unit = %s,
+                    item_color_key = %s,
+                    item_color_hex = %s,
+                    product_kind = %s,
+                    iptv_package_label = %s,
+                    iptv_xui_package_id = %s,
+                    iptv_auto_provision = %s,
+                    iptv_notes = %s,
                     use_category_discounts = FALSE,
                     enabled_category_discount_ids = NULL,
                     discount_enabled = FALSE,
@@ -19062,12 +22307,18 @@ def update_product_item(item_id: str, payload: ProductItemPayload, admin=Depends
                 RETURNING *
                 """,
                 (
-                    category["id"] if category else None,
                     payload.name.strip(),
                     (payload.description or "").strip() or None,
                     payload.price,
                     payload.duration_value,
                     duration_unit,
+                    color["item_color_key"],
+                    color["item_color_hex"],
+                    product_kind,
+                    iptv_package_label,
+                    iptv_xui_package_id,
+                    bool(payload.iptv_auto_provision and False),
+                    iptv_notes,
                     status,
                     payload.sort_order,
                     item_id,
@@ -19076,14 +22327,8 @@ def update_product_item(item_id: str, payload: ProductItemPayload, admin=Depends
             row = cur.fetchone()
             replace_product_item_discounts(cur, str(row["id"]), payload.discounts)
             row["discounts"] = product_item_discount_rows([str(row["id"])], active_only=False)
-            if category:
-                row["category_name"] = category["name"]
-                row["category_description"] = category.get("description")
-                row["category_image_url"] = category.get("image_url")
-                row["category_access_scope"] = category.get("access_scope")
-                row["category_allowed_barangay"] = category.get("allowed_barangay")
-                row["category_discounts"] = []
-    audit(admin["id"], "update_product_item", "product_items", item_id, {"name": row["name"], "price": float(row["price"]), "status": row["status"]})
+            row["category_discounts"] = []
+    audit(admin["id"], "update_product_item", "product_items", item_id, {"name": row["name"], "price": float(row["price"]), "status": row["status"], "product_kind": product_kind})
     return serialize_product_item(row)
 
 
@@ -21090,7 +24335,7 @@ def apply_configuration_to_ap(
                         "externalPortalUrl": portal_url,
                         "ssidNames": desired_ssids,
                         "vlanId": vlan_tag,
-                        "httpsRedirectEnable": True,
+                        "httpsRedirectEnable": False,
                     }
                     controller_portal_url = {}
                     try:
@@ -21101,7 +24346,7 @@ def apply_configuration_to_ap(
                     if controller_portal_url:
                         results["portal"]["controller_portal_url"] = controller_portal_url
                     try:
-                        results["portal"]["pre_auth_access"] = client.ensure_pre_auth_access_for_portal(str(ap_row["omada_site_id"]), portal_url)
+                        results["portal"]["pre_auth_access"] = client.ensure_pre_auth_access_for_portal(str(ap_row["omada_site_id"]), portal_url, extra_hosts=iptv_pre_auth_hosts())
                     except Exception as exc:
                         warnings.append(f"Portal pre-auth access: {exc}")
                 except OmadaApiError as exc:
@@ -23871,6 +27116,12 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
     local_interface_list = station.get("local_interface_list") or "LOCAL"
     nat_comment = f"3J Station - NAT for VLAN {vlan_id} clients"
     station_no_nat_office_comment = f"3J Station - preserve client IP for VLAN {vlan_id} to portal office subnet"
+    station_iptv_dstnat_bypass_comment = f"3J Station - bypass transparent redirect for local IPTVweb on VLAN {vlan_id}"
+    station_iptv_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to local IPTVweb"
+    iptv_xui_raw_tracking_comment = "3J IPTV web - keep XUI API traffic tracked"
+    iptv_xui_raw_return_tracking_comment = "3J IPTV web - keep XUI API return traffic tracked"
+    iptv_xui_raw_nat_return_tracking_comment = "3J IPTV web - keep XUI API NAT return traffic tracked"
+    iptv_xui_nat_comment = "3J IPTV web - NAT to XUI server"
     station_omada_portal_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to Omada portal"
     station_portal_server_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to 3J portal server"
     anti_tether_ttl_clamp_comment = f"3J Station - anti-tether return TTL clamp for VLAN {vlan_id}"
@@ -23886,6 +27137,8 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
     ap_management_raw_return_tracking_comment = f"3J AP Management - keep VLAN {ap_management_vlan_id} AP management return traffic tracked"
     omada_controller_ip = omada_controller_discovery_ip()
     portal_host_ip = station_portal_host_ip(portal_url)
+    iptv_local_web_host_ip = station_iptv_local_web_host_ip()
+    iptv_xui_host_ip = station_iptv_xui_host_ip()
     portal_office_subnet = station_portal_office_access_subnet()
     portal_access_ports = station_portal_access_ports(portal_url)
     omada_discovery_udp_ports = omada_ap_discovery_udp_ports()
@@ -23904,6 +27157,7 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
         role = "ROOT_GATEWAY" if is_root else "TRUNK_HELPER"
         commands = []
         if is_root:
+            iptv_xui_nat_return_ip = station_router_ip_for_direct_host(router.get("router_id"), iptv_xui_host_ip)
             if ap_management_enabled:
                 commands.extend([
                     station_routeros_add_command(
@@ -24162,6 +27416,27 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                 ),
                 *([
                     station_routeros_add_command(
+                        "Bypass transparent redirect for local IPTV web",
+                        "/ip/firewall/nat/add",
+                        {
+                            "chain": "dstnat",
+                            "src-address": network.with_prefixlen,
+                            "dst-address": iptv_local_web_host_ip,
+                            "protocol": "tcp",
+                            "dst-port": "80",
+                            "action": "accept",
+                            "comment": station_iptv_dstnat_bypass_comment,
+                        },
+                        unique_comment=station_iptv_dstnat_bypass_comment,
+                        place_before_query={
+                            "print_path": "/ip/firewall/nat/print",
+                            "query": {"chain": "dstnat", "action": "redirect"},
+                            "proplist": ".id,chain,action,protocol,dst-port,to-ports,disabled,comment",
+                        },
+                    ),
+                ] if iptv_local_web_host_ip else []),
+                *([
+                    station_routeros_add_command(
                         "Allow VLAN clients to Omada captive portal entry",
                         "/ip/firewall/filter/add",
                         {
@@ -24194,6 +27469,85 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                         place_before_query=omada_forward_drop_place_before_query(),
                     ),
                 ] if portal_host_ip else []),
+                *([
+                    station_routeros_add_command(
+                        "Allow VLAN clients to local IPTV web",
+                        "/ip/firewall/filter/add",
+                        {
+                            "chain": "forward",
+                            "src-address": network.with_prefixlen,
+                            "dst-address": iptv_local_web_host_ip,
+                            "protocol": "tcp",
+                            "dst-port": "80",
+                            "action": "accept",
+                            "comment": station_iptv_filter_comment,
+                        },
+                        unique_comment=station_iptv_filter_comment,
+                        place_before_query={
+                            "print_path": "/ip/firewall/filter/print",
+                            "query": {"comment": anti_tether_low_ttl_comment},
+                            "proplist": ".id,chain,action,comment,disabled",
+                        },
+                    ),
+                ] if iptv_local_web_host_ip else []),
+                *([
+                    station_routeros_add_command(
+                        "Keep IPTV web XUI API traffic tracked before global raw notrack",
+                        "/ip/firewall/raw/add",
+                        {
+                            "chain": "prerouting",
+                            "src-address": iptv_local_web_host_ip,
+                            "dst-address": iptv_xui_host_ip,
+                            "action": "accept",
+                            "comment": iptv_xui_raw_tracking_comment,
+                        },
+                        unique_comment=iptv_xui_raw_tracking_comment,
+                        only_if_query_exists=routeros_active_broad_notrack_condition(),
+                        place_before_query=routeros_active_broad_notrack_condition(),
+                    ),
+                    station_routeros_add_command(
+                        "Keep IPTV web XUI API return traffic tracked before global raw notrack",
+                        "/ip/firewall/raw/add",
+                        {
+                            "chain": "prerouting",
+                            "src-address": iptv_xui_host_ip,
+                            "dst-address": iptv_local_web_host_ip,
+                            "action": "accept",
+                            "comment": iptv_xui_raw_return_tracking_comment,
+                        },
+                        unique_comment=iptv_xui_raw_return_tracking_comment,
+                        only_if_query_exists=routeros_active_broad_notrack_condition(),
+                        place_before_query=routeros_active_broad_notrack_condition(),
+                    ),
+                    *([
+                        station_routeros_add_command(
+                            "Keep IPTV web XUI NAT return traffic tracked before global raw notrack",
+                            "/ip/firewall/raw/add",
+                            {
+                                "chain": "prerouting",
+                                "src-address": iptv_xui_host_ip,
+                                "dst-address": iptv_xui_nat_return_ip,
+                                "action": "accept",
+                                "comment": iptv_xui_raw_nat_return_tracking_comment,
+                            },
+                            unique_comment=iptv_xui_raw_nat_return_tracking_comment,
+                            only_if_query_exists=routeros_active_broad_notrack_condition(),
+                            place_before_query=routeros_active_broad_notrack_condition(),
+                        ),
+                    ] if iptv_xui_nat_return_ip else []),
+                    station_routeros_add_command(
+                        "NAT IPTV web traffic to XUI server",
+                        "/ip/firewall/nat/add",
+                        {
+                            "chain": "srcnat",
+                            "src-address": iptv_local_web_host_ip,
+                            "dst-address": iptv_xui_host_ip,
+                            "action": "masquerade",
+                            "comment": iptv_xui_nat_comment,
+                        },
+                        unique_comment=iptv_xui_nat_comment,
+                    ),
+                ] if iptv_local_web_host_ip and iptv_xui_host_ip else []),
                 station_routeros_add_command(
                     "Create internet NAT for client VLAN",
                     "/ip/firewall/nat/add",
@@ -24408,6 +27762,8 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
         "ap_management_dns_servers": ap_management_dns_servers,
         "omada_controller_ip": omada_controller_ip,
         "portal_host_ip": portal_host_ip,
+        "iptv_local_web_host_ip": iptv_local_web_host_ip,
+        "iptv_xui_host_ip": iptv_xui_host_ip,
         "portal_office_subnet": portal_office_subnet,
         "portal_access_ports": portal_access_ports,
         "omada_ap_discovery_udp_ports": omada_discovery_udp_ports,
@@ -24416,6 +27772,10 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
         "station_no_nat_office_comment": station_no_nat_office_comment,
         "station_omada_portal_filter_comment": station_omada_portal_filter_comment,
         "station_portal_server_filter_comment": station_portal_server_filter_comment,
+        "iptv_xui_raw_tracking_comment": iptv_xui_raw_tracking_comment,
+        "iptv_xui_raw_return_tracking_comment": iptv_xui_raw_return_tracking_comment,
+        "iptv_xui_raw_nat_return_tracking_comment": iptv_xui_raw_nat_return_tracking_comment,
+        "iptv_xui_nat_comment": iptv_xui_nat_comment,
         "anti_tethering_enabled": True,
         "anti_tether_ttl_clamp_comment": anti_tether_ttl_clamp_comment,
         "anti_tether_low_ttl_comment": anti_tether_low_ttl_comment,
@@ -24445,6 +27805,12 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
     nat_comment = f"3J Hotspot - NAT for VLAN {vlan_id} clients"
     station_nat_comment = f"3J Station - NAT for VLAN {vlan_id} clients"
     station_no_nat_office_comment = f"3J Station - preserve client IP for VLAN {vlan_id} to portal office subnet"
+    station_iptv_dstnat_bypass_comment = f"3J Station - bypass transparent redirect for local IPTVweb on VLAN {vlan_id}"
+    station_iptv_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to local IPTVweb"
+    iptv_xui_raw_tracking_comment = "3J IPTV web - keep XUI API traffic tracked"
+    iptv_xui_raw_return_tracking_comment = "3J IPTV web - keep XUI API return traffic tracked"
+    iptv_xui_raw_nat_return_tracking_comment = "3J IPTV web - keep XUI API NAT return traffic tracked"
+    iptv_xui_nat_comment = "3J IPTV web - NAT to XUI server"
     station_omada_portal_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to Omada portal"
     station_portal_server_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to 3J portal server"
     anti_tether_ttl_clamp_comment = f"3J Station - anti-tether return TTL clamp for VLAN {vlan_id}"
@@ -24548,6 +27914,12 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
                     station_no_nat_office_comment,
                 ),
                 station_routeros_remove_command(
+                    "Remove local IPTV transparent redirect bypass",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    station_iptv_dstnat_bypass_comment,
+                ),
+                station_routeros_remove_command(
                     "Remove Omada captive portal allow rule",
                     "/ip/firewall/filter/print",
                     "comment",
@@ -24558,6 +27930,36 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
                     "/ip/firewall/filter/print",
                     "comment",
                     station_portal_server_filter_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove local IPTV web allow rule",
+                    "/ip/firewall/filter/print",
+                    "comment",
+                    station_iptv_filter_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove IPTV web XUI API tracking exception",
+                    "/ip/firewall/raw/print",
+                    "comment",
+                    iptv_xui_raw_tracking_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove IPTV web XUI API return tracking exception",
+                    "/ip/firewall/raw/print",
+                    "comment",
+                    iptv_xui_raw_return_tracking_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove IPTV web XUI API NAT return tracking exception",
+                    "/ip/firewall/raw/print",
+                    "comment",
+                    iptv_xui_raw_nat_return_tracking_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove IPTV web XUI server NAT",
+                    "/ip/firewall/nat/print",
+                    "comment",
+                    iptv_xui_nat_comment,
                 ),
                 station_routeros_remove_command(
                     "Remove anti-tether return TTL guard",
@@ -25705,12 +29107,12 @@ def run_station_omada_action(station_id: str, action_key: str, admin: dict) -> d
                 "ssidNames": ssid_names,
                 "stationName": row["station_name"],
                 "vlanId": vlan_id,
-                "httpsRedirectEnable": True,
+                "httpsRedirectEnable": False,
             }
             details = client.configure_external_portal_if_supported(site_id, omada_payload)
             details["controller_portal_url"] = controller_portal_url
             try:
-                details["pre_auth_access"] = client.ensure_pre_auth_access_for_portal(site_id, portal_url)
+                details["pre_auth_access"] = client.ensure_pre_auth_access_for_portal(site_id, portal_url, extra_hosts=iptv_pre_auth_hosts())
             except Exception as exc:
                 details["pre_auth_access"] = {"status": "WARNING", "message": sanitize_routeros_text(str(exc))}
             message = "External portal profile created or updated for this station."
@@ -27587,6 +30989,72 @@ def mikrotik_station_hotspot_diagnostics(station: dict, client_ip: Optional[str]
         )
     except Exception as exc:
         add_check("portal_office_no_nat", "Omada portal client identity", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        iptv_host = station_iptv_local_web_host_ip()
+        bypass_comment = f"3J Station - bypass transparent redirect for local IPTVweb on VLAN {station['vlan_id']}"
+        if iptv_host:
+            rows = query(
+                "/ip/firewall/nat/print",
+                f"?comment={bypass_comment}",
+                "=.proplist=.id,chain,action,src-address,dst-address,protocol,dst-port,comment,disabled",
+            )
+            bypass_ok = any(
+                row.get("chain") == "dstnat"
+                and row.get("action") == "accept"
+                and row.get("src-address") == station["client_network_cidr"]
+                and row.get("dst-address") == iptv_host
+                and row.get("protocol") == "tcp"
+                and str(row.get("dst-port") or "") == "80"
+                and not routeros_truthy(row.get("disabled"))
+                for row in rows
+            )
+            add_check(
+                "local_iptv_redirect_bypass",
+                "Local IPTV redirect bypass",
+                "OK" if bypass_ok else "FAILED",
+                "Local IPTV web traffic bypasses broad transparent redirect rules before dstnat processing continues." if bypass_ok else "Missing dstnat accept exception for local IPTV web. Broad transparent redirects can hijack 192.168.50.15:80 before the forward allow rule sees it.",
+                {"expected_comment": bypass_comment, "expected_src_address": station["client_network_cidr"], "expected_dst_address": iptv_host, "rows": rows},
+            )
+        else:
+            add_check("local_iptv_redirect_bypass", "Local IPTV redirect bypass", "WARNING", "IPTV local web host is not an IPv4 address, so the station bypass rule cannot be verified.", {})
+    except Exception as exc:
+        add_check("local_iptv_redirect_bypass", "Local IPTV redirect bypass", "WARNING", sanitize_routeros_text(str(exc)))
+
+    try:
+        iptv_host = station_iptv_local_web_host_ip()
+        iptv_filter_comment = f"3J Station - allow VLAN {station['vlan_id']} clients to local IPTVweb"
+        low_ttl_comment = f"3J Station - block likely tethered low TTL for VLAN {station['vlan_id']}"
+        if iptv_host:
+            rows = query(
+                "/ip/firewall/filter/print",
+                "=.proplist=.id,chain,action,src-address,dst-address,protocol,dst-port,ttl,comment,disabled",
+            )
+            enabled_rows = [row for row in rows if not routeros_truthy(row.get("disabled"))]
+            iptv_index = next((index for index, row in enumerate(enabled_rows) if row.get("comment") == iptv_filter_comment), None)
+            ttl_index = next((index for index, row in enumerate(enabled_rows) if row.get("comment") == low_ttl_comment), None)
+            filter_ok = any(
+                row.get("chain") == "forward"
+                and row.get("action") == "accept"
+                and row.get("src-address") == station["client_network_cidr"]
+                and row.get("dst-address") == iptv_host
+                and row.get("protocol") == "tcp"
+                and str(row.get("dst-port") or "") == "80"
+                and not routeros_truthy(row.get("disabled"))
+                for row in enabled_rows
+            )
+            order_ok = filter_ok and (ttl_index is None or (iptv_index is not None and iptv_index < ttl_index))
+            add_check(
+                "local_iptv_forward_allow",
+                "Local IPTV forward allow",
+                "OK" if filter_ok and order_ok else "FAILED",
+                "Local IPTV traffic is allowed before the anti-tether TTL drop rules." if filter_ok and order_ok else "Local IPTV allow rule is missing or is below the anti-tether TTL drop. Direct phones may be dropped as TTL 63 before reaching IPTV.",
+                {"expected_comment": iptv_filter_comment, "expected_src_address": station["client_network_cidr"], "expected_dst_address": iptv_host, "iptv_rule_index": iptv_index, "low_ttl_rule_index": ttl_index, "rows": rows},
+            )
+        else:
+            add_check("local_iptv_forward_allow", "Local IPTV forward allow", "WARNING", "IPTV local web host is not an IPv4 address, so the station allow rule cannot be verified.", {})
+    except Exception as exc:
+        add_check("local_iptv_forward_allow", "Local IPTV forward allow", "WARNING", sanitize_routeros_text(str(exc)))
 
     try:
         client_tracking_comment = f"3J Station - keep VLAN {station['vlan_id']} client traffic tracked"
@@ -33842,7 +37310,7 @@ def captive_portal_configure_external_portal(payload: OmadaPortalConfigureReques
         "externalPortalUrl": portal_url,
         "ssidName": ssid_names[0] if ssid_names else ssid_name,
         "ssidNames": ssid_names,
-        "httpsRedirectEnable": True,
+        "httpsRedirectEnable": False,
     }
     try:
         _, client = omada_api_client_from_settings()
@@ -33850,7 +37318,7 @@ def captive_portal_configure_external_portal(payload: OmadaPortalConfigureReques
         result = client.configure_external_portal_if_supported(site_id, omada_payload)
         result["controller_portal_url"] = controller_portal_url
         try:
-            result["pre_auth_access"] = client.ensure_pre_auth_access_for_portal(site_id, portal_url)
+            result["pre_auth_access"] = client.ensure_pre_auth_access_for_portal(site_id, portal_url, extra_hosts=iptv_pre_auth_hosts())
         except Exception as exc:
             result["pre_auth_access"] = {"status": "WARNING", "message": sanitize_routeros_text(str(exc))}
         log_captive_portal_test("CONFIGURE_EXTERNAL_PORTAL", "SUCCESS", "External portal profile created or updated.", {"portal_url": portal_url, "site_id": site_id, "result": result})
@@ -35217,6 +38685,223 @@ def restart_public_endpoint_cloudflare(admin=Depends(current_admin)):
     return result
 
 
+@app.get("/api/iptv/provisioning")
+def get_iptv_provisioning(admin=Depends(current_admin)):
+    return iptv_provisioning_payload()
+
+
+@app.post("/api/iptv/provisioning/run-pending")
+def run_pending_iptv_provisioning(admin=Depends(current_admin)):
+    results = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM iptv_provisioning_jobs
+                WHERE status = 'PENDING'
+                ORDER BY created_at ASC
+                LIMIT 20
+                FOR UPDATE SKIP LOCKED
+                """
+            )
+            jobs = cur.fetchall()
+            for job in jobs:
+                try:
+                    result = process_iptv_provisioning_job(cur, job)
+                    results.append({"job_id": str(job["id"]), "status": result.get("status"), "error": result.get("error")})
+                except Exception as exc:
+                    error = normalize_iptv_text(str(exc), 700)
+                    cur.execute(
+                        """
+                        UPDATE iptv_provisioning_jobs
+                        SET status = 'FAILED',
+                            attempts = attempts + 1,
+                            last_error = %s,
+                            updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (error, job["id"]),
+                    )
+                    cur.execute("UPDATE customer_bag_items SET iptv_status = 'FAILED', updated_at = now() WHERE id = %s", (job["bag_item_id"],))
+                    results.append({"job_id": str(job["id"]), "status": "FAILED", "error": error})
+    audit(admin["id"], "iptv_provisioning_run_pending", "iptv_provisioning_jobs", "batch", {"results": sanitize_summary(results)})
+    return {"status": "SUCCESS", "results": results, "provisioning": iptv_provisioning_payload()}
+
+
+@app.post("/api/iptv/provisioning/jobs/{job_id}/retry")
+def retry_iptv_provisioning_job(job_id: str, payload: IptvProvisioningRetryPayload = None, admin=Depends(current_admin)):
+    clean_job_id = parse_uuid_or_400(job_id, "IPTV provisioning job")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM iptv_provisioning_jobs WHERE id = %s FOR UPDATE", (clean_job_id,))
+            job = cur.fetchone()
+            if not job:
+                raise HTTPException(status_code=404, detail="IPTV provisioning job was not found.")
+            if job.get("status") == "PROVISIONED" and not bool((payload or IptvProvisioningRetryPayload()).force):
+                return {"status": "SKIPPED", "message": "This IPTV job is already provisioned.", "provisioning": iptv_provisioning_payload()}
+            cur.execute(
+                """
+                UPDATE iptv_provisioning_jobs
+                SET status = 'PENDING',
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (clean_job_id,),
+            )
+            job = cur.fetchone()
+            try:
+                result = process_iptv_provisioning_job(cur, job)
+            except Exception as exc:
+                error = normalize_iptv_text(str(exc), 700)
+                cur.execute(
+                    """
+                    UPDATE iptv_provisioning_jobs
+                    SET status = 'FAILED',
+                        attempts = attempts + 1,
+                        last_error = %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (error, clean_job_id),
+                )
+                job = cur.fetchone()
+                cur.execute("UPDATE customer_bag_items SET iptv_status = 'FAILED', updated_at = now() WHERE id = %s", (job["bag_item_id"],))
+                result = {"status": "FAILED", "error": error, "job": job}
+    audit(admin["id"], "iptv_provisioning_retry", "iptv_provisioning_jobs", clean_job_id, {"status": result.get("status"), "error": result.get("error")})
+    return {"status": result.get("status"), "error": result.get("error"), "job": iptv_job_public(result.get("job")), "provisioning": iptv_provisioning_payload()}
+
+
+@app.get("/api/system-settings/iptv")
+def get_iptv_settings(admin=Depends(current_admin)):
+    return public_iptv_settings()
+
+
+@app.patch("/api/system-settings/iptv")
+def update_iptv_settings(payload: IptvSettingsPayload, admin=Depends(current_admin)):
+    store = iptv_store()
+    data = payload.model_dump(exclude_unset=True)
+    for key in [
+        "enabled", "public_hostname", "public_url", "internal_web_url",
+        "iptv_web_ssh_host", "iptv_web_ssh_port", "iptv_web_ssh_username",
+        "iptv_web_ssh_auth_type", "iptv_web_sudo_mode", "xui_base_url",
+        "xui_public_url", "xui_server_host", "xui_api_mode", "xui_access_code", "xui_max_connections",
+        "xui_line_repair_db_enabled", "xui_line_repair_db_host", "xui_line_repair_db_port",
+        "xui_line_repair_db_name", "xui_line_repair_db_username",
+        "xui_admin_username", "iptv_token_ttl_minutes", "iptv_expiry_warning_minutes",
+        "iptv_expiry_stop_seconds", "xui_test_username", "notes",
+    ]:
+        if key in data:
+            store[key] = data[key]
+    if payload.iptv_web_ssh_password:
+        store["iptv_web_ssh_password_encrypted"] = encrypt_secret(payload.iptv_web_ssh_password)
+    if payload.clear_iptv_web_ssh_password:
+        store["iptv_web_ssh_password_encrypted"] = None
+    if payload.iptv_web_ssh_private_key:
+        store["iptv_web_ssh_private_key_encrypted"] = encrypt_secret(payload.iptv_web_ssh_private_key)
+    if payload.clear_iptv_web_ssh_private_key:
+        store["iptv_web_ssh_private_key_encrypted"] = None
+    if payload.iptv_web_ssh_private_key_passphrase:
+        store["iptv_web_ssh_private_key_passphrase_encrypted"] = encrypt_secret(payload.iptv_web_ssh_private_key_passphrase)
+    if payload.clear_iptv_web_ssh_private_key_passphrase:
+        store["iptv_web_ssh_private_key_passphrase_encrypted"] = None
+    if payload.xui_admin_password:
+        store["xui_admin_password_encrypted"] = encrypt_secret(payload.xui_admin_password)
+    if payload.clear_xui_admin_password:
+        store["xui_admin_password_encrypted"] = None
+    if payload.xui_api_key:
+        store["xui_api_key_encrypted"] = encrypt_secret(payload.xui_api_key)
+    if payload.clear_xui_api_key:
+        store["xui_api_key_encrypted"] = None
+    if payload.clear_xui_public_tunnel_token:
+        store["xui_public_tunnel_token_encrypted"] = None
+    if payload.xui_line_repair_db_password:
+        store["xui_line_repair_db_password_encrypted"] = encrypt_secret(payload.xui_line_repair_db_password)
+    if payload.clear_xui_line_repair_db_password:
+        store["xui_line_repair_db_password_encrypted"] = None
+    xui_tunnel_token = extract_cloudflare_tunnel_token(payload.xui_public_tunnel_token or payload.xui_public_connector_command)
+    if xui_tunnel_token:
+        store["xui_public_tunnel_token_encrypted"] = encrypt_secret(xui_tunnel_token)
+    if payload.iptv_web_integration_secret:
+        store["iptv_web_integration_secret_encrypted"] = encrypt_secret(payload.iptv_web_integration_secret)
+    if payload.clear_iptv_web_integration_secret:
+        store["iptv_web_integration_secret_encrypted"] = None
+    if payload.xui_test_password:
+        store["xui_test_password_encrypted"] = encrypt_secret(payload.xui_test_password)
+    if payload.clear_xui_test_password:
+        store["xui_test_password_encrypted"] = None
+    save_iptv_store(store)
+    audit(
+        admin["id"],
+        "system_iptv_settings_updated",
+        "system_iptv",
+        "iptv_xui",
+        {
+            "enabled": bool(store.get("enabled")),
+            "public_hostname": store.get("public_hostname"),
+            "internal_web_url": store.get("internal_web_url"),
+            "iptv_web_ssh_host": store.get("iptv_web_ssh_host"),
+            "xui_server_host": store.get("xui_server_host"),
+            "xui_api_mode": store.get("xui_api_mode"),
+            "secrets_changed": bool(
+                payload.iptv_web_ssh_password
+                or payload.clear_iptv_web_ssh_password
+                or payload.iptv_web_ssh_private_key
+                or payload.clear_iptv_web_ssh_private_key
+                or payload.iptv_web_ssh_private_key_passphrase
+                or payload.clear_iptv_web_ssh_private_key_passphrase
+                or payload.xui_admin_password
+                or payload.clear_xui_admin_password
+                or payload.xui_api_key
+                or payload.clear_xui_api_key
+                or payload.xui_line_repair_db_password
+                or payload.clear_xui_line_repair_db_password
+                or payload.iptv_web_integration_secret
+                or payload.clear_iptv_web_integration_secret
+                or payload.xui_test_password
+                or payload.clear_xui_test_password
+            ),
+        },
+    )
+    return public_iptv_settings()
+
+
+@app.post("/api/system-settings/iptv/test")
+def test_iptv_settings(admin=Depends(current_admin)):
+    result = run_iptv_connectivity_test()
+    audit(admin["id"], "system_iptv_connectivity_test", "system_iptv", "iptv_xui", {"status": result.get("status")})
+    return public_iptv_settings()
+
+
+@app.post("/api/system-settings/iptv/test-xui-api")
+def test_iptv_xui_api(admin=Depends(current_admin)):
+    result = run_iptv_xui_api_test()
+    audit(
+        admin["id"],
+        "system_iptv_xui_api_test",
+        "system_iptv",
+        "iptv_xui",
+        {"status": result.get("status")},
+    )
+    return public_iptv_settings()
+
+
+@app.post("/api/system-settings/iptv/test-ssh")
+def test_iptv_web_ssh(admin=Depends(current_admin)):
+    result = run_iptv_web_ssh_test()
+    audit(
+        admin["id"],
+        "system_iptv_web_ssh_test",
+        "system_iptv",
+        "iptv_xui",
+        {"status": result.get("status"), "host": result.get("host"), "port": result.get("port")},
+    )
+    return public_iptv_settings()
+
+
 @app.get("/api/system-settings/payments")
 def get_payment_gateway_settings(admin=Depends(current_admin)):
     return public_payment_gateway_settings()
@@ -35637,39 +39322,58 @@ def public_admin_notification(row: dict) -> dict:
 
 
 @app.get("/api/admin/notifications")
-def list_admin_notifications(limit: int = 40, admin=Depends(current_admin)):
-    safe_limit = min(100, max(10, int(limit or 40)))
+def list_admin_notifications(
+    limit: int = 40,
+    page: int = 1,
+    page_size: Optional[int] = None,
+    q: str = "",
+    status: str = "",
+    category: str = "",
+    severity: str = "",
+    include_support: bool = True,
+    admin=Depends(current_admin),
+):
+    safe_page = max(1, int(page or 1))
+    safe_page_size = min(200, max(10, int(page_size or limit or 40)))
+    clean_q = normalize_payment_text(q, 200).lower()
+    clean_status = normalize_payment_text(status, 20).upper()
+    clean_category = normalize_payment_text(category, 80).upper()
+    clean_severity = normalize_payment_text(severity, 20).upper()
+    clauses = ["status <> 'ARCHIVED'"]
+    params = []
+    if clean_status in {"UNREAD", "READ", "ARCHIVED"}:
+        clauses.append("status = %s")
+        params.append(clean_status)
+    if clean_category:
+        clauses.append("category = %s")
+        params.append(clean_category)
+    if clean_severity in {"INFO", "SUCCESS", "WARNING", "DANGER"}:
+        clauses.append("severity = %s")
+        params.append(clean_severity)
+    if clean_q:
+        clauses.append("(lower(title) LIKE %s OR lower(COALESCE(message, '')) LIKE %s OR lower(category) LIKE %s OR lower(COALESCE(target_page, '')) LIKE %s)")
+        like = f"%{clean_q}%"
+        params.extend([like, like, like, like])
+    where = " AND ".join(clauses)
+    total_row = fetch_one(f"SELECT COUNT(*) AS count FROM admin_notifications WHERE {where}", tuple(params)) or {}
     rows = fetch_all(
-        """
+        f"""
         SELECT *
         FROM admin_notifications
-        WHERE status <> 'ARCHIVED'
+        WHERE {where}
         ORDER BY CASE WHEN status = 'UNREAD' THEN 0 ELSE 1 END, created_at DESC
-        LIMIT %s
+        LIMIT %s OFFSET %s
         """,
-        (safe_limit,),
+        tuple(params + [safe_page_size, (safe_page - 1) * safe_page_size]),
     )
-    support_rows = fetch_all(
-        """
-        SELECT psc.id, psc.public_conversation_id, psc.customer_name, psc.contact_number, psc.email,
-               psc.status, psc.unread_admin_count, psc.last_message_at, psc.created_at,
-               COALESCE(psc.source_type, 'CUSTOMER') AS source_type,
-               ps.store_name AS support_store_name
-        FROM portal_support_conversations psc
-        LEFT JOIN physical_stores ps ON ps.id = psc.physical_store_id
-        WHERE psc.unread_admin_count > 0
-        ORDER BY COALESCE(psc.last_message_at, psc.created_at) DESC
-        LIMIT 25
-        """
-    )
-    items = [public_admin_notification(row) for row in rows]
-    for row in support_rows:
+
+    def support_notification_item(row: dict) -> dict:
         unread_count = int(row.get("unread_admin_count") or 0)
         source_type = (row.get("source_type") or "CUSTOMER").upper()
         customer = row.get("customer_name") or row.get("contact_number") or row.get("email") or ("Store owner" if source_type == "STORE_OWNER" else "Customer")
         support_title = "Store owner message needs reply" if source_type == "STORE_OWNER" else "Customer message needs reply"
         source_label = "store owner" if source_type == "STORE_OWNER" else "customer"
-        items.append({
+        return {
             "id": f"support-{row['id']}",
             "category": "SUPPORT_MESSAGE",
             "severity": "INFO",
@@ -35690,16 +39394,73 @@ def list_admin_notifications(limit: int = 40, admin=Depends(current_admin)):
             "created_at": row.get("last_message_at") or row.get("created_at"),
             "read_at": None,
             "source": "SUPPORT",
-        })
+        }
+
+    support_rows = []
+    if include_support and safe_page == 1 and not clean_category and clean_status in {"", "UNREAD"} and not clean_severity and not clean_q:
+        support_rows = fetch_all(
+            """
+            SELECT psc.id, psc.public_conversation_id, psc.customer_name, psc.contact_number, psc.email,
+                   psc.status, psc.unread_admin_count, psc.last_message_at, psc.created_at,
+                   COALESCE(psc.source_type, 'CUSTOMER') AS source_type,
+                   ps.store_name AS support_store_name
+            FROM portal_support_conversations psc
+            LEFT JOIN physical_stores ps ON ps.id = psc.physical_store_id
+            WHERE psc.unread_admin_count > 0
+            ORDER BY COALESCE(psc.last_message_at, psc.created_at) DESC
+            LIMIT 25
+            """
+        )
+
+    items = [public_admin_notification(row) for row in rows]
+    items.extend(support_notification_item(row) for row in support_rows)
     items = sorted(items, key=lambda item: (item.get("status") == "UNREAD", str(item.get("created_at") or "")), reverse=True)
     notification_unread = fetch_one("SELECT COUNT(*) AS count FROM admin_notifications WHERE status = 'UNREAD'") or {}
     support_unread = fetch_one("SELECT COALESCE(SUM(unread_admin_count), 0) AS count FROM portal_support_conversations WHERE unread_admin_count > 0") or {}
     a2p_unread = fetch_one("SELECT COUNT(*) AS count FROM admin_notifications WHERE status = 'UNREAD' AND category = 'A2P_SMS_FAILED'") or {}
+    iptv_unread = fetch_one("SELECT COUNT(*) AS count FROM admin_notifications WHERE status = 'UNREAD' AND category = 'IPTV_LOGIN_FAILED'") or {}
+    summary = fetch_one(
+        """
+        SELECT COUNT(*) AS total,
+               COUNT(*) FILTER (WHERE status = 'UNREAD') AS unread,
+               COUNT(*) FILTER (WHERE severity = 'DANGER') AS danger,
+               COUNT(*) FILTER (WHERE severity = 'WARNING') AS warning,
+               COUNT(*) FILTER (WHERE created_at >= date_trunc('day', now())) AS today
+        FROM admin_notifications
+        WHERE status <> 'ARCHIVED'
+        """
+    ) or {}
+    category_rows = fetch_all(
+        """
+        SELECT category, COUNT(*) AS count
+        FROM admin_notifications
+        WHERE status <> 'ARCHIVED'
+        GROUP BY category
+        ORDER BY COUNT(*) DESC, category ASC
+        LIMIT 100
+        """
+    )
     return {
-        "items": items[:safe_limit],
+        "items": items[:safe_page_size],
+        "total": int(total_row.get("count") or 0),
+        "page": safe_page,
+        "page_size": safe_page_size,
+        "total_pages": max(1, math.ceil(int(total_row.get("count") or 0) / safe_page_size)),
         "unread_count": int(notification_unread.get("count") or 0) + int(support_unread.get("count") or 0),
         "a2p_failure_unread_count": int(a2p_unread.get("count") or 0),
+        "iptv_failure_unread_count": int(iptv_unread.get("count") or 0),
         "support_unread_count": int(support_unread.get("count") or 0),
+        "summary": {
+            "total": int(summary.get("total") or 0),
+            "unread": int(summary.get("unread") or 0) + int(support_unread.get("count") or 0),
+            "danger": int(summary.get("danger") or 0),
+            "warning": int(summary.get("warning") or 0),
+            "today": int(summary.get("today") or 0),
+            "a2p_failed_unread": int(a2p_unread.get("count") or 0),
+            "iptv_failed_unread": int(iptv_unread.get("count") or 0),
+            "support_unread": int(support_unread.get("count") or 0),
+        },
+        "categories": [{"category": row.get("category") or "SYSTEM", "count": int(row.get("count") or 0)} for row in category_rows],
     }
 
 

@@ -371,6 +371,7 @@ Phone connects but does not redirect:
 - Confirm the phone receives an IP from the MikroTik station client subnet.
 - Confirm MikroTik is not source-NATing station clients when they reach Omada/portal servers. The station root gateway must have a `srcnat accept` no-NAT rule from the station subnet to the office portal subnet before the station masquerade rule.
 - Confirm the station internet NAT is WAN-only. A broad `srcnat masquerade src-address=<station subnet>` can hide the real phone IP from Omada and break captive portal session matching.
+- Keep Omada External Portal URL on HTTPS, but leave Omada HTTPS Redirect disabled unless the Omada controller entry URL uses a trusted certificate/domain. If Android shows `SSL_UNTRUSTED` for `https://<omada-controller-ip>:8843/portal/entry`, Omada HTTPS Redirect is causing the phone to see TP-Link's self-signed controller certificate.
 - Expected managed rules use comments `3J Station - preserve client IP for VLAN {vlan_id} to portal office subnet` and `3J Station - NAT for VLAN {vlan_id} clients`.
 
 Voucher works manually but Omada does not authorize:
@@ -510,6 +511,10 @@ Customer paid in PayMongo but internet access did not activate:
 - Copy the webhook signing secret into the matching Test Keys or Live Keys tab in System Settings -> Payments.
 - Confirm the payment amount in PayMongo matches the Product Item price. Amount mismatches are blocked.
 - If the order is paid but fulfillment failed, check whether Omada authorization failed for that device/session.
+- If the Product Item is `IPTV only`, only IPTV entitlement time should activate. Hotspot internet should not activate. Use `WiFi + IPTV` for products that should grant both WiFi time and IPTV.
+- If a local IPTV watch URL times out from the AP, keep the intended local route first and check the path before falling back to public HTTPS: confirm `192.168.50.15:80` reverse-proxies to `127.0.0.1:3000`, Omada Pre-Auth Access includes `192.168.50.15`, WiFi guest/LAN isolation is not blocking office-local hosts, and the station root allows `10.77.0.0/24 -> 192.168.50.15:80`. Public `https://tv.3jhotspot.com/watch` is the outside-network fallback, not the preferred in-AP route.
+- Check MikroTik `dstnat` before the forward filter if `192.168.50.15:80` still times out. A broad transparent redirect such as `chain=dstnat action=redirect protocol=tcp dst-port=80,443 to-ports=8081` can hijack local IPTV web traffic before the forward allow rule counter increments. Add a station-scoped `dstnat accept` exception for the IPTV web host before the broad redirect.
+- If an IPTV item is not watchable, check Admin -> IPTV -> Provisioning for failed XUI jobs and retry after confirming XUI API settings.
 
 PayMongo webhook fails:
 - Confirm the request includes the `Paymongo-Signature` header.
