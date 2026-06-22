@@ -682,6 +682,7 @@ class PortalBagClaimVoucherRequest(PortalSessionRequest):
 
 class PortalIptvWatchRequest(PortalSessionRequest):
     bag_item_id: str
+    route_preference: Optional[str] = Field(default="AUTO", max_length=20)
 
 
 class PortalProfileOtpRequest(PortalSessionRequest):
@@ -4164,11 +4165,51 @@ def iptv_provisioning_payload() -> dict:
     }
 
 
-def iptv_watch_base_url_for_presence(store: dict, network_presence: Optional[dict] = None) -> tuple[str, str]:
+def iptv_route_preference(value: Optional[str]) -> str:
+    preference = normalize_iptv_text(value or "AUTO", 20).upper()
+    return preference if preference in {"AUTO", "LOCAL", "PUBLIC"} else "AUTO"
+
+
+def iptv_local_route_omada_fresh_seconds() -> int:
+    try:
+        return min(max(int(os.getenv("IPTV_LOCAL_ROUTE_OMADA_FRESH_SECONDS", "15")), 1), 120)
+    except (TypeError, ValueError):
+        return 15
+
+
+def iptv_presence_supports_local_route(network_presence: Optional[dict] = None) -> bool:
     presence = network_presence or {}
+    if presence.get("connected_to_3j_ap") is not True:
+        return False
+    if presence.get("current_request_detected"):
+        return True
+    if presence.get("detection_reason") in {
+        "current_gateway_context",
+        "current_portal_context",
+        "current_client_ip_station_subnet",
+        "current_request_ip_station_subnet",
+    }:
+        return True
+    if presence.get("live_omada_client_detected") and presence.get("live_omada_station_detected"):
+        try:
+            age = float(presence.get("live_omada_last_seen_age_seconds"))
+        except (TypeError, ValueError):
+            age = None
+        if age is not None and age <= iptv_local_route_omada_fresh_seconds():
+            return True
+    return False
+
+
+def iptv_watch_base_url_for_presence(store: dict, network_presence: Optional[dict] = None, route_preference: Optional[str] = None) -> tuple[str, str]:
+    presence = network_presence or {}
+    preference = iptv_route_preference(route_preference)
     local_url = normalize_iptv_url(store.get("internal_web_url"), IPTV_DEFAULT_SETTINGS["internal_web_url"], required=False)
     public_url = normalize_iptv_url(store.get("public_url"), IPTV_DEFAULT_SETTINGS["public_url"], required=False)
-    if presence.get("connected_to_3j_ap") is True and local_url:
+    if preference == "PUBLIC" and public_url:
+        return public_url, "PUBLIC_HTTPS_REQUESTED"
+    if preference == "LOCAL" and local_url:
+        return local_url, "LOCAL_REQUESTED"
+    if iptv_presence_supports_local_route(presence) and local_url:
         return local_url, "LOCAL_3J_NETWORK"
     if public_url:
         return public_url, "PUBLIC_HTTPS"
@@ -4192,7 +4233,7 @@ def iptv_watch_url_from_base(base_url: str, token: str) -> str:
     return f"{watch_url}{separator}threej_token={quote(token)}"
 
 
-def create_iptv_watch_token(cur, session: dict, bag_item: dict, account: dict, network_presence: Optional[dict] = None) -> dict:
+def create_iptv_watch_token(cur, session: dict, bag_item: dict, account: dict, network_presence: Optional[dict] = None, route_preference: Optional[str] = None) -> dict:
     store = iptv_store()
     ttl_minutes = int(store.get("iptv_token_ttl_minutes") or 15)
     token = secrets.token_urlsafe(36)
@@ -4206,7 +4247,7 @@ def create_iptv_watch_token(cur, session: dict, bag_item: dict, account: dict, n
         (iptv_token_hash(token), session["user_id"], bag_item["id"], account["id"], expires_at),
     )
     token_row = cur.fetchone()
-    watch_base_url, route_mode = iptv_watch_base_url_for_presence(store, network_presence)
+    watch_base_url, route_mode = iptv_watch_base_url_for_presence(store, network_presence, route_preference)
     public_base_url = normalize_iptv_url(store.get("public_url"), IPTV_DEFAULT_SETTINGS["public_url"], required=False)
     local_base_url = normalize_iptv_url(store.get("internal_web_url"), IPTV_DEFAULT_SETTINGS["internal_web_url"], required=False)
     fallback_watch_url = None
@@ -10715,7 +10756,7 @@ def bag_overlap_seconds(settings: Optional[dict] = None) -> int:
         return 60
 
 
-def portal_network_presence(session: Optional[dict], request: Optional[Request] = None, payload: Optional[PortalSessionRequest] = None) -> dict:
+def portal_network_presence(session: Optional[dict], request: Optional[Request] = None, payload: Optional[PortalSessionRequest] = None, force_omada_lookup: bool = False) -> dict:
     session = session or {}
     ctx = portal_context(payload) if payload else {}
     request_ip = public_ip(request) if request else None
@@ -10759,13 +10800,14 @@ def portal_network_presence(session: Optional[dict], request: Optional[Request] 
         )
         if mac_candidates:
             live_omada_lookup_attempted = True
-            snapshots = fetch_omada_client_snapshot_map()
+            snapshots = fetch_omada_client_snapshot_map(force=force_omada_lookup)
             for mac in mac_candidates:
                 snapshot = snapshots.get(mac)
                 if snapshot and snapshot.get("active"):
                     live_omada_client = snapshot
                     break
     live_omada_station = station_for_client_ip(str((live_omada_client or {}).get("client_ip") or "")) if live_omada_client else None
+    live_omada_last_seen_age = omada_last_seen_age_seconds((live_omada_client or {}).get("last_seen")) if live_omada_client else None
     current_station = request_station or context_station or live_omada_station
     connected_to_3j = bool(current_request_detected or live_omada_client)
     detection_reason = "none"
@@ -10789,6 +10831,8 @@ def portal_network_presence(session: Optional[dict], request: Optional[Request] 
         "detection_reason": detection_reason,
         "live_omada_lookup_attempted": live_omada_lookup_attempted,
         "live_omada_client_detected": bool(live_omada_client),
+        "live_omada_station_detected": bool(live_omada_station),
+        "live_omada_last_seen_age_seconds": live_omada_last_seen_age,
         "saved_session_station_detected": bool(saved_session_station),
         "status": "ON_3J_NETWORK" if connected_to_3j else "OUTSIDE_3J_NETWORK",
         "current_status": "CURRENTLY_ON_3J_NETWORK" if connected_to_3j else "CURRENTLY_OUTSIDE_3J_NETWORK",
@@ -15436,8 +15480,9 @@ def create_portal_iptv_watch_session(payload: PortalIptvWatchRequest, request: R
                     raise HTTPException(status_code=400, detail=coverage.get("error") or "IPTV access could not be synced.")
             if expires_at and expires_at <= now:
                 raise HTTPException(status_code=400, detail="IPTV access has expired.")
-            network_presence = portal_network_presence(session, request, payload)
-            token = create_iptv_watch_token(cur, session, bag_item, account, network_presence)
+            route_preference = iptv_route_preference(payload.route_preference)
+            network_presence = portal_network_presence(session, request, payload, force_omada_lookup=True)
+            token = create_iptv_watch_token(cur, session, bag_item, account, network_presence, route_preference)
             cur.execute(
                 """
                 UPDATE customer_bag_items
@@ -15463,6 +15508,7 @@ def create_portal_iptv_watch_session(payload: PortalIptvWatchRequest, request: R
                 "watch_url": token["watch_url"],
                 "fallback_watch_url": token.get("fallback_watch_url"),
                 "route_mode": token.get("route_mode"),
+                "route_preference": route_preference,
                 "network_presence": network_presence,
                 "token_expires_at": token["expires_at"],
                 "ttl_minutes": token["ttl_minutes"],
@@ -22850,6 +22896,413 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
 @app.get("/api/customer-devices")
 def customer_devices(include_test: bool = False, admin=Depends(current_admin)):
     return connected_devices(include_test=include_test, admin=admin)
+
+
+
+def threejtv_customer_api_token() -> str:
+    token = os.getenv("THREEJTV_CUSTOMER_API_KEY", "").strip()
+    if not token:
+        raise HTTPException(status_code=503, detail="3JTV customer API token is not configured.")
+    return token
+
+
+def require_threejtv_customer_api(request: Request):
+    expected = threejtv_customer_api_token()
+    auth = request.headers.get("authorization", "") or ""
+    bearer = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    header = (request.headers.get("x-3jtv-api-key", "") or "").strip()
+    provided = bearer or header
+    if not provided or not secrets.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="Invalid 3JTV API token.")
+
+
+@app.get("/api/integrations/3jtv/health")
+def threejtv_customer_api_health(request: Request):
+    require_threejtv_customer_api(request)
+    count_row = fetch_one(
+        """
+        SELECT COUNT(*) AS count
+        FROM portal_customer_profiles p
+        WHERE COALESCE(NULLIF(trim(p.contact_number), ''), '') <> ''
+        """
+    ) or {}
+    active_row = fetch_one(
+        """
+        SELECT COUNT(DISTINCT p.user_id) AS count
+        FROM portal_customer_profiles p
+        JOIN customer_bag_items i ON i.user_id = p.user_id
+        LEFT JOIN iptv_accounts a ON a.id = i.iptv_account_id
+        WHERE COALESCE(NULLIF(trim(p.contact_number), ''), '') <> ''
+          AND i.product_kind IN ('IPTV', 'WIFI_IPTV')
+          AND i.status = 'ACTIVE'
+          AND i.active_until IS NOT NULL
+          AND i.active_until > now()
+          AND i.iptv_status = 'PROVISIONED'
+          AND (i.iptv_account_id IS NOT NULL OR COALESCE(NULLIF(i.iptv_account_username, ''), NULLIF(a.xui_username, '')) IS NOT NULL)
+        """
+    ) or {}
+    inactive_row = fetch_one(
+        """
+        SELECT COUNT(DISTINCT p.user_id) AS count
+        FROM portal_customer_profiles p
+        WHERE COALESCE(NULLIF(trim(p.contact_number), ''), '') <> ''
+          AND EXISTS (
+            SELECT 1
+            FROM customer_bag_items h
+            WHERE h.user_id = p.user_id
+              AND h.product_kind IN ('IPTV', 'WIFI_IPTV')
+              AND (h.iptv_account_id IS NOT NULL OR COALESCE(NULLIF(h.iptv_account_username, ''), NULLIF(h.iptv_status, '')) IS NOT NULL)
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM customer_bag_items i
+            LEFT JOIN iptv_accounts a ON a.id = i.iptv_account_id
+            WHERE i.user_id = p.user_id
+              AND i.product_kind IN ('IPTV', 'WIFI_IPTV')
+              AND i.status = 'ACTIVE'
+              AND i.active_until IS NOT NULL
+              AND i.active_until > now()
+              AND i.iptv_status = 'PROVISIONED'
+              AND (i.iptv_account_id IS NOT NULL OR COALESCE(NULLIF(i.iptv_account_username, ''), NULLIF(a.xui_username, '')) IS NOT NULL)
+          )
+        """
+    ) or {}
+    return {
+        "ok": True,
+        "status": "ACTIVE",
+        "service": "3JTV customer API",
+        "customers_with_contact": int(count_row.get("count") or 0),
+        "iptv_active_customers": int(active_row.get("count") or 0),
+        "iptv_inactive_customers": int(inactive_row.get("count") or 0),
+    }
+
+
+@app.get("/api/integrations/3jtv/customers")
+def threejtv_customer_api_customers(request: Request, q: str = "", limit: int = 500, offset: int = 0):
+    require_threejtv_customer_api(request)
+    clean_limit = max(1, min(1000, int(limit or 500)))
+    clean_offset = max(0, int(offset or 0))
+    search = (q or "").strip().lower()
+    like = f"%{search}%"
+    rows = fetch_all(
+        """
+        SELECT
+            p.id,
+            p.user_id,
+            u.username,
+            COALESCE(NULLIF(p.display_name, ''), NULLIF(u.full_name, ''), u.username) AS display_name,
+            COALESCE(NULLIF(p.email, ''), NULLIF(u.email, '')) AS email,
+            p.contact_number,
+            p.normalized_contact,
+            p.marketing_sms_consent,
+            p.contact_verified_at,
+            p.updated_at
+        FROM portal_customer_profiles p
+        JOIN users u ON u.id = p.user_id
+        WHERE COALESCE(NULLIF(trim(p.contact_number), ''), '') <> ''
+          AND (
+              %s = ''
+              OR lower(COALESCE(p.display_name, '')) LIKE %s
+              OR lower(COALESCE(u.username, '')) LIKE %s
+              OR lower(COALESCE(p.contact_number, '')) LIKE %s
+              OR lower(COALESCE(p.normalized_contact, '')) LIKE %s
+              OR lower(COALESCE(p.email, u.email, '')) LIKE %s
+          )
+        ORDER BY p.updated_at DESC NULLS LAST, p.created_at DESC NULLS LAST
+        LIMIT %s OFFSET %s
+        """,
+        (search, like, like, like, like, like, clean_limit, clean_offset),
+    )
+    customers = []
+    for row in rows:
+        customers.append({
+            "id": str(row.get("id") or ""),
+            "user_id": str(row.get("user_id") or ""),
+            "username": row.get("username") or "",
+            "display_name": row.get("display_name") or row.get("username") or "",
+            "email": row.get("email") or "",
+            "contact_number": row.get("contact_number") or "",
+            "normalized_contact": row.get("normalized_contact") or "",
+            "marketing_sms_consent": bool(row.get("marketing_sms_consent")),
+            "contact_verified_at": row.get("contact_verified_at").isoformat() if row.get("contact_verified_at") else None,
+            "updated_at": row.get("updated_at").isoformat() if row.get("updated_at") else None,
+            "source": "threejpisowifi",
+        })
+    return {"ok": True, "customers": customers, "limit": clean_limit, "offset": clean_offset}
+
+
+@app.get("/api/integrations/3jtv/iptv-customers")
+def threejtv_customer_api_iptv_customers(request: Request, status: str = "all", q: str = "", limit: int = 500, offset: int = 0):
+    require_threejtv_customer_api(request)
+    clean_limit = max(1, min(1000, int(limit or 500)))
+    clean_offset = max(0, int(offset or 0))
+    selected_status = (status or "all").strip().lower()
+    if selected_status not in {"all", "active", "inactive"}:
+        raise HTTPException(status_code=400, detail="status must be all, active, or inactive.")
+    search = (q or "").strip().lower()
+    like = f"%{search}%"
+    rows = fetch_all(
+        """
+        WITH profile_base AS (
+            SELECT
+                p.id,
+                p.user_id,
+                u.username,
+                COALESCE(NULLIF(p.display_name, ''), NULLIF(u.full_name, ''), u.username) AS display_name,
+                COALESCE(NULLIF(p.email, ''), NULLIF(u.email, '')) AS email,
+                p.contact_number,
+                p.normalized_contact,
+                p.marketing_sms_consent,
+                p.contact_verified_at,
+                p.updated_at
+            FROM portal_customer_profiles p
+            JOIN users u ON u.id = p.user_id
+            WHERE COALESCE(NULLIF(trim(p.contact_number), ''), '') <> ''
+              AND (
+                  %s = ''
+                  OR lower(COALESCE(p.display_name, '')) LIKE %s
+                  OR lower(COALESCE(u.username, '')) LIKE %s
+                  OR lower(COALESCE(p.contact_number, '')) LIKE %s
+                  OR lower(COALESCE(p.normalized_contact, '')) LIKE %s
+                  OR lower(COALESCE(p.email, u.email, '')) LIKE %s
+              )
+        ),
+        history AS (
+            SELECT
+                i.user_id,
+                COUNT(*) AS iptv_history_count,
+                MAX(i.active_until) AS last_active_until,
+                MAX(i.updated_at) AS last_iptv_updated_at
+            FROM customer_bag_items i
+            WHERE i.product_kind IN ('IPTV', 'WIFI_IPTV')
+              AND (i.iptv_account_id IS NOT NULL OR COALESCE(NULLIF(i.iptv_account_username, ''), NULLIF(i.iptv_status, '')) IS NOT NULL)
+            GROUP BY i.user_id
+        ),
+        active_item AS (
+            SELECT DISTINCT ON (i.user_id)
+                i.user_id,
+                i.id AS bag_item_id,
+                i.product_name,
+                i.active_until,
+                i.iptv_account_id,
+                COALESCE(NULLIF(a.xui_username, ''), NULLIF(i.iptv_account_username, '')) AS xui_username,
+                a.status AS iptv_account_status
+            FROM customer_bag_items i
+            LEFT JOIN iptv_accounts a ON a.id = i.iptv_account_id
+            WHERE i.product_kind IN ('IPTV', 'WIFI_IPTV')
+              AND i.status = 'ACTIVE'
+              AND i.active_until IS NOT NULL
+              AND i.active_until > now()
+              AND i.iptv_status = 'PROVISIONED'
+              AND (i.iptv_account_id IS NOT NULL OR COALESCE(NULLIF(i.iptv_account_username, ''), NULLIF(a.xui_username, '')) IS NOT NULL)
+            ORDER BY i.user_id, i.active_until DESC, i.updated_at DESC
+        ),
+        latest_item AS (
+            SELECT DISTINCT ON (i.user_id)
+                i.user_id,
+                i.product_name,
+                i.active_until,
+                i.iptv_account_id,
+                COALESCE(NULLIF(a.xui_username, ''), NULLIF(i.iptv_account_username, '')) AS xui_username,
+                a.status AS iptv_account_status
+            FROM customer_bag_items i
+            LEFT JOIN iptv_accounts a ON a.id = i.iptv_account_id
+            WHERE i.product_kind IN ('IPTV', 'WIFI_IPTV')
+              AND (i.iptv_account_id IS NOT NULL OR COALESCE(NULLIF(i.iptv_account_username, ''), NULLIF(i.iptv_status, '')) IS NOT NULL)
+            ORDER BY i.user_id, i.updated_at DESC, i.active_until DESC NULLS LAST
+        ),
+        account_history AS (
+            SELECT
+                i.user_id,
+                jsonb_agg(
+                    jsonb_build_object(
+                        'xui_username', COALESCE(NULLIF(a.xui_username, ''), NULLIF(i.iptv_account_username, '')),
+                        'status', COALESCE(NULLIF(a.status, ''), NULLIF(i.iptv_status, '')),
+                        'active_until', CASE WHEN i.active_until IS NULL THEN NULL ELSE i.active_until END,
+                        'product_name', i.product_name
+                    )
+                    ORDER BY i.updated_at DESC, i.active_until DESC NULLS LAST
+                ) FILTER (WHERE COALESCE(NULLIF(a.xui_username, ''), NULLIF(i.iptv_account_username, '')) IS NOT NULL) AS iptv_accounts
+            FROM customer_bag_items i
+            LEFT JOIN iptv_accounts a ON a.id = i.iptv_account_id
+            WHERE i.product_kind IN ('IPTV', 'WIFI_IPTV')
+              AND (i.iptv_account_id IS NOT NULL OR COALESCE(NULLIF(i.iptv_account_username, ''), NULLIF(i.iptv_status, '')) IS NOT NULL)
+            GROUP BY i.user_id
+        ),
+        internet_summary AS (
+            SELECT
+                i.user_id,
+                COALESCE(SUM(
+                    CASE
+                        WHEN i.product_kind IN ('WIFI', 'WIFI_IPTV')
+                         AND i.status IN ('ACTIVE', 'QUEUED')
+                        THEN GREATEST(COALESCE(i.remaining_seconds, 0), 0)
+                        ELSE 0
+                    END
+                ), 0) AS internet_remaining_seconds,
+                COUNT(*) FILTER (
+                    WHERE i.product_kind IN ('WIFI', 'WIFI_IPTV')
+                      AND i.status = 'ACTIVE'
+                      AND COALESCE(i.remaining_seconds, 0) > 0
+                      AND (i.active_until IS NULL OR i.active_until > now())
+                ) AS internet_active_count,
+                COUNT(*) FILTER (
+                    WHERE i.product_kind IN ('WIFI', 'WIFI_IPTV')
+                      AND i.status = 'QUEUED'
+                      AND COALESCE(i.remaining_seconds, 0) > 0
+                ) AS internet_queued_count,
+                MAX(i.active_until) FILTER (
+                    WHERE i.product_kind IN ('WIFI', 'WIFI_IPTV')
+                      AND i.status = 'ACTIVE'
+                ) AS internet_active_until,
+                jsonb_agg(
+                    jsonb_build_object(
+                        'product_name', i.product_name,
+                        'product_kind', i.product_kind,
+                        'status', i.status,
+                        'remaining_seconds', COALESCE(i.remaining_seconds, 0),
+                        'active_until', i.active_until,
+                        'activated_at', i.activated_at
+                    )
+                    ORDER BY i.updated_at DESC
+                ) FILTER (WHERE i.product_kind IN ('WIFI', 'WIFI_IPTV')) AS internet_items
+            FROM customer_bag_items i
+            WHERE i.product_kind IN ('WIFI', 'WIFI_IPTV')
+            GROUP BY i.user_id
+        )
+        SELECT
+            p.*,
+            CASE WHEN a.user_id IS NOT NULL THEN 'active' ELSE 'inactive' END AS iptv_status,
+            COALESCE(a.xui_username, l.xui_username) AS xui_username,
+            COALESCE(a.iptv_account_id, l.iptv_account_id) AS iptv_account_id,
+            COALESCE(a.iptv_account_status, l.iptv_account_status) AS iptv_account_status,
+            COALESCE(a.product_name, l.product_name) AS iptv_product_name,
+            a.active_until,
+            h.last_active_until,
+            h.iptv_history_count,
+            COALESCE(ah.iptv_accounts, '[]'::jsonb) AS iptv_accounts,
+            COALESCE(net.internet_remaining_seconds, 0) AS internet_remaining_seconds,
+            COALESCE(net.internet_active_count, 0) AS internet_active_count,
+            COALESCE(net.internet_queued_count, 0) AS internet_queued_count,
+            net.internet_active_until,
+            COALESCE(net.internet_items, '[]'::jsonb) AS internet_items
+        FROM profile_base p
+        JOIN history h ON h.user_id = p.user_id
+        LEFT JOIN active_item a ON a.user_id = p.user_id
+        LEFT JOIN latest_item l ON l.user_id = p.user_id
+        LEFT JOIN account_history ah ON ah.user_id = p.user_id
+        LEFT JOIN internet_summary net ON net.user_id = p.user_id
+        WHERE (%s = 'all' OR (%s = 'active' AND a.user_id IS NOT NULL) OR (%s = 'inactive' AND a.user_id IS NULL))
+        ORDER BY
+          CASE WHEN a.user_id IS NOT NULL THEN 0 ELSE 1 END,
+          COALESCE(a.active_until, h.last_active_until, h.last_iptv_updated_at) DESC NULLS LAST
+        LIMIT %s OFFSET %s
+        """,
+        (search, like, like, like, like, like, selected_status, selected_status, selected_status, clean_limit, clean_offset),
+    )
+    customers = []
+    for row in rows:
+        internet_remaining_seconds = int(row.get("internet_remaining_seconds") or 0)
+        internet_active_count = int(row.get("internet_active_count") or 0)
+        internet_queued_count = int(row.get("internet_queued_count") or 0)
+        customers.append({
+            "id": str(row.get("id") or ""),
+            "user_id": str(row.get("user_id") or ""),
+            "username": row.get("username") or "",
+            "display_name": row.get("display_name") or row.get("username") or "",
+            "email": row.get("email") or "",
+            "contact_number": row.get("contact_number") or "",
+            "normalized_contact": row.get("normalized_contact") or "",
+            "marketing_sms_consent": bool(row.get("marketing_sms_consent")),
+            "contact_verified_at": row.get("contact_verified_at").isoformat() if row.get("contact_verified_at") else None,
+            "updated_at": row.get("updated_at").isoformat() if row.get("updated_at") else None,
+            "iptv_status": row.get("iptv_status") or "inactive",
+            "xui_username": row.get("xui_username") or "",
+            "iptv_account_id": str(row.get("iptv_account_id") or ""),
+            "iptv_account_status": row.get("iptv_account_status") or "",
+            "iptv_product_name": row.get("iptv_product_name") or "",
+            "active_until": row.get("active_until").isoformat() if row.get("active_until") else None,
+            "last_active_until": row.get("last_active_until").isoformat() if row.get("last_active_until") else None,
+            "iptv_history_count": int(row.get("iptv_history_count") or 0),
+            "iptv_accounts": row.get("iptv_accounts") or [],
+            "internet_status": "active" if internet_remaining_seconds > 0 and (internet_active_count + internet_queued_count) > 0 else "inactive",
+            "internet_remaining_seconds": internet_remaining_seconds,
+            "internet_active_count": internet_active_count,
+            "internet_queued_count": internet_queued_count,
+            "internet_active_until": row.get("internet_active_until").isoformat() if row.get("internet_active_until") else None,
+            "internet_items": row.get("internet_items") or [],
+            "source": "threejpisowifi",
+        })
+    return {"ok": True, "customers": customers, "limit": clean_limit, "offset": clean_offset, "status": selected_status}
+
+
+@app.get("/api/admin/integrations/3jtv/status")
+def admin_threejtv_customer_api_status(admin=Depends(current_admin)):
+    configured = bool(os.getenv("THREEJTV_CUSTOMER_API_KEY", "").strip())
+    count_row = fetch_one(
+        """
+        SELECT COUNT(*) AS count
+        FROM portal_customer_profiles p
+        WHERE COALESCE(NULLIF(trim(p.contact_number), ''), '') <> ''
+        """
+    ) or {}
+    active_row = fetch_one(
+        """
+        SELECT COUNT(DISTINCT p.user_id) AS count
+        FROM portal_customer_profiles p
+        JOIN customer_bag_items i ON i.user_id = p.user_id
+        LEFT JOIN iptv_accounts a ON a.id = i.iptv_account_id
+        WHERE COALESCE(NULLIF(trim(p.contact_number), ''), '') <> ''
+          AND i.product_kind IN ('IPTV', 'WIFI_IPTV')
+          AND i.status = 'ACTIVE'
+          AND i.active_until IS NOT NULL
+          AND i.active_until > now()
+          AND i.iptv_status = 'PROVISIONED'
+          AND (i.iptv_account_id IS NOT NULL OR COALESCE(NULLIF(i.iptv_account_username, ''), NULLIF(a.xui_username, '')) IS NOT NULL)
+        """
+    ) or {}
+    inactive_row = fetch_one(
+        """
+        SELECT COUNT(DISTINCT p.user_id) AS count
+        FROM portal_customer_profiles p
+        WHERE COALESCE(NULLIF(trim(p.contact_number), ''), '') <> ''
+          AND EXISTS (
+            SELECT 1
+            FROM customer_bag_items h
+            WHERE h.user_id = p.user_id
+              AND h.product_kind IN ('IPTV', 'WIFI_IPTV')
+              AND (h.iptv_account_id IS NOT NULL OR COALESCE(NULLIF(h.iptv_account_username, ''), NULLIF(h.iptv_status, '')) IS NOT NULL)
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM customer_bag_items i
+            LEFT JOIN iptv_accounts a ON a.id = i.iptv_account_id
+            WHERE i.user_id = p.user_id
+              AND i.product_kind IN ('IPTV', 'WIFI_IPTV')
+              AND i.status = 'ACTIVE'
+              AND i.active_until IS NOT NULL
+              AND i.active_until > now()
+              AND i.iptv_status = 'PROVISIONED'
+              AND (i.iptv_account_id IS NOT NULL OR COALESCE(NULLIF(i.iptv_account_username, ''), NULLIF(a.xui_username, '')) IS NOT NULL)
+          )
+        """
+    ) or {}
+    return {
+        "status": "ACTIVE" if configured else "INACTIVE",
+        "configured": configured,
+        "customers_with_contact": int(count_row.get("count") or 0),
+        "iptv_active_customers": int(active_row.get("count") or 0),
+        "iptv_inactive_customers": int(inactive_row.get("count") or 0),
+        "base_path": "/api/integrations/3jtv",
+        "endpoints": ["/api/integrations/3jtv/health", "/api/integrations/3jtv/customers", "/api/integrations/3jtv/iptv-customers"],
+        "guide": [
+            "Use this read-only API to let 3J TV sync profiled customers with contact numbers.",
+            "3J TV also reads IPTV provisioning history through /iptv-customers to show Active and Inactive IPTV customers.",
+            "Requests must include Authorization: Bearer <token> or X-3JTV-API-Key.",
+            "Only customer profile records with contact numbers are returned.",
+            "XUI lines are not treated as customers. They are exposed only as IPTV access status linked to profiled customers.",
+        ],
+    }
 
 
 def admin_customer_bag_duration_seconds(payload: AdminCustomerBagItemRequest) -> int:

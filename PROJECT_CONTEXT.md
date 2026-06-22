@@ -1412,3 +1412,12 @@ Safety:
 - Admin success messages should use the shared `AutoDismissAlert` success path, which renders a green Tabler-style toast in the upper-right corner.
 - Default toast duration is 6 seconds and every toast must include a close button.
 - Keep long-running progress panels, command review panels, and interactive result panels inline when the user needs to inspect steps or use actions such as copy/print.
+
+## 2026-06-18 — 3JTV Customer/IPTV API
+- The 3JTV API documentation/status page moved from the main sidebar into `System Settings -> API`.
+- Token-protected local-network endpoints under `/api/integrations/3jtv` are used by the 3J TV project for customer sync:
+  - `GET /health` returns API status plus contactable, active-IPTV, and inactive-IPTV counts.
+  - `GET /customers` returns Profiled Customers with contact numbers only.
+  - `GET /iptv-customers?status=all|active|inactive` returns only contactable customers with IPTV provisioning history. Active rows have current IPTV time and an XUI username; inactive rows have IPTV history but no current active IPTV access.
+- XUI lines are not treated as customers. They are exposed only as access-status fields linked to profiled customers from Customer Devices -> Profiled Customers and IPTV -> Provisioning.
+- 2026-06-18 update: `/api/integrations/3jtv/iptv-customers` now includes an `iptv_accounts` array for each profiled customer so 3J TV can show one inactive customer row and a View modal listing all historical XUI usernames/accounts.

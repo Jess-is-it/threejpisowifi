@@ -678,6 +678,8 @@ const routePages = {
   'customers-accounts': 'Customer Devices',
   'connected-devices': 'Customer Devices',
   'customer-devices': 'Customer Devices',
+  'integrations/3jtv-api': 'System Settings',
+  '3jtv-api': 'System Settings',
   'sites-deployments': 'Sites',
   'aps-deployment': 'Sites',
   'aps-deployment/sites': 'Sites',
@@ -2380,6 +2382,25 @@ function PortalApp() {
     return portalNetworkState(nextStatus) === 'OUTSIDE';
   }
 
+  function portalHostLooksLocalNetwork() {
+    const host = String(window.location.hostname || '').trim().toLowerCase();
+    if (!host || host === 'localhost' || host === '127.0.0.1' || host === '::1') return true;
+    if (/^10\./.test(host)) return true;
+    if (/^192\.168\./.test(host)) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+    return false;
+  }
+
+  function iptvWatchRoutePreference() {
+    const presence = status?.network_presence || {};
+    if (outsideNetworkConfirmed && portalStatusLooksOutside(status)) return 'PUBLIC';
+    if (portalHostLooksLocalNetwork()) return 'AUTO';
+    if (deviceDetected || presence.current_request_detected) return 'AUTO';
+    if (presence.current_status === 'CURRENTLY_OUTSIDE_3J_NETWORK') return 'PUBLIC';
+    if (presence.detection_reason === 'live_omada_client' || presence.live_omada_client_detected) return 'PUBLIC';
+    return 'PUBLIC';
+  }
+
   useEffect(() => {
     const currentNetworkState = portalNetworkState(status);
     if (currentNetworkState === 'INSIDE') {
@@ -2999,7 +3020,10 @@ function PortalApp() {
     try {
       const data = await publicApi('/portal/iptv/watch', {
         method: 'POST',
-        body: JSON.stringify(payload({ bag_item_id: item.id }))
+        body: JSON.stringify(payload({
+          bag_item_id: item.id,
+          route_preference: iptvWatchRoutePreference(),
+        }))
       });
       if (data?.watch_url) {
         window.location.href = data.watch_url;
@@ -26799,9 +26823,10 @@ function ProfilePage({ onSaved }) {
 }
 
 function SystemSettingsPage({ refresh }) {
-  const tabs = ['General', 'Access', 'Public HTTPS', 'Payments', 'A2P Messaging', 'System Update', 'Backup', 'Danger'];
+  const tabs = ['General', 'Access', 'Public HTTPS', 'Payments', 'A2P Messaging', 'API', 'System Update', 'Backup', 'Danger'];
   const [tab, setTab] = useState(() => {
     const requestedTab = new URLSearchParams(window.location.search).get('tab');
+    if (window.location.pathname.includes('/integrations/3jtv-api')) return 'API';
     return tabs.includes(requestedTab) ? requestedTab : 'General';
   });
   const [settings, setSettings] = useState(null);
@@ -26820,6 +26845,10 @@ function SystemSettingsPage({ refresh }) {
   useEffect(() => {
     const syncTabFromRoute = () => {
       const requestedTab = new URLSearchParams(window.location.search).get('tab');
+      if (window.location.pathname.includes('/integrations/3jtv-api')) {
+        setTab('API');
+        return;
+      }
       if (tabs.includes(requestedTab)) setTab(requestedTab);
     };
     syncTabFromRoute();
@@ -27056,6 +27085,7 @@ function SystemSettingsPage({ refresh }) {
       {tab === 'Payments' && <PaymentSettingsTab />}
       {tab === 'Public HTTPS' && <PublicEndpointSettingsTab />}
       {tab === 'A2P Messaging' && <A2PMessagingSettingsTab />}
+      {tab === 'API' && <ThreeJtvApiPage />}
       {tab === 'System Update' && <UpdatePanel />}
       {tab === 'Backup' && <BackupPanel />}
       {tab === 'Danger' && (
@@ -30091,6 +30121,83 @@ function SupportInboxPage() {
           ) : (
             <div className="empty">Select a conversation.</div>
           )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+
+function ThreeJtvApiPage() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function loadStatus() {
+    setLoading(true);
+    setError('');
+    try {
+      setStatus(await request('/admin/integrations/3jtv/status'));
+    } catch (err) {
+      setError(err.message || 'Failed to load 3JTV API status.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadStatus(); }, []);
+
+  const active = status?.status === 'ACTIVE';
+  return (
+    <div className="row g-3">
+      <div className="col-12">
+        <Card title="3JTV Customer API" actions={<button className="btn btn-outline-primary" type="button" disabled={loading} onClick={loadStatus}><IconRefresh size={17} className="me-2" />Refresh</button>}>
+          {error && <div className="alert alert-danger">{error}</div>}
+          <div className="d-flex flex-wrap align-items-center justify-content-between gap-3 mb-3">
+            <div>
+              <div className="text-muted small">Connection status</div>
+              <span className={'badge ' + (active ? 'bg-green-lt text-green' : 'bg-red-lt text-red')}>{active ? 'Active' : 'Inactive'}</span>
+            </div>
+            <div>
+              <div className="text-muted small">Customers with contact numbers</div>
+              <div className="h2 mb-0">{status?.customers_with_contact ?? '—'}</div>
+            </div>
+          </div>
+          <div className="alert alert-info">
+            <strong>Guide:</strong> This page exposes read-only local-network APIs for 3J TV. Customer sync returns only profiled customers with contact numbers. IPTV sync returns Active/Inactive IPTV status from the Provisioning tab so 3J TV can show who currently has IPTV time and which XUI account is being used.
+          </div>
+          <div className="table-responsive">
+            <table className="table card-table table-vcenter">
+              <tbody>
+                <tr><th>Base path</th><td><code>{status?.base_path || '/api/integrations/3jtv'}</code></td></tr>
+                <tr><th>Health endpoint</th><td><code>/api/integrations/3jtv/health</code></td></tr>
+                <tr><th>Customers endpoint</th><td><code>/api/integrations/3jtv/customers</code></td></tr>
+                <tr><th>IPTV customers endpoint</th><td><code>/api/integrations/3jtv/iptv-customers?status=all|active|inactive</code></td></tr>
+                <tr><th>Authentication</th><td><code>Authorization: Bearer &lt;token&gt;</code> or <code>X-3JTV-API-Key</code></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="row g-3 mt-1">
+            <div className="col-md-4">
+              <div className="border rounded p-3 h-100">
+                <div className="text-muted small">Contactable customers</div>
+                <div className="h3 mb-0">{status?.customers_with_contact ?? '—'}</div>
+              </div>
+            </div>
+            <div className="col-md-4">
+              <div className="border rounded p-3 h-100">
+                <div className="text-muted small">Active IPTV customers</div>
+                <div className="h3 mb-0">{status?.iptv_active_customers ?? '—'}</div>
+              </div>
+            </div>
+            <div className="col-md-4">
+              <div className="border rounded p-3 h-100">
+                <div className="text-muted small">Inactive IPTV history</div>
+                <div className="h3 mb-0">{status?.iptv_inactive_customers ?? '—'}</div>
+              </div>
+            </div>
+          </div>
+          {loading && <div className="text-muted mt-3">Loading status...</div>}
         </Card>
       </div>
     </div>
