@@ -4601,6 +4601,113 @@ body.modal-open {
   color: #ffffff;
 }
 
+.portal-payment-handoff {
+  display: grid;
+  gap: 1rem;
+}
+
+.portal-payment-handoff-icon {
+  flex: 0 0 auto;
+}
+
+.portal-payment-handoff-summary {
+  background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.08);
+  border: 1px solid rgba(var(--portal-brand-rgb, 6, 111, 209), 0.16);
+  border-radius: 0.85rem;
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem;
+}
+
+.portal-payment-handoff-summary > div {
+  align-items: center;
+  display: flex;
+  gap: 0.85rem;
+  justify-content: space-between;
+}
+
+.portal-payment-handoff-summary small {
+  color: #667085;
+  font-size: 0.73rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.portal-payment-handoff-summary strong {
+  color: #172033;
+  font-size: 0.88rem;
+  font-weight: 900;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.portal-payment-handoff-note,
+.portal-payment-copy-status {
+  align-items: flex-start;
+  border-radius: 0.85rem;
+  display: flex;
+  gap: 0.6rem;
+  line-height: 1.35;
+  padding: 0.75rem 0.8rem;
+}
+
+.portal-payment-handoff-note {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  color: #7c4a03;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.portal-payment-copy-status {
+  background: rgba(47, 179, 68, 0.1);
+  border: 1px solid rgba(47, 179, 68, 0.18);
+  color: #1f7a33;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.portal-payment-handoff-actions {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.portal-payment-handoff-actions .btn {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-weight: 850;
+  gap: 0.45rem;
+  justify-content: center;
+  min-height: 2.4rem;
+}
+
+.portal-profile-modal-content.is-dark .portal-payment-handoff-summary {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.portal-profile-modal-content.is-dark .portal-payment-handoff-summary small {
+  color: #9fb0c4;
+}
+
+.portal-profile-modal-content.is-dark .portal-payment-handoff-summary strong {
+  color: #f8fafc;
+}
+
+.portal-profile-modal-content.is-dark .portal-payment-handoff-note {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.22);
+  color: #fde68a;
+}
+
+.portal-profile-modal-content.is-dark .portal-payment-copy-status {
+  background: rgba(47, 179, 68, 0.14);
+  border-color: rgba(47, 179, 68, 0.24);
+  color: #bbf7d0;
+}
+
 .app-modal-scroll-top {
   align-items: center;
   background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.94);

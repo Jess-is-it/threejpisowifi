@@ -77,6 +77,8 @@ import {
 import './styles.css';
 
 const API = '/api';
+const PORTAL_PENDING_PAYMENT_STORAGE_KEY = 'centralwifi_pending_paymongo_checkout';
+const PORTAL_PENDING_PAYMENT_MAX_AGE_MS = 60 * 60 * 1000;
 
 const PORTAL_TAP_TARGET_SELECTOR = [
   'button:not(:disabled)',
@@ -2272,6 +2274,8 @@ function PortalApp() {
   const purchaseSuccessKeyRef = useRef('');
   const [outsidePurchaseConfirm, setOutsidePurchaseConfirm] = useState(null);
   const [checkoutBrowserReminder, setCheckoutBrowserReminder] = useState(null);
+  const [paymentHandoff, setPaymentHandoff] = useState(null);
+  const [checkoutCopyMessage, setCheckoutCopyMessage] = useState('');
   const [portalScreen, setPortalScreen] = useState(() => {
     const initialParams = new URLSearchParams(window.location.search);
     return initialParams.get('payment_order_id') || initialParams.get('screen') === 'shop' || initialParams.get('purchase_channel')
@@ -2397,6 +2401,7 @@ function PortalApp() {
   const paymentResultRef = useRef(null);
   const dismissedPaymentNoticeKeyRef = useRef('');
   const cancelledPaymentOrdersRef = useRef(new Set());
+  const checkoutCopyMessageTimerRef = useRef(null);
   const handledStoreApprovalRef = useRef(new Set());
   const storeRequestStatusRef = useRef(new Map());
   const storePendingRequestsRef = useRef([]);
@@ -2727,6 +2732,83 @@ function PortalApp() {
     return payment.status === 'PAID' && ['FULFILLED', 'FAILED'].includes(payment.fulfillment_status);
   }
 
+  function pendingPaymentSnapshot(payment = null) {
+    if (!payment?.payment_order_id || !payment?.checkout_url) return null;
+    return {
+      found: payment.found !== false,
+      status: payment.status || 'CHECKOUT_CREATED',
+      fulfillment_status: payment.fulfillment_status || 'PENDING',
+      payment_order_id: payment.payment_order_id,
+      checkout_url: payment.checkout_url,
+      provider: payment.provider || 'PAYMONGO',
+      mode: payment.mode,
+      payment_method: payment.payment_method || selectedPaymentMethod || 'gcash',
+      amount_centavos: payment.amount_centavos,
+      currency: payment.currency || 'PHP',
+      product_name: payment.product_name,
+      product_kind: payment.product_kind,
+      product_kind_label: payment.product_kind_label,
+      product_category_name: payment.product_category_name,
+      outside_network_purchase: Boolean(payment.outside_network_purchase),
+      portal_session_id: payment.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session') || '',
+      saved_at: Date.now(),
+    };
+  }
+
+  function savePendingPaymentCheckout(payment = null) {
+    const snapshot = pendingPaymentSnapshot(payment);
+    if (!snapshot || paymentResultIsTerminal(snapshot)) return;
+    try {
+      sessionStorage.setItem(PORTAL_PENDING_PAYMENT_STORAGE_KEY, JSON.stringify(snapshot));
+    } catch {
+      // Session storage is best effort; the visible payment panel still works in this page session.
+    }
+  }
+
+  function readPendingPaymentCheckout() {
+    try {
+      const raw = sessionStorage.getItem(PORTAL_PENDING_PAYMENT_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed?.payment_order_id || !parsed?.checkout_url) {
+        sessionStorage.removeItem(PORTAL_PENDING_PAYMENT_STORAGE_KEY);
+        return null;
+      }
+      if (Date.now() - Number(parsed.saved_at || 0) > PORTAL_PENDING_PAYMENT_MAX_AGE_MS || paymentResultIsTerminal(parsed)) {
+        sessionStorage.removeItem(PORTAL_PENDING_PAYMENT_STORAGE_KEY);
+        return null;
+      }
+      return parsed;
+    } catch {
+      try { sessionStorage.removeItem(PORTAL_PENDING_PAYMENT_STORAGE_KEY); } catch {}
+      return null;
+    }
+  }
+
+  function clearPendingPaymentCheckout(orderId = '') {
+    try {
+      if (!orderId) {
+        sessionStorage.removeItem(PORTAL_PENDING_PAYMENT_STORAGE_KEY);
+        return;
+      }
+      const stored = readPendingPaymentCheckout();
+      if (!stored || stored.payment_order_id === orderId) {
+        sessionStorage.removeItem(PORTAL_PENDING_PAYMENT_STORAGE_KEY);
+      }
+    } catch {
+      // Nothing else to do if browser storage is unavailable.
+    }
+  }
+
+  function showCheckoutHandoff(payment) {
+    if (!payment?.checkout_url) return;
+    savePendingPaymentCheckout(payment);
+    showPaymentResult(payment, { force: true });
+    setCheckoutCopyMessage('');
+    setPaymentHandoff(payment);
+    setPortalScreen('shop');
+  }
+
   function showPaymentResult(payment, options = {}) {
     if (!payment) {
       setPaymentResult(null);
@@ -2739,6 +2821,8 @@ function PortalApp() {
       dismissedPaymentNoticeKeyRef.current = '';
       setDismissedPaymentNoticeKey('');
     }
+    if (terminal) clearPendingPaymentCheckout(payment.payment_order_id);
+    else if (payment.checkout_url) savePendingPaymentCheckout(payment);
     setPaymentResult(payment);
   }
 
@@ -2754,6 +2838,8 @@ function PortalApp() {
   async function cancelPaymentCheckout(payment = paymentResultRef.current) {
     const orderId = payment?.payment_order_id;
     if (orderId) cancelledPaymentOrdersRef.current.add(orderId);
+    clearPendingPaymentCheckout(orderId);
+    setPaymentHandoff(null);
     dismissPaymentNotice(payment);
     setPaymentChecking(false);
     setPaymentLoading('');
@@ -2982,6 +3068,15 @@ function PortalApp() {
   }, []);
 
   useEffect(() => {
+    if (paymentOrderFromUrl) return;
+    const restoredPayment = readPendingPaymentCheckout();
+    if (!restoredPayment?.payment_order_id || cancelledPaymentOrdersRef.current.has(restoredPayment.payment_order_id)) return;
+    setPortalScreen('shop');
+    showPaymentResult(restoredPayment, { force: false });
+    checkPaymentStatus(restoredPayment.payment_order_id).catch(() => null);
+  }, []);
+
+  useEffect(() => {
     if (!selectedProductCategory || !selectedCategoryProductId) return;
     const categoryItems = selectedProductCategory.items || [];
     const item = categoryItems.find((entry) => entry.id === selectedCategoryProductId);
@@ -3026,6 +3121,7 @@ function PortalApp() {
 
   useEffect(() => () => {
     if (profileMessageTimerRef.current) window.clearTimeout(profileMessageTimerRef.current);
+    if (checkoutCopyMessageTimerRef.current) window.clearTimeout(checkoutCopyMessageTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -3093,6 +3189,7 @@ function PortalApp() {
     try {
       const data = await publicRequest(`/portal/payments/${encodeURIComponent(orderId)}/status`);
       showPaymentResult(data, { force: Boolean(options.force) });
+      if (paymentResultIsTerminal(data) || data.status === 'PAID') setPaymentHandoff(null);
       persistSession(data);
       if (data.status === 'PAID' && data.fulfillment_status === 'FULFILLED') {
         const nextStatus = await refreshStatus(data.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session'));
@@ -3174,7 +3271,7 @@ function PortalApp() {
       });
       if (!data.checkout_url) throw new Error('PayMongo did not return a checkout link.');
       setPaymentLoading('');
-      window.location.href = data.checkout_url;
+      showCheckoutHandoff(data);
     } catch (err) {
       showPaymentResult({ status: 'FAILED', last_error: err.message }, { force: true });
       setPaymentLoading('');
@@ -5719,6 +5816,70 @@ function PortalApp() {
     startProductCheckout(next.item, next.quantity || 1, false, next.paymentMethod || selectedPaymentMethod, true);
   }
 
+  function checkoutPaymentMethodLabel(payment = null) {
+    const methodId = payment?.payment_method || selectedPaymentMethod || 'gcash';
+    return portalPaymentMethodOptions.find((method) => method.id === methodId)?.label || selectedPaymentLabel || 'Online payment';
+  }
+
+  function openCheckoutUrl(url = paymentHandoff?.checkout_url || paymentResult?.checkout_url) {
+    if (!url) return;
+    setCheckoutCopyMessage('');
+    try {
+      const checkoutWindow = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!checkoutWindow) {
+        window.location.href = url;
+      }
+    } catch {
+      window.location.href = url;
+    }
+  }
+
+  function fallbackCopyText(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'readonly');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      return true;
+    } catch {
+      return false;
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+
+  async function copyCheckoutLink(payment = paymentHandoff || paymentResult) {
+    const url = payment?.checkout_url;
+    if (!url) return;
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+    if (!copied) copied = fallbackCopyText(url);
+    const message = copied
+      ? t('Payment link copied. Open Chrome or Safari and paste it there to continue checkout.')
+      : t('Copy was blocked by this browser. Long press the payment link and copy it manually.');
+    setCheckoutCopyMessage(message);
+    setPortalToast({
+      key: `payment-link-${Date.now()}`,
+      tone: copied ? 'success' : 'danger',
+      title: copied ? t('Payment link copied') : t('Copy blocked'),
+      message,
+    });
+    if (checkoutCopyMessageTimerRef.current) window.clearTimeout(checkoutCopyMessageTimerRef.current);
+    checkoutCopyMessageTimerRef.current = window.setTimeout(() => setCheckoutCopyMessage(''), portalMessageAutoHideMs);
+  }
+
   function openProfileFromOutsidePurchase() {
     setOutsidePurchaseConfirm(null);
     closeProductCategoryModal();
@@ -7012,6 +7173,87 @@ function PortalApp() {
     );
   }
 
+  function PaymentCheckoutHandoffModal() {
+    if (!paymentHandoff?.checkout_url) return null;
+    const captiveBrowser = isCaptivePortalPlaybackBrowser();
+    const methodLabel = checkoutPaymentMethodLabel(paymentHandoff);
+    const amountLabel = paymentHandoff.amount_centavos !== undefined
+      ? formatCentavos(paymentHandoff.amount_centavos, paymentHandoff.currency || 'PHP')
+      : '';
+    return (
+      <Modal
+        title={t('Complete payment')}
+        onClose={() => setPaymentHandoff(null)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content portal-payment-handoff-modal ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className="portal-payment-handoff">
+          <div className="d-flex align-items-start gap-3">
+            <span className="avatar bg-blue-lt text-blue portal-payment-handoff-icon"><IconExternalLink size={24} /></span>
+            <div>
+              <div className="fw-semibold mb-1">{paymentHandoff.product_name || t('WiFi package')}</div>
+              <div className="text-muted small">
+                {captiveBrowser
+                  ? t('You are inside the WiFi sign-in window. For GCash, open the secure PayMongo checkout in Chrome or Safari, then return here and tap Check.')
+                  : t('Open the secure PayMongo checkout, complete the payment, then return here and tap Check if the page does not update automatically.')}
+              </div>
+            </div>
+          </div>
+
+          <div className="portal-payment-handoff-summary">
+            <div>
+              <small>{t('Payment method')}</small>
+              <strong>{methodLabel}</strong>
+            </div>
+            {amountLabel && (
+              <div>
+                <small>{t('Amount')}</small>
+                <strong>{amountLabel}</strong>
+              </div>
+            )}
+            <div>
+              <small>{t('Order')}</small>
+              <strong>{paymentHandoff.payment_order_id}</strong>
+            </div>
+          </div>
+
+          <div className="portal-payment-handoff-note">
+            <IconBrandChrome size={18} />
+            <span>{t('If the checkout tries to open GCash from the WiFi sign-in window, use Copy link and paste it in Chrome or Safari for a clearer payment flow.')}</span>
+          </div>
+
+          {checkoutCopyMessage && (
+            <div className="portal-payment-copy-status">
+              <IconCircleCheck size={17} />
+              <span>{checkoutCopyMessage}</span>
+            </div>
+          )}
+
+          <div className="portal-payment-handoff-actions">
+            <button className="btn btn-primary portal-outside-modal-primary" type="button" onClick={() => openCheckoutUrl(paymentHandoff.checkout_url)}>
+              <IconExternalLink size={18} />
+              {t('Open secure checkout')}
+            </button>
+            <button className="btn portal-outside-modal-cancel" type="button" onClick={() => copyCheckoutLink(paymentHandoff)}>
+              <IconCopy size={18} />
+              {t('Copy link')}
+            </button>
+            <button className="btn portal-outside-modal-cancel" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentHandoff.payment_order_id, { force: true })}>
+              <IconRefresh size={18} />
+              {paymentChecking ? t('Checking...') : t('I paid, check')}
+            </button>
+            <button className="btn btn-outline-danger" type="button" disabled={paymentChecking} onClick={() => cancelPaymentCheckout(paymentHandoff)}>
+              <IconX size={18} />
+              {t('Cancel order')}
+            </button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
+
   function IptvProfileRequiredModal() {
     if (!iptvProfileRequiredItem) return null;
     const itemName = iptvProfileRequiredItem.product_name || iptvProfileRequiredItem.name || t('IPTV pass');
@@ -7393,7 +7635,7 @@ function PortalApp() {
                   ? (paymentResult.bag_item_status === 'QUEUED' ? t(status?.outside_network_warning?.purchase_success_message || 'Payment received. Package saved to your bag.') : t('Payment received. Internet access is active.'))
                   : paymentResult.status === 'FAILED'
                     ? t(friendlyPayMongoError(paymentResult.last_error))
-                    : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Waiting for PayMongo payment confirmation.')}
+                    : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Payment is not completed yet. Open the secure checkout, then return here and tap Check.')}
                 tone={paymentResult.status === 'FAILED' ? 'danger' : paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'success' : 'info'}
                 timeoutMs={portalMessageAutoHideMs}
                 autoDismiss={paymentResultIsTerminal(paymentResult)}
@@ -7402,6 +7644,18 @@ function PortalApp() {
                 dismissKey={`${paymentResult.payment_order_id || ''}-${paymentResult.status}-${paymentResult.fulfillment_status || ''}-${paymentChecking ? 'checking' : 'idle'}`}
                 actions={paymentResult.payment_order_id && (
                   <>
+                    {!paymentResultIsTerminal(paymentResult) && paymentResult.checkout_url && (
+                      <button className="btn btn-sm btn-primary" type="button" disabled={paymentChecking} onClick={() => setPaymentHandoff(paymentResult)}>
+                        <IconExternalLink size={15} className="me-1" />
+                        {t('Open checkout')}
+                      </button>
+                    )}
+                    {!paymentResultIsTerminal(paymentResult) && paymentResult.checkout_url && (
+                      <button className="btn btn-sm btn-outline-secondary" type="button" disabled={paymentChecking} onClick={() => copyCheckoutLink(paymentResult)}>
+                        <IconCopy size={15} className="me-1" />
+                        {t('Copy link')}
+                      </button>
+                    )}
                     <button className="btn btn-sm btn-outline-secondary" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id, { force: true })}>
                       {paymentChecking ? t('Checking...') : t('Check')}
                     </button>
@@ -7615,6 +7869,7 @@ function PortalApp() {
 	      {renderPortalSettingsModal()}
       {OutsidePurchaseModal()}
       {BrowserReminderCheckoutModal()}
+      {PaymentCheckoutHandoffModal()}
       {IptvProfileRequiredModal()}
       {IptvChromeOnlyModal()}
       {PortalCoverageModal()}
