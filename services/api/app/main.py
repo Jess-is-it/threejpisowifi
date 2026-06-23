@@ -35,7 +35,7 @@ import requests
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -1035,6 +1035,10 @@ class PaymentGatewaySettingsPayload(BaseModel):
     enabled_payment_methods: Optional[list[str]] = None
     success_url: Optional[str] = Field(default=None, max_length=500)
     cancel_url: Optional[str] = Field(default=None, max_length=500)
+    telegram_enabled: Optional[bool] = None
+    telegram_bot_token: Optional[str] = Field(default=None, max_length=300)
+    clear_telegram_bot_token: bool = False
+    telegram_chat_id: Optional[str] = Field(default=None, max_length=120)
     notes: Optional[str] = Field(default=None, max_length=1000)
 
 
@@ -4436,6 +4440,12 @@ PAYMENT_GATEWAY_DEFAULT_SETTINGS = {
     "enabled_payment_methods": ["gcash"],
     "success_url": "http://192.168.50.70/portal?payment=success",
     "cancel_url": "http://192.168.50.70/portal?payment=cancelled",
+    "telegram_enabled": False,
+    "telegram_bot_token_encrypted": None,
+    "telegram_chat_id": "",
+    "telegram_last_status": "",
+    "telegram_last_error": "",
+    "telegram_last_sent_at": None,
     "notes": "",
     "credentials": {
         "TEST": {},
@@ -4558,6 +4568,19 @@ def public_payment_credential_payload(credentials: dict, mode: str) -> dict:
     }
 
 
+def public_paymongo_telegram_settings(store: dict) -> dict:
+    token = decrypt_secret(store.get("telegram_bot_token_encrypted"))
+    return {
+        "enabled": bool(store.get("telegram_enabled")),
+        "bot_token_configured": bool(token),
+        "bot_token_hint": mask_payment_secret(token),
+        "chat_id": store.get("telegram_chat_id") or "",
+        "last_status": store.get("telegram_last_status") or "",
+        "last_error": store.get("telegram_last_error") or "",
+        "last_sent_at": store.get("telegram_last_sent_at"),
+    }
+
+
 def payment_gateway_store() -> dict:
     row = fetch_one("SELECT value FROM app_settings WHERE key = 'payment_gateway'")
     value = row["value"] if row and isinstance(row["value"], dict) else {}
@@ -4570,6 +4593,11 @@ def payment_gateway_store() -> dict:
     store["enabled_payment_methods"] = normalize_payment_methods(store.get("enabled_payment_methods"))
     store["success_url"] = normalize_payment_url(store.get("success_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["success_url"])
     store["cancel_url"] = normalize_payment_url(store.get("cancel_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["cancel_url"])
+    store["telegram_enabled"] = bool(store.get("telegram_enabled"))
+    store["telegram_bot_token_encrypted"] = normalize_payment_text(store.get("telegram_bot_token_encrypted"), 2000)
+    store["telegram_chat_id"] = normalize_payment_text(store.get("telegram_chat_id"), 120)
+    store["telegram_last_status"] = normalize_payment_text(store.get("telegram_last_status"), 80)
+    store["telegram_last_error"] = normalize_payment_text(store.get("telegram_last_error"), 1000)
     store["notes"] = normalize_payment_text(store.get("notes"), 1000)
     store["credentials"] = normalize_payment_credentials(store)
     return store
@@ -4587,6 +4615,12 @@ def save_payment_gateway_store(store: dict):
         "enabled_payment_methods": normalize_payment_methods(store.get("enabled_payment_methods")),
         "success_url": normalize_payment_url(store.get("success_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["success_url"]),
         "cancel_url": normalize_payment_url(store.get("cancel_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["cancel_url"]),
+        "telegram_enabled": bool(store.get("telegram_enabled")),
+        "telegram_bot_token_encrypted": normalize_payment_text(store.get("telegram_bot_token_encrypted"), 2000),
+        "telegram_chat_id": normalize_payment_text(store.get("telegram_chat_id"), 120),
+        "telegram_last_status": normalize_payment_text(store.get("telegram_last_status"), 80),
+        "telegram_last_error": normalize_payment_text(store.get("telegram_last_error"), 1000),
+        "telegram_last_sent_at": store.get("telegram_last_sent_at"),
         "notes": normalize_payment_text(store.get("notes"), 1000),
     }
     with get_conn() as conn:
@@ -4628,6 +4662,7 @@ def public_payment_gateway_settings() -> dict:
         "payment_method_options": [{"id": key, "label": label} for key, label in PAYMENT_METHOD_OPTIONS.items()],
         "success_url": store.get("success_url"),
         "cancel_url": store.get("cancel_url"),
+        "telegram": public_paymongo_telegram_settings(store),
         "notes": store.get("notes"),
         "phase": "PHASE_2_CHECKOUT_FOUNDATION",
         "ready_for_gcash": ready_for_gcash,
@@ -4735,7 +4770,9 @@ def paymongo_request(store: dict, secret_key: str, method: str, path: str, paylo
         errors = data.get("errors") if isinstance(data, dict) else None
         if isinstance(errors, list) and errors:
             first = errors[0] if isinstance(errors[0], dict) else {}
-            message = first.get("detail") or first.get("message") or message
+            raw_message = first.get("detail") or first.get("message") or message
+            code = first.get("code") or first.get("sub_code") or first.get("subCode") or first.get("status")
+            message = paymongo_customer_failure_message(code, raw_message)
         raise HTTPException(status_code=502, detail=message)
     return data if isinstance(data, dict) else {}
 
@@ -4904,6 +4941,38 @@ def paymongo_event_id(payload: dict) -> str:
     return normalize_payment_text(nested_value(payload, ["data", "id"]) or f"evt_local_{secrets.token_urlsafe(18)}", 120)
 
 
+def paymongo_event_resource(payload: dict) -> dict:
+    resource = nested_value(payload, ["data", "attributes", "data"])
+    return resource if isinstance(resource, dict) else {}
+
+
+def paymongo_checkout_session_id(payload: dict) -> Optional[str]:
+    value = (
+        nested_value(payload, ["data", "attributes", "data", "id"])
+        or nested_value(payload, ["data", "attributes", "data", "attributes", "checkout_session_id"])
+        or recursive_find_value(payload, {"checkout_session_id", "checkoutSessionId"})
+    )
+    text = normalize_payment_text(value, 120)
+    return text or None
+
+
+def paymongo_event_is_paid(event_type: str) -> bool:
+    return normalize_payment_text(event_type, 120).lower() in {
+        "payment.paid",
+        "checkout_session.payment.paid",
+        "checkout_session.paid",
+    }
+
+
+def paymongo_event_is_failed(event_type: str) -> bool:
+    return normalize_payment_text(event_type, 120).lower() in {
+        "payment.failed",
+        "checkout_session.payment.failed",
+        "checkout_session.failed",
+        "checkout_session.expired",
+    }
+
+
 def paymongo_payment_reference(payload: dict) -> Optional[str]:
     def find_order_id(value):
         if isinstance(value, dict):
@@ -4929,6 +4998,51 @@ def paymongo_payment_reference(payload: dict) -> Optional[str]:
 def paymongo_provider_payment_id(payload: dict) -> Optional[str]:
     value = nested_value(payload, ["data", "attributes", "data", "id"]) or recursive_find_value(payload, {"payment_id", "paymentId"})
     return normalize_payment_text(value, 120) or None
+
+
+PAYMONGO_FAILURE_MESSAGES = {
+    "CLOSED": "GCash payment was closed before it was completed. No WiFi pass was activated.",
+    "CANCELLED": "Payment was cancelled before completion. No WiFi pass was activated.",
+    "CANCELED": "Payment was cancelled before completion. No WiFi pass was activated.",
+    "EXPIRED": "Payment session expired. Please start checkout again.",
+    "AMOUNT_EXCEED_LIMIT": "GCash declined the payment because it exceeded a transaction or wallet limit. Try a smaller package or another payment method.",
+    "AMOUNT_EXCEEDS_LIMIT": "GCash declined the payment because it exceeded a transaction or wallet limit. Try a smaller package or another payment method.",
+    "SYSTEM_ERROR": "GCash or PayMongo had a temporary system issue. Please try again in a few minutes.",
+    "PAYMENT_FAILED": "GCash payment failed. No WiFi pass was activated.",
+    "FAILED": "Payment failed. No WiFi pass was activated.",
+    "INSUFFICIENT_FUNDS": "GCash reported insufficient balance. Please top up GCash or choose another payment method.",
+    "PROCESSOR_ERROR": "The payment processor could not complete the transaction. Please try again.",
+}
+
+
+def paymongo_customer_failure_message(code: Optional[str], fallback: str = "Payment was not completed.") -> str:
+    clean_code = normalize_payment_text(code, 80).upper().replace(" ", "_").replace("-", "_")
+    if clean_code in PAYMONGO_FAILURE_MESSAGES:
+        return PAYMONGO_FAILURE_MESSAGES[clean_code]
+    if fallback:
+        return normalize_payment_text(fallback, 500) or "Payment was not completed."
+    return ""
+
+
+def paymongo_failure_code(payload: dict) -> str:
+    value = (
+        recursive_find_value(payload, {"failure_code", "failed_code", "error_code", "errorCode", "code", "reason", "status"})
+        or ""
+    )
+    return normalize_payment_text(value, 80).upper().replace(" ", "_").replace("-", "_")
+
+
+def paymongo_failure_message(payload: dict, fallback: str = "PayMongo reported payment failed.") -> str:
+    code = paymongo_failure_code(payload)
+    if code:
+        mapped = paymongo_customer_failure_message(code, "")
+        if mapped:
+            return mapped
+    detail = recursive_find_value(payload, {"failure_message", "failed_message", "error_message", "message", "detail", "description"})
+    detail_text = normalize_payment_text(detail, 500)
+    if detail_text:
+        return detail_text
+    return fallback
 
 
 def paymongo_payload_amount(payload: dict) -> Optional[int]:
@@ -5244,6 +5358,97 @@ def create_admin_notification(
     except Exception as exc:
         print(f"admin notification log failed: {exc}")
         return None
+
+
+def update_payment_gateway_telegram_status(status: str, error: str = "", sent_at: Optional[datetime] = None):
+    try:
+        store = payment_gateway_store()
+        store["telegram_last_status"] = normalize_payment_text(status, 80)
+        store["telegram_last_error"] = normalize_payment_text(error, 1000)
+        if sent_at:
+            store["telegram_last_sent_at"] = sent_at.isoformat()
+        save_payment_gateway_store(store)
+    except Exception as exc:
+        print(f"PayMongo Telegram status update failed: {exc}")
+
+
+def send_paymongo_telegram_alert(title: str, message: str, metadata: Optional[dict] = None) -> Optional[dict]:
+    store = payment_gateway_store()
+    if not store.get("telegram_enabled"):
+        return None
+    token = decrypt_secret(store.get("telegram_bot_token_encrypted"))
+    chat_id = normalize_payment_text(store.get("telegram_chat_id"), 120)
+    if not token or not chat_id:
+        update_payment_gateway_telegram_status("FAILED", "Telegram bot token or chat id is missing.")
+        return None
+    lines = [
+        f"3J PayMongo Alert",
+        f"{normalize_payment_text(title, 200)}",
+        normalize_payment_text(message, 1000),
+    ]
+    metadata = sanitize_summary(metadata or {})
+    if metadata:
+        for key, value in list(metadata.items())[:8]:
+            lines.append(f"{key}: {normalize_payment_text(value, 160)}")
+    try:
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": "\n".join([line for line in lines if line])},
+            timeout=12,
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"HTTP {response.status_code} {response.text[:300]}")
+        update_payment_gateway_telegram_status("SUCCESS", "", datetime.now(timezone.utc))
+        try:
+            return response.json()
+        except ValueError:
+            return {"ok": True}
+    except Exception as exc:
+        update_payment_gateway_telegram_status("FAILED", str(exc))
+        return None
+
+
+def create_paymongo_admin_notification(
+    title: str,
+    message: str,
+    *,
+    severity: str = "DANGER",
+    related_id: str = "",
+    metadata: Optional[dict] = None,
+    telegram: bool = True,
+) -> Optional[str]:
+    clean_related_id = normalize_payment_text(related_id or title, 120)
+    try:
+        existing = fetch_one(
+            """
+            SELECT id
+            FROM admin_notifications
+            WHERE category = 'PAYMONGO_ALERT'
+              AND related_id = %s
+              AND created_at > now() - interval '5 minutes'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (clean_related_id,),
+        )
+        if existing:
+            return str(existing["id"])
+    except Exception:
+        pass
+    notification_id = create_admin_notification(
+        "PAYMONGO_ALERT",
+        severity,
+        title,
+        message,
+        "PayMongo",
+        "/admin/paymongo",
+        "payment_orders",
+        clean_related_id,
+        metadata or {},
+    )
+    if telegram:
+        send_paymongo_telegram_alert(title, message, metadata)
+    return notification_id
 
 
 def create_iptv_login_failure_notification(
@@ -16483,59 +16688,74 @@ def fulfill_paid_payment_order(cur, order: dict, request: Request):
     return {"status": "FULFILLED", "order": fulfilled_order, "bag_item": bag_item, "activation": sanitize_summary(activation)}
 
 
-@app.post("/api/payments/paymongo/webhook")
-async def paymongo_webhook(request: Request):
-    raw_body = await request.body()
+def record_rejected_paymongo_webhook(payload: dict, event_type: str, reason: str):
     try:
-        verification = verify_paymongo_webhook_signature(raw_body, request.headers.get("Paymongo-Signature") or request.headers.get("paymongo-signature") or "")
-    except HTTPException as exc:
-        return {
-            "received": True,
-            "status": "REJECTED",
-            "message": "Webhook was acknowledged but not processed because signature verification failed.",
-            "detail": str(exc.detail),
-        }
-    try:
-        payload = json.loads(raw_body.decode("utf-8"))
-    except ValueError:
-        return {
-            "received": True,
-            "status": "REJECTED",
-            "message": "Webhook was acknowledged but not processed because the JSON body was invalid.",
-        }
-    event_id = paymongo_event_id(payload)
-    event_type = paymongo_event_type(payload)
-    public_order_id = paymongo_payment_reference(payload)
-    provider_payment_id = paymongo_provider_payment_id(payload)
-    event_amount = paymongo_payload_amount(payload)
+        event_id = normalize_payment_text(
+            nested_value(payload, ["data", "id"]) or f"rejected_{sha256(json.dumps(sanitize_summary(payload), sort_keys=True).encode('utf-8')).hexdigest()[:28]}",
+            120,
+        )
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO payment_webhook_events(provider, provider_mode, provider_event_id, event_type, processing_status, payload_json, error_message, processed_at)
+                    VALUES ('PAYMONGO', NULL, %s, %s, 'FAILED', %s, %s, now())
+                    ON CONFLICT (provider_event_id) DO UPDATE
+                    SET processing_status = 'FAILED',
+                        error_message = EXCLUDED.error_message,
+                        processed_at = now()
+                    """,
+                    (event_id, event_type or "unknown", Json(sanitize_summary(payload)), normalize_payment_text(reason, 1000)),
+                )
+    except Exception as exc:
+        print(f"PayMongo rejected webhook record failed: {exc}")
+
+
+def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
     processing_status = "RECEIVED"
     error_message = None
+    order = None
+    event_type = ""
+    payload = {}
+    event_id = ""
     try:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                order = None
-                if public_order_id:
-                    cur.execute("SELECT * FROM payment_orders WHERE public_order_id = %s FOR UPDATE", (public_order_id,))
-                    order = cur.fetchone()
-                cur.execute(
-                    """
-                    INSERT INTO payment_webhook_events(provider, provider_mode, provider_event_id, event_type, payment_order_id, processing_status, payload_json)
-                    VALUES ('PAYMONGO', %s, %s, %s, %s, 'RECEIVED', %s)
-                    ON CONFLICT (provider_event_id) DO NOTHING
-                    RETURNING *
-                    """,
-                    (verification["mode"], event_id, event_type, order["id"] if order else None, Json(sanitize_summary(payload))),
-                )
+                cur.execute("SELECT * FROM payment_webhook_events WHERE id = %s FOR UPDATE", (webhook_event_id,))
                 webhook_event = cur.fetchone()
                 if not webhook_event:
-                    return {"received": True, "duplicate": True}
-                if order and order.get("portal_session_id"):
+                    return
+                if webhook_event.get("processing_status") in {"PROCESSED", "IGNORED"}:
+                    return
+                payload = webhook_event.get("payload_json") if isinstance(webhook_event.get("payload_json"), dict) else {}
+                event_type = webhook_event.get("event_type") or paymongo_event_type(payload)
+                event_id = webhook_event.get("provider_event_id") or paymongo_event_id(payload)
+                public_order_id = paymongo_payment_reference(payload)
+                checkout_session_id = paymongo_checkout_session_id(payload)
+                provider_payment_id = paymongo_provider_payment_id(payload)
+                event_amount = paymongo_payload_amount(payload)
+                if webhook_event.get("payment_order_id"):
+                    cur.execute("SELECT * FROM payment_orders WHERE id = %s FOR UPDATE", (webhook_event["payment_order_id"],))
+                    order = cur.fetchone()
+                if not order and public_order_id:
+                    cur.execute("SELECT * FROM payment_orders WHERE public_order_id = %s FOR UPDATE", (public_order_id,))
+                    order = cur.fetchone()
+                if not order and checkout_session_id:
+                    cur.execute("SELECT * FROM payment_orders WHERE checkout_session_id = %s FOR UPDATE", (checkout_session_id,))
+                    order = cur.fetchone()
+                if order and webhook_event.get("payment_order_id") != order.get("id"):
+                    cur.execute("UPDATE payment_webhook_events SET payment_order_id = %s WHERE id = %s", (order["id"], webhook_event["id"]))
+
+                if not order:
+                    processing_status = "IGNORED"
+                    error_message = "No local payment order matched this webhook."
+                elif order.get("portal_session_id"):
                     create_portal_event(cur, order["portal_session_id"], "PAYMENT_WEBHOOK_RECEIVED", request, "PayMongo webhook received", raw_context={"payment_order_id": order["public_order_id"], "event_type": event_type})
-                try:
-                    if not order:
-                        processing_status = "IGNORED"
-                        error_message = "No local payment order matched this webhook."
-                    elif event_type == "payment.paid":
+
+                if order and paymongo_event_is_paid(event_type):
+                    if order.get("checkout_session_id"):
+                        order = sync_paymongo_checkout_status(cur, order, request)
+                    else:
                         if event_amount is None:
                             raise RuntimeError("PayMongo paid webhook did not include a parsable amount.")
                         if int(event_amount) != int(order["amount_centavos"]):
@@ -16556,43 +16776,53 @@ async def paymongo_webhook(request: Request):
                             (provider_payment_id, event_id, Json(sanitize_summary(payload)), order["id"]),
                         )
                         order = cur.fetchone()
-                        if order.get("portal_session_id"):
-                            create_portal_event(cur, order["portal_session_id"], "PAYMENT_PAID", request, "PayMongo payment marked paid", raw_context={"payment_order_id": order["public_order_id"], "event_type": event_type})
                         fulfill_paid_payment_order(cur, order, request)
-                        processing_status = "PROCESSED"
-                    elif event_type == "payment.failed":
-                        cur.execute(
-                            """
-                            UPDATE payment_orders
-                            SET status = 'FAILED',
-                                provider_payment_id = COALESCE(%s, provider_payment_id),
-                                provider_event_id = %s,
-                                provider_webhook_json = %s,
-                                last_error = 'PayMongo reported payment failed.',
-                                updated_at = now()
-                            WHERE id = %s
-                            """,
-                            (provider_payment_id, event_id, Json(sanitize_summary(payload)), order["id"]),
-                        )
-                        if order.get("portal_session_id"):
-                            create_portal_event(cur, order["portal_session_id"], "PAYMENT_FAILED", request, "PayMongo reported payment failed.", raw_context={"payment_order_id": order["public_order_id"], "event_type": event_type})
-                        processing_status = "PROCESSED"
-                    else:
-                        processing_status = "IGNORED"
-                        error_message = f"Event type {event_type or 'unknown'} does not require payment fulfillment."
+                    processing_status = "PROCESSED"
+                elif order and paymongo_event_is_failed(event_type):
+                    error_message = paymongo_failure_message(payload)
                     cur.execute(
                         """
-                        UPDATE payment_webhook_events
-                        SET processing_status = %s,
-                            error_message = %s,
-                            processed_at = now()
+                        UPDATE payment_orders
+                        SET status = 'FAILED',
+                            fulfillment_status = CASE WHEN fulfillment_status = 'PENDING' THEN 'NOT_REQUIRED' ELSE fulfillment_status END,
+                            provider_payment_id = COALESCE(%s, provider_payment_id),
+                            provider_event_id = %s,
+                            provider_webhook_json = %s,
+                            last_error = %s,
+                            updated_at = now()
                         WHERE id = %s
                         """,
-                        (processing_status, error_message, webhook_event["id"]),
+                        (provider_payment_id, event_id, Json(sanitize_summary(payload)), error_message, order["id"]),
                     )
-                except Exception as exc:
-                    processing_status = "FAILED"
-                    error_message = str(exc)
+                    if order.get("portal_session_id"):
+                        create_portal_event(cur, order["portal_session_id"], "PAYMENT_FAILED", request, error_message, raw_context={"payment_order_id": order["public_order_id"], "event_type": event_type, "failure_code": paymongo_failure_code(payload)})
+                    processing_status = "PROCESSED"
+                elif order and processing_status == "RECEIVED":
+                    processing_status = "IGNORED"
+                    error_message = f"Event type {event_type or 'unknown'} does not require payment fulfillment."
+
+                cur.execute(
+                    """
+                    UPDATE payment_webhook_events
+                    SET processing_status = %s,
+                        error_message = %s,
+                        processed_at = now()
+                    WHERE id = %s
+                    """,
+                    (processing_status, error_message, webhook_event["id"]),
+                )
+        if processing_status == "FAILED" or (processing_status == "PROCESSED" and order and order.get("status") == "FAILED"):
+            create_paymongo_admin_notification(
+                "PayMongo payment failed",
+                error_message or "A PayMongo payment failed.",
+                related_id=(order or {}).get("public_order_id") or event_id,
+                metadata={"event_type": event_type, "order": (order or {}).get("public_order_id"), "failure_code": paymongo_failure_code(payload)},
+            )
+    except Exception as exc:
+        error_message = str(exc)
+        try:
+            with get_conn() as conn:
+                with conn.cursor() as cur:
                     if order:
                         cur.execute(
                             """
@@ -16604,8 +16834,6 @@ async def paymongo_webhook(request: Request):
                             """,
                             (error_message, order["id"]),
                         )
-                        if order.get("portal_session_id"):
-                            create_portal_event(cur, order["portal_session_id"], "PAYMENT_FULFILLMENT_FAILED", request, error_message, raw_context={"payment_order_id": order["public_order_id"], "event_type": event_type})
                     cur.execute(
                         """
                         UPDATE payment_webhook_events
@@ -16614,22 +16842,96 @@ async def paymongo_webhook(request: Request):
                             processed_at = now()
                         WHERE id = %s
                         """,
-                        (error_message, webhook_event["id"]),
+                        (error_message, webhook_event_id),
                     )
+        except Exception as update_exc:
+            print(f"PayMongo webhook failure update failed: {update_exc}")
+        create_paymongo_admin_notification(
+            "PayMongo webhook processing failed",
+            error_message,
+            related_id=(order or {}).get("public_order_id") or event_id or str(webhook_event_id),
+            metadata={"event_type": event_type, "order": (order or {}).get("public_order_id")},
+        )
+
+
+@app.post("/api/payments/paymongo/webhook")
+async def paymongo_webhook(request: Request, background_tasks: BackgroundTasks):
+    raw_body = await request.body()
+    try:
+        verification = verify_paymongo_webhook_signature(raw_body, request.headers.get("Paymongo-Signature") or request.headers.get("paymongo-signature") or "")
+    except HTTPException as exc:
+        reason = str(exc.detail)
+        payload = {}
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except ValueError:
+            payload = {"raw_body_sha256": sha256(raw_body).hexdigest()}
+        record_rejected_paymongo_webhook(payload, paymongo_event_type(payload), reason)
+        create_paymongo_admin_notification(
+            "PayMongo webhook signature rejected",
+            reason,
+            severity="WARNING",
+            related_id=f"signature:{sha256(raw_body).hexdigest()[:24]}",
+            metadata={"event_type": paymongo_event_type(payload), "body_hash": sha256(raw_body).hexdigest()[:24]},
+            telegram=False,
+        )
+        return {
+            "received": True,
+            "status": "REJECTED",
+            "message": "Webhook was acknowledged but not processed because signature verification failed.",
+        }
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except ValueError:
+        record_rejected_paymongo_webhook({"raw_body_sha256": sha256(raw_body).hexdigest()}, "invalid_json", "Invalid JSON body")
+        return {
+            "received": True,
+            "status": "REJECTED",
+            "message": "Webhook was acknowledged but not processed because the JSON body was invalid.",
+        }
+
+    event_id = paymongo_event_id(payload)
+    event_type = paymongo_event_type(payload)
+    public_order_id = paymongo_payment_reference(payload)
+    checkout_session_id = paymongo_checkout_session_id(payload)
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                order = None
+                if public_order_id:
+                    cur.execute("SELECT * FROM payment_orders WHERE public_order_id = %s", (public_order_id,))
+                    order = cur.fetchone()
+                if not order and checkout_session_id:
+                    cur.execute("SELECT * FROM payment_orders WHERE checkout_session_id = %s", (checkout_session_id,))
+                    order = cur.fetchone()
+                cur.execute(
+                    """
+                    INSERT INTO payment_webhook_events(provider, provider_mode, provider_event_id, event_type, payment_order_id, processing_status, payload_json)
+                    VALUES ('PAYMONGO', %s, %s, %s, %s, 'RECEIVED', %s)
+                    ON CONFLICT (provider_event_id) DO NOTHING
+                    RETURNING *
+                    """,
+                    (verification["mode"], event_id, event_type, order["id"] if order else None, Json(sanitize_summary(payload))),
+                )
+                webhook_event = cur.fetchone()
+                if not webhook_event:
+                    return {"received": True, "duplicate": True, "event_type": event_type}
     except Exception as exc:
+        create_paymongo_admin_notification(
+            "PayMongo webhook record failed",
+            str(exc),
+            related_id=event_id,
+            metadata={"event_type": event_type, "order": public_order_id, "checkout_session_id": checkout_session_id},
+        )
         return {
             "received": True,
             "status": "FAILED",
             "operator_review_required": True,
-            "message": "Webhook was acknowledged, but local processing failed before it could be recorded.",
-            "detail": str(exc),
-            "event_type": event_type,
+            "message": "Webhook was acknowledged, but local recording failed.",
         }
-    response = {"received": True, "status": processing_status, "event_type": event_type}
-    if processing_status == "FAILED":
-        response["operator_review_required"] = True
-        response["message"] = "PayMongo webhook was received, but local fulfillment failed and was recorded for review."
-    return response
+
+    background_tasks.add_task(process_paymongo_webhook_event, str(webhook_event["id"]), request)
+    return {"received": True, "status": "QUEUED", "event_type": event_type}
 
 
 def read_cpu_ticks():
@@ -39645,6 +39947,118 @@ def get_payment_gateway_settings(admin=Depends(current_admin)):
     return public_payment_gateway_settings()
 
 
+def paymongo_remote_webhooks_summary(store: dict) -> dict:
+    summaries = []
+    errors = []
+    for mode in PAYMENT_MODE_OPTIONS:
+        credentials = payment_gateway_active_credentials(store, mode)
+        if not credentials.get("secret_key"):
+            summaries.append({"mode": mode, "configured": False, "status": "MISSING_SECRET_KEY", "webhooks": []})
+            continue
+        try:
+            data = paymongo_request(store, credentials["secret_key"], "GET", "/webhooks")
+            rows = []
+            for item in data.get("data", []) if isinstance(data, dict) else []:
+                attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+                rows.append({
+                    "id": item.get("id"),
+                    "mode": mode,
+                    "status": attrs.get("status"),
+                    "livemode": attrs.get("livemode"),
+                    "url": attrs.get("url"),
+                    "events": attrs.get("events") or [],
+                    "disabled_reason": attrs.get("disabled_reason") or "",
+                    "created_at": attrs.get("created_at"),
+                    "updated_at": attrs.get("updated_at"),
+                })
+            summaries.append({"mode": mode, "configured": True, "status": "OK", "webhooks": rows})
+        except Exception as exc:
+            message = str(exc)
+            errors.append({"mode": mode, "message": message})
+            summaries.append({"mode": mode, "configured": True, "status": "ERROR", "error": message, "webhooks": []})
+    return {"modes": summaries, "errors": errors}
+
+
+@app.get("/api/paymongo/overview")
+def get_paymongo_overview(admin=Depends(current_admin)):
+    store = payment_gateway_store()
+    settings = public_payment_gateway_settings()
+    remote_webhooks = paymongo_remote_webhooks_summary(store)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_orders,
+                    COUNT(*) FILTER (WHERE status = 'PAID') AS paid_orders,
+                    COUNT(*) FILTER (WHERE status = 'FAILED' OR fulfillment_status = 'FAILED') AS failed_orders,
+                    COUNT(*) FILTER (WHERE status IN ('PENDING', 'CHECKOUT_CREATED')) AS pending_orders,
+                    COALESCE(SUM(amount_centavos) FILTER (WHERE status = 'PAID'), 0) AS paid_centavos
+                FROM payment_orders
+                WHERE provider = 'PAYMONGO'
+                """
+            )
+            order_stats = cur.fetchone() or {}
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_webhooks,
+                    COUNT(*) FILTER (WHERE processing_status = 'PROCESSED') AS processed_webhooks,
+                    COUNT(*) FILTER (WHERE processing_status = 'FAILED') AS failed_webhooks,
+                    COUNT(*) FILTER (WHERE processing_status = 'IGNORED') AS ignored_webhooks,
+                    MAX(created_at) AS last_webhook_at
+                FROM payment_webhook_events
+                WHERE provider = 'PAYMONGO'
+                """
+            )
+            webhook_stats = cur.fetchone() or {}
+            cur.execute(
+                """
+                SELECT public_order_id, provider_mode, status, fulfillment_status, payment_method,
+                       amount_centavos, currency, product_name, checkout_session_id, provider_payment_id,
+                       last_error, created_at, updated_at
+                FROM payment_orders
+                WHERE provider = 'PAYMONGO'
+                  AND (status = 'FAILED' OR fulfillment_status = 'FAILED' OR last_error IS NOT NULL)
+                ORDER BY updated_at DESC
+                LIMIT 25
+                """
+            )
+            recent_failed_orders = cur.fetchall()
+            cur.execute(
+                """
+                SELECT provider_mode, provider_event_id, event_type, processing_status, error_message, created_at, processed_at
+                FROM payment_webhook_events
+                WHERE provider = 'PAYMONGO'
+                  AND processing_status IN ('FAILED', 'IGNORED')
+                ORDER BY created_at DESC
+                LIMIT 25
+                """
+            )
+            recent_webhook_errors = cur.fetchall()
+    return {
+        "settings": settings,
+        "remote_webhooks": remote_webhooks,
+        "order_stats": order_stats,
+        "webhook_stats": webhook_stats,
+        "recent_failed_orders": recent_failed_orders,
+        "recent_webhook_errors": recent_webhook_errors,
+    }
+
+
+@app.post("/api/paymongo/telegram-test")
+def test_paymongo_telegram_alert(admin=Depends(current_admin)):
+    result = send_paymongo_telegram_alert(
+        "PayMongo alert test",
+        "This is a test alert from 3JCentralPisowifi PayMongo monitoring.",
+        {"mode": payment_gateway_store().get("mode"), "triggered_by": admin.get("username") or admin.get("full_name") or "admin"},
+    )
+    if result is None:
+        raise HTTPException(status_code=400, detail="Telegram alert was not sent. Enable PayMongo Telegram alerts and save bot token/chat ID first.")
+    audit(admin["id"], "test_paymongo_telegram_alert", "payment_gateway", "paymongo", {"status": "SUCCESS"})
+    return {"status": "SUCCESS", "message": "PayMongo Telegram test alert sent.", "settings": public_payment_gateway_settings()}
+
+
 @app.patch("/api/system-settings/payments")
 def update_payment_gateway_settings(payload: PaymentGatewaySettingsPayload, admin=Depends(current_admin)):
     store = payment_gateway_store()
@@ -39709,6 +40123,16 @@ def update_payment_gateway_settings(payload: PaymentGatewaySettingsPayload, admi
         store["success_url"] = normalize_payment_url(data.get("success_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["success_url"])
     if "cancel_url" in data and data.get("cancel_url") is not None:
         store["cancel_url"] = normalize_payment_url(data.get("cancel_url"), PAYMENT_GATEWAY_DEFAULT_SETTINGS["cancel_url"])
+    if "telegram_enabled" in data and data.get("telegram_enabled") is not None:
+        store["telegram_enabled"] = bool(data.get("telegram_enabled"))
+    if data.get("clear_telegram_bot_token"):
+        store["telegram_bot_token_encrypted"] = None
+    elif "telegram_bot_token" in data:
+        telegram_token = normalize_payment_text(data.get("telegram_bot_token"), 300)
+        if telegram_token:
+            store["telegram_bot_token_encrypted"] = encrypt_secret(telegram_token)
+    if "telegram_chat_id" in data and data.get("telegram_chat_id") is not None:
+        store["telegram_chat_id"] = normalize_payment_text(data.get("telegram_chat_id"), 120)
     if "notes" in data and data.get("notes") is not None:
         store["notes"] = normalize_payment_text(data.get("notes"), 1000)
 
@@ -40157,6 +40581,7 @@ def list_admin_notifications(
     support_unread = fetch_one("SELECT COALESCE(SUM(unread_admin_count), 0) AS count FROM portal_support_conversations WHERE unread_admin_count > 0") or {}
     a2p_unread = fetch_one("SELECT COUNT(*) AS count FROM admin_notifications WHERE status = 'UNREAD' AND category = 'A2P_SMS_FAILED'") or {}
     iptv_unread = fetch_one("SELECT COUNT(*) AS count FROM admin_notifications WHERE status = 'UNREAD' AND category = 'IPTV_LOGIN_FAILED'") or {}
+    paymongo_unread = fetch_one("SELECT COUNT(*) AS count FROM admin_notifications WHERE status = 'UNREAD' AND category = 'PAYMONGO_ALERT'") or {}
     summary = fetch_one(
         """
         SELECT COUNT(*) AS total,
@@ -40187,6 +40612,7 @@ def list_admin_notifications(
         "unread_count": int(notification_unread.get("count") or 0) + int(support_unread.get("count") or 0),
         "a2p_failure_unread_count": int(a2p_unread.get("count") or 0),
         "iptv_failure_unread_count": int(iptv_unread.get("count") or 0),
+        "paymongo_failure_unread_count": int(paymongo_unread.get("count") or 0),
         "support_unread_count": int(support_unread.get("count") or 0),
         "summary": {
             "total": int(summary.get("total") or 0),
@@ -40196,6 +40622,7 @@ def list_admin_notifications(
             "today": int(summary.get("today") or 0),
             "a2p_failed_unread": int(a2p_unread.get("count") or 0),
             "iptv_failed_unread": int(iptv_unread.get("count") or 0),
+            "paymongo_failed_unread": int(paymongo_unread.get("count") or 0),
             "support_unread": int(support_unread.get("count") or 0),
         },
         "categories": [{"category": row.get("category") or "SYSTEM", "count": int(row.get("count") or 0)} for row in category_rows],

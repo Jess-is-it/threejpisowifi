@@ -753,6 +753,21 @@ function formatCentavos(value, currency = 'PHP') {
   return `${currency} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function friendlyPayMongoError(message) {
+  const text = String(message || '').trim();
+  const normalized = text.toUpperCase().replace(/[\s-]+/g, '_');
+  if (normalized.includes('AMOUNT_EXCEED_LIMIT') || normalized.includes('AMOUNT_EXCEEDS_LIMIT')) {
+    return 'GCash declined the payment because it exceeded a transaction or wallet limit. Try a smaller package or another payment method.';
+  }
+  if (normalized.includes('SYSTEM_ERROR')) return 'GCash or PayMongo had a temporary system issue. Please try again in a few minutes.';
+  if (normalized.includes('INSUFFICIENT_FUNDS')) return 'GCash reported insufficient balance. Please top up GCash or choose another payment method.';
+  if (normalized.includes('CLOSED')) return 'GCash payment was closed before it was completed. No WiFi pass was activated.';
+  if (normalized.includes('CANCELLED') || normalized.includes('CANCELED')) return 'Payment was cancelled before completion. No WiFi pass was activated.';
+  if (normalized.includes('EXPIRED')) return 'Payment session expired. Please start checkout again.';
+  if (normalized.includes('PAYMENT_FAILED')) return 'GCash payment failed. No WiFi pass was activated.';
+  return text || 'Payment was not completed.';
+}
+
 function truncateWithEllipsis(value, maxLength = 10) {
   const text = fmt(value);
   if (!text || text.length <= maxLength) return text || 'n/a';
@@ -819,6 +834,7 @@ const routePages = {
   'physical-stores/store-map': 'Store Map',
   'store-map': 'Store Map',
   sales: 'Sales',
+  paymongo: 'PayMongo',
   iptv: 'IPTV',
   'iptv-integration': 'IPTV',
   'captive-portal': 'Captive Portal',
@@ -852,6 +868,7 @@ function routeForPage(page) {
   if (page === 'Long Lat') return '/admin/aps-deployment/long-lat';
   if (page === 'Store Map') return '/admin/physical-stores/store-map';
   if (page === 'IPTV') return '/admin/iptv';
+  if (page === 'PayMongo') return '/admin/paymongo';
   if (page === 'Online Store' || page === 'Product Items') return '/admin/online-store';
   return `/admin/${slugify(page)}`;
 }
@@ -860,6 +877,7 @@ function adminNotificationIcon(item) {
   if (item?.category === 'SUPPORT_MESSAGE') return IconMessageCircle;
   if (item?.category === 'A2P_SMS_FAILED') return IconSend;
   if (item?.category === 'IPTV_LOGIN_FAILED') return IconPlayerPlay;
+  if (item?.category === 'PAYMONGO_ALERT') return IconCash;
   if (item?.severity === 'DANGER' || item?.severity === 'WARNING') return IconAlertTriangle;
   return IconBell;
 }
@@ -869,6 +887,7 @@ function adminNotificationTone(item) {
   if (item?.severity === 'WARNING') return 'yellow';
   if (item?.category === 'SUPPORT_MESSAGE') return 'orange';
   if (item?.category === 'IPTV_LOGIN_FAILED') return 'purple';
+  if (item?.category === 'PAYMONGO_ALERT') return 'green';
   if (item?.severity === 'SUCCESS') return 'green';
   return 'blue';
 }
@@ -2009,12 +2028,12 @@ function PortalAppLegacy() {
           message={paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
             ? 'Payment received. Internet access is active.'
             : paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FAILED'
-              ? `Payment received, but access activation failed: ${paymentResult.last_error || 'Please ask the operator.'}`
+              ? `Payment received, but access activation failed: ${friendlyPayMongoError(paymentResult.last_error || 'Please ask the operator.')}`
               : paymentResult.status === 'PAID'
                 ? 'Payment received. Waiting for access activation.'
                 : paymentResult.status === 'CHECKOUT_CREATED' || paymentResult.status === 'PENDING'
                   ? paymentChecking ? 'Checking PayMongo payment confirmation...' : 'Waiting for PayMongo payment confirmation.'
-                  : paymentResult.last_error || 'Payment was not completed.'}
+                  : friendlyPayMongoError(paymentResult.last_error)}
           tone={paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'success' : paymentResult.status === 'FAILED' ? 'danger' : 'info'}
           className="mt-3"
           timeoutMs={Math.max(1, Number(settings?.portal_message_auto_hide_seconds || 6)) * 1000}
@@ -7373,7 +7392,7 @@ function PortalApp() {
                 message={paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
                   ? (paymentResult.bag_item_status === 'QUEUED' ? t(status?.outside_network_warning?.purchase_success_message || 'Payment received. Package saved to your bag.') : t('Payment received. Internet access is active.'))
                   : paymentResult.status === 'FAILED'
-                    ? t(paymentResult.last_error || 'Payment was not completed.')
+                    ? t(friendlyPayMongoError(paymentResult.last_error))
                     : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Waiting for PayMongo payment confirmation.')}
                 tone={paymentResult.status === 'FAILED' ? 'danger' : paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'success' : 'info'}
                 timeoutMs={portalMessageAutoHideMs}
@@ -27129,7 +27148,7 @@ function ProfilePage({ onSaved }) {
 }
 
 function SystemSettingsPage({ refresh }) {
-  const tabs = ['General', 'Access', 'Public HTTPS', 'Payments', 'A2P Messaging', 'API', 'System Update', 'Backup', 'Danger'];
+  const tabs = ['General', 'Access', 'Public HTTPS', 'A2P Messaging', 'API', 'System Update', 'Backup', 'Danger'];
   const [tab, setTab] = useState(() => {
     const requestedTab = new URLSearchParams(window.location.search).get('tab');
     if (window.location.pathname.includes('/integrations/3jtv-api')) return 'API';
@@ -27388,7 +27407,6 @@ function SystemSettingsPage({ refresh }) {
         </div>
       )}
 
-      {tab === 'Payments' && <PaymentSettingsTab />}
       {tab === 'Public HTTPS' && <PublicEndpointSettingsTab />}
       {tab === 'A2P Messaging' && <A2PMessagingSettingsTab />}
       {tab === 'API' && <ThreeJtvApiPage />}
@@ -28482,6 +28500,317 @@ function IptvPage() {
 	    </div>
 	  );
 	}
+
+function paymongoStatusBadge(status) {
+  const value = String(status || '').toUpperCase();
+  if (['OK', 'ACTIVE', 'ENABLED', 'PROCESSED', 'PAID', 'FULFILLED'].includes(value)) return 'bg-green-lt text-green';
+  if (['QUEUED', 'RECEIVED', 'PENDING', 'CHECKOUT_CREATED'].includes(value)) return 'bg-blue-lt text-blue';
+  if (['DISABLED', 'MISSING_SECRET_KEY', 'IGNORED'].includes(value)) return 'bg-yellow-lt text-yellow';
+  return 'bg-red-lt text-red';
+}
+
+function PayMongoOverviewTab() {
+  const [overview, setOverview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function loadOverview() {
+    setLoading(true);
+    try {
+      const data = await request('/paymongo/overview');
+      setOverview(data);
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadOverview();
+    const timer = window.setInterval(loadOverview, 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  if (!overview && loading) return <div className="empty">Loading PayMongo status...</div>;
+  const settings = overview?.settings || {};
+  const orderStats = overview?.order_stats || {};
+  const webhookStats = overview?.webhook_stats || {};
+  const remoteModes = overview?.remote_webhooks?.modes || [];
+  const remoteWebhooks = remoteModes.flatMap((mode) => (mode.webhooks || []).map((hook) => ({ ...hook, mode: hook.mode || mode.mode })));
+  const activeRemoteMode = remoteModes.find((mode) => mode.mode === settings.mode) || {};
+  const activeWebhookDisabled = (activeRemoteMode.webhooks || []).some((hook) => String(hook.status || '').toLowerCase() === 'disabled');
+  const kpis = [
+    { label: 'Active Mode', value: settings.mode || 'TEST', icon: IconShieldLock, tone: settings.mode === 'LIVE' ? 'green' : 'blue', detail: settings.ready_for_gcash ? 'Checkout ready' : 'Needs setup' },
+    { label: 'Paid Sales', value: formatCentavos(orderStats.paid_centavos || 0), icon: IconCash, tone: 'green', detail: `${orderStats.paid_orders || 0} paid order(s)` },
+    { label: 'Failed Orders', value: orderStats.failed_orders || 0, icon: IconAlertTriangle, tone: Number(orderStats.failed_orders || 0) ? 'red' : 'secondary', detail: 'Payment or fulfillment failures' },
+    { label: 'Webhook Health', value: activeWebhookDisabled ? 'Disabled' : (webhookStats.last_webhook_at ? 'Receiving' : 'No events'), icon: IconBell, tone: activeWebhookDisabled ? 'red' : webhookStats.last_webhook_at ? 'green' : 'yellow', detail: `${webhookStats.processed_webhooks || 0} processed · ${webhookStats.failed_webhooks || 0} failed` },
+  ];
+
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
+          <div>
+            <div className="page-pretitle">Gateway monitoring</div>
+            <h2 className="page-title mb-1">PayMongo Overview</h2>
+            <div className="text-muted">Readiness, webhook status, and recent payment failures before live GCash testing.</div>
+          </div>
+          <button className="btn btn-outline-secondary" type="button" onClick={loadOverview} disabled={loading}><IconRefresh size={17} className="me-2" />Refresh</button>
+        </div>
+      </div>
+      {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
+      {kpis.map((kpi) => {
+        const Icon = kpi.icon;
+        return (
+          <div className="col-12 col-sm-6 col-xl-3" key={kpi.label}>
+            <div className="card card-sm h-100">
+              <div className="card-body d-flex align-items-center gap-3">
+                <span className={`badge bg-${kpi.tone}-lt text-${kpi.tone} admin-page-kpi-icon`}><Icon size={22} /></span>
+                <div>
+                  <div className="text-muted small">{kpi.label}</div>
+                  <div className="h3 mb-0">{kpi.value}</div>
+                  <div className="text-muted small">{kpi.detail}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      <div className="col-12 col-xl-5">
+        <Card title="Remote Webhooks" subtitle="Pulled from PayMongo using the saved secret keys.">
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead><tr><th>Mode</th><th>Status</th><th>URL</th><th>Events</th></tr></thead>
+              <tbody>
+                {remoteWebhooks.map((hook) => (
+                  <tr key={`${hook.mode}-${hook.id}`}>
+                    <td><span className="badge bg-secondary-lt text-secondary">{hook.mode}</span></td>
+                    <td>
+                      <span className={`badge ${paymongoStatusBadge(hook.status)}`}>{hook.status || 'unknown'}</span>
+                      {hook.disabled_reason && <div className="text-danger small mt-1">{hook.disabled_reason}</div>}
+                    </td>
+                    <td className="text-truncate" style={{ maxWidth: 280 }} title={hook.url || ''}>{hook.url || '-'}</td>
+                    <td className="small">{(hook.events || []).join(', ') || '-'}</td>
+                  </tr>
+                ))}
+                {!remoteWebhooks.length && <tr><td colSpan="4" className="text-center text-muted py-4">No PayMongo webhooks detected or secret key is not configured.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+      <div className="col-12 col-xl-7">
+        <Card title="Recent PayMongo Failures" subtitle="Payment and fulfillment failures that need operator review.">
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead><tr><th>Order</th><th>Mode</th><th>Status</th><th>Product</th><th>Error</th><th>Updated</th></tr></thead>
+              <tbody>
+                {(overview?.recent_failed_orders || []).map((row) => (
+                  <tr key={row.public_order_id}>
+                    <td><code>{row.public_order_id}</code></td>
+                    <td><span className="badge bg-secondary-lt text-secondary">{row.provider_mode}</span></td>
+                    <td><span className={`badge ${paymongoStatusBadge(row.fulfillment_status === 'FAILED' ? 'FAILED' : row.status)}`}>{row.status}/{row.fulfillment_status}</span></td>
+                    <td>{row.product_name || '-'}</td>
+                    <td className="text-danger text-truncate" style={{ maxWidth: 320 }} title={row.last_error || ''}>{row.last_error || '-'}</td>
+                    <td className="text-muted">{compactDateTime(row.updated_at)}</td>
+                  </tr>
+                ))}
+                {!(overview?.recent_failed_orders || []).length && <tr><td colSpan="6" className="text-center text-muted py-4">No failed PayMongo orders recorded.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+      <div className="col-12">
+        <Card title="Webhook Processing Errors" subtitle="Local webhook records that were ignored or failed processing.">
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead><tr><th>Event</th><th>Mode</th><th>Type</th><th>Status</th><th>Error</th><th>Received</th></tr></thead>
+              <tbody>
+                {(overview?.recent_webhook_errors || []).map((row) => (
+                  <tr key={row.provider_event_id}>
+                    <td><code>{truncateWithEllipsis(row.provider_event_id, 18)}</code></td>
+                    <td><span className="badge bg-secondary-lt text-secondary">{row.provider_mode || 'n/a'}</span></td>
+                    <td>{row.event_type || '-'}</td>
+                    <td><span className={`badge ${paymongoStatusBadge(row.processing_status)}`}>{row.processing_status}</span></td>
+                    <td className="text-truncate" style={{ maxWidth: 480 }} title={row.error_message || ''}>{row.error_message || '-'}</td>
+                    <td className="text-muted">{compactDateTime(row.created_at)}</td>
+                  </tr>
+                ))}
+                {!(overview?.recent_webhook_errors || []).length && <tr><td colSpan="6" className="text-center text-muted py-4">No webhook processing errors recorded.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function PayMongoTelegramTab() {
+  const [config, setConfig] = useState(null);
+  const [form, setForm] = useState({ telegram_enabled: false, telegram_bot_token: '', telegram_chat_id: '' });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function load() {
+    setLoading(true);
+    try {
+      const data = await request('/system-settings/payments');
+      setConfig(data);
+      setForm({
+        telegram_enabled: Boolean(data.telegram?.enabled),
+        telegram_bot_token: '',
+        telegram_chat_id: data.telegram?.chat_id || '',
+      });
+      setError('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(); }, []);
+
+  async function save(event) {
+    event.preventDefault();
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const payload = {
+        telegram_enabled: form.telegram_enabled,
+        telegram_chat_id: form.telegram_chat_id,
+      };
+      if (form.telegram_bot_token.trim()) payload.telegram_bot_token = form.telegram_bot_token.trim();
+      const data = await request('/system-settings/payments', { method: 'PATCH', body: JSON.stringify(payload) });
+      setConfig(data);
+      setForm({ telegram_enabled: Boolean(data.telegram?.enabled), telegram_bot_token: '', telegram_chat_id: data.telegram?.chat_id || '' });
+      setMessage('PayMongo Telegram alert settings saved.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function clearToken() {
+    if (!window.confirm('Remove the saved PayMongo Telegram bot token?')) return;
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request('/system-settings/payments', { method: 'PATCH', body: JSON.stringify({ clear_telegram_bot_token: true }) });
+      setConfig(data);
+      setForm({ telegram_enabled: Boolean(data.telegram?.enabled), telegram_bot_token: '', telegram_chat_id: data.telegram?.chat_id || '' });
+      setMessage('PayMongo Telegram bot token removed.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function sendTest() {
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request('/paymongo/telegram-test', { method: 'POST' });
+      setConfig(data.settings || config);
+      setMessage(data.message || 'PayMongo Telegram test alert sent.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <div className="empty">Loading Telegram settings...</div>;
+  const telegram = config?.telegram || {};
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        {message && <AutoDismissAlert message={message} onDismiss={() => setMessage('')} />}
+        {error && <div className="alert alert-danger">{error}</div>}
+      </div>
+      <div className="col-12 col-xl-8">
+        <Card title="Telegram PayMongo Alerts" subtitle="Send operator alerts when PayMongo payments, webhooks, or fulfillment need attention.">
+          <form onSubmit={save}>
+            <div className="row g-3">
+              <div className="col-12">
+                <label className="form-check form-switch">
+                  <input className="form-check-input" type="checkbox" checked={form.telegram_enabled} onChange={(e) => setForm({ ...form, telegram_enabled: e.target.checked })} />
+                  <span className="form-check-label">Enable Telegram alerts for PayMongo</span>
+                </label>
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Bot Token</label>
+                <input className="form-control" type="password" value={form.telegram_bot_token} onChange={(e) => setForm({ ...form, telegram_bot_token: e.target.value })} placeholder={telegram.bot_token_configured ? `Saved: ${telegram.bot_token_hint}` : '123456:ABC...'} />
+                {telegram.bot_token_configured && <button className="btn btn-link px-0 py-1" type="button" onClick={clearToken}>Clear saved bot token</button>}
+              </div>
+              <div className="col-md-6">
+                <label className="form-label">Chat ID</label>
+                <input className="form-control" value={form.telegram_chat_id} onChange={(e) => setForm({ ...form, telegram_chat_id: e.target.value })} placeholder="-1001234567890" />
+              </div>
+              <div className="col-12 d-flex justify-content-end gap-2">
+                <button className="btn btn-outline-primary" type="button" disabled={saving} onClick={sendTest}><IconSend size={18} className="me-2" />Send Test Alert</button>
+                <button className="btn btn-primary" disabled={saving}><IconDeviceFloppy size={18} className="me-2" />{saving ? 'Saving...' : 'Save Telegram Alerts'}</button>
+              </div>
+            </div>
+          </form>
+        </Card>
+      </div>
+      <div className="col-12 col-xl-4">
+        <Card title="Alert Status">
+          <div className="list-group list-group-flush">
+            <div className="list-group-item px-0 d-flex justify-content-between"><span>Enabled</span><span className={`badge ${telegram.enabled ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{telegram.enabled ? 'Yes' : 'No'}</span></div>
+            <div className="list-group-item px-0 d-flex justify-content-between"><span>Bot token</span><span className={`badge ${telegram.bot_token_configured ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{telegram.bot_token_configured ? 'Saved' : 'Missing'}</span></div>
+            <div className="list-group-item px-0 d-flex justify-content-between"><span>Chat ID</span><span className={`badge ${telegram.chat_id ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{telegram.chat_id ? telegram.chat_id : 'Missing'}</span></div>
+            <div className="list-group-item px-0 d-flex justify-content-between"><span>Last status</span><span className={`badge ${paymongoStatusBadge(telegram.last_status || 'MISSING')}`}>{telegram.last_status || 'Not tested'}</span></div>
+          </div>
+          {telegram.last_error && <div className="alert alert-danger mt-3 mb-0 small">{telegram.last_error}</div>}
+          {telegram.last_sent_at && <div className="text-muted small mt-3">Last sent: {compactDateTime(telegram.last_sent_at)}</div>}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function PayMongoPage() {
+  const tabs = [
+    { key: 'Overview', icon: IconActivity },
+    { key: 'Settings', icon: IconSettings },
+    { key: 'Telegram Alerts', icon: IconSend },
+  ];
+  const requestedTab = new URLSearchParams(window.location.search).get('tab');
+  const [tab, setTab] = useState(tabs.some((item) => item.key === requestedTab) ? requestedTab : 'Overview');
+  return (
+    <>
+      <ul className="nav nav-tabs mb-3">
+        {tabs.map((item) => {
+          const Icon = item.icon;
+          return (
+            <li className="nav-item" key={item.key}>
+              <button className={`nav-link ${tab === item.key ? 'active' : ''}`} type="button" onClick={() => setTab(item.key)}>
+                <Icon size={16} className="me-1" />{item.key}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {tab === 'Overview' && <PayMongoOverviewTab />}
+      {tab === 'Settings' && <PaymentSettingsTab />}
+      {tab === 'Telegram Alerts' && <PayMongoTelegramTab />}
+    </>
+  );
+}
 
 function PaymentSettingsTab() {
   const emptyForm = {
@@ -30537,6 +30866,7 @@ const nav = [
     ]
   },
   { page: 'Sales', icon: IconCalendarStats, tone: 'green' },
+  { page: 'PayMongo', icon: IconCash, tone: 'green' },
   { page: 'IPTV', icon: IconPlayerPlay, tone: 'purple' },
   { page: 'Captive Portal', icon: IconWifi, tone: 'blue' },
   { page: 'Support Inbox', icon: IconMessageCircle, tone: 'orange' },
@@ -30632,6 +30962,7 @@ function NotificationsPage({ onNavigate }) {
 
   const kpis = [
     { label: 'Unread', value: summary.unread || 0, icon: IconBell, tone: 'red' },
+    { label: 'PayMongo Failed', value: summary.paymongo_failed_unread || 0, icon: IconCash, tone: 'green' },
     { label: 'IPTV Login Failed', value: summary.iptv_failed_unread || 0, icon: IconPlayerPlay, tone: 'purple' },
     { label: 'SMS Failed', value: summary.a2p_failed_unread || 0, icon: IconSend, tone: 'orange' },
     { label: 'Today', value: summary.today || 0, icon: IconClock, tone: 'blue' }
@@ -30893,6 +31224,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [a2pFailureCount, setA2PFailureCount] = useState(0);
   const [iptvFailureCount, setIptvFailureCount] = useState(0);
+  const [paymongoFailureCount, setPaymongoFailureCount] = useState(0);
   const [supportCount, setSupportCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -30905,6 +31237,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
       setUnreadCount(Number(data.unread_count || 0));
       setA2PFailureCount(Number(data.a2p_failure_unread_count || 0));
       setIptvFailureCount(Number(data.iptv_failure_unread_count || 0));
+      setPaymongoFailureCount(Number(data.paymongo_failure_unread_count || 0));
       setSupportCount(Number(data.support_unread_count || 0));
       onSupportCountChange?.(Number(data.support_unread_count || 0));
       setError('');
@@ -30938,6 +31271,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
     if (item.category === 'SUPPORT_MESSAGE') return IconMessageCircle;
     if (item.category === 'A2P_SMS_FAILED') return IconSend;
     if (item.category === 'IPTV_LOGIN_FAILED') return IconPlayerPlay;
+    if (item.category === 'PAYMONGO_ALERT') return IconCash;
     if (item.severity === 'DANGER' || item.severity === 'WARNING') return IconAlertTriangle;
     return IconBell;
   }
@@ -30947,6 +31281,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
     if (item.severity === 'WARNING') return 'yellow';
     if (item.category === 'SUPPORT_MESSAGE') return 'orange';
     if (item.category === 'IPTV_LOGIN_FAILED') return 'purple';
+    if (item.category === 'PAYMONGO_ALERT') return 'green';
     if (item.severity === 'SUCCESS') return 'green';
     return 'blue';
   }
@@ -31001,6 +31336,11 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
                 <IconPlayerPlay size={18} />
                 <span>IPTV Failed</span>
                 <strong>{iptvFailureCount}</strong>
+              </div>
+              <div className="admin-notification-kpi">
+                <IconCash size={18} />
+                <span>PayMongo</span>
+                <strong>{paymongoFailureCount}</strong>
               </div>
               <div className="admin-notification-kpi">
                 <IconSend size={18} />
@@ -31218,6 +31558,7 @@ function App() {
             {(page === 'Online Store' || page === 'Product Items') && <ProductItemsPage />}
 	            {page === 'Physical Stores' && <PhysicalStoresPage />}
 	            {page === 'Sales' && <SalesPage />}
+	            {page === 'PayMongo' && <PayMongoPage />}
 	            {page === 'IPTV' && <IptvPage />}
 	            {page === 'Captive Portal' && <CaptivePortalPage />}
             {page === 'Support Inbox' && <SupportInboxPage />}
