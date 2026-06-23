@@ -1226,6 +1226,134 @@ body:has(.portal-tabler-page.is-dark)::-webkit-scrollbar-thumb {
   width: 100%;
 }
 
+.client-portal-page button,
+.client-portal-page .btn,
+.client-portal-page [role="button"],
+.portal-tabler-page button,
+.portal-tabler-page .btn,
+.portal-tabler-page [role="button"],
+.portal-tabler-page .portal-choice-card,
+.portal-tabler-page .portal-product-select-card,
+.portal-tabler-page .portal-product-card,
+.portal-tabler-page .portal-category-image-button,
+.portal-tabler-page .portal-payment-method-pill,
+.portal-tabler-page .portal-bag-control-card,
+.portal-tabler-page .portal-ready-pass-panel,
+.app-modal-layer button,
+.app-modal-layer .btn,
+.app-modal-layer [role="button"],
+.app-modal-backdrop,
+.app-modal-scroll-top,
+.app-toast-container button,
+.store-owner-toast button {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.client-portal-page button > svg,
+.client-portal-page .btn > svg,
+.portal-tabler-page button > svg,
+.portal-tabler-page .btn > svg,
+.app-modal-layer button > svg,
+.app-modal-layer .btn > svg,
+.app-modal-scroll-top > svg,
+.app-toast-container button > svg,
+.store-owner-toast button > svg {
+  pointer-events: none;
+}
+
+.client-portal-page button > *,
+.client-portal-page .btn > *,
+.portal-tabler-page button > *,
+.portal-tabler-page .btn > *,
+.app-modal-layer button > *,
+.app-modal-layer .btn > *,
+.app-modal-scroll-top > *,
+.app-toast-container button > *,
+.store-owner-toast button > * {
+  pointer-events: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+	  .client-portal-page button:hover,
+	  .client-portal-page button:focus,
+	  .client-portal-page .btn:hover,
+	  .client-portal-page .btn:focus,
+	  .client-portal-page [role="button"]:hover,
+	  .client-portal-page [role="button"]:focus,
+	  .portal-tabler-page button:hover,
+	  .portal-tabler-page button:focus,
+	  .portal-tabler-page .btn:hover,
+	  .portal-tabler-page .btn:focus,
+	  .portal-tabler-page [role="button"]:hover,
+	  .portal-tabler-page [role="button"]:focus,
+	  .app-modal-layer button:hover,
+	  .app-modal-layer button:focus,
+	  .app-modal-layer .btn:hover,
+	  .app-modal-layer .btn:focus,
+	  .app-modal-layer [role="button"]:hover,
+	  .app-modal-layer [role="button"]:focus,
+	  .app-modal-scroll-top:hover,
+	  .app-modal-scroll-top:focus,
+	  .app-toast-container button:hover,
+  .app-toast-container button:focus,
+  .store-owner-toast button:hover,
+  .store-owner-toast button:focus {
+    filter: none;
+    transform: none;
+  }
+
+  .portal-tabler-page .portal-choice-card:hover,
+  .portal-tabler-page .portal-choice-card:focus-visible,
+  .portal-tabler-page .portal-product-select-card:hover,
+  .portal-tabler-page .portal-product-select-card:focus-visible,
+  .portal-tabler-page .portal-remaining-card.is-clickable:hover,
+  .portal-tabler-page .portal-remaining-card.is-clickable:focus-visible,
+  .portal-tabler-page .portal-profile-tag:hover,
+  .portal-tabler-page .portal-profile-tag:focus-visible,
+  .portal-tabler-page .portal-bag-tag:hover,
+  .portal-tabler-page .portal-bag-tag:focus-visible,
+  .portal-tabler-page .portal-sticky-brand:hover .portal-sticky-brand-mark,
+  .portal-tabler-page .portal-sticky-brand:focus-visible .portal-sticky-brand-mark,
+	  .portal-tabler-page .portal-category-area-tag:hover,
+	  .portal-tabler-page .portal-category-area-tag:focus-visible,
+	  .portal-tabler-page .portal-category-image-button:hover,
+	  .portal-tabler-page .portal-category-image-button:focus-visible,
+	  .portal-tabler-page .portal-payment-method-pill:hover,
+	  .portal-tabler-page .portal-payment-method-pill:focus-visible,
+	  .portal-tabler-page .portal-bag-control-card:hover,
+	  .portal-tabler-page .portal-bag-control-card:focus-visible,
+	  .portal-tabler-page .portal-ready-pass-panel:hover,
+	  .portal-tabler-page .portal-ready-pass-panel:focus-visible,
+	  .portal-tabler-page .portal-history-page .btn:hover,
+	  .portal-tabler-page .portal-history-page .btn:focus-visible {
+	    filter: none;
+	    transform: none;
+	  }
+
+  .portal-tabler-page .portal-choice-card:hover .portal-choice-radio::after,
+  .portal-tabler-page .portal-choice-card:focus-visible .portal-choice-radio::after {
+    content: none;
+  }
+
+	  .client-portal-page button:active,
+	  .client-portal-page .btn:active,
+	  .client-portal-page [role="button"]:active,
+	  .portal-tabler-page button:active,
+	  .portal-tabler-page .btn:active,
+	  .portal-tabler-page [role="button"]:active,
+	  .app-modal-layer button:active,
+	  .app-modal-layer .btn:active,
+	  .app-modal-layer [role="button"]:active,
+	  .app-modal-scroll-top:active,
+	  .app-toast-container button:active,
+  .store-owner-toast button:active {
+    transition-duration: 0s;
+  }
+}
+
 .client-portal-shell {
   width: min(100%, 430px);
 }
@@ -6896,6 +7024,35 @@ body.modal-open {
   overflow-wrap: anywhere;
 }
 
+.portal-gift-redeem-button {
+  background: var(--tblr-success, #2fb344);
+  border-color: var(--tblr-success, #2fb344);
+  box-shadow: none;
+  color: #fff;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.portal-gift-redeem-button:hover,
+.portal-gift-redeem-button:focus,
+.portal-gift-redeem-button:focus-visible,
+.portal-gift-redeem-button:active,
+.portal-gift-redeem-button.show,
+.portal-gift-redeem-button:first-child:active {
+  background: var(--tblr-success, #2fb344) !important;
+  border-color: var(--tblr-success, #2fb344) !important;
+  box-shadow: none !important;
+  color: #fff !important;
+  filter: none !important;
+  transform: none !important;
+}
+
+.portal-gift-redeem-button:disabled {
+  background: rgba(47, 179, 68, 0.72) !important;
+  border-color: rgba(47, 179, 68, 0.72) !important;
+  color: #fff !important;
+  opacity: 1;
+}
+
 .portal-gift-button-copy span:last-child,
 .portal-gift-kicker {
   font-size: 0.8rem;
@@ -8575,6 +8732,40 @@ body.modal-open {
   margin-left: auto;
 }
 
+.portal-bag-back-button {
+  background: rgba(100, 116, 139, 0.08);
+  border-color: rgba(100, 116, 139, 0.22);
+  color: #475569;
+  flex: 0 0 auto;
+}
+
+.portal-bag-back-button:hover,
+.portal-bag-back-button:focus,
+.portal-bag-back-button:focus-visible,
+.portal-bag-back-button:active {
+  background: rgba(100, 116, 139, 0.08) !important;
+  border-color: rgba(100, 116, 139, 0.22) !important;
+  box-shadow: none !important;
+  color: #475569 !important;
+  filter: none !important;
+  transform: none !important;
+}
+
+.portal-tabler-page.is-dark .portal-bag-back-button {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.portal-tabler-page.is-dark .portal-bag-back-button:hover,
+.portal-tabler-page.is-dark .portal-bag-back-button:focus,
+.portal-tabler-page.is-dark .portal-bag-back-button:focus-visible,
+.portal-tabler-page.is-dark .portal-bag-back-button:active {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  color: rgba(255, 255, 255, 0.82) !important;
+}
+
 .portal-bag-page-card {
   background: #ffffff;
   border: 1px solid rgba(98, 105, 118, 0.16);
@@ -10130,6 +10321,44 @@ button.portal-bag-control-card {
   gap: 0.9rem;
 }
 
+.portal-ios-safari-reminder {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(100, 116, 139, 0.16);
+  border-radius: 14px;
+  color: inherit;
+  display: flex;
+  gap: 0.75rem;
+  margin: 0.75rem 0 0;
+  padding: 0.8rem;
+  text-align: left;
+}
+
+.portal-ios-safari-reminder > div {
+  flex: 1 1 auto;
+}
+
+.portal-ios-safari-reminder-icon {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.06);
+  border-radius: 12px;
+  color: #0f766e;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 2.4rem;
+  justify-content: center;
+  width: 2.4rem;
+}
+
+.portal-ios-safari-reminder strong,
+.portal-ios-safari-reminder small {
+  display: block;
+}
+
+.portal-ios-safari-reminder small {
+  color: #64748b;
+}
+
 .portal-chrome-reminder {
   align-items: center;
   background: rgba(255, 255, 255, 0.62);
@@ -10177,7 +10406,14 @@ button.portal-bag-control-card {
 .portal-chrome-reminder-close:focus-visible {
   background: rgba(15, 23, 42, 0.1);
   color: #0f172a;
-  transform: translateY(-1px);
+  transform: none;
+}
+
+.portal-chrome-reminder-close:active {
+  background: rgba(15, 23, 42, 0.06);
+  border-color: rgba(15, 23, 42, 0.08);
+  color: #334155;
+  transform: none;
 }
 
 .portal-chrome-reminder strong,
@@ -10192,6 +10428,20 @@ button.portal-bag-control-card {
 .portal-tabler-page.is-dark .portal-chrome-reminder {
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(255, 255, 255, 0.12);
+}
+
+.portal-tabler-page.is-dark .portal-ios-safari-reminder {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.portal-tabler-page.is-dark .portal-ios-safari-reminder-icon {
+  background: rgba(255, 255, 255, 0.08);
+  color: #5eead4;
+}
+
+.portal-tabler-page.is-dark .portal-ios-safari-reminder small {
+  color: rgba(255, 255, 255, 0.68);
 }
 
 .portal-tabler-page.is-dark .portal-chrome-reminder-icon {
@@ -10209,6 +10459,12 @@ button.portal-bag-control-card {
 .portal-tabler-page.is-dark .portal-chrome-reminder-close:focus-visible {
   background: rgba(255, 255, 255, 0.14);
   color: #fff;
+}
+
+.portal-tabler-page.is-dark .portal-chrome-reminder-close:active {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.76);
 }
 
 .portal-tabler-page.is-dark .portal-chrome-reminder small {

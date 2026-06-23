@@ -12,6 +12,7 @@ import {
   IconBuildingStore,
   IconCamera,
   IconBrandChrome,
+  IconBrowserCheck,
   IconCalendarStats,
   IconChevronRight,
   IconCash,
@@ -76,6 +77,129 @@ import {
 import './styles.css';
 
 const API = '/api';
+
+const PORTAL_TAP_TARGET_SELECTOR = [
+  'button:not(:disabled)',
+  'a[href]',
+  '[role="button"]',
+  '.btn-close',
+  '.app-modal-backdrop',
+  '.app-modal-scroll-top',
+  '.portal-choice-card',
+  '.portal-product-select-card',
+  '.portal-product-card',
+  '.portal-category-image-button',
+  '.portal-profile-tag',
+  '.portal-bag-tag',
+  '.portal-gift-button',
+  '.portal-ready-pass-panel',
+  '.portal-profile-choice-card',
+  '.portal-customer-message-close',
+  '.store-owner-toast-close',
+].join(',');
+
+const PORTAL_TAP_SKIP_SELECTOR = [
+  'input',
+  'textarea',
+  'select',
+  'option',
+  'label',
+  '[contenteditable="true"]',
+  '.portal-qty-input',
+  '.portal-category-discount-tabs',
+].join(',');
+
+function isIosWebKitTouchBrowser() {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const platform = navigator.platform || '';
+  return /iPad|iPhone|iPod/i.test(ua)
+    || (platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1);
+}
+
+function usePortalSingleTapFix() {
+  return {};
+  const stateRef = useRef({
+    startX: 0,
+    startY: 0,
+    target: null,
+    suppressTarget: null,
+    suppressX: Number.NaN,
+    suppressY: Number.NaN,
+    suppressUntil: 0,
+    syntheticClick: false,
+  });
+
+  function findPortalTapTarget(target) {
+    if (!target || typeof target.closest !== 'function') return null;
+    if (target.closest(PORTAL_TAP_SKIP_SELECTOR)) return null;
+    const tappable = target.closest(PORTAL_TAP_TARGET_SELECTOR);
+    if (!tappable) return null;
+    if (tappable.getAttribute('aria-disabled') === 'true') return null;
+    if (tappable.classList?.contains('disabled')) return null;
+    return tappable;
+  }
+
+  return {
+    onTouchStartCapture(event) {
+      if (!isIosWebKitTouchBrowser()) return;
+      if (event.touches.length !== 1) return;
+      const target = findPortalTapTarget(event.target);
+      if (!target) {
+        stateRef.current.target = null;
+        return;
+      }
+      const touch = event.touches[0];
+      stateRef.current.startX = touch.clientX;
+      stateRef.current.startY = touch.clientY;
+      stateRef.current.target = target;
+    },
+    onTouchEndCapture(event) {
+      if (!isIosWebKitTouchBrowser()) return;
+      const state = stateRef.current;
+      const target = findPortalTapTarget(event.target);
+      if (!target || target !== state.target) {
+        state.target = null;
+        return;
+      }
+      const touch = event.changedTouches?.[0];
+      if (!touch) return;
+      const moved = Math.hypot(touch.clientX - state.startX, touch.clientY - state.startY);
+      state.target = null;
+      if (moved > 12) return;
+      event.preventDefault();
+      event.stopPropagation();
+      state.suppressTarget = target;
+      state.suppressX = touch.clientX;
+      state.suppressY = touch.clientY;
+      state.suppressUntil = Date.now() + 700;
+      state.syntheticClick = true;
+      target.click();
+      target.blur?.();
+      state.syntheticClick = false;
+    },
+    onClickCapture(event) {
+      const state = stateRef.current;
+      if (state.syntheticClick) return;
+      if (Date.now() > state.suppressUntil) return;
+      const target = findPortalTapTarget(event.target);
+      const clickX = typeof event.clientX === 'number' ? event.clientX : Number.NaN;
+      const clickY = typeof event.clientY === 'number' ? event.clientY : Number.NaN;
+      const nearSuppressedTap = Number.isFinite(clickX)
+        && Number.isFinite(clickY)
+        && Number.isFinite(state.suppressX)
+        && Number.isFinite(state.suppressY)
+        && Math.hypot(clickX - state.suppressX, clickY - state.suppressY) <= 48;
+      if ((!target || target !== state.suppressTarget) && !nearSuppressedTap) return;
+      event.preventDefault();
+      event.stopPropagation();
+      state.suppressTarget = null;
+      state.suppressX = Number.NaN;
+      state.suppressY = Number.NaN;
+      state.suppressUntil = 0;
+    },
+  };
+}
 
 function svgDataUrl(svg) {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
@@ -1389,6 +1513,7 @@ function shouldRestoreStorePaymentFromMap(params = new URLSearchParams(window.lo
 }
 
 function PortalAppLegacy() {
+  const iosSingleTapHandlers = usePortalSingleTapFix();
   const [settings, setSettings] = useState(null);
   const [sessionId, setSessionId] = useState(() => new URLSearchParams(window.location.search).get('portal_session_id') || localStorage.getItem('centralwifi_portal_session') || '');
   const [deviceToken, setDeviceToken] = useState(() => localStorage.getItem('centralwifi_portal_device_token') || '');
@@ -1404,6 +1529,8 @@ function PortalAppLegacy() {
   const [paymentResult, setPaymentResult] = useState(null);
   const remainingNoticeSentRef = useRef('');
   const expiredNoticeSentRef = useRef('');
+  const localPresenceProbeInFlightRef = useRef(false);
+  const lastLocalPresenceProbeAtRef = useRef(0);
   const params = new URLSearchParams(window.location.search);
   const paymentOrderFromUrl = params.get('payment_order_id') || params.get('payment_order') || params.get('order');
   const handoffBridge = params.get('handoff_bridge') === '1';
@@ -1459,10 +1586,20 @@ function PortalAppLegacy() {
     return /Chrome/i.test(ua) && /Google Inc/i.test(vendor || 'Google Inc');
   }
 
+  function isIosSafariBrowser() {
+    const ua = navigator.userAgent || '';
+    return isIosWebKitTouchBrowser()
+      && /Safari/i.test(ua)
+      && !/CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo/i.test(ua);
+  }
+
   function localHandoffBridgeUrl(portalSettings) {
     const base = portalSettings?.local_portal_url || 'http://192.168.50.70:8080/portal';
     const target = new URL(base, window.location.href);
     const returnUrl = new URL(window.location.href);
+    returnUrl.searchParams.delete('handoff');
+    returnUrl.searchParams.delete('handoff_bridge');
+    returnUrl.searchParams.delete('return_url');
     returnUrl.searchParams.set('bridge_checked', '1');
     target.searchParams.set('handoff_bridge', '1');
     target.searchParams.set('return_url', returnUrl.toString());
@@ -1473,9 +1610,31 @@ function PortalAppLegacy() {
     if (handoffBridge || bridgeChecked || context.handoff || deviceDetected) return false;
     if (window.location.protocol !== 'https:') return false;
     if (!portalSettings?.local_portal_url) return false;
+    if (nextStatus?.network_presence?.connected_to_3j_ap === true) return false;
     const activeExpiry = nextStatus?.access_expires_at && !nextStatus?.access_expired && new Date(nextStatus.access_expires_at).getTime() > Date.now();
-    if (nextStatus?.connected || Number(nextStatus?.remaining_time_seconds || 0) > 0 || activeExpiry) return false;
+    const hasActiveTime = nextStatus?.connected || Number(nextStatus?.remaining_time_seconds || 0) > 0 || activeExpiry;
+    if (hasActiveTime && nextStatus?.network_presence?.connected_to_3j_ap !== false) return false;
     return true;
+  }
+
+  async function refreshLegacyLocalPresenceProof(nextStatus, portalSettings, statusSessionId) {
+    if (window.location.protocol !== 'https:') return nextStatus;
+    if (!portalSettings?.local_portal_url || !statusSessionId) return nextStatus;
+    if (nextStatus?.network_presence?.connected_to_3j_ap === true) return nextStatus;
+    if (localPresenceProbeInFlightRef.current) return nextStatus;
+    const now = Date.now();
+    if (now - lastLocalPresenceProbeAtRef.current < 25000) return nextStatus;
+    localPresenceProbeInFlightRef.current = true;
+    lastLocalPresenceProbeAtRef.current = now;
+    try {
+      const detected = await probeLocalPortalPresence(portalSettings, statusSessionId);
+      if (detected) {
+        return await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(statusSessionId)}&quiet=1`);
+      }
+    } finally {
+      localPresenceProbeInFlightRef.current = false;
+    }
+    return nextStatus;
   }
 
   async function emitPortalNotification(portalSettings, type, template, values = {}) {
@@ -1512,7 +1671,11 @@ function PortalAppLegacy() {
     } else if (session.mac_rebind_status === 'FAILED') {
       setResult({ status: 'FAILED', message: session.mac_rebind_message || 'We recognized this device session, but could not reconnect it automatically.' });
     }
-    const nextStatus = await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(session.portal_session_id)}`);
+    const nextStatus = await refreshLegacyLocalPresenceProof(
+      await publicRequest(`/portal/status?portal_session_id=${encodeURIComponent(session.portal_session_id)}`),
+      portalSettings,
+      session.portal_session_id
+    );
     setStatus(nextStatus);
     if (handoffBridge) {
       if (session.portal_handoff_url) {
@@ -1523,8 +1686,12 @@ function PortalAppLegacy() {
       return;
     }
     if (shouldTryLocalHandoffBridge(portalSettings, session, nextStatus)) {
+      markLocalHandoffBridgeAttempt();
       window.location.replace(localHandoffBridgeUrl(portalSettings));
       return;
+    }
+    if (context.handoff || bridgeChecked) {
+      cleanPortalBridgeParamsFromUrl();
     }
     if (session.mac_rebind_status === 'SUCCESS' && portalSettings?.portal_notifications?.reconnect_enabled) {
       emitPortalNotification(portalSettings, 'RECONNECTED', portalSettings.portal_notifications.reconnect_message, {
@@ -1917,7 +2084,7 @@ function PortalAppLegacy() {
 
   if (!settings) {
     return (
-      <div className="client-portal-page">
+      <div className="client-portal-page" {...iosSingleTapHandlers}>
 	      <div className="client-portal-shell">
 	        <div className="client-portal-loading">
 	          <div className="spinner-border text-primary" role="status" aria-hidden="true" />
@@ -1929,7 +2096,7 @@ function PortalAppLegacy() {
   }
 
   return (
-    <div className="client-portal-page">
+    <div className="client-portal-page" {...iosSingleTapHandlers}>
       {settings?.custom_css && <style>{settings.custom_css}</style>}
       <div className="client-portal-shell">
         {template
@@ -1943,6 +2110,8 @@ function PortalAppLegacy() {
 const PORTAL_THEME_MODE_KEY = 'centralwifi_portal_theme_mode';
 const PORTAL_THEME_MODE_SAVED_AT_KEY = 'centralwifi_portal_theme_mode_saved_at';
 const PORTAL_THEME_OVERRIDE_TTL_MS = 12 * 60 * 60 * 1000;
+const PORTAL_LOCAL_HANDOFF_ATTEMPT_KEY = 'centralwifi_local_handoff_bridge_attempted_at';
+const PORTAL_LOCAL_HANDOFF_COOLDOWN_MS = 30000;
 
 function readPortalThemeMode() {
   const stored = localStorage.getItem(PORTAL_THEME_MODE_KEY);
@@ -1968,7 +2137,66 @@ function writePortalThemeMode(mode) {
   return nextMode;
 }
 
+function localHandoffBridgeInCooldown() {
+  const attemptedAt = Number(sessionStorage.getItem(PORTAL_LOCAL_HANDOFF_ATTEMPT_KEY) || 0);
+  return Boolean(attemptedAt && Date.now() - attemptedAt < PORTAL_LOCAL_HANDOFF_COOLDOWN_MS);
+}
+
+function markLocalHandoffBridgeAttempt() {
+  sessionStorage.setItem(PORTAL_LOCAL_HANDOFF_ATTEMPT_KEY, String(Date.now()));
+}
+
+function cleanPortalBridgeParamsFromUrl() {
+  if (typeof window === 'undefined') return;
+  const url = new URL(window.location.href);
+  const original = url.toString();
+  ['handoff', 'handoff_bridge', 'return_url', 'bridge_checked'].forEach((key) => url.searchParams.delete(key));
+  if (url.toString() !== original) {
+    window.history.replaceState({}, '', url.toString());
+  }
+}
+
+function localPresencePixelUrl(portalSettings, portalSessionId) {
+  if (!portalSettings?.local_portal_url || !portalSessionId) return '';
+  try {
+    const url = new URL('/api/portal/local-presence-pixel', portalSettings.local_portal_url);
+    url.searchParams.set('portal_session_id', portalSessionId);
+    url.searchParams.set('_', String(Date.now()));
+    return url.toString();
+  } catch (_error) {
+    return '';
+  }
+}
+
+function probeLocalPortalPresence(portalSettings, portalSessionId, timeoutMs = 2500) {
+  const url = localPresencePixelUrl(portalSettings, portalSessionId);
+  if (!url) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const image = new Image();
+    let settled = false;
+    const done = (value) => {
+      if (settled) return;
+      settled = true;
+      image.onload = null;
+      image.onerror = null;
+      resolve(value);
+    };
+    const timeoutId = window.setTimeout(() => done(false), timeoutMs);
+    image.onload = () => {
+      window.clearTimeout(timeoutId);
+      done(true);
+    };
+    image.onerror = () => {
+      window.clearTimeout(timeoutId);
+      done(false);
+    };
+    image.referrerPolicy = 'no-referrer';
+    image.src = url;
+  });
+}
+
 function PortalApp() {
+  const iosSingleTapHandlers = usePortalSingleTapFix();
   function isGoogleChromeBrowser() {
     const ua = navigator.userAgent || '';
     const vendor = navigator.vendor || '';
@@ -1976,6 +2204,13 @@ function PortalApp() {
     if (/Version\/\d+(?:\.\d+)?\s+Chrome/i.test(ua)) return false;
     if (/CriOS/i.test(ua)) return true;
     return /Chrome/i.test(ua) && /Google Inc/i.test(vendor || 'Google Inc');
+  }
+
+  function isIosSafariBrowser() {
+    const ua = navigator.userAgent || '';
+    return isIosWebKitTouchBrowser()
+      && /Safari/i.test(ua)
+      && !/CriOS|FxiOS|EdgiOS|OPiOS|DuckDuckGo/i.test(ua);
   }
 
   const [settings, setSettings] = useState(null);
@@ -2145,6 +2380,9 @@ function PortalApp() {
   const cancelledPaymentOrdersRef = useRef(new Set());
   const handledStoreApprovalRef = useRef(new Set());
   const storeRequestStatusRef = useRef(new Map());
+  const storePendingRequestsRef = useRef([]);
+  const localPresenceProbeInFlightRef = useRef(false);
+  const lastLocalPresenceProbeAtRef = useRef(0);
   const [avatarEventNoteSignal, setAvatarEventNoteSignal] = useState(0);
   const params = new URLSearchParams(window.location.search);
   const paymentOrderFromUrl = params.get('payment_order_id') || params.get('payment_order') || params.get('order');
@@ -2274,6 +2512,7 @@ function PortalApp() {
     const base = portalSettings?.local_portal_url || 'http://192.168.50.70:8080/portal';
     const target = new URL(base, window.location.href);
     const returnUrl = new URL(window.location.href);
+    returnUrl.searchParams.delete('handoff');
     returnUrl.searchParams.delete('handoff_bridge');
     returnUrl.searchParams.delete('return_url');
     returnUrl.searchParams.set('bridge_checked', '1');
@@ -2286,8 +2525,10 @@ function PortalApp() {
     if (handoffBridge || bridgeChecked || context.handoff || deviceDetected) return false;
     if (window.location.protocol !== 'https:') return false;
     if (!portalSettings?.local_portal_url) return false;
+    if (nextStatus?.network_presence?.connected_to_3j_ap === true) return false;
     const activeExpiry = nextStatus?.access_expires_at && !nextStatus?.access_expired && new Date(nextStatus.access_expires_at).getTime() > Date.now();
-    if (nextStatus?.connected || Number(nextStatus?.remaining_time_seconds || 0) > 0 || activeExpiry) return false;
+    const hasActiveTime = nextStatus?.connected || Number(nextStatus?.remaining_time_seconds || 0) > 0 || activeExpiry;
+    if (hasActiveTime && nextStatus?.network_presence?.connected_to_3j_ap !== false) return false;
     return Boolean(session?.portal_session_id);
   }
 
@@ -2344,6 +2585,31 @@ function PortalApp() {
       });
     }
     return `/portal/status?${query.toString()}`;
+  }
+
+  function shouldProbeLocalPresence(nextStatus, options = {}) {
+    const portalSettings = options.portalSettings || settings;
+    const statusSessionId = options.portalSessionId || sessionId || localStorage.getItem('centralwifi_portal_session');
+    if (window.location.protocol !== 'https:') return false;
+    if (!portalSettings?.local_portal_url || !statusSessionId) return false;
+    if (nextStatus?.network_presence?.connected_to_3j_ap === true) return false;
+    if (localPresenceProbeInFlightRef.current) return false;
+    const now = Date.now();
+    const minAgeMs = options.forceLocalPresenceProbe ? 0 : 25000;
+    if (now - lastLocalPresenceProbeAtRef.current < minAgeMs) return false;
+    return true;
+  }
+
+  async function refreshLocalPresenceProof(statusSessionId, portalSettings = settings) {
+    if (!statusSessionId || !portalSettings?.local_portal_url) return false;
+    if (localPresenceProbeInFlightRef.current) return false;
+    localPresenceProbeInFlightRef.current = true;
+    lastLocalPresenceProbeAtRef.current = Date.now();
+    try {
+      return await probeLocalPortalPresence(portalSettings, statusSessionId);
+    } finally {
+      localPresenceProbeInFlightRef.current = false;
+    }
   }
 
   function currentBlockedDevice() {
@@ -2563,6 +2829,7 @@ function PortalApp() {
 
   async function refreshStatus(id = sessionId || localStorage.getItem('centralwifi_portal_session'), options = {}) {
     const requestOptions = { includeContext: true, ...options };
+    const portalSettingsForProbe = requestOptions.portalSettings || settings;
     let statusSessionId = id;
     if (!statusSessionId) {
       const session = await publicApi('/portal/session', { method: 'POST', body: JSON.stringify(payload()) });
@@ -2577,7 +2844,14 @@ function PortalApp() {
       const session = await publicApi('/portal/session', { method: 'POST', body: JSON.stringify(payload({ portal_session_id: statusSessionId })) });
       persistSession(session);
       if (!session.portal_session_id || session.portal_session_id === statusSessionId) throw err;
+      statusSessionId = session.portal_session_id;
       nextStatus = await publicRequest(portalStatusPath(session.portal_session_id, requestOptions));
+    }
+    if (shouldProbeLocalPresence(nextStatus, { ...requestOptions, portalSettings: portalSettingsForProbe, portalSessionId: statusSessionId })) {
+      const localPresenceDetected = await refreshLocalPresenceProof(statusSessionId, portalSettingsForProbe);
+      if (localPresenceDetected) {
+        nextStatus = await publicRequest(portalStatusPath(statusSessionId, { ...requestOptions, quiet: true }));
+      }
     }
     setStatus(nextStatus);
     if (nextStatus.profile) setProfile(nextStatus.profile);
@@ -2603,7 +2877,7 @@ function PortalApp() {
     } else if (session.mac_rebind_status === 'FAILED') {
       setResult({ status: 'FAILED', message: session.mac_rebind_message || 'We found your old session, but could not reconnect this device automatically.' });
     }
-    const nextStatus = await refreshStatus(session.portal_session_id, { includeContext: true, quiet: true });
+    const nextStatus = await refreshStatus(session.portal_session_id, { includeContext: true, quiet: true, portalSettings });
     if (session?.blocked_device?.blocked || nextStatus?.blocked_device?.blocked) {
       const blockedMessage = session?.blocked_device?.message || nextStatus?.blocked_device?.message || 'This device is blocked. Please contact the operator.';
       setResult({ status: 'FAILED', message: blockedMessage });
@@ -2626,8 +2900,12 @@ function PortalApp() {
       return;
     }
     if (shouldTryLocalHandoffBridge(portalSettings, session, nextStatus)) {
+      markLocalHandoffBridgeAttempt();
       window.location.replace(localHandoffBridgeUrl(portalSettings));
       return;
+    }
+    if (context.handoff || bridgeChecked) {
+      cleanPortalBridgeParamsFromUrl();
     }
     if (session.mac_rebind_status === 'SUCCESS' && portalSettings?.portal_notifications?.reconnect_enabled) {
       emitPortalNotification(portalSettings, 'RECONNECTED', portalSettings.portal_notifications.reconnect_message, {
@@ -3920,7 +4198,9 @@ function PortalApp() {
       const currentDeviceToken = deviceToken || localStorage.getItem('centralwifi_portal_device_token') || '';
       if (currentDeviceToken) params.set('device_token', currentDeviceToken);
       const data = await publicRequest(`/portal/store-purchase-requests?${params.toString()}`);
-      setStorePendingRequests(data.requests || []);
+      const nextRequests = data.requests || [];
+      storePendingRequestsRef.current = nextRequests;
+      setStorePendingRequests(nextRequests);
       if (!background) setStorePendingMessage(null);
       return data;
     } catch (error) {
@@ -4022,11 +4302,11 @@ function PortalApp() {
     loadStorePendingRequests(sessionId, { background: true }).catch(() => null);
     const timer = window.setInterval(() => {
       const hasOpenStoreRequest = Boolean(storePurchaseResult?.request?.public_id || storeRequestModal?.public_id);
-      const hasPending = (storePendingRequests || []).some((request) => request.status === 'PENDING');
+      const hasPending = (storePendingRequestsRef.current || []).some((request) => request.status === 'PENDING');
       if (hasOpenStoreRequest || hasPending) loadStorePendingRequests(sessionId, { background: true }).catch(() => null);
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [sessionId, storePendingRequests, storePurchaseResult?.request?.public_id, storeRequestModal?.public_id]);
+  }, [sessionId, storePurchaseResult?.request?.public_id, storeRequestModal?.public_id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4600,7 +4880,7 @@ function PortalApp() {
               <div className="badge bg-yellow-lt text-yellow">{giftDurationLabel}</div>
               <div className="badge bg-blue-lt text-blue">Personal use only</div>
             </div>
-            <button className="btn btn-success w-100" type="button" onClick={redeemWelcomeGift} disabled={giftRedeeming}>
+            <button className="btn btn-success w-100 portal-gift-redeem-button" type="button" onClick={redeemWelcomeGift} disabled={giftRedeeming}>
               {giftRedeeming ? t('Adding...') : t('Add to My WiFi Bag')}
             </button>
           </div>
@@ -4907,7 +5187,11 @@ function PortalApp() {
       <>
         <div className="portal-bag-page">
           <div className="portal-history-header portal-bag-page-header">
-            <button className="btn btn-outline-secondary btn-sm" type="button" onClick={() => setPortalScreen('shop')}>
+            <button
+              className="btn btn-outline-secondary btn-sm portal-bag-back-button"
+              type="button"
+              onClick={() => setPortalScreen('shop')}
+            >
               <IconChevronLeft size={16} className="me-1" /> Back to portal
             </button>
             <div className="portal-bag-header-copy">
@@ -5307,13 +5591,17 @@ function PortalApp() {
 	  }
 
   function PortalChromeReminder() {
-    if (chromeReminderHidden || isGoogleChromeBrowser()) return null;
+    const iosDevice = isIosWebKitTouchBrowser();
+    if (iosDevice) return null;
+    const preferredBrowser = iosDevice ? 'Safari' : 'Google Chrome';
+    const alreadyPreferred = iosDevice ? isIosSafariBrowser() : isGoogleChromeBrowser();
+    if (chromeReminderHidden || alreadyPreferred) return null;
     return (
       <div className="portal-chrome-reminder">
-        <span className="portal-chrome-reminder-icon"><IconBrandChrome size={20} /></span>
+        <span className="portal-chrome-reminder-icon">{iosDevice ? <IconBrowserCheck size={20} /> : <IconBrandChrome size={20} />}</span>
         <div>
           <strong>{t('For better experience')}</strong>
-          <small>{t('Open net.3jhotspot.com in Google Chrome when checking time, buying WiFi, or managing your profile.')}</small>
+          <small>{t(`Open net.3jhotspot.com in ${preferredBrowser} when checking time, buying WiFi, or managing your profile.`)}</small>
         </div>
         <button
           className="portal-chrome-reminder-close"
@@ -5323,6 +5611,19 @@ function PortalApp() {
         >
           <IconX size={16} />
         </button>
+      </div>
+    );
+  }
+
+  function PortalIosSafariLandingReminder() {
+    if (!isIosWebKitTouchBrowser() || isIosSafariBrowser()) return null;
+    return (
+      <div className="portal-ios-safari-reminder">
+        <span className="portal-ios-safari-reminder-icon"><IconBrowserCheck size={20} /></span>
+        <div>
+          <strong>{t('For better experience')}</strong>
+          <small>{t('On iPhone, open net.3jhotspot.com in Safari when checking time, buying WiFi, or managing your profile.')}</small>
+        </div>
       </div>
     );
   }
@@ -6764,9 +7065,9 @@ function PortalApp() {
     );
   }
 
-  function PortalBootSkeleton() {
-    return (
-      <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'}`}>
+	  function PortalBootSkeleton() {
+	    return (
+	      <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'}`} {...iosSingleTapHandlers}>
         <div className="client-portal-shell">
           <div className="portal-boot-skeleton card">
             <div className="portal-skeleton-avatar portal-skeleton-shimmer" />
@@ -6828,8 +7129,8 @@ function PortalApp() {
     );
   }
 
-  return (
-    <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'} ${portalScreen !== 'landing' && !portalBlocked ? 'has-portal-header' : ''}`}>
+	  return (
+	    <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'} ${portalScreen !== 'landing' && !portalBlocked ? 'has-portal-header' : ''}`} {...iosSingleTapHandlers}>
       <StoreOwnerToast toast={portalToast} onDismiss={() => setPortalToast(null)} timeoutMs={portalMessageAutoHideMs} />
       {portalScreen !== 'landing' && !portalBlocked && (
         <header className="portal-sticky-header">
@@ -6884,6 +7185,7 @@ function PortalApp() {
 	                <h1 className="mt-4 mb-2">{t(settings.no_internet_headline || 'No Internet Detected')}</h1>
 	                <div className="text-muted mb-3">{t(settings.no_internet_subtitle || 'Buy a WiFi pass or claim an optional voucher.')}</div>
 	                <PortalNetworkPresenceBanner variant="landing" />
+	                <PortalIosSafariLandingReminder />
 	                <GiftPanel />
                 <div className="d-grid gap-2 mt-4">
                   <button className="btn btn-primary btn-lg" type="button" onClick={() => setPortalScreen('shop')}>
@@ -7830,6 +8132,7 @@ function PortalCustomerMessage({ message, children, tone = 'info', onDismiss, ti
 }
 
 function AutoDismissAlert({ message, tone = 'success', onDismiss, timeoutMs = 6000 }) {
+  const iosSingleTapHandlers = usePortalSingleTapFix();
   useEffect(() => {
     if (!message || !onDismiss) return undefined;
     const timer = window.setTimeout(() => onDismiss(), timeoutMs);
@@ -7839,7 +8142,7 @@ function AutoDismissAlert({ message, tone = 'success', onDismiss, timeoutMs = 60
   if (tone === 'success') {
     return createPortal(
       <div className="toast-container position-fixed top-0 end-0 p-3 app-toast-container">
-        <div className="toast show app-tabler-toast app-tabler-toast-success" role="status" aria-live="polite">
+        <div className="toast show app-tabler-toast app-tabler-toast-success" role="status" aria-live="polite" {...iosSingleTapHandlers}>
           <div className="toast-header">
             <span className="badge app-tabler-toast-icon me-2"><IconCircleCheck size={18} /></span>
             <strong className="me-auto">Success</strong>
@@ -7862,6 +8165,7 @@ function AutoDismissAlert({ message, tone = 'success', onDismiss, timeoutMs = 60
 }
 
 function StoreOwnerToast({ toast, onDismiss, timeoutMs = 6000 }) {
+  const iosSingleTapHandlers = usePortalSingleTapFix();
   useEffect(() => {
     if (!toast || !onDismiss) return undefined;
     const timer = window.setTimeout(() => onDismiss(), timeoutMs);
@@ -7870,7 +8174,7 @@ function StoreOwnerToast({ toast, onDismiss, timeoutMs = 6000 }) {
   if (!toast) return null;
   const ToastIcon = toast.tone === 'danger' ? IconAlertTriangle : IconCircleCheck;
   return (
-    <div className={`store-owner-toast store-owner-toast-${toast.tone || 'success'}`} role="status" aria-live="polite">
+    <div className={`store-owner-toast store-owner-toast-${toast.tone || 'success'}`} role="status" aria-live="polite" {...iosSingleTapHandlers}>
       <span className="store-owner-toast-icon"><ToastIcon size={20} /></span>
       <div className="store-owner-toast-body">
         <div className="store-owner-toast-title">{toast.title || (toast.tone === 'danger' ? 'Action failed' : 'Success')}</div>
@@ -12213,6 +12517,7 @@ function LocationManagementPage() {
 }
 
 function Modal({ title, children, onClose, size = 'lg', dialogClassName = '', bodyClassName = '', contentClassName = '', lockPageRefresh = false }) {
+  const iosSingleTapHandlers = usePortalSingleTapFix();
   const layerRef = useRef(null);
   const bodyRef = useRef(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -12272,8 +12577,8 @@ function Modal({ title, children, onClose, size = 'lg', dialogClassName = '', bo
 
   return createPortal(
     <>
-      <div className="modal-backdrop fade show app-modal-backdrop" onClick={onClose} />
-      <div className={`modal modal-blur fade show d-block app-modal-layer ${settingsLayer ? 'is-settings-modal-layer' : ''}`} tabIndex="-1" role="dialog" ref={layerRef} onScroll={updateModalScrollTopVisibility}>
+      <div className="modal-backdrop fade show app-modal-backdrop" onClick={onClose} {...iosSingleTapHandlers} />
+      <div className={`modal modal-blur fade show d-block app-modal-layer ${settingsLayer ? 'is-settings-modal-layer' : ''}`} tabIndex="-1" role="dialog" ref={layerRef} onScroll={updateModalScrollTopVisibility} {...iosSingleTapHandlers}>
         <div className={`modal-dialog modal-${size} modal-dialog-centered ${dialogClassName}`}>
           <div className={`modal-content ${contentClassName}`}>
             <div className="modal-header">
@@ -12290,6 +12595,7 @@ function Modal({ title, children, onClose, size = 'lg', dialogClassName = '', bo
         aria-label="Scroll to top"
         title="Scroll to top"
         onClick={scrollModalToTop}
+        {...iosSingleTapHandlers}
       >
         <IconChevronUp size={20} />
       </button>

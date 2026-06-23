@@ -8397,6 +8397,28 @@ def infer_device_name_from_user_agent(user_agent: Optional[str]) -> Optional[str
     return None
 
 
+def user_agent_profile_handoff_key(user_agent: Optional[str]) -> str:
+    """Return a strong-enough browser/device key for profile-only handoff.
+
+    iOS captive portal/Safari user agents are generic across different iPhones, so
+    they must not be used to copy a customer profile to a new session. Android
+    model names can be useful, but generic platform names are also rejected.
+    """
+    device_name = infer_device_name_from_user_agent(user_agent)
+    key = customer_device_group_key(device_name)
+    weak_keys = {
+        "",
+        "iphone",
+        "ipad",
+        "android-device",
+        "windows-device",
+        "mac-device",
+        "unknown-device",
+        "unknown",
+    }
+    return "" if key in weak_keys else key
+
+
 GENERIC_DEVICE_NAMES = {
     "",
     "unknown",
@@ -9072,7 +9094,7 @@ def station_for_client_ip(client_ip: Optional[str]):
     if not client_ip:
         return None
     try:
-        target_ip = ip_address(str(client_ip))
+        target_ip = ip_address(host_ip(client_ip) or "")
     except ValueError:
         return None
     for station in fetch_all("SELECT * FROM mikrotik_stations WHERE status <> 'ARCHIVED' ORDER BY updated_at DESC"):
@@ -9081,6 +9103,37 @@ def station_for_client_ip(client_ip: Optional[str]):
                 return station
         except Exception:
             continue
+    return None
+
+
+def recent_portal_station_event(session_id, window_seconds: int = 180) -> Optional[dict]:
+    if not session_id:
+        return None
+    try:
+        safe_window = max(10, min(int(window_seconds), 600))
+    except (TypeError, ValueError):
+        safe_window = 180
+    rows = fetch_all(
+        """
+        SELECT ip_address::text AS ip_address, event_type, created_at
+        FROM portal_events
+        WHERE portal_session_id = %s
+          AND ip_address IS NOT NULL
+          AND created_at > now() - (%s::int * interval '1 second')
+        ORDER BY created_at DESC
+        LIMIT 20
+        """,
+        (session_id, safe_window),
+    )
+    for row in rows:
+        station = station_for_client_ip(row.get("ip_address"))
+        if station:
+            return {
+                "station": station,
+                "ip_address": row.get("ip_address"),
+                "event_type": row.get("event_type"),
+                "created_at": row.get("created_at"),
+            }
     return None
 
 
@@ -9290,6 +9343,8 @@ def find_unique_recent_profile_session_for_browser_context(cur, ctx: dict, reque
     verification.
     """
     user_agent = normalize_payment_text(request.headers.get("user-agent"), 500)
+    if not user_agent_profile_handoff_key(user_agent):
+        return None
     ap_mac = normalize_mac_if_valid(ctx.get("ap_mac"))
     site_id = str(ctx.get("site_id") or "").strip()
     site_name = str(ctx.get("site_name") or ctx.get("site") or "").strip()
@@ -9328,6 +9383,45 @@ def find_unique_recent_profile_session_for_browser_context(cur, ctx: dict, reque
         LIMIT 2
         """,
         tuple(params),
+    )
+    rows = cur.fetchall()
+    if len(rows) == 1 and int(rows[0].get("candidate_count") or 0) == 1:
+        return rows[0]
+    return None
+
+
+def find_unique_recent_profile_session_for_same_mac(cur, ctx: dict) -> Optional[dict]:
+    """Carry a verified profile to a new captive session when Omada/MikroTik gives the same MAC.
+
+    iOS captive portal browser state is not reliable, but an exact client MAC from
+    the gateway is a stronger identity than the generic iPhone user agent.
+    """
+    candidate_mac = portal_effective_mac_from_context(ctx)
+    clean_mac = re.sub(r"[^A-Fa-f0-9]", "", candidate_mac or "").lower()
+    if len(clean_mac) != 12:
+        return None
+    cur.execute(
+        """
+        WITH candidates AS (
+            SELECT DISTINCT ON (ps.user_id) ps.*
+            FROM portal_sessions ps
+            JOIN portal_customer_profiles p ON p.user_id = ps.user_id
+            WHERE ps.source IN ('OMADA', 'MIKROTIK')
+              AND ps.user_id IS NOT NULL
+              AND ps.updated_at > now() - interval '30 days'
+              AND (
+                regexp_replace(lower(coalesce(ps.client_mac::text, '')), '[^a-f0-9]', '', 'g') = %s
+                OR regexp_replace(lower(coalesce(ps.omada_client_mac::text, '')), '[^a-f0-9]', '', 'g') = %s
+                OR regexp_replace(lower(coalesce(ps.mikrotik_client_mac::text, '')), '[^a-f0-9]', '', 'g') = %s
+              )
+            ORDER BY ps.user_id, ps.updated_at DESC
+        )
+        SELECT *, count(*) OVER () AS candidate_count
+        FROM candidates
+        ORDER BY updated_at DESC
+        LIMIT 2
+        """,
+        (clean_mac, clean_mac, clean_mac),
     )
     rows = cur.fetchall()
     if len(rows) == 1 and int(rows[0].get("candidate_count") or 0) == 1:
@@ -9416,6 +9510,9 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             profile_handoff_user_id = portal_profile_handoff_user_id(cur, candidate_session, ctx, request)
             if profile_handoff_user_id:
                 break
+        if not profile_handoff_user_id:
+            same_mac_profile_session = find_unique_recent_profile_session_for_same_mac(cur, ctx)
+            profile_handoff_user_id = portal_profile_handoff_user_id(cur, same_mac_profile_session, ctx, request)
         if not profile_handoff_user_id:
             recent_profile_session = find_unique_recent_profile_session_for_browser_context(cur, ctx, request)
             profile_handoff_user_id = portal_profile_handoff_user_id(cur, recent_profile_session, ctx, request)
@@ -10808,8 +10905,10 @@ def portal_network_presence(session: Optional[dict], request: Optional[Request] 
                     break
     live_omada_station = station_for_client_ip(str((live_omada_client or {}).get("client_ip") or "")) if live_omada_client else None
     live_omada_last_seen_age = omada_last_seen_age_seconds((live_omada_client or {}).get("last_seen")) if live_omada_client else None
-    current_station = request_station or context_station or live_omada_station
-    connected_to_3j = bool(current_request_detected or live_omada_client)
+    recent_station_event = recent_portal_station_event(session.get("id")) if session.get("id") else None
+    recent_station = (recent_station_event or {}).get("station")
+    current_station = request_station or context_station or live_omada_station or recent_station
+    connected_to_3j = bool(current_request_detected or live_omada_client or recent_station_event)
     detection_reason = "none"
     if has_gateway_context:
         detection_reason = "current_gateway_context"
@@ -10821,6 +10920,8 @@ def portal_network_presence(session: Optional[dict], request: Optional[Request] 
         detection_reason = "current_request_ip_station_subnet"
     elif live_omada_client:
         detection_reason = "live_omada_client"
+    elif recent_station_event:
+        detection_reason = "recent_local_portal_station_event"
     elif saved_session_station:
         detection_reason = "saved_session_station_not_current"
     return {
@@ -10833,6 +10934,9 @@ def portal_network_presence(session: Optional[dict], request: Optional[Request] 
         "live_omada_client_detected": bool(live_omada_client),
         "live_omada_station_detected": bool(live_omada_station),
         "live_omada_last_seen_age_seconds": live_omada_last_seen_age,
+        "recent_local_station_event_detected": bool(recent_station_event),
+        "recent_local_station_event_at": (recent_station_event or {}).get("created_at"),
+        "recent_local_station_event_ip": (recent_station_event or {}).get("ip_address"),
         "saved_session_station_detected": bool(saved_session_station),
         "status": "ON_3J_NETWORK" if connected_to_3j else "OUTSIDE_3J_NETWORK",
         "current_status": "CURRENTLY_ON_3J_NETWORK" if connected_to_3j else "CURRENTLY_OUTSIDE_3J_NETWORK",
@@ -10901,6 +11005,130 @@ def create_customer_bag_event(cur, user_id, bag_item_id=None, portal_session_id=
         """,
         (user_id, bag_item_id, portal_session_id, event_type, message, auto_activate_enabled, overlap_seconds_value, Json(sanitize_summary(metadata or {}))),
     )
+
+
+def active_hotspot_bag_items_for_user(cur, user_id) -> list[dict]:
+    if not user_id:
+        return []
+    cur.execute(
+        """
+        SELECT *
+        FROM customer_bag_items
+        WHERE user_id = %s
+          AND status = 'ACTIVE'
+          AND product_kind IN ('WIFI', 'WIFI_IPTV')
+          AND (
+            (active_until IS NOT NULL AND active_until > now())
+            OR (active_until IS NULL AND remaining_seconds > 0)
+          )
+        ORDER BY active_until DESC NULLS LAST, updated_at DESC
+        """,
+        (user_id,),
+    )
+    return cur.fetchall()
+
+
+def sync_gateway_access_to_active_bag(cur, session: Optional[dict], reason: str, request: Request = None, admin=None) -> dict:
+    if not session or session.get("source") not in {"OMADA", "MIKROTIK"} or not session.get("user_id"):
+        return {"status": "SKIPPED"}
+    active_items = active_hotspot_bag_items_for_user(cur, session["user_id"])
+    now = datetime.now(timezone.utc)
+    if active_items:
+        latest_until = None
+        for item in active_items:
+            active_until = aware_utc(item.get("active_until"))
+            if active_until and active_until > now:
+                latest_until = max(latest_until, active_until) if latest_until else active_until
+        if not latest_until:
+            return {"status": "SKIPPED", "message": "Active WiFi item has no expiry to sync."}
+        cur.execute(
+            """
+            UPDATE portal_sessions
+            SET status = 'ACCESS_GRANTED',
+                access_expires_at = %s,
+                last_error = NULL,
+                omada_authorization_status = CASE WHEN source = 'OMADA' THEN 'AUTHORIZED' ELSE omada_authorization_status END,
+                mikrotik_authorization_status = CASE WHEN source = 'MIKROTIK' THEN 'AUTHORIZED' ELSE mikrotik_authorization_status END,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (latest_until, session["id"]),
+        )
+        updated_session = cur.fetchone() or session
+        return {
+            "status": "ACTIVE_SYNCED",
+            "access_expires_at": latest_until.isoformat(),
+            "session": updated_session,
+            "active_item_count": len(active_items),
+        }
+
+    access_expires_at = aware_utc(session.get("access_expires_at"))
+    already_expired = bool(
+        session.get("status") in {"EXPIRED", "ACCESS_DENIED"}
+        and session.get("omada_authorization_status") != "AUTHORIZED"
+        and (not access_expires_at or access_expires_at <= now)
+    )
+    if already_expired:
+        return {"status": "ALREADY_EXPIRED", "session": session}
+    should_revoke = bool(
+        session.get("source") == "OMADA"
+        and (
+            session.get("omada_authorization_status") == "AUTHORIZED"
+            or (access_expires_at and access_expires_at > now)
+        )
+    )
+    revoke_result = None
+    if should_revoke:
+        revoke_result = revoke_omada_authorized_clients(cur, session, admin)
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET status = 'EXPIRED',
+            access_expires_at = now(),
+            last_error = 'No active WiFi Bag item remains for this device.',
+            omada_authorization_status = CASE WHEN source = 'OMADA' THEN 'EXPIRED' ELSE omada_authorization_status END,
+            mikrotik_authorization_status = CASE WHEN source = 'MIKROTIK' THEN 'EXPIRED' ELSE mikrotik_authorization_status END,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (session["id"],),
+    )
+    updated_session = cur.fetchone() or session
+    if request:
+        create_portal_event(
+            cur,
+            updated_session["id"],
+            "GATEWAY_ACCESS_SYNCED",
+            request,
+            "Gateway authorization expired because no active WiFi Bag item remains.",
+            raw_context={"reason": reason, "revoke_result": sanitize_summary(revoke_result)},
+        )
+    return {
+        "status": "REVOKED" if revoke_result else "EXPIRED",
+        "session": updated_session,
+        "revoke_result": sanitize_summary(revoke_result),
+    }
+
+
+def sync_gateway_access_for_sessions(cur, session_ids, reason: str, request: Request = None, admin=None) -> list[dict]:
+    results = []
+    clean_ids = [str(value) for value in (session_ids or []) if value]
+    if not clean_ids:
+        return results
+    cur.execute(
+        """
+        SELECT *
+        FROM portal_sessions
+        WHERE id = ANY(%s::uuid[])
+        FOR UPDATE
+        """,
+        (clean_ids,),
+    )
+    for session in cur.fetchall():
+        results.append(sync_gateway_access_to_active_bag(cur, session, reason, request, admin))
+    return results
 
 
 def ensure_customer_bag_settings(cur, user_id) -> dict:
@@ -11086,8 +11314,12 @@ def customer_bag_payload(cur, user_id) -> dict:
         """,
         (history_user_ids,),
     )
+    consumed_session_ids = []
     for consumed in cur.fetchall():
         schedule_iptv_line_deletion_for_bag_item(cur, consumed, "BAG_PAYLOAD_EXPIRED")
+        if consumed.get("portal_session_id"):
+            consumed_session_ids.append(consumed["portal_session_id"])
+    sync_gateway_access_for_sessions(cur, consumed_session_ids, "BAG_PAYLOAD_EXPIRED")
     cur.execute(
         """
         SELECT *
@@ -11572,6 +11804,7 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
     active_rows = cur.fetchall()
     now = datetime.now(timezone.utc)
     current_active = []
+    consumed_session_ids = []
     for active in active_rows:
         active_until = aware_utc(active.get("active_until"))
         active_remaining = max(int((active_until - now).total_seconds()), 0) if active_until else int(active.get("remaining_seconds") or 0)
@@ -11592,12 +11825,20 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
             consumed = cur.fetchone()
             create_customer_bag_event(cur, session["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item fully consumed.", bool(settings.get("auto_activate")), overlap)
             schedule_iptv_line_deletion_for_bag_item(cur, consumed, "SESSION_REFRESH_CONSUMED")
+            if consumed.get("portal_session_id"):
+                consumed_session_ids.append(consumed["portal_session_id"])
         else:
             active["remaining_seconds"] = active_remaining
             current_active.append(active)
 
     active_for_device = current_active
     internet_active_for_device = [item for item in current_active if product_kind_grants_hotspot(item.get("product_kind"))]
+    if consumed_session_ids:
+        sync_results = sync_gateway_access_for_sessions(cur, consumed_session_ids, "SESSION_REFRESH_CONSUMED", request)
+        for sync_result in sync_results:
+            if str((sync_result.get("session") or {}).get("id") or "") == str(session.get("id")):
+                session = sync_result.get("session") or session
+                break
 
     if internet_active_for_device and session.get("source") in {"OMADA", "MIKROTIK"} and on_3j_network:
         gateway_sync = ensure_gateway_authorization_for_active_bag_items(cur, session, internet_active_for_device, request, "ACTIVE_ITEM_REFRESH")
@@ -11627,6 +11868,9 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
                 (session_access_until, session["id"]),
             )
             session = cur.fetchone()
+    elif session.get("source") in {"OMADA", "MIKROTIK"}:
+        sync_result = sync_gateway_access_to_active_bag(cur, session, "SESSION_REFRESH_NO_ACTIVE_HOTSPOT", request)
+        session = sync_result.get("session") or session
 
     should_activate_next = bool(settings.get("auto_activate")) and (
         (session.get("source") in {"OMADA", "MIKROTIK"} and on_3j_network)
@@ -11725,6 +11969,7 @@ def process_customer_bag_auto_activation_once():
                     consumed = cur.fetchone()
                     create_customer_bag_event(cur, active["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item fully consumed by auto activation worker.", True, overlap)
                     schedule_iptv_line_deletion_for_bag_item(cur, consumed, "AUTO_WORKER_CONSUMED")
+                    sync_gateway_access_to_active_bag(cur, session, "AUTO_WORKER_CONSUMED")
                     active = None
                 elif remaining > overlap:
                     continue
@@ -13680,6 +13925,37 @@ def portal_settings():
     }
 
 
+PORTAL_LOCAL_PRESENCE_PIXEL = base64.b64decode("R0lGODlhAQABAPAAAP///wAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==")
+
+
+@app.get("/api/portal/local-presence-pixel")
+def portal_local_presence_pixel(request: Request, portal_session_id: Optional[str] = None):
+    response = Response(content=PORTAL_LOCAL_PRESENCE_PIXEL, media_type="image/gif")
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Private-Network"] = "true"
+    if not portal_session_id or not request:
+        return response
+    request_station = station_for_client_ip(public_ip(request))
+    if not request_station:
+        return response
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM portal_sessions WHERE public_session_id = %s", (portal_session_id,))
+            session = cur.fetchone()
+            if session:
+                create_portal_event(
+                    cur,
+                    session["id"],
+                    "LOCAL_PRESENCE_PIXEL",
+                    request,
+                    "Local 3J WiFi presence pixel loaded.",
+                    raw_context={"station_id": str(request_station.get("id")), "station_name": request_station.get("name")},
+                )
+    return response
+
+
 @app.post("/api/portal/session")
 def create_or_update_portal_session(payload: PortalSessionRequest, request: Request, response: Response):
     handoff_session_id = parse_portal_handoff_token(payload.handoff)
@@ -13719,12 +13995,17 @@ def create_or_update_portal_session(payload: PortalSessionRequest, request: Requ
             create_portal_event(cur, session["id"], "PORTAL_VIEW", request, "Portal viewed", raw_context=payload.model_dump())
             mac_rebind = attempt_portal_device_mac_rebind(cur, session, payload, request)
             device_token = None
-            handoff_url = portal_handoff_url(session["public_session_id"]) if portal_session_has_current_gateway_access(session) else None
             incoming_hash = portal_device_token_hash(payload.device_token)
             if incoming_hash and session.get("device_token_hash") and hmac.compare_digest(str(incoming_hash), str(session["device_token_hash"])):
                 device_token = payload.device_token
             profile = portal_profile_for_user(cur, session.get("user_id"))
             network_presence = portal_network_presence(session, request, payload)
+            raw_payload = payload.raw_query_params or {}
+            local_bridge_request = str(raw_payload.get("handoff_bridge") or "").strip().lower() in {"1", "true", "yes"}
+            handoff_url = portal_handoff_url(session["public_session_id"]) if (
+                portal_session_has_current_gateway_access(session)
+                or (local_bridge_request and network_presence.get("connected_to_3j_ap") is True)
+            ) else None
     set_portal_session_cookies(response, session["public_session_id"], device_token)
     return {
         "portal_session_id": session["public_session_id"],
@@ -23470,6 +23751,8 @@ def update_customer_device_bag_item(user_id: str, item_id: str, payload: AdminCu
             )
             item = cur.fetchone()
             create_customer_bag_event(cur, user["id"], item["id"], None, "ADMIN_ITEM_UPDATED", "Admin updated a WiFi bag item.", metadata={"item_name": item_name, "duration_seconds": duration_seconds, "expires_at": expires_at.isoformat() if expires_at else None, "admin_id": str(admin["id"])})
+            if current.get("status") == "ACTIVE" and current.get("portal_session_id"):
+                sync_gateway_access_for_sessions(cur, [current["portal_session_id"]], "ADMIN_ITEM_UPDATED", admin=admin)
             bag = customer_bag_payload(cur, user["id"])
     audit(admin["id"], "update_customer_bag_item", "customer_bag_items", str(item["id"]), {"user_id": str(user["id"]), "item_name": item_name, "duration_seconds": duration_seconds})
     return {"status": "SUCCESS", "message": "WiFi bag item updated.", "item": bag_item_public(item), "bag": bag}
@@ -23495,6 +23778,8 @@ def delete_customer_device_bag_item(user_id: str, item_id: str, admin=Depends(cu
             )
             updated = cur.fetchone()
             create_customer_bag_event(cur, user["id"], updated["id"], None, "ADMIN_ITEM_DELETED", "Admin deleted a WiFi bag item.", metadata={"admin_id": str(admin["id"]), "item_name": updated.get("product_name")})
+            if updated.get("portal_session_id"):
+                sync_gateway_access_for_sessions(cur, [updated["portal_session_id"]], "ADMIN_ITEM_DELETED", admin=admin)
             bag = customer_bag_payload(cur, user["id"])
     audit(admin["id"], "delete_customer_bag_item", "customer_bag_items", str(updated["id"]), {"user_id": str(user["id"]), "item_name": updated.get("product_name")})
     return {"status": "SUCCESS", "message": "WiFi bag item deleted.", "bag": bag}
