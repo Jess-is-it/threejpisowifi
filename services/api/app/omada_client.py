@@ -38,6 +38,15 @@ OMADA_SITE_SCENARIO_TYPES = {
 }
 
 
+PAYMONGO_PRE_AUTH_HOSTS = (
+    "checkout.paymongo.com",
+    "api.paymongo.com",
+    "paymongo.com",
+    "www.paymongo.com",
+    "payments.gcash.com",
+)
+
+
 def omada_site_scenario_type(scenario: Optional[str]) -> int:
     return OMADA_SITE_SCENARIO_TYPES.get(str(scenario or "Office").strip().lower(), 0)
 
@@ -1518,7 +1527,7 @@ class OmadaApiClient:
         required_url_hosts = []
         required_ip_hosts = []
         controller_host = urlparse(self.base_url).hostname
-        for host in (portal_host, controller_host, "checkout.paymongo.com", "api.paymongo.com", "paymongo.com", *(extra_hosts or [])):
+        for host in (portal_host, controller_host, *PAYMONGO_PRE_AUTH_HOSTS, *(extra_hosts or [])):
             clean_host = str(host or "").strip()
             if not clean_host:
                 continue
@@ -1650,7 +1659,7 @@ class OmadaApiClient:
             except ValueError:
                 if clean_host not in required_url_hosts:
                     required_url_hosts.append(clean_host)
-        for host in ("checkout.paymongo.com", "api.paymongo.com", "paymongo.com", *(extra_hosts or [])):
+        for host in (*PAYMONGO_PRE_AUTH_HOSTS, *(extra_hosts or [])):
             if host not in required_url_hosts:
                 clean_host = str(host or "").strip()
                 if not clean_host:
