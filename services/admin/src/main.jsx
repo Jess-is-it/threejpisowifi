@@ -2870,6 +2870,57 @@ function PortalApp() {
     }
   }
 
+  function portalBrowserTransferUrl(portalSettings = settings) {
+    const rawUrl = portalSettings?.current_portal_url || 'https://net.3jhotspot.com/portal';
+    let url;
+    try {
+      url = new URL(rawUrl, window.location.origin);
+    } catch (_error) {
+      url = new URL('https://net.3jhotspot.com/portal');
+    }
+    const currentParams = new URLSearchParams(window.location.search);
+    currentParams.forEach((value, key) => {
+      if (!url.searchParams.has(key)) url.searchParams.set(key, value);
+    });
+    if (sessionId) url.searchParams.set('portal_session_id', sessionId);
+    const currentDeviceToken = deviceToken || localStorage.getItem('centralwifi_portal_device_token') || '';
+    if (currentDeviceToken) url.searchParams.set('device_token', currentDeviceToken);
+    url.searchParams.set('browser_handoff', '1');
+    return url.toString();
+  }
+
+  function preferredOnlinePaymentBrowser() {
+    if (isIosWebKitTouchBrowser()) return 'Safari';
+    if (/Android/i.test(navigator.userAgent || '')) return 'Google Chrome';
+    return 'Google Chrome or Safari';
+  }
+
+  async function copyPortalBrowserTransferLink() {
+    const url = portalBrowserTransferUrl();
+    let copied = false;
+    try {
+      if (navigator.clipboard?.writeText && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+        copied = true;
+      }
+    } catch {
+      copied = false;
+    }
+    if (!copied) copied = fallbackCopyText(url);
+    const message = copied
+      ? t('Portal link copied. Open it in your browser to continue buying online.')
+      : t('Copy was blocked. Long press the portal link and copy it manually.');
+    setCheckoutCopyMessage(message);
+    setPortalToast({
+      key: `portal-browser-link-${Date.now()}`,
+      tone: copied ? 'success' : 'danger',
+      title: copied ? t('Portal link copied') : t('Copy blocked'),
+      message,
+    });
+    if (checkoutCopyMessageTimerRef.current) window.clearTimeout(checkoutCopyMessageTimerRef.current);
+    checkoutCopyMessageTimerRef.current = window.setTimeout(() => setCheckoutCopyMessage(''), portalMessageAutoHideMs);
+  }
+
   function portalNotificationIcon(portalSettings = settings, values = {}) {
     const hasTime = values.time === 'Unlimited' || Number(values.remaining_time_seconds || 0) > 0;
     const connectedIcon = portalSettings?.no_internet_avatar_connected_url || settings?.no_internet_avatar_connected_url || '';
@@ -3224,6 +3275,15 @@ function PortalApp() {
       currentStatus = status;
     }
     let currentProfile = currentStatus?.profile || profile;
+    if (settings?.payment_browser_handoff?.enabled !== false && isCaptivePortalPlaybackBrowser() && !confirmedBrowserReminder) {
+      setCheckoutBrowserReminder({
+        item,
+        quantity: safeQuantity,
+        paymentMethod: paymentMethod || selectedPaymentMethod || 'gcash',
+        forceBrowserTransfer: true,
+      });
+      return;
+    }
     if (requireProfileForIptvItem(item, currentProfile)) return;
     const outside3jNetwork = outsideNetworkConfirmed && portalStatusLooksOutside(currentStatus);
     if (outside3jNetwork && !portalProfileConfigured(currentProfile)) {
@@ -5812,6 +5872,10 @@ function PortalApp() {
   function continueCheckoutAfterBrowserReminder() {
     const next = checkoutBrowserReminder;
     if (!next?.item) return;
+    if (next.forceBrowserTransfer) {
+      setCheckoutBrowserReminder(null);
+      return;
+    }
     setCheckoutBrowserReminder(null);
     startProductCheckout(next.item, next.quantity || 1, false, next.paymentMethod || selectedPaymentMethod, true);
   }
@@ -7145,9 +7209,12 @@ function PortalApp() {
   function BrowserReminderCheckoutModal() {
     if (!checkoutBrowserReminder?.item) return null;
     const item = checkoutBrowserReminder.item;
+    const forceBrowserTransfer = Boolean(checkoutBrowserReminder.forceBrowserTransfer);
+    const browserName = preferredOnlinePaymentBrowser();
+    const transferUrl = portalBrowserTransferUrl();
     return (
 	      <Modal
-	        title={t('Before you continue')}
+	        title={forceBrowserTransfer ? t('Buy online in your browser') : t('Before you continue')}
 	        onClose={() => setCheckoutBrowserReminder(null)}
 	        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
 	        bodyClassName="portal-profile-modal-body"
@@ -7155,19 +7222,52 @@ function PortalApp() {
 	        lockPageRefresh
 	      >
         <div className="d-flex align-items-start gap-3">
-          <span className="avatar bg-blue-lt text-blue"><IconBrandChrome size={24} /></span>
+          <span className="avatar bg-blue-lt text-blue">{forceBrowserTransfer ? <IconBrowserCheck size={24} /> : <IconBrandChrome size={24} />}</span>
           <div>
             <div className="fw-semibold mb-1">{item.name}</div>
             <div className="text-muted small">
-              {t('For your next purchase, use Google Chrome and open net.3jhotspot.com. Chrome is better for checking remaining time, receiving phone notifications, and recovering your account if your device changes.')}
+              {forceBrowserTransfer
+                ? t(`You are currently inside the WiFi sign-in page. Online payment and GCash app handoff must be done in ${browserName}. Copy this link, open it in ${browserName}, then buy online there.`)
+                : t('For your next purchase, use Google Chrome and open net.3jhotspot.com. Chrome is better for checking remaining time, receiving phone notifications, and recovering your account if your device changes.')}
             </div>
           </div>
         </div>
+        {forceBrowserTransfer && (
+          <>
+            <div className="portal-payment-handoff-note mt-3">
+              <IconInfoCircle size={18} />
+              <span>{t('After you open the portal in the browser, choose the same item again. The system will temporarily allow payment traffic for a short checkout window.')}</span>
+            </div>
+            <div className="mt-3">
+              <label className="form-label">{t('Browser portal link')}</label>
+              <div className="input-group">
+                <input className="form-control" value={transferUrl} readOnly onFocus={(event) => event.target.select()} />
+                <button className="btn" type="button" onClick={copyPortalBrowserTransferLink}>
+                  <IconCopy size={18} />
+                  {t('Copy')}
+                </button>
+              </div>
+              {checkoutCopyMessage && (
+                <div className="portal-payment-copy-status mt-2">
+                  <IconCircleCheck size={17} />
+                  <span>{checkoutCopyMessage}</span>
+                </div>
+              )}
+            </div>
+          </>
+        )}
         <div className="modal-footer px-0 pb-0">
-          <button className="btn" type="button" onClick={() => setCheckoutBrowserReminder(null)}>{t('Cancel')}</button>
-          <button className="btn btn-primary" type="button" onClick={continueCheckoutAfterBrowserReminder}>
-            {t('OK, Continue to Payment')}
-          </button>
+          <button className="btn" type="button" onClick={() => setCheckoutBrowserReminder(null)}>{forceBrowserTransfer ? t('Close') : t('Cancel')}</button>
+          {forceBrowserTransfer ? (
+            <button className="btn btn-primary" type="button" onClick={copyPortalBrowserTransferLink}>
+              <IconCopy size={18} />
+              {t('Copy portal link')}
+            </button>
+          ) : (
+            <button className="btn btn-primary" type="button" onClick={continueCheckoutAfterBrowserReminder}>
+              {t('OK, Continue to Payment')}
+            </button>
+          )}
         </div>
       </Modal>
     );
@@ -30113,6 +30213,9 @@ function OmadaControllerPage({ refresh }) {
   const [sshResult, setSshResult] = useState(null);
   const [nasResult, setNasResult] = useState(null);
   const [apiSettings, setApiSettings] = useState(null);
+  const [paymentAccess, setPaymentAccess] = useState(null);
+  const [paymentAccessForm, setPaymentAccessForm] = useState(null);
+  const [paymentAccessTab, setPaymentAccessTab] = useState('Overview');
   const [sites, setSites] = useState([]);
   const [automationLogs, setAutomationLogs] = useState([]);
   const [automationResult, setAutomationResult] = useState(null);
@@ -30154,7 +30257,7 @@ function OmadaControllerPage({ refresh }) {
   ];
   const installed = Boolean(settings && ['INSTALLED', 'RUNNING', 'STOPPED', 'ERROR'].includes(settings.install_status));
   const installOnly = Boolean(settings && settings.install_status === 'NOT_INSTALLED');
-  const omadaTabs = installOnly ? ['Install'] : ['Status', 'Settings', 'Logs'];
+  const omadaTabs = installOnly ? ['Install'] : ['Status', 'Settings', 'Payment Access', 'Logs'];
   const webReachable = Boolean(webResult && (webResult.http?.status === 'Reachable' || webResult.https?.status === 'Reachable'));
   const canOpenOmada = installed && settings?.install_status !== 'NOT_INSTALLED' && webReachable;
 
@@ -30162,12 +30265,15 @@ function OmadaControllerPage({ refresh }) {
     setSettings(await request('/omada/settings'));
     setLogs(await request('/omada/logs'));
     setApiSettings(await request('/omada/api-settings'));
+    const paymentAccessData = await request('/omada/payment-auth-free').catch(() => null);
+    setPaymentAccess(paymentAccessData);
+    if (paymentAccessData?.settings) setPaymentAccessForm(paymentAccessData.settings);
     setAutomationLogs(await request('/omada/automation-logs'));
   }
   useEffect(() => { load(); }, []);
   useEffect(() => {
     if (!settings) return;
-    const allowedTabs = settings.install_status === 'NOT_INSTALLED' ? ['Install'] : ['Status', 'Settings', 'Logs'];
+    const allowedTabs = settings.install_status === 'NOT_INSTALLED' ? ['Install'] : ['Status', 'Settings', 'Payment Access', 'Logs'];
     if (!allowedTabs.includes(tab)) setTab(allowedTabs[0]);
   }, [settings?.install_status, tab]);
   useEffect(() => {
@@ -30393,6 +30499,43 @@ function OmadaControllerPage({ refresh }) {
     } finally {
       setBusy('');
     }
+  }
+
+  async function refreshPaymentAccess() {
+    const data = await request('/omada/payment-auth-free');
+    setPaymentAccess(data);
+    if (data?.settings) setPaymentAccessForm(data.settings);
+    return data;
+  }
+
+  async function savePaymentAccessSettings(event) {
+    event.preventDefault();
+    setBusy('save-payment-access');
+    setError('');
+    setMessage('');
+    try {
+      const data = await request('/omada/payment-auth-free/settings', { method: 'PUT', body: JSON.stringify(paymentAccessForm || {}) });
+      setPaymentAccess(data);
+      if (data?.settings) setPaymentAccessForm(data.settings);
+      setMessage('Payment access settings saved.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function paymentAccessTone(status) {
+    const value = String(status || '').toUpperCase();
+    if (['ACTIVE'].includes(value)) return 'green';
+    if (['FAILED', 'REMOVE_FAILED', 'ABUSE_BLOCKED'].includes(value)) return 'red';
+    if (['REMOVED', 'EXPIRED', 'CANCELLED'].includes(value)) return 'secondary';
+    if (['GRANT_SKIPPED'].includes(value)) return 'yellow';
+    return 'blue';
+  }
+
+  function paymentAccessCustomer(row) {
+    return row?.profile_name || row?.profile_contact_number || row?.client_mac || 'Unprofiled device';
   }
 
   async function testApiLogin() {
@@ -30752,6 +30895,219 @@ function OmadaControllerPage({ refresh }) {
       {tab === 'Advanced' && apiTab === 'Automation Logs' && <div className="col-12">
         <Card title="Automation Logs">
           {automationLogs.length > 0 ? <Table rows={automationLogs.slice(0, 10)} columns={['action', 'status', 'error_message', 'created_at']} /> : <div className="empty">No Omada automation logs yet.</div>}
+        </Card>
+      </div>}
+
+      {tab === 'Payment Access' && <div className="col-12">
+        <Card title="PayMongo Authentication-Free Client" subtitle="Temporary Omada access used only while a customer completes online payment in Chrome or Safari.">
+          <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+            <ul className="nav nav-pills">
+              {['Overview', 'Settings'].map((item) => (
+                <li className="nav-item" key={item}>
+                  <button className={`nav-link ${paymentAccessTab === item ? 'active' : ''}`} type="button" onClick={() => setPaymentAccessTab(item)}>
+                    {item}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <button className="btn btn-outline-primary" type="button" disabled={!!busy} onClick={() => refreshPaymentAccess().catch((err) => setError(err.message))}>
+              <IconRefresh size={18} className="me-2" />Refresh
+            </button>
+          </div>
+
+          {paymentAccessTab === 'Overview' && (
+            <>
+              <div className="row g-3 mb-3">
+                <KpiCard icon={IconWifi} label="Active grants" value={paymentAccess?.overview?.active_count || 0} tone="green" />
+                <KpiCard icon={IconClock} label="Grants today" value={paymentAccess?.overview?.grants_today || 0} tone="blue" />
+                <KpiCard icon={IconAlertTriangle} label="Failures" value={paymentAccess?.overview?.failed_count || 0} tone="red" />
+                <KpiCard icon={IconBan} label="Abuse blocks" value={paymentAccess?.overview?.active_blocks || 0} tone="orange" />
+              </div>
+
+              <div className="alert alert-info">
+                {paymentAccess?.guide?.summary || 'When a customer starts checkout from a real browser, Omada can allow that client temporarily for payment traffic.'}
+                <div className="small mt-1">{paymentAccess?.guide?.cleanup || 'The temporary entry is removed on success, cancel, or timeout.'}</div>
+              </div>
+
+              <div className="row g-3">
+                <div className="col-12">
+                  <div className="card">
+                    <div className="card-header"><h3 className="card-title">Currently Granted Clients</h3></div>
+                    <div className="table-responsive">
+                      <table className="table table-vcenter card-table">
+                        <thead>
+                          <tr>
+                            <th>Customer / Device</th>
+                            <th>Site</th>
+                            <th>MAC / IP</th>
+                            <th>Status</th>
+                            <th>Expires</th>
+                            <th>Remaining</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(paymentAccess?.active_grants || []).map((row) => (
+                            <tr key={row.id}>
+                              <td>
+                                <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
+                                {row.profile_contact_number && <div className="text-muted small">{row.profile_contact_number}</div>}
+                              </td>
+                              <td>{row.site_name || row.site_id || '-'}</td>
+                              <td>
+                                <div>{row.client_mac || '-'}</div>
+                                <div className="text-muted small">{row.client_ip || '-'}</div>
+                              </td>
+                              <td><span className={`badge bg-${paymentAccessTone(row.status)}-lt text-${paymentAccessTone(row.status)}`}>{row.status}</span></td>
+                              <td className="text-muted">{formatPortalDateTime(row.expires_at)}</td>
+                              <td>{formatSeconds(row.remaining_seconds || 0)}</td>
+                            </tr>
+                          ))}
+                          {!(paymentAccess?.active_grants || []).length && <tr><td colSpan="6" className="text-center text-muted py-4">No active payment access grants.</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="col-12">
+                  <div className="card">
+                    <div className="card-header"><h3 className="card-title">Abuse Watchlist</h3></div>
+                    <div className="table-responsive">
+                      <table className="table table-vcenter card-table">
+                        <thead>
+                          <tr>
+                            <th>Customer / Device</th>
+                            <th>Attempts Today</th>
+                            <th>MAC</th>
+                            <th>Last Attempt</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(paymentAccess?.abuse_profiles || []).map((row, index) => (
+                            <tr key={`${row.client_mac || row.user_id || index}`}>
+                              <td>
+                                <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
+                                {row.profile_contact_number && <div className="text-muted small">{row.profile_contact_number}</div>}
+                              </td>
+                              <td><span className="badge bg-red-lt text-red">{row.attempts_today}</span></td>
+                              <td>{row.client_mac || '-'}</td>
+                              <td className="text-muted">{formatPortalDateTime(row.last_attempt_at)}</td>
+                            </tr>
+                          ))}
+                          {!(paymentAccess?.abuse_profiles || []).length && <tr><td colSpan="4" className="text-center text-muted py-4">No profile has reached the daily limit today.</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="col-12">
+                  <div className="card">
+                    <div className="card-header"><h3 className="card-title">Recent Payment Access Activity</h3></div>
+                    <div className="table-responsive">
+                      <table className="table table-vcenter card-table">
+                        <thead>
+                          <tr>
+                            <th>Customer / Device</th>
+                            <th>Status</th>
+                            <th>Site</th>
+                            <th>Order</th>
+                            <th>Created</th>
+                            <th>Details</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(paymentAccess?.recent_grants || []).map((row) => (
+                            <tr key={row.id}>
+                              <td>
+                                <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
+                                <div className="text-muted small">{row.client_mac || row.client_ip || '-'}</div>
+                              </td>
+                              <td><span className={`badge bg-${paymentAccessTone(row.status)}-lt text-${paymentAccessTone(row.status)}`}>{row.status}</span></td>
+                              <td>{row.site_name || row.site_id || '-'}</td>
+                              <td className="text-muted">{row.payment_order_id || '-'}</td>
+                              <td className="text-muted">{formatPortalDateTime(row.created_at)}</td>
+                              <td className="text-muted small">{row.last_error || '-'}</td>
+                            </tr>
+                          ))}
+                          {!(paymentAccess?.recent_grants || []).length && <tr><td colSpan="6" className="text-center text-muted py-4">No payment access activity yet.</td></tr>}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {paymentAccessTab === 'Settings' && (
+            <form onSubmit={savePaymentAccessSettings}>
+              <div className="row g-3">
+                <div className="col-md-6">
+                  <div className="border rounded p-3 h-100">
+                    <div className="d-flex align-items-center justify-content-between gap-3">
+                      <div>
+                        <div className="fw-semibold">Enable temporary Authentication-Free Client</div>
+                        <div className="text-muted small">Adds the checkout device MAC in Omada only during the payment window.</div>
+                      </div>
+                      <label className="form-check form-switch m-0">
+                        <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.enabled !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), enabled: event.target.checked })} />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <div className="col-md-6">
+                  <div className="border rounded p-3 h-100">
+                    <div className="d-flex align-items-center justify-content-between gap-3">
+                      <div>
+                        <div className="fw-semibold">Force browser handoff from captive popup</div>
+                        <div className="text-muted small">Captive popup customers must copy/open the portal in Chrome or Safari before PayMongo checkout starts.</div>
+                      </div>
+                      <label className="form-check form-switch m-0">
+                        <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.browser_transfer_required !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), browser_transfer_required: event.target.checked })} />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <div className="col-md-3">
+                  <label className="form-label">Payment window timeout (seconds)</label>
+                  <input className="form-control" type="number" min="30" max="900" value={paymentAccessForm?.grant_timeout_seconds ?? 120} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), grant_timeout_seconds: Number(event.target.value) })} />
+                  <div className="text-muted small mt-1">Default 120 seconds. The Omada free-client entry is removed after this window.</div>
+                </div>
+                <div className="col-md-3">
+                  <label className="form-label">Daily checkout window limit</label>
+                  <input className="form-control" type="number" min="1" max="100" value={paymentAccessForm?.daily_attempt_limit ?? 5} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), daily_attempt_limit: Number(event.target.value) })} />
+                </div>
+                <div className="col-md-3">
+                  <label className="form-label">Attempt cooldown (seconds)</label>
+                  <input className="form-control" type="number" min="0" max="3600" value={paymentAccessForm?.cooldown_seconds ?? 60} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), cooldown_seconds: Number(event.target.value) })} />
+                </div>
+                <div className="col-md-3">
+                  <label className="form-label">Abuse block duration (hours)</label>
+                  <input className="form-control" type="number" min="1" max="168" value={paymentAccessForm?.abuse_block_hours ?? 24} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), abuse_block_hours: Number(event.target.value) })} />
+                </div>
+                <div className="col-md-6">
+                  <label className="form-check">
+                    <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.block_online_payment_on_abuse !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), block_online_payment_on_abuse: event.target.checked })} />
+                    <span className="form-check-label">Block online payment after daily limit is reached</span>
+                  </label>
+                </div>
+                <div className="col-12">
+                  <label className="form-label">Operator notes / guide</label>
+                  <textarea className="form-control" rows={3} value={paymentAccessForm?.notes || ''} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), notes: event.target.value })} />
+                </div>
+                <div className="col-12">
+                  <div className="alert alert-warning mb-0">
+                    This feature does not authorize free internet permanently. It only gives the device a short Omada Authentication-Free Client window so GCash/PayMongo can finish outside the captive popup.
+                  </div>
+                </div>
+                <div className="col-12 d-flex gap-2">
+                  <button className="btn btn-primary" disabled={busy === 'save-payment-access'}><IconDeviceFloppy size={18} className="me-2" />Save Payment Access Settings</button>
+                  <button className="btn" type="button" disabled={!!busy} onClick={() => refreshPaymentAccess().catch((err) => setError(err.message))}>Reload</button>
+                </div>
+              </div>
+            </form>
+          )}
         </Card>
       </div>}
 

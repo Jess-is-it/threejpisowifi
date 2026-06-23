@@ -327,6 +327,17 @@ class OmadaApiSettingsUpdate(BaseModel):
     remember_credentials: Optional[bool] = True
 
 
+class OmadaPaymentAuthFreeSettingsUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    browser_transfer_required: Optional[bool] = None
+    grant_timeout_seconds: Optional[int] = Field(default=None, ge=30, le=900)
+    daily_attempt_limit: Optional[int] = Field(default=None, ge=1, le=100)
+    cooldown_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
+    abuse_block_hours: Optional[int] = Field(default=None, ge=1, le=168)
+    block_online_payment_on_abuse: Optional[bool] = None
+    notes: Optional[str] = None
+
+
 class OmadaSiteSelect(BaseModel):
     site_id: str
     site_name: Optional[str] = None
@@ -5200,6 +5211,7 @@ def sync_paymongo_checkout_status(cur, order: dict, request: Request) -> dict:
 
     try:
         fulfillment = fulfill_paid_payment_order(cur, order, request)
+        finalize_omada_payment_auth_free_grants_for_order(cur, fulfillment.get("order") or order, final_status="REMOVED")
         return fulfillment.get("order") or order
     except Exception as exc:
         message = str(exc)
@@ -5913,6 +5925,523 @@ def omada_api_client_from_settings():
         # transient so stale database values cannot poison later API calls.
         controller_id=None,
     )
+
+
+DEFAULT_OMADA_PAYMENT_AUTH_FREE_SETTINGS = {
+    "enabled": True,
+    "browser_transfer_required": True,
+    "grant_timeout_seconds": 120,
+    "daily_attempt_limit": 5,
+    "cooldown_seconds": 60,
+    "abuse_block_hours": 24,
+    "block_online_payment_on_abuse": True,
+    "notes": "Temporarily places a client MAC in Omada Authentication-Free Client only while the customer completes PayMongo checkout in Chrome/Safari.",
+}
+
+
+def bounded_int(value, default: int, minimum: int, maximum: int) -> int:
+    try:
+        return max(minimum, min(int(value), maximum))
+    except (TypeError, ValueError):
+        return default
+
+
+def omada_payment_auth_free_store() -> dict:
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'omada_payment_auth_free'")
+    value = row["value"] if row and isinstance(row["value"], dict) else {}
+    store = {**DEFAULT_OMADA_PAYMENT_AUTH_FREE_SETTINGS, **value}
+    return {
+        "enabled": bool(store.get("enabled")),
+        "browser_transfer_required": bool(store.get("browser_transfer_required")),
+        "grant_timeout_seconds": bounded_int(store.get("grant_timeout_seconds"), 120, 30, 900),
+        "daily_attempt_limit": bounded_int(store.get("daily_attempt_limit"), 5, 1, 100),
+        "cooldown_seconds": bounded_int(store.get("cooldown_seconds"), 60, 0, 3600),
+        "abuse_block_hours": bounded_int(store.get("abuse_block_hours"), 24, 1, 168),
+        "block_online_payment_on_abuse": bool(store.get("block_online_payment_on_abuse")),
+        "notes": normalize_payment_text(store.get("notes"), 1000) or DEFAULT_OMADA_PAYMENT_AUTH_FREE_SETTINGS["notes"],
+    }
+
+
+def save_omada_payment_auth_free_store(store: dict):
+    clean = {
+        "enabled": bool(store.get("enabled")),
+        "browser_transfer_required": bool(store.get("browser_transfer_required")),
+        "grant_timeout_seconds": bounded_int(store.get("grant_timeout_seconds"), 120, 30, 900),
+        "daily_attempt_limit": bounded_int(store.get("daily_attempt_limit"), 5, 1, 100),
+        "cooldown_seconds": bounded_int(store.get("cooldown_seconds"), 60, 0, 3600),
+        "abuse_block_hours": bounded_int(store.get("abuse_block_hours"), 24, 1, 168),
+        "block_online_payment_on_abuse": bool(store.get("block_online_payment_on_abuse")),
+        "notes": normalize_payment_text(store.get("notes"), 1000) or DEFAULT_OMADA_PAYMENT_AUTH_FREE_SETTINGS["notes"],
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES ('omada_payment_auth_free', %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (Json(clean),),
+            )
+    return clean
+
+
+def public_omada_payment_auth_free_settings() -> dict:
+    store = omada_payment_auth_free_store()
+    return {
+        **store,
+        "grant_timeout_minutes": round(store["grant_timeout_seconds"] / 60, 2),
+        "cooldown_minutes": round(store["cooldown_seconds"] / 60, 2),
+    }
+
+
+def omada_payment_auth_free_public_grant(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return None
+    expires_at = aware_utc(row.get("expires_at"))
+    now = datetime.now(timezone.utc)
+    remaining_seconds = max(int((expires_at - now).total_seconds()), 0) if expires_at else 0
+    return {
+        "id": str(row["id"]),
+        "public_grant_id": row.get("public_grant_id"),
+        "payment_order_id": str(row["payment_order_id"]) if row.get("payment_order_id") else None,
+        "portal_session_id": str(row["portal_session_id"]) if row.get("portal_session_id") else None,
+        "user_id": str(row["user_id"]) if row.get("user_id") else None,
+        "site_id": row.get("site_id"),
+        "site_name": row.get("site_name"),
+        "client_mac": row.get("client_mac"),
+        "client_ip": str(row["client_ip"]) if row.get("client_ip") else None,
+        "profile_name": row.get("profile_name"),
+        "profile_contact_number": row.get("profile_contact_number"),
+        "status": row.get("status"),
+        "reason": row.get("reason"),
+        "remaining_seconds": remaining_seconds,
+        "granted_at": row.get("granted_at"),
+        "expires_at": row.get("expires_at"),
+        "removed_at": row.get("removed_at"),
+        "last_error": row.get("last_error"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def omada_payment_auth_free_identity(session: dict, user: Optional[dict] = None, profile: Optional[dict] = None, payload: Optional[PortalSessionRequest] = None, request: Optional[Request] = None) -> dict:
+    ctx = portal_context(payload) if payload else {}
+    client_mac = (
+        normalize_mac_if_valid(portal_effective_mac_from_session(session))
+        or normalize_mac_if_valid(ctx.get("client_mac"))
+    )
+    client_ip = host_ip(session.get("client_ip") or ctx.get("client_ip") or (public_ip(request) if request else None))
+    device_token_hash = session.get("device_token_hash") or (portal_device_token_hash(payload.device_token) if payload else None)
+    return {
+        "user_id": (user or {}).get("id") or session.get("user_id"),
+        "portal_session_id": session.get("id"),
+        "client_mac": client_mac,
+        "client_ip": client_ip,
+        "device_token_hash": device_token_hash,
+        "profile_name": normalize_payment_text((profile or {}).get("display_name") or (user or {}).get("full_name"), 120) or None,
+        "profile_contact_number": normalize_payment_text((profile or {}).get("contact_number") or (user or {}).get("phone_number"), 32) or None,
+    }
+
+
+def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, profile: Optional[dict], payload: PortalSessionRequest, request: Request) -> dict:
+    store = omada_payment_auth_free_store()
+    if not store.get("enabled") or not store.get("block_online_payment_on_abuse"):
+        return {"status": "OK", "attempts_today": 0, "limit": store["daily_attempt_limit"]}
+    identity = omada_payment_auth_free_identity(session, user, profile, payload, request)
+    clauses = []
+    params = []
+    if identity.get("user_id"):
+        clauses.append("user_id = %s")
+        params.append(identity["user_id"])
+    if identity.get("client_mac"):
+        clauses.append("client_mac = %s")
+        params.append(identity["client_mac"])
+    if identity.get("device_token_hash"):
+        clauses.append("device_token_hash = %s")
+        params.append(identity["device_token_hash"])
+    if not clauses:
+        return {"status": "OK", "attempts_today": 0, "limit": store["daily_attempt_limit"]}
+    where_clause = " OR ".join(clauses)
+    cur.execute(
+        f"""
+        SELECT *
+        FROM omada_payment_auth_free_abuse_blocks
+        WHERE block_until > now()
+          AND ({where_clause})
+        ORDER BY block_until DESC
+        LIMIT 1
+        """,
+        tuple(params),
+    )
+    active_block = cur.fetchone()
+    if active_block:
+        raise HTTPException(
+            status_code=429,
+            detail="Online payment access is temporarily blocked for this device/profile because too many checkout windows were started today. Try again later or ask the operator.",
+        )
+    if store["cooldown_seconds"] > 0:
+        cur.execute(
+            f"""
+            SELECT created_at
+            FROM omada_payment_auth_free_grants
+            WHERE ({where_clause})
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            tuple(params),
+        )
+        last_attempt = cur.fetchone()
+        last_created = aware_utc((last_attempt or {}).get("created_at"))
+        if last_created and (datetime.now(timezone.utc) - last_created).total_seconds() < store["cooldown_seconds"]:
+            remaining = max(int(store["cooldown_seconds"] - (datetime.now(timezone.utc) - last_created).total_seconds()), 1)
+            raise HTTPException(
+                status_code=429,
+                detail=f"Please wait {remaining} seconds before starting another online payment checkout.",
+            )
+    cur.execute(
+        f"""
+        SELECT count(*)::int AS attempts
+        FROM omada_payment_auth_free_grants
+        WHERE created_at >= date_trunc('day', now())
+          AND ({where_clause})
+        """,
+        tuple(params),
+    )
+    attempts_today = int((cur.fetchone() or {}).get("attempts") or 0)
+    if attempts_today < store["daily_attempt_limit"]:
+        return {"status": "OK", "attempts_today": attempts_today, "limit": store["daily_attempt_limit"]}
+    block_until = datetime.now(timezone.utc) + timedelta(hours=store["abuse_block_hours"])
+    cur.execute(
+        """
+        INSERT INTO omada_payment_auth_free_abuse_blocks(
+            user_id, portal_session_id, client_mac, device_token_hash, profile_name,
+            profile_contact_number, attempts_today, reason, block_until
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'DAILY_LIMIT', %s)
+        RETURNING *
+        """,
+        (
+            identity.get("user_id"),
+            identity.get("portal_session_id"),
+            identity.get("client_mac"),
+            identity.get("device_token_hash"),
+            identity.get("profile_name"),
+            identity.get("profile_contact_number"),
+            attempts_today,
+            block_until,
+        ),
+    )
+    cur.fetchone()
+    raise HTTPException(
+        status_code=429,
+        detail="Online payment access is temporarily blocked for this device/profile because too many checkout windows were started today. Try again later or ask the operator.",
+    )
+
+
+def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: dict, profile: Optional[dict], payload: PortalPaymentCheckoutRequest, request: Request) -> Optional[dict]:
+    store = omada_payment_auth_free_store()
+    if not store.get("enabled"):
+        return None
+    cleanup_expired_omada_payment_auth_free_grants(cur, limit=20)
+    identity = omada_payment_auth_free_identity(session, user, profile, payload, request)
+    site_row = site_deployment_for_portal_context(session, payload)
+    site_id = (
+        normalize_payment_text(session.get("omada_site_id"), 120)
+        or normalize_payment_text((site_row or {}).get("omada_site_id"), 120)
+    )
+    site_name = (
+        normalize_payment_text(session.get("omada_site_name") or session.get("site"), 160)
+        or normalize_payment_text((site_row or {}).get("site_name"), 160)
+    )
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=store["grant_timeout_seconds"])
+    public_grant_id = f"og_{secrets.token_urlsafe(16).replace('-', '').replace('_', '')[:24]}"
+    status = "PENDING"
+    last_error = None
+    if not site_id:
+        status = "GRANT_SKIPPED"
+        last_error = "Omada site could not be detected for this checkout."
+    elif not identity.get("client_mac"):
+        status = "GRANT_SKIPPED"
+        last_error = "Client MAC could not be detected for this checkout."
+    cur.execute(
+        """
+        INSERT INTO omada_payment_auth_free_grants(
+            public_grant_id, payment_order_id, portal_session_id, user_id, site_id, site_name,
+            client_mac, client_ip, device_token_hash, profile_name, profile_contact_number,
+            status, reason, expires_at, last_error
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, 'PAYMONGO_CHECKOUT', %s, %s)
+        RETURNING *
+        """,
+        (
+            public_grant_id,
+            order.get("id"),
+            session.get("id"),
+            identity.get("user_id"),
+            site_id,
+            site_name,
+            identity.get("client_mac"),
+            identity.get("client_ip") or "",
+            identity.get("device_token_hash"),
+            identity.get("profile_name"),
+            identity.get("profile_contact_number"),
+            status,
+            expires_at,
+            last_error,
+        ),
+    )
+    grant = cur.fetchone()
+    if status != "PENDING":
+        return grant
+    try:
+        _, client = omada_api_client_from_settings()
+        result = client.grant_auth_free_client(site_id, client_mac=identity.get("client_mac"), client_ip=identity.get("client_ip"))
+        cur.execute(
+            """
+            UPDATE omada_payment_auth_free_grants
+            SET status = 'ACTIVE',
+                granted_at = now(),
+                omada_request_summary = %s,
+                omada_response_summary = %s,
+                last_error = NULL,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (
+                Json({"site_id": site_id, "client_mac": identity.get("client_mac"), "client_ip": identity.get("client_ip")}),
+                Json(sanitize_summary(result)),
+                grant["id"],
+            ),
+        )
+        grant = cur.fetchone()
+    except Exception as exc:
+        cur.execute(
+            """
+            UPDATE omada_payment_auth_free_grants
+            SET status = 'FAILED',
+                last_error = %s,
+                omada_request_summary = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (
+                normalize_payment_text(str(exc), 1000),
+                Json({"site_id": site_id, "client_mac": identity.get("client_mac"), "client_ip": identity.get("client_ip")}),
+                grant["id"],
+            ),
+        )
+        grant = cur.fetchone()
+    return grant
+
+
+def remove_omada_payment_auth_free_grant(cur, grant: dict, final_status: str = "REMOVED") -> dict:
+    if not grant or grant.get("status") not in {"ACTIVE", "PENDING", "FAILED", "REMOVE_FAILED"}:
+        return grant
+    if grant.get("status") != "ACTIVE":
+        cur.execute(
+            """
+            UPDATE omada_payment_auth_free_grants
+            SET status = %s,
+                removed_at = now(),
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (final_status, grant["id"]),
+        )
+        return cur.fetchone()
+    try:
+        _, client = omada_api_client_from_settings()
+        result = client.remove_auth_free_client(grant.get("site_id"), client_mac=grant.get("client_mac"), client_ip=str(grant.get("client_ip") or ""))
+        cur.execute(
+            """
+            UPDATE omada_payment_auth_free_grants
+            SET status = %s,
+                removed_at = now(),
+                removal_response_summary = %s,
+                last_error = NULL,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (final_status, Json(sanitize_summary(result)), grant["id"]),
+        )
+        return cur.fetchone()
+    except Exception as exc:
+        cur.execute(
+            """
+            UPDATE omada_payment_auth_free_grants
+            SET status = 'REMOVE_FAILED',
+                last_error = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (normalize_payment_text(str(exc), 1000), grant["id"]),
+        )
+        return cur.fetchone()
+
+
+def cleanup_expired_omada_payment_auth_free_grants(cur, limit: int = 50) -> list[dict]:
+    cur.execute(
+        """
+        SELECT *
+        FROM omada_payment_auth_free_grants
+        WHERE status = 'ACTIVE'
+          AND expires_at <= now()
+        ORDER BY expires_at ASC
+        LIMIT %s
+        FOR UPDATE SKIP LOCKED
+        """,
+        (max(1, min(int(limit or 50), 200)),),
+    )
+    rows = cur.fetchall()
+    cleaned = []
+    for row in rows:
+        cleaned.append(remove_omada_payment_auth_free_grant(cur, row, final_status="EXPIRED"))
+    return cleaned
+
+
+def finalize_omada_payment_auth_free_grants_for_order(cur, order: dict, final_status: str = "REMOVED") -> list[dict]:
+    if not order or not order.get("id"):
+        return []
+    cur.execute(
+        """
+        SELECT *
+        FROM omada_payment_auth_free_grants
+        WHERE payment_order_id = %s
+          AND status IN ('PENDING', 'ACTIVE', 'FAILED', 'REMOVE_FAILED', 'GRANT_SKIPPED')
+        ORDER BY created_at DESC
+        FOR UPDATE
+        """,
+        (order["id"],),
+    )
+    rows = cur.fetchall()
+    finalized = []
+    for row in rows:
+        if row.get("status") == "GRANT_SKIPPED":
+            cur.execute(
+                """
+                UPDATE omada_payment_auth_free_grants
+                SET status = %s,
+                    removed_at = now(),
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (final_status, row["id"]),
+            )
+            finalized.append(cur.fetchone())
+        else:
+            finalized.append(remove_omada_payment_auth_free_grant(cur, row, final_status=final_status))
+    return finalized
+
+
+def omada_payment_auth_free_dashboard_payload(cur) -> dict:
+    cleanup_expired_omada_payment_auth_free_grants(cur, limit=50)
+    settings = public_omada_payment_auth_free_settings()
+    cur.execute(
+        """
+        SELECT
+          count(*) FILTER (WHERE status = 'ACTIVE' AND expires_at > now())::int AS active_count,
+          count(*) FILTER (WHERE created_at >= date_trunc('day', now()))::int AS grants_today,
+          count(*) FILTER (WHERE status IN ('FAILED', 'REMOVE_FAILED'))::int AS failed_count,
+          count(*) FILTER (WHERE status = 'GRANT_SKIPPED')::int AS skipped_count
+        FROM omada_payment_auth_free_grants
+        """
+    )
+    overview = cur.fetchone() or {}
+    cur.execute(
+        """
+        SELECT *
+        FROM omada_payment_auth_free_grants
+        WHERE status = 'ACTIVE' AND expires_at > now()
+        ORDER BY expires_at ASC
+        LIMIT 100
+        """
+    )
+    active_grants = [omada_payment_auth_free_public_grant(row) for row in cur.fetchall()]
+    cur.execute(
+        """
+        SELECT *
+        FROM omada_payment_auth_free_grants
+        ORDER BY created_at DESC
+        LIMIT 100
+        """
+    )
+    recent_grants = [omada_payment_auth_free_public_grant(row) for row in cur.fetchall()]
+    cur.execute(
+        """
+        SELECT
+          COALESCE(profile_name, 'Unprofiled device') AS profile_name,
+          profile_contact_number,
+          client_mac,
+          device_token_hash,
+          user_id,
+          count(*)::int AS attempts_today,
+          max(created_at) AS last_attempt_at
+        FROM omada_payment_auth_free_grants
+        WHERE created_at >= date_trunc('day', now())
+        GROUP BY COALESCE(profile_name, 'Unprofiled device'), profile_contact_number, client_mac, device_token_hash, user_id
+        HAVING count(*) >= %s
+        ORDER BY attempts_today DESC, last_attempt_at DESC
+        LIMIT 100
+        """,
+        (settings["daily_attempt_limit"],),
+    )
+    abuse_rows = [
+        {
+            "profile_name": row.get("profile_name"),
+            "profile_contact_number": row.get("profile_contact_number"),
+            "client_mac": row.get("client_mac"),
+            "device_token_hash": row.get("device_token_hash"),
+            "user_id": str(row["user_id"]) if row.get("user_id") else None,
+            "attempts_today": int(row.get("attempts_today") or 0),
+            "last_attempt_at": row.get("last_attempt_at"),
+        }
+        for row in cur.fetchall()
+    ]
+    cur.execute(
+        """
+        SELECT *
+        FROM omada_payment_auth_free_abuse_blocks
+        WHERE block_until > now()
+        ORDER BY block_until DESC
+        LIMIT 100
+        """
+    )
+    active_blocks = [
+        {
+            "id": str(row["id"]),
+            "user_id": str(row["user_id"]) if row.get("user_id") else None,
+            "portal_session_id": str(row["portal_session_id"]) if row.get("portal_session_id") else None,
+            "client_mac": row.get("client_mac"),
+            "profile_name": row.get("profile_name"),
+            "profile_contact_number": row.get("profile_contact_number"),
+            "attempts_today": int(row.get("attempts_today") or 0),
+            "reason": row.get("reason"),
+            "block_until": row.get("block_until"),
+            "created_at": row.get("created_at"),
+        }
+        for row in cur.fetchall()
+    ]
+    overview["active_blocks"] = len(active_blocks)
+    return {
+        "settings": settings,
+        "overview": {key: int(value or 0) for key, value in overview.items()},
+        "active_grants": active_grants,
+        "recent_grants": recent_grants,
+        "abuse_profiles": abuse_rows,
+        "active_blocks": active_blocks,
+        "guide": {
+            "summary": "When a customer starts PayMongo checkout from a real browser, the system can place that client MAC in Omada Authentication-Free Client for a short time.",
+            "cleanup": "The entry is removed when payment succeeds, payment is cancelled, or the timeout expires.",
+            "abuse": "The daily limit prevents customers from repeatedly opening free payment windows without paying.",
+        },
+    }
 
 
 def log_omada_automation(admin_id, action: str, status: str, request_summary: dict = None, response_summary: dict = None, error_message: str = None):
@@ -12770,6 +13299,7 @@ def public_captive_portal_settings(row=None):
     profile_gift = portal_profile_gift_settings(row)
     welcome_sms_message = strip_sms_url_schemes(row.get("portal_welcome_sms_message") or "Welcome to 3J WiFi, <USER>! For a better experience, open net.3jhotspot.com in Google Chrome when checking your time, buying WiFi, or managing your profile.")
     store_owner_activation_sms_message = strip_sms_url_schemes(row.get("store_owner_activation_sms_message") or "Welcome to 3J Hotspot, <OWNER>! Your store <STORE> is now active. Store portal: <STORE_PORTAL_URL> Username: <USERNAME> Temporary password: <TEMP_PASSWORD>. Please change your password after login.")
+    payment_handoff = omada_payment_auth_free_store()
     return {
         "id": row["id"],
         "portal_mode": row["portal_mode"],
@@ -12833,6 +13363,11 @@ def public_captive_portal_settings(row=None):
             "expired_message": row.get("portal_expired_notification_message") or "Your WiFi pass time is fully consumed. Buy another package or claim a voucher to continue.",
             "reconnect_enabled": bool(row.get("portal_reconnect_notification_enabled")),
             "reconnect_message": row.get("portal_reconnect_notification_message") or "Your WiFi session was restored. Remaining time: <TIME>.",
+        },
+        "payment_browser_handoff": {
+            "enabled": bool(payment_handoff.get("browser_transfer_required")),
+            "auth_free_enabled": bool(payment_handoff.get("enabled")),
+            "auth_free_timeout_seconds": int(payment_handoff.get("grant_timeout_seconds") or 120),
         },
         "portal_welcome_sms": {
             "enabled": bool(row.get("portal_welcome_sms_enabled", True)),
@@ -14120,6 +14655,7 @@ def portal_settings():
         "outside_network_purchase_success_message": portal_settings_row.get("outside_network_purchase_success_message"),
         "bag_auto_activate_default": portal_settings_row.get("bag_auto_activate_default"),
         "bag_activation_overlap_seconds": portal_settings_row.get("bag_activation_overlap_seconds"),
+        "payment_browser_handoff": portal_settings_row.get("payment_browser_handoff", {}),
         "custom_html": "",
         "custom_css": "",
         "product_items": product_items,
@@ -16276,6 +16812,8 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
             enforce_portal_device_not_blocked(cur, session, payload, request, "PAYMENT_CHECKOUT")
             user = ensure_portal_user(cur, session)
             profile = portal_profile_for_user(cur, user["id"])
+            cleanup_expired_omada_payment_auth_free_grants(cur, limit=20)
+            enforce_omada_payment_auth_free_abuse_limit(cur, session, user, profile, payload, request)
             network_presence = portal_network_presence(session, request, payload)
             outside_network_purchase = (
                 bool(payload.outside_network_purchase)
@@ -16439,6 +16977,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     (checkout_session_id, checkout_url, Json(sanitize_summary(checkout)), order["id"]),
                 )
                 order = cur.fetchone()
+                auth_free_grant = create_omada_payment_auth_free_grant(cur, order, session, user, profile, payload, request)
                 create_portal_event(cur, session["id"], "PAYMENT_CHECKOUT_CREATED", request, "PayMongo checkout created", raw_context={"payment_order_id": public_order_id, "product_item_id": str(product["id"]), "method": method, "category": product.get("category_name"), "current_barangay": current_barangay})
                 response_payload = {
                     "status": "CHECKOUT_CREATED",
@@ -16464,6 +17003,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     "product_category_barangay": order.get("product_category_barangay"),
                     "outside_network_purchase": bool(order.get("outside_network_purchase")),
                     "portal_session_id": session["public_session_id"],
+                    "payment_access_grant": omada_payment_auth_free_public_grant(auth_free_grant),
                 }
             except HTTPException as exc:
                 checkout_error = exc
@@ -16489,6 +17029,7 @@ def portal_payment_status(public_order_id: str, request: Request, response: Resp
     normalized_order_id = normalize_payment_text(public_order_id, 120)
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cleanup_expired_omada_payment_auth_free_grants(cur, limit=20)
             cur.execute("SELECT * FROM payment_orders WHERE public_order_id = %s FOR UPDATE", (normalized_order_id,))
             order = cur.fetchone()
             if order and order.get("portal_session_id"):
@@ -16580,6 +17121,7 @@ def cancel_portal_payment(public_order_id: str, payload: PortalPaymentCancelRequ
                         "PayMongo checkout cancelled by customer.",
                         raw_context={"payment_order_id": order["public_order_id"]},
                     )
+                finalize_omada_payment_auth_free_grants_for_order(cur, order, final_status="CANCELLED")
             order["_bag_item"] = customer_bag_item_for_payment(cur, order["id"])
     return {**payment_order_status_payload(order), "message": "Payment checkout cancelled."}
 
@@ -16791,9 +17333,12 @@ def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
                             last_error = %s,
                             updated_at = now()
                         WHERE id = %s
+                        RETURNING *
                         """,
                         (provider_payment_id, event_id, Json(sanitize_summary(payload)), error_message, order["id"]),
                     )
+                    order = cur.fetchone()
+                    finalize_omada_payment_auth_free_grants_for_order(cur, order, final_status="CANCELLED")
                     if order.get("portal_session_id"):
                         create_portal_event(cur, order["portal_session_id"], "PAYMENT_FAILED", request, error_message, raw_context={"payment_order_id": order["public_order_id"], "event_type": event_type, "failure_code": paymongo_failure_code(payload)})
                     processing_status = "PROCESSED"
@@ -39114,6 +39659,24 @@ def omada_backup(admin=Depends(current_admin)):
 @app.get("/api/omada/logs")
 def omada_logs(admin=Depends(current_admin)):
     return fetch_all("SELECT id, action, status, progress_percent, current_step, output_text, created_at, completed_at FROM omada_install_logs ORDER BY created_at DESC LIMIT 50")
+
+
+@app.get("/api/omada/payment-auth-free")
+def get_omada_payment_auth_free(admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            return omada_payment_auth_free_dashboard_payload(cur)
+
+
+@app.put("/api/omada/payment-auth-free/settings")
+def save_omada_payment_auth_free_settings(payload: OmadaPaymentAuthFreeSettingsUpdate, admin=Depends(current_admin)):
+    current = omada_payment_auth_free_store()
+    updates = {key: value for key, value in payload.model_dump(exclude_none=True).items()}
+    saved = save_omada_payment_auth_free_store({**current, **updates})
+    audit(admin["id"], "save_omada_payment_auth_free_settings", "omada_controller", "payment_auth_free", saved)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            return omada_payment_auth_free_dashboard_payload(cur)
 
 
 @app.get("/api/omada/api-settings")

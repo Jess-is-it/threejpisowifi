@@ -101,6 +101,13 @@ def omada_mac_variants(mac: Optional[str]) -> list[str]:
     return variants
 
 
+def normalize_omada_mac(mac: Optional[str]) -> Optional[str]:
+    clean = re.sub(r"[^A-Fa-f0-9]", "", str(mac or ""))
+    if len(clean) != 12:
+        return None
+    return ":".join(clean[i:i + 2] for i in range(0, 12, 2)).upper()
+
+
 @dataclass
 class OmadaLoginResult:
     controller_id: Optional[str]
@@ -1733,6 +1740,122 @@ class OmadaApiClient:
             "pre_auth_policy_count": len(policies),
             "response_summary": patch_summary,
             "read_summary": read_summary,
+            "result": data.get("result") if isinstance(data, dict) else data,
+        }
+
+    def get_access_control(self, site_id: str) -> dict:
+        self.login()
+        if not self.controller_id:
+            self.discover_controller_id()
+        if not self.controller_id:
+            raise OmadaApiError("Omada controller ID could not be detected.")
+        access_path = f"/{self.controller_id}/api/v2/sites/{site_id}/setting/accessControl"
+        current_body, read_summary = self._get_json_candidates([access_path], timeout=20)
+        current = current_body.get("result") if isinstance(current_body, dict) else {}
+        if not isinstance(current, dict):
+            current = {}
+        return {"access_control": current, "response_summary": read_summary}
+
+    def grant_auth_free_client(self, site_id: str, client_mac: Optional[str] = None, client_ip: Optional[str] = None) -> dict:
+        self.login()
+        if not self.controller_id:
+            self.discover_controller_id()
+        if not self.controller_id:
+            raise OmadaApiError("Omada controller ID could not be detected.")
+
+        normalized_mac = normalize_omada_mac(client_mac)
+        clean_ip = str(client_ip or "").strip()
+        if not normalized_mac and not clean_ip:
+            raise OmadaApiError("Client MAC or IP is required for Omada Authentication-Free Client.")
+
+        access_path = f"/{self.controller_id}/api/v2/sites/{site_id}/setting/accessControl"
+        current_body, read_summary = self._get_json_candidates([access_path], timeout=20)
+        current = current_body.get("result") if isinstance(current_body, dict) else {}
+        if not isinstance(current, dict):
+            current = {}
+
+        policies = [item for item in list(current.get("freeAuthClientPolicies") or []) if isinstance(item, dict)]
+        existing = False
+        for item in policies:
+            policy_type = int(item.get("type") or 0)
+            if normalized_mac and policy_type == 4 and normalize_omada_mac(item.get("clientMac")) == normalized_mac:
+                existing = True
+                break
+            if clean_ip and policy_type == 3 and str(item.get("clientIp") or "").strip() == clean_ip:
+                existing = True
+                break
+        if not existing:
+            if normalized_mac:
+                policies.append({"type": 4, "clientMac": normalized_mac})
+            else:
+                policies.append({"type": 3, "clientIp": clean_ip})
+
+        payload = {
+            "preAuthAccessEnable": bool(current.get("preAuthAccessEnable")),
+            "preAuthAccessPolicies": current.get("preAuthAccessPolicies") or [],
+            "freeAuthClientEnable": True,
+            "freeAuthClientPolicies": policies,
+        }
+        response, patch_summary = self._patch_json_candidates([access_path], payload, timeout=25)
+        data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        return {
+            "site_id": site_id,
+            "client_mac": normalized_mac,
+            "client_ip": clean_ip or None,
+            "created": not existing,
+            "free_auth_policy_count": len(policies),
+            "read_summary": read_summary,
+            "response_summary": patch_summary,
+            "result": data.get("result") if isinstance(data, dict) else data,
+        }
+
+    def remove_auth_free_client(self, site_id: str, client_mac: Optional[str] = None, client_ip: Optional[str] = None) -> dict:
+        self.login()
+        if not self.controller_id:
+            self.discover_controller_id()
+        if not self.controller_id:
+            raise OmadaApiError("Omada controller ID could not be detected.")
+
+        normalized_mac = normalize_omada_mac(client_mac)
+        clean_ip = str(client_ip or "").strip()
+        if not normalized_mac and not clean_ip:
+            raise OmadaApiError("Client MAC or IP is required to remove an Omada Authentication-Free Client.")
+
+        access_path = f"/{self.controller_id}/api/v2/sites/{site_id}/setting/accessControl"
+        current_body, read_summary = self._get_json_candidates([access_path], timeout=20)
+        current = current_body.get("result") if isinstance(current_body, dict) else {}
+        if not isinstance(current, dict):
+            current = {}
+
+        policies = [item for item in list(current.get("freeAuthClientPolicies") or []) if isinstance(item, dict)]
+        remaining = []
+        removed = []
+        for item in policies:
+            policy_type = int(item.get("type") or 0)
+            mac_match = normalized_mac and policy_type == 4 and normalize_omada_mac(item.get("clientMac")) == normalized_mac
+            ip_match = clean_ip and policy_type == 3 and str(item.get("clientIp") or "").strip() == clean_ip
+            if mac_match or ip_match:
+                removed.append(item)
+            else:
+                remaining.append(item)
+
+        payload = {
+            "preAuthAccessEnable": bool(current.get("preAuthAccessEnable")),
+            "preAuthAccessPolicies": current.get("preAuthAccessPolicies") or [],
+            "freeAuthClientEnable": bool(remaining),
+            "freeAuthClientPolicies": remaining,
+        }
+        response, patch_summary = self._patch_json_candidates([access_path], payload, timeout=25)
+        data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        return {
+            "site_id": site_id,
+            "client_mac": normalized_mac,
+            "client_ip": clean_ip or None,
+            "removed": bool(removed),
+            "removed_count": len(removed),
+            "free_auth_policy_count": len(remaining),
+            "read_summary": read_summary,
+            "response_summary": patch_summary,
             "result": data.get("result") if isinstance(data, dict) else data,
         }
 
