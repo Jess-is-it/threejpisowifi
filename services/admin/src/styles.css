@@ -4610,6 +4610,51 @@ body.modal-open {
   flex: 0 0 auto;
 }
 
+.portal-browser-brand-avatar {
+  align-items: center;
+  background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.1) !important;
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+}
+
+.portal-browser-brand-avatar svg,
+.portal-chrome-reminder-icon svg,
+.portal-ios-safari-reminder-icon svg {
+  display: block;
+}
+
+.portal-browser-copy-inline,
+.portal-browser-modal-footer .btn {
+  align-items: center;
+  display: inline-flex;
+  font-weight: 800;
+  gap: 0.42rem;
+  justify-content: center;
+}
+
+.portal-browser-copy-inline,
+.portal-browser-modal-secondary {
+  background: rgba(98, 105, 118, 0.08);
+  border-color: rgba(98, 105, 118, 0.18);
+  color: #374151;
+}
+
+.portal-browser-copy-inline:hover,
+.portal-browser-copy-inline:focus-visible,
+.portal-browser-modal-secondary:hover,
+.portal-browser-modal-secondary:focus-visible {
+  background: rgba(98, 105, 118, 0.14);
+  border-color: rgba(98, 105, 118, 0.28);
+  color: #111827;
+}
+
+.portal-browser-modal-primary {
+  background: var(--portal-brand-color, #066fd1) !important;
+  border-color: var(--portal-brand-color, #066fd1) !important;
+  color: #ffffff !important;
+}
+
 .portal-payment-handoff-summary {
   background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.08);
   border: 1px solid rgba(var(--portal-brand-rgb, 6, 111, 209), 0.16);
@@ -4700,6 +4745,30 @@ body.modal-open {
   background: rgba(245, 158, 11, 0.12);
   border-color: rgba(245, 158, 11, 0.22);
   color: #fde68a;
+}
+
+.portal-profile-modal-content.is-dark .portal-browser-copy-inline,
+.portal-profile-modal-content.is-dark .portal-browser-modal-secondary {
+  background: rgba(15, 23, 42, 0.62) !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  color: #dbe7f5;
+}
+
+.portal-profile-modal-content.is-dark .portal-browser-copy-inline:hover,
+.portal-profile-modal-content.is-dark .portal-browser-copy-inline:focus-visible,
+.portal-profile-modal-content.is-dark .portal-browser-modal-secondary:hover,
+.portal-profile-modal-content.is-dark .portal-browser-modal-secondary:focus-visible {
+  background: rgba(30, 41, 59, 0.88) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  color: #ffffff;
+}
+
+.portal-profile-modal-content.is-dark .portal-browser-modal-primary {
+  box-shadow: 0 0.65rem 1.35rem rgba(var(--portal-brand-rgb, 6, 111, 209), 0.25);
+}
+
+.portal-profile-modal-content.is-dark .portal-browser-brand-avatar {
+  background: rgba(255, 255, 255, 0.1) !important;
 }
 
 .portal-profile-modal-content.is-dark .portal-payment-copy-status {
@@ -5160,6 +5229,233 @@ body.modal-open {
   border: 1px solid rgba(98, 105, 118, 0.14);
   border-radius: 10px;
   padding: 0.85rem;
+}
+
+.product-category-assignment-grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin-top: 0.85rem;
+}
+
+.product-category-assignment-column {
+  background: #f8fafc;
+  border: 1px solid rgba(98, 105, 118, 0.14);
+  border-radius: 10px;
+  min-width: 0;
+  padding: 0.75rem;
+}
+
+.product-category-assignment-column.is-selected {
+  background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.035);
+  border-color: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.18);
+}
+
+.product-category-assignment-column-head {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  margin-bottom: 0.65rem;
+}
+
+.product-category-assignment-list {
+  display: grid;
+  gap: 0.55rem;
+  max-height: 24rem;
+  min-height: 9rem;
+  overflow: auto;
+  padding-right: 0.15rem;
+}
+
+.product-category-assignment-list.is-sorting {
+  cursor: grabbing;
+}
+
+.product-category-assignment-card {
+  align-items: center;
+  background: #ffffff;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 10px;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  gap: 0.6rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-width: 0;
+  padding: 0.7rem;
+  text-align: left;
+  transition: border-color 140ms ease, box-shadow 140ms ease, opacity 140ms ease, transform 140ms ease;
+  width: 100%;
+}
+
+.product-category-assignment-card:hover,
+.product-category-assignment-card:focus-visible {
+  border-color: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.36);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+  outline: 0;
+}
+
+.product-category-assignment-card.is-selected {
+  cursor: grab;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding-left: 2.15rem;
+  position: relative;
+}
+
+.product-category-assignment-card.is-selected:active {
+  cursor: grabbing;
+}
+
+.product-category-assignment-card.is-dragging {
+  border-color: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.35);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+  opacity: 0.58;
+  transform: scale(0.985);
+}
+
+.product-category-assignment-card.is-drop-before::before,
+.product-category-assignment-card.is-drop-after::before {
+  background: var(--tblr-primary, #206bc4);
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.12);
+  content: "";
+  height: 3px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  z-index: 3;
+}
+
+.product-category-assignment-card.is-drop-before::after,
+.product-category-assignment-card.is-drop-after::after {
+  background: #ffffff;
+  border: 3px solid var(--tblr-primary, #206bc4);
+  border-radius: 999px;
+  content: "";
+  height: 0.75rem;
+  left: -0.1rem;
+  position: absolute;
+  width: 0.75rem;
+  z-index: 4;
+}
+
+.product-category-assignment-card.is-drop-before::before {
+  top: -0.37rem;
+}
+
+.product-category-assignment-card.is-drop-before::after {
+  top: -0.68rem;
+}
+
+.product-category-assignment-card.is-drop-after::before {
+  bottom: -0.37rem;
+}
+
+.product-category-assignment-card.is-drop-after::after {
+  bottom: -0.68rem;
+}
+
+.product-category-assignment-card-main {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.product-category-assignment-card-main strong {
+  min-width: 0;
+}
+
+.product-category-assignment-card-main small {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.product-category-assignment-action,
+.product-category-assignment-drag {
+  align-items: center;
+  border-radius: 8px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  justify-content: center;
+}
+
+.product-category-assignment-action {
+  background: #eef2f7;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  color: #475569;
+  height: 2rem;
+  padding: 0;
+  width: 2rem;
+}
+
+button.product-category-assignment-action:hover,
+button.product-category-assignment-action:focus-visible,
+.product-category-assignment-card:hover .product-category-assignment-action,
+.product-category-assignment-card:focus-visible .product-category-assignment-action {
+  background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.08);
+  border-color: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.24);
+  color: var(--tblr-primary, #206bc4);
+  outline: 0;
+}
+
+.product-category-assignment-drag {
+  background: transparent;
+  border: 0;
+  color: #94a3b8;
+  cursor: grab;
+  height: 1.35rem;
+  left: 0.5rem;
+  position: absolute;
+  top: 0.5rem;
+  width: 1.35rem;
+}
+
+.product-category-assignment-card.is-selected:hover .product-category-assignment-drag,
+.product-category-assignment-card.is-selected:focus-visible .product-category-assignment-drag,
+.product-category-assignment-card.is-selected.is-dragging .product-category-assignment-drag {
+  color: var(--tblr-primary, #206bc4);
+}
+
+.product-category-selected-header-icon {
+  align-items: center;
+  background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.1);
+  border: 1px solid rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.18);
+  border-radius: 999px;
+  color: var(--tblr-primary, #206bc4);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 1.65rem;
+  justify-content: center;
+  width: 1.65rem;
+}
+
+.product-category-assignment-empty {
+  align-items: center;
+  border: 1px dashed rgba(98, 105, 118, 0.24);
+  border-radius: 10px;
+  color: #64748b;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  justify-content: center;
+  min-height: 8rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+@media (max-width: 767.98px) {
+  .product-category-assignment-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .product-category-assignment-list {
+    max-height: 18rem;
+  }
+
+  .product-category-assignment-card.is-selected {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
 }
 
 .product-item-modal-body {
@@ -7887,6 +8183,40 @@ body.modal-open {
   outline: 0;
 }
 
+.portal-login-placeholder-separator {
+  background: rgba(98, 105, 118, 0.18);
+  height: 1px;
+  margin: 0.2rem 0;
+}
+
+.portal-login-placeholder-card {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px dashed rgba(98, 105, 118, 0.24);
+  border-radius: 0.9rem;
+  color: #344054;
+  display: flex;
+  gap: 0.8rem;
+  opacity: 0.86;
+  padding: 0.9rem;
+  text-align: left;
+}
+
+.portal-login-placeholder-card strong {
+  color: #172033;
+  display: block;
+  font-weight: 850;
+  line-height: 1.15;
+}
+
+.portal-login-placeholder-card small {
+  color: #667085;
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  margin-top: 0.2rem;
+}
+
 .portal-choice-icon {
   align-items: center;
   background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.1);
@@ -7989,10 +8319,15 @@ body.modal-open {
 
 .portal-tabler-page.is-dark .portal-choice-card,
 .portal-tabler-page.is-dark .portal-store-placeholder,
+.portal-tabler-page.is-dark .portal-login-placeholder-card,
 .portal-tabler-page.is-dark .portal-payment-method-pill {
   background: #1f2a3d;
   border-color: rgba(255, 255, 255, 0.12);
   color: #dbe7f5;
+}
+
+.portal-tabler-page.is-dark .portal-login-placeholder-separator {
+  background: rgba(255, 255, 255, 0.14);
 }
 
 .portal-tabler-page.is-dark .portal-purchase-breadcrumbs button {
@@ -8046,12 +8381,14 @@ body.modal-open {
 }
 
 .portal-tabler-page.is-dark .portal-choice-card strong,
-.portal-tabler-page.is-dark .portal-store-placeholder strong {
+.portal-tabler-page.is-dark .portal-store-placeholder strong,
+.portal-tabler-page.is-dark .portal-login-placeholder-card strong {
   color: #f8fafc;
 }
 
 .portal-tabler-page.is-dark .portal-choice-card small,
-.portal-tabler-page.is-dark .portal-store-placeholder p {
+.portal-tabler-page.is-dark .portal-store-placeholder p,
+.portal-tabler-page.is-dark .portal-login-placeholder-card small {
   color: #9caec5;
 }
 
@@ -10548,8 +10885,34 @@ button.portal-bag-control-card {
   text-align: left;
 }
 
-.portal-ios-safari-reminder > div {
+.portal-ios-safari-reminder.is-clickable,
+.portal-chrome-reminder.is-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.portal-ios-safari-reminder.is-clickable:hover,
+.portal-ios-safari-reminder.is-clickable:focus-visible,
+.portal-chrome-reminder.is-clickable:hover,
+.portal-chrome-reminder.is-clickable:focus-visible {
+  border-color: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.3);
+  box-shadow: 0 0 0 0.18rem rgba(var(--portal-brand-rgb, 6, 111, 209), 0.08);
+  outline: none;
+}
+
+.portal-ios-safari-reminder > div,
+.portal-browser-reminder-content {
   flex: 1 1 auto;
+  min-width: 0;
+}
+
+.portal-browser-copy-hint {
+  color: inherit;
+  font-weight: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  white-space: nowrap;
 }
 
 .portal-ios-safari-reminder-icon {
@@ -10656,6 +11019,10 @@ button.portal-bag-control-card {
 
 .portal-tabler-page.is-dark .portal-ios-safari-reminder small {
   color: rgba(255, 255, 255, 0.68);
+}
+
+.portal-tabler-page.is-dark .portal-browser-copy-hint {
+  color: inherit;
 }
 
 .portal-tabler-page.is-dark .portal-chrome-reminder-icon {
@@ -12031,6 +12398,9 @@ button.portal-bag-control-card {
   position: fixed;
   right: 1rem;
   top: 1rem;
+  touch-action: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  will-change: opacity, transform;
   z-index: 2600;
 }
 
@@ -12041,6 +12411,21 @@ button.portal-bag-control-card {
 .app-tabler-toast {
   min-width: min(360px, calc(100vw - 2rem));
   box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  touch-action: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  will-change: opacity, transform;
+}
+
+.toast-swipe-target {
+  touch-action: none;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  will-change: opacity, transform;
+}
+
+.store-owner-toast.is-swiping,
+.app-tabler-toast.is-swiping,
+.toast-swipe-target.is-swiping {
+  transition: none;
 }
 
 .app-tabler-toast-success {

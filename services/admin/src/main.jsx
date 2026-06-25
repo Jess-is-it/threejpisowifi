@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import '@tabler/core/dist/css/tabler.min.css';
+import { Icon as IconifyIcon } from '@iconify/react';
+import chromeIcon from '@iconify-icons/logos/chrome';
+import safariIcon from '@iconify-icons/logos/safari';
 import ApexCharts from 'apexcharts';
 import QRCode from 'qrcode';
 import {
@@ -119,6 +122,17 @@ function isIosWebKitTouchBrowser() {
     || (platform === 'MacIntel' && Number(navigator.maxTouchPoints || 0) > 1);
 }
 
+function isAndroidDevice() {
+  if (typeof navigator === 'undefined') return false;
+  return /Android/i.test(navigator.userAgent || '');
+}
+
+function BrowserBrandIcon({ browser = 'Google Chrome', size = 20, className = '' }) {
+  const normalized = String(browser || '').toLowerCase();
+  const icon = normalized.includes('safari') && !normalized.includes('chrome') ? safariIcon : chromeIcon;
+  return <IconifyIcon icon={icon} width={size} height={size} className={className} aria-hidden="true" />;
+}
+
 function usePortalSingleTapFix() {
   return {};
   const stateRef = useRef({
@@ -200,6 +214,74 @@ function usePortalSingleTapFix() {
       state.suppressY = Number.NaN;
       state.suppressUntil = 0;
     },
+  };
+}
+
+function useToastSwipeDismiss(onDismiss, options = {}) {
+  const enabled = options.enabled !== false;
+  const dismissRef = useRef(onDismiss);
+  const startRef = useRef(null);
+  const dragRef = useRef({ x: 0, y: 0 });
+  const [drag, setDrag] = useState({ active: false, x: 0, y: 0 });
+
+  useEffect(() => {
+    dismissRef.current = onDismiss;
+  }, [onDismiss]);
+
+  function canSwipeToast() {
+    if (!enabled || typeof window === 'undefined' || typeof dismissRef.current !== 'function') return false;
+    return isAndroidDevice()
+      || isIosWebKitTouchBrowser()
+      || window.matchMedia?.('(hover: none) and (pointer: coarse)')?.matches;
+  }
+
+  function resetSwipe() {
+    startRef.current = null;
+    dragRef.current = { x: 0, y: 0 };
+    setDrag({ active: false, x: 0, y: 0 });
+  }
+
+  const handlers = {
+    onTouchStart(event) {
+      if (!canSwipeToast() || !event.touches?.length) return;
+      const touch = event.touches[0];
+      startRef.current = { x: touch.clientX, y: touch.clientY };
+      dragRef.current = { x: 0, y: 0 };
+      setDrag({ active: true, x: 0, y: 0 });
+    },
+    onTouchMove(event) {
+      if (!startRef.current || !event.touches?.length) return;
+      const touch = event.touches[0];
+      const rawX = touch.clientX - startRef.current.x;
+      const rawY = touch.clientY - startRef.current.y;
+      const x = Math.max(0, rawX);
+      const y = Math.min(0, rawY);
+      if (x <= 0 && y >= 0) return;
+      dragRef.current = { x, y };
+      setDrag({ active: true, x, y });
+    },
+    onTouchEnd() {
+      const { x, y } = dragRef.current || {};
+      if (x >= 72 || y <= -56) {
+        dismissRef.current?.();
+        resetSwipe();
+        return;
+      }
+      resetSwipe();
+    },
+    onTouchCancel: resetSwipe,
+  };
+
+  const distance = Math.max(drag.x, Math.abs(drag.y));
+  return {
+    handlers,
+    className: drag.active ? 'is-swiping' : '',
+    style: drag.active
+      ? {
+        opacity: Math.max(0.35, 1 - (distance / 180)),
+        transform: `translate3d(${drag.x}px, ${drag.y}px, 0)`,
+      }
+      : undefined,
   };
 }
 
@@ -837,6 +919,8 @@ const routePages = {
   'store-map': 'Store Map',
   sales: 'Sales',
   paymongo: 'PayMongo',
+  'payment-access': 'Payment Access',
+  'omada/payment-access': 'Payment Access',
   iptv: 'IPTV',
   'iptv-integration': 'IPTV',
   'captive-portal': 'Captive Portal',
@@ -871,6 +955,7 @@ function routeForPage(page) {
   if (page === 'Store Map') return '/admin/physical-stores/store-map';
   if (page === 'IPTV') return '/admin/iptv';
   if (page === 'PayMongo') return '/admin/paymongo';
+  if (page === 'Payment Access') return '/admin/payment-access';
   if (page === 'Online Store' || page === 'Product Items') return '/admin/online-store';
   return `/admin/${slugify(page)}`;
 }
@@ -1525,6 +1610,7 @@ function PortalAvatarHeroView({
 
 const STORE_MAP_RETURN_MAX_AGE_MS = 5000;
 const STORE_OWNER_REQUEST_POLL_MS = 3000;
+const PORTAL_PRODUCT_REFRESH_MIN_MS = 8000;
 
 function shouldRestoreStorePaymentFromMap(params = new URLSearchParams(window.location.search)) {
   if (params.get('purchase_channel') !== 'STORE') return false;
@@ -2405,6 +2491,8 @@ function PortalApp() {
   const checkoutCopyMessageTimerRef = useRef(null);
   const portalStateSyncInFlightRef = useRef(false);
   const lastPortalStateSyncAtRef = useRef(0);
+  const portalProductRefreshInFlightRef = useRef(false);
+  const lastPortalProductRefreshAtRef = useRef(0);
   const handledStoreApprovalRef = useRef(new Set());
   const storeRequestStatusRef = useRef(new Map());
   const storePendingRequestsRef = useRef([]);
@@ -2916,12 +3004,13 @@ function PortalApp() {
 
   function preferredOnlinePaymentBrowser() {
     if (isIosWebKitTouchBrowser()) return 'Safari';
-    if (/Android/i.test(navigator.userAgent || '')) return 'Google Chrome';
+    if (isAndroidDevice()) return 'Google Chrome';
     return 'Google Chrome or Safari';
   }
 
-  async function copyPortalBrowserTransferLink() {
+  async function copyPortalBrowserTransferLink(options = {}) {
     const url = portalBrowserTransferUrl();
+    const browserName = preferredOnlinePaymentBrowser();
     let copied = false;
     try {
       if (navigator.clipboard?.writeText && window.isSecureContext) {
@@ -2933,17 +3022,19 @@ function PortalApp() {
     }
     if (!copied) copied = fallbackCopyText(url);
     const message = copied
-      ? t('Portal link copied. Open it in your browser to continue buying online.')
-      : t('Copy was blocked. Long press the portal link and copy it manually.');
+      ? t(`Portal link copied. Paste it in ${browserName} to continue from the full browser.`)
+      : t(`Copy was blocked. Long press the portal link, copy it, then paste it in ${browserName}.`);
     setCheckoutCopyMessage(message);
     setPortalToast({
       key: `portal-browser-link-${Date.now()}`,
       tone: copied ? 'success' : 'danger',
-      title: copied ? t('Portal link copied') : t('Copy blocked'),
+      title: copied ? t('Link copied') : t('Copy blocked'),
       message,
+      timeoutMs: 6000,
     });
+    if (typeof options.afterCopy === 'function') options.afterCopy(copied);
     if (checkoutCopyMessageTimerRef.current) window.clearTimeout(checkoutCopyMessageTimerRef.current);
-    checkoutCopyMessageTimerRef.current = window.setTimeout(() => setCheckoutCopyMessage(''), portalMessageAutoHideMs);
+    checkoutCopyMessageTimerRef.current = window.setTimeout(() => setCheckoutCopyMessage(''), 6000);
   }
 
   function portalNotificationIcon(portalSettings = settings, values = {}) {
@@ -3048,6 +3139,32 @@ function PortalApp() {
     return nextStatus;
   }
 
+  function applyPortalProductCatalog(data = {}) {
+    setSettings((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        product_items: Array.isArray(data.items) ? data.items : current.product_items,
+        product_categories: Array.isArray(data.categories) ? data.categories : current.product_categories,
+      };
+    });
+  }
+
+  async function refreshPortalProductCatalog(options = {}) {
+    if (portalProductRefreshInFlightRef.current) return null;
+    const minAgeMs = Number(options.throttleMs ?? PORTAL_PRODUCT_REFRESH_MIN_MS);
+    if (!options.force && minAgeMs > 0 && Date.now() - lastPortalProductRefreshAtRef.current < minAgeMs) return null;
+    portalProductRefreshInFlightRef.current = true;
+    lastPortalProductRefreshAtRef.current = Date.now();
+    try {
+      const data = await publicRequest(`/portal/product-items?ts=${Date.now()}`);
+      applyPortalProductCatalog(data);
+      return data;
+    } finally {
+      portalProductRefreshInFlightRef.current = false;
+    }
+  }
+
   async function syncPortalState(options = {}) {
     const id = options.sessionId || sessionId || localStorage.getItem('centralwifi_portal_session');
     if (!id || portalStateSyncInFlightRef.current) return null;
@@ -3062,6 +3179,11 @@ function PortalApp() {
       } catch {
         // Status response often includes bag details already; this second fetch is best effort.
       }
+      try {
+        await refreshPortalProductCatalog({ throttleMs: options.productThrottleMs ?? PORTAL_PRODUCT_REFRESH_MIN_MS });
+      } catch {
+        // Product catalog refresh is best effort; keep the current visible catalog on transient failures.
+      }
       return nextStatus;
     } finally {
       portalStateSyncInFlightRef.current = false;
@@ -3071,6 +3193,7 @@ function PortalApp() {
   async function loadPortal() {
     const portalSettings = await publicRequest('/portal/settings');
     setSettings(portalSettings);
+    lastPortalProductRefreshAtRef.current = Date.now();
     const session = await publicApi('/portal/session', { method: 'POST', body: JSON.stringify(payload()) });
     persistSession(session);
     if (session.mac_rebind_status === 'SUCCESS') {
@@ -4085,16 +4208,19 @@ function PortalApp() {
     const syncState = async (options = {}) => {
       if (stopped || document.hidden) return;
       try {
-        await syncPortalState({ throttleMs: options.throttleMs ?? 0 });
+        await syncPortalState({
+          throttleMs: options.throttleMs ?? 0,
+          productThrottleMs: options.productThrottleMs ?? PORTAL_PRODUCT_REFRESH_MIN_MS,
+        });
       } catch {
         // Background sync should never interrupt the captive portal UI.
       }
     };
     const intervalId = window.setInterval(() => syncState({ throttleMs: 2500 }), hasBagItems ? 5000 : 10000);
     const handleVisibility = () => {
-      if (!document.hidden) syncState({ throttleMs: 1000 });
+      if (!document.hidden) syncState({ throttleMs: 1000, productThrottleMs: 0 });
     };
-    const handleFocus = () => syncState({ throttleMs: 1000 });
+    const handleFocus = () => syncState({ throttleMs: 1000, productThrottleMs: 0 });
     window.addEventListener('focus', handleFocus);
     window.addEventListener('pageshow', handleFocus);
     document.addEventListener('visibilitychange', handleVisibility);
@@ -5953,22 +6079,41 @@ function PortalApp() {
 
   function PortalChromeReminder() {
     const iosDevice = isIosWebKitTouchBrowser();
-    if (iosDevice) return null;
-    const preferredBrowser = iosDevice ? 'Safari' : 'Google Chrome';
-    const alreadyPreferred = iosDevice ? isIosSafariBrowser() : isGoogleChromeBrowser();
+    const androidDevice = isAndroidDevice();
+    const preferredBrowser = iosDevice ? 'Safari' : androidDevice ? 'Google Chrome' : 'Google Chrome or Safari';
+    const alreadyPreferred = iosDevice ? isIosSafariBrowser() : androidDevice ? isGoogleChromeBrowser() : (isGoogleChromeBrowser() || isIosSafariBrowser());
     if (chromeReminderHidden || alreadyPreferred) return null;
+    const handleCopy = () => copyPortalBrowserTransferLink();
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      handleCopy();
+    };
     return (
-      <div className="portal-chrome-reminder">
-        <span className="portal-chrome-reminder-icon">{iosDevice ? <IconBrowserCheck size={20} /> : <IconBrandChrome size={20} />}</span>
-        <div>
+      <div
+        className="portal-chrome-reminder is-clickable"
+        role="button"
+        tabIndex={0}
+        onClick={handleCopy}
+        onKeyDown={handleKeyDown}
+      >
+        <span className="portal-chrome-reminder-icon"><BrowserBrandIcon browser={preferredBrowser} size={22} /></span>
+        <div className="portal-browser-reminder-content">
           <strong>{t('For better experience')}</strong>
-          <small>{t(`Open net.3jhotspot.com in ${preferredBrowser} when checking time, buying WiFi, or managing your profile.`)}</small>
+          <small>
+            {t(`Open net.3jhotspot.com in ${preferredBrowser} when checking time, buying WiFi, or managing your profile.`)}
+            {' '}
+            <span className="portal-browser-copy-hint">{t('(Click to Copy URL)')}</span>
+          </small>
         </div>
         <button
           className="portal-chrome-reminder-close"
           type="button"
           aria-label={t('Close')}
-          onClick={() => setChromeReminderHidden(true)}
+          onClick={(event) => {
+            event.stopPropagation();
+            setChromeReminderHidden(true);
+          }}
         >
           <IconX size={16} />
         </button>
@@ -5976,14 +6121,35 @@ function PortalApp() {
     );
   }
 
-  function PortalIosSafariLandingReminder() {
-    if (!isIosWebKitTouchBrowser() || isIosSafariBrowser()) return null;
+  function PortalLandingBrowserReminder() {
+    const iosDevice = isIosWebKitTouchBrowser();
+    const androidDevice = isAndroidDevice();
+    if (!iosDevice && !androidDevice) return null;
+    const preferredBrowser = iosDevice ? 'Safari' : 'Google Chrome';
+    const alreadyPreferred = iosDevice ? isIosSafariBrowser() : isGoogleChromeBrowser();
+    if (alreadyPreferred) return null;
+    const handleCopy = () => copyPortalBrowserTransferLink();
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      handleCopy();
+    };
     return (
-      <div className="portal-ios-safari-reminder">
-        <span className="portal-ios-safari-reminder-icon"><IconBrowserCheck size={20} /></span>
-        <div>
+      <div
+        className="portal-ios-safari-reminder portal-browser-landing-reminder is-clickable"
+        role="button"
+        tabIndex={0}
+        onClick={handleCopy}
+        onKeyDown={handleKeyDown}
+      >
+        <span className="portal-ios-safari-reminder-icon"><BrowserBrandIcon browser={preferredBrowser} size={22} /></span>
+        <div className="portal-browser-reminder-content">
           <strong>{t('For better experience')}</strong>
-          <small>{t('On iPhone, open net.3jhotspot.com in Safari when checking time, buying WiFi, or managing your profile.')}</small>
+          <small>
+            {t(`Open net.3jhotspot.com in ${preferredBrowser} when checking time, buying WiFi, or managing your profile.`)}
+            {' '}
+            <span className="portal-browser-copy-hint">{t('(Click to Copy URL)')}</span>
+          </small>
         </div>
       </div>
     );
@@ -7410,9 +7576,11 @@ function PortalApp() {
 	        bodyClassName="portal-profile-modal-body"
 	        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
 	        lockPageRefresh
-	      >
+      >
         <div className="d-flex align-items-start gap-3">
-          <span className="avatar bg-blue-lt text-blue">{forceBrowserTransfer ? <IconBrowserCheck size={24} /> : <IconBrandChrome size={24} />}</span>
+          <span className="avatar bg-blue-lt text-blue portal-browser-brand-avatar">
+            <BrowserBrandIcon browser={browserName} size={28} />
+          </span>
           <div>
             <div className="fw-semibold mb-1">{item.name}</div>
             <div className="text-muted small">
@@ -7432,7 +7600,7 @@ function PortalApp() {
               <label className="form-label">{t('Browser portal link')}</label>
               <div className="input-group">
                 <input className="form-control" value={transferUrl} readOnly onFocus={(event) => event.target.select()} />
-                <button className="btn" type="button" onClick={copyPortalBrowserTransferLink}>
+                <button className="btn portal-browser-copy-inline" type="button" onClick={copyPortalBrowserTransferLink}>
                   <IconCopy size={18} />
                   {t('Copy')}
                 </button>
@@ -7446,15 +7614,15 @@ function PortalApp() {
             </div>
           </>
         )}
-        <div className="modal-footer px-0 pb-0">
-          <button className="btn" type="button" onClick={() => setCheckoutBrowserReminder(null)}>{forceBrowserTransfer ? t('Close') : t('Cancel')}</button>
+        <div className="modal-footer portal-browser-modal-footer px-0 pb-0">
+          <button className="btn portal-browser-modal-secondary" type="button" onClick={() => setCheckoutBrowserReminder(null)}>{forceBrowserTransfer ? t('Close') : t('Cancel')}</button>
           {forceBrowserTransfer ? (
-            <button className="btn btn-primary" type="button" onClick={copyPortalBrowserTransferLink}>
+            <button className="btn btn-primary portal-browser-modal-primary" type="button" onClick={copyPortalBrowserTransferLink}>
               <IconCopy size={18} />
               {t('Copy portal link')}
             </button>
           ) : (
-            <button className="btn btn-primary" type="button" onClick={continueCheckoutAfterBrowserReminder}>
+            <button className="btn btn-primary portal-browser-modal-primary" type="button" onClick={continueCheckoutAfterBrowserReminder}>
               {t('OK, Continue to Payment')}
             </button>
           )}
@@ -7510,7 +7678,7 @@ function PortalApp() {
           </div>
 
           <div className="portal-payment-handoff-note">
-            <IconBrandChrome size={18} />
+            <BrowserBrandIcon browser={preferredOnlinePaymentBrowser()} size={19} />
             <span>{captiveBrowser ? t('Use Chrome on Android or Safari on iPhone for GCash, Maya, card, and other online payment methods.') : t('If checkout does not open automatically, use the button below to continue payment.')}</span>
           </div>
 
@@ -7709,7 +7877,7 @@ function PortalApp() {
 
 	  return (
 	    <div className={`client-portal-page portal-tabler-page ${portalDark ? 'is-dark' : 'is-light'} ${portalScreen !== 'landing' && !portalBlocked ? 'has-portal-header' : ''}`} {...iosSingleTapHandlers}>
-      <StoreOwnerToast toast={portalToast} onDismiss={() => setPortalToast(null)} timeoutMs={portalMessageAutoHideMs} />
+      <StoreOwnerToast toast={portalToast} onDismiss={() => setPortalToast(null)} timeoutMs={portalToast?.timeoutMs || portalMessageAutoHideMs} />
       {portalScreen !== 'landing' && !portalBlocked && (
         <header className="portal-sticky-header">
           <div className="portal-sticky-header-inner">
@@ -7764,7 +7932,7 @@ function PortalApp() {
 	                <h1 className="mt-4 mb-2">{t(settings.no_internet_headline || 'No Internet Detected')}</h1>
 	                <div className="text-muted mb-3">{t(settings.no_internet_subtitle || 'Buy a WiFi pass or claim an optional voucher.')}</div>
 	                <PortalNetworkPresenceBanner variant="landing" />
-	                <PortalIosSafariLandingReminder />
+	                <PortalLandingBrowserReminder />
 	                <GiftPanel />
                 <div className="d-grid gap-2 mt-4">
                   <button className="btn btn-primary btn-lg" type="button" onClick={() => setPortalScreen('shop')}>
@@ -8009,6 +8177,14 @@ function PortalApp() {
                     </span>
                     <span className="portal-choice-radio" aria-hidden="true" />
                   </button>
+                  <div className="portal-login-placeholder-separator" aria-hidden="true" />
+                  <div className="portal-login-placeholder-card" aria-disabled="true">
+                    <span className="portal-choice-icon"><IconUser size={24} /></span>
+                    <span>
+                      <strong>{t('Have an account?')}</strong>
+                      <small>{t('Login instead. This option is coming soon.')}</small>
+                    </span>
+                  </div>
                 </div>
               ) : (
                 <div className="portal-purchase-tab-shell">
@@ -8709,6 +8885,7 @@ function PortalCustomerMessage({ message, children, tone = 'info', onDismiss, ti
 
 function AutoDismissAlert({ message, tone = 'success', onDismiss, timeoutMs = 6000 }) {
   const iosSingleTapHandlers = usePortalSingleTapFix();
+  const swipeDismiss = useToastSwipeDismiss(onDismiss, { enabled: Boolean(message && onDismiss) });
   useEffect(() => {
     if (!message || !onDismiss) return undefined;
     const timer = window.setTimeout(() => onDismiss(), timeoutMs);
@@ -8718,7 +8895,14 @@ function AutoDismissAlert({ message, tone = 'success', onDismiss, timeoutMs = 60
   if (tone === 'success') {
     return createPortal(
       <div className="toast-container position-fixed top-0 end-0 p-3 app-toast-container">
-        <div className="toast show app-tabler-toast app-tabler-toast-success" role="status" aria-live="polite" {...iosSingleTapHandlers}>
+        <div
+          className={`toast show app-tabler-toast app-tabler-toast-success ${swipeDismiss.className}`.trim()}
+          role="status"
+          aria-live="polite"
+          style={swipeDismiss.style}
+          {...iosSingleTapHandlers}
+          {...swipeDismiss.handlers}
+        >
           <div className="toast-header">
             <span className="badge app-tabler-toast-icon me-2"><IconCircleCheck size={18} /></span>
             <strong className="me-auto">Success</strong>
@@ -8731,7 +8915,11 @@ function AutoDismissAlert({ message, tone = 'success', onDismiss, timeoutMs = 60
     );
   }
   return (
-    <div className={`alert alert-${tone} auto-dismiss-alert mb-0 d-flex align-items-start justify-content-between gap-3`}>
+    <div
+      className={`alert alert-${tone} auto-dismiss-alert mb-0 d-flex align-items-start justify-content-between gap-3 toast-swipe-target ${swipeDismiss.className}`.trim()}
+      style={swipeDismiss.style}
+      {...swipeDismiss.handlers}
+    >
       <div>{message}</div>
       {onDismiss && (
         <button className="btn-close" type="button" aria-label="Close" onClick={onDismiss} />
@@ -8742,6 +8930,7 @@ function AutoDismissAlert({ message, tone = 'success', onDismiss, timeoutMs = 60
 
 function StoreOwnerToast({ toast, onDismiss, timeoutMs = 6000 }) {
   const iosSingleTapHandlers = usePortalSingleTapFix();
+  const swipeDismiss = useToastSwipeDismiss(onDismiss, { enabled: Boolean(toast && onDismiss) });
   useEffect(() => {
     if (!toast || !onDismiss) return undefined;
     const timer = window.setTimeout(() => onDismiss(), timeoutMs);
@@ -8750,7 +8939,14 @@ function StoreOwnerToast({ toast, onDismiss, timeoutMs = 6000 }) {
   if (!toast) return null;
   const ToastIcon = toast.tone === 'danger' ? IconAlertTriangle : IconCircleCheck;
   return (
-    <div className={`store-owner-toast store-owner-toast-${toast.tone || 'success'}`} role="status" aria-live="polite" {...iosSingleTapHandlers}>
+    <div
+      className={`store-owner-toast store-owner-toast-${toast.tone || 'success'} ${swipeDismiss.className}`.trim()}
+      role="status"
+      aria-live="polite"
+      style={swipeDismiss.style}
+      {...iosSingleTapHandlers}
+      {...swipeDismiss.handlers}
+    >
       <span className="store-owner-toast-icon"><ToastIcon size={20} /></span>
       <div className="store-owner-toast-body">
         <div className="store-owner-toast-title">{toast.title || (toast.tone === 'danger' ? 'Action failed' : 'Success')}</div>
@@ -14014,6 +14210,9 @@ function PhysicalStoresPage() {
   const [captureMapOpen, setCaptureMapOpen] = useState(false);
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState('');
+  const [storeItemDragId, setStoreItemDragId] = useState('');
+  const [storeItemDragOverId, setStoreItemDragOverId] = useState('');
+  const [storeItemDropPlacement, setStoreItemDropPlacement] = useState('before');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -14243,12 +14442,33 @@ function PhysicalStoresPage() {
     });
   }
 
-  function toggleStoreItem(itemId) {
+  function addStoreItem(itemId) {
     setForm((current) => {
-      const existing = new Set(current.item_ids || []);
-      if (existing.has(itemId)) existing.delete(itemId);
-      else existing.add(itemId);
-      return { ...current, item_ids: Array.from(existing) };
+      const currentIds = current.item_ids || [];
+      if (currentIds.includes(itemId)) return current;
+      return { ...current, item_ids: [...currentIds, itemId] };
+    });
+  }
+
+  function removeStoreItem(itemId) {
+    setForm((current) => ({
+      ...current,
+      item_ids: (current.item_ids || []).filter((id) => id !== itemId),
+    }));
+  }
+
+  function reorderStoreAssignedItem(sourceId, targetId, placement = 'before') {
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    setForm((current) => {
+      const currentIds = [...(current.item_ids || [])];
+      const sourceIndex = currentIds.indexOf(sourceId);
+      const targetIndex = currentIds.indexOf(targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return current;
+      const [movedId] = currentIds.splice(sourceIndex, 1);
+      let insertIndex = currentIds.indexOf(targetId);
+      if (placement === 'after') insertIndex += 1;
+      currentIds.splice(insertIndex, 0, movedId);
+      return { ...current, item_ids: currentIds };
     });
   }
 
@@ -14496,6 +14716,11 @@ function PhysicalStoresPage() {
     if (!query) return true;
     return [site.site_name, site.barangay, site.municipality, site.omada_site_id, site.location].filter(Boolean).join(' ').toLowerCase().includes(query);
   });
+  const storeSelectedItemIds = form.item_ids || [];
+  const storeSelectedItemSet = new Set(storeSelectedItemIds);
+  const storeItemsById = new Map(itemCatalog.map((item) => [item.id, item]));
+  const storeSelectedItems = storeSelectedItemIds.map((itemId) => storeItemsById.get(itemId)).filter(Boolean);
+  const storeUnselectedItems = itemCatalog.filter((item) => !storeSelectedItemSet.has(item.id));
 
   return (
     <div className="row row-cards">
@@ -15092,33 +15317,142 @@ function PhysicalStoresPage() {
                       <div className="physical-store-panel-header">
                         <div>
                           <div className="fw-semibold">Store Items</div>
-                          <div className="text-muted small">Select the reusable catalog items this physical store can sell. Items remain in the system even if this store is deleted.</div>
+                          <div className="text-muted small">Move reusable items into Selected Items, then drag them top-to-bottom to control store item display order.</div>
                         </div>
                         <span className="badge bg-blue-lt text-blue">{(form.item_ids || []).length} selected</span>
                       </div>
-                      <div className="physical-store-assigned-items">
-                        {itemCatalog.map((item) => (
-                          <label className="physical-store-site-choice" key={`store-item-choice-${item.id}`}>
-                            <input type="checkbox" checked={(form.item_ids || []).includes(item.id)} onChange={() => toggleStoreItem(item.id)} />
-                            <span>
-                              <strong className="item-color-inline">
-                                <span className="item-color-dot" style={{ backgroundColor: itemColorMeta(item).hex }} />
-                                {item.name}
-                              </strong>
-                              <small>{item.price_display} · {item.duration_label}</small>
-                              <small>{item.access_scope_label}{item.allowed_barangay ? ` · ${item.allowed_barangay}` : ''} · {item.status}</small>
-                            </span>
-                          </label>
-                        ))}
-                        {!itemCatalog.length && (
-                          <div className="empty py-4">
-                            <IconShoppingBag size={28} />
-                            <p className="mb-2">No reusable store items yet.</p>
-                            <button className="btn btn-primary btn-sm" type="button" onClick={() => { setModalMode(''); openNewItem(); }}>
-                              <IconPlus size={16} className="me-1" />Add item in Items tab
-                            </button>
+                      <div className="product-category-assignment-grid physical-store-assignment-grid">
+                        <section className="product-category-assignment-column">
+                          <div className="product-category-assignment-column-head">
+                            <div>
+                              <div className="fw-semibold">Unselected Items</div>
+                              <small className="text-muted">Available store item catalog</small>
+                            </div>
+                            <span className="badge bg-secondary-lt text-secondary">{storeUnselectedItems.length}</span>
                           </div>
-                        )}
+                          <div className="product-category-assignment-list">
+                            {storeUnselectedItems.map((item) => (
+                              <button
+                                className="product-category-assignment-card"
+                                type="button"
+                                key={`store-item-unselected-${item.id}`}
+                                onClick={() => addStoreItem(item.id)}
+                              >
+                                <span className="product-category-assignment-card-main">
+                                  <strong className="item-color-inline">
+                                    <span className="item-color-dot" style={{ backgroundColor: itemColorMeta(item).hex }} />
+                                    {item.name}
+                                  </strong>
+                                  <small>{item.price_display} · {item.duration_label}</small>
+                                  <small>{item.access_scope_label}{item.allowed_barangay ? ` · ${item.allowed_barangay}` : ''} · {item.status}</small>
+                                </span>
+                                <span className="product-category-assignment-action" title="Assign item">
+                                  <IconChevronRight size={17} />
+                                </span>
+                              </button>
+                            ))}
+                            {!itemCatalog.length && (
+                              <div className="empty py-4">
+                                <IconShoppingBag size={28} />
+                                <p className="mb-2">No reusable store items yet.</p>
+                                <button className="btn btn-primary btn-sm" type="button" onClick={() => { setModalMode(''); openNewItem(); }}>
+                                  <IconPlus size={16} className="me-1" />Add item in Items tab
+                                </button>
+                              </div>
+                            )}
+                            {itemCatalog.length > 0 && !storeUnselectedItems.length && (
+                              <div className="product-category-assignment-empty">
+                                <IconCircleCheck size={22} />
+                                <span>All items are selected.</span>
+                              </div>
+                            )}
+                          </div>
+                        </section>
+                        <section className="product-category-assignment-column is-selected">
+                          <div className="product-category-assignment-column-head">
+                            <div className="d-flex align-items-center gap-2">
+                              <span className="product-category-selected-header-icon"><IconCircleCheck size={16} /></span>
+                              <div>
+                                <div className="fw-semibold">Selected Items</div>
+                                <small className="text-muted">Drag to set store order</small>
+                              </div>
+                            </div>
+                            <span className="badge bg-blue-lt text-blue">{storeSelectedItems.length}</span>
+                          </div>
+                          <div
+                            className={`product-category-assignment-list is-sortable ${storeItemDragId ? 'is-sorting' : ''}`}
+                            onDragOver={(event) => {
+                              if (!storeSelectedItems.length) return;
+                              event.preventDefault();
+                            }}
+                          >
+                            {storeSelectedItems.map((item) => (
+                              <div
+                                className={`product-category-assignment-card is-selected ${storeItemDragId === item.id ? 'is-dragging' : ''} ${storeItemDragOverId === item.id && storeItemDragId !== item.id ? `is-drop-${storeItemDropPlacement}` : ''}`}
+                                key={`store-item-selected-${item.id}`}
+                                draggable
+                                onDragStart={(event) => {
+                                  setStoreItemDragId(item.id);
+                                  setStoreItemDropPlacement('before');
+                                  event.dataTransfer.effectAllowed = 'move';
+                                  event.dataTransfer.setData('text/plain', item.id);
+                                }}
+                                onDragOver={(event) => {
+                                  event.preventDefault();
+                                  event.dataTransfer.dropEffect = 'move';
+                                  const rect = event.currentTarget.getBoundingClientRect();
+                                  const placement = event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+                                  setStoreItemDragOverId(item.id);
+                                  setStoreItemDropPlacement(placement);
+                                }}
+                                onDragLeave={() => {
+                                  setStoreItemDragOverId((current) => current === item.id ? '' : current);
+                                }}
+                                onDrop={(event) => {
+                                  event.preventDefault();
+                                  const sourceId = event.dataTransfer.getData('text/plain') || storeItemDragId;
+                                  const rect = event.currentTarget.getBoundingClientRect();
+                                  const placement = event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+                                  reorderStoreAssignedItem(sourceId, item.id, placement);
+                                  setStoreItemDragId('');
+                                  setStoreItemDragOverId('');
+                                  setStoreItemDropPlacement('before');
+                                }}
+                                onDragEnd={() => {
+                                  setStoreItemDragId('');
+                                  setStoreItemDragOverId('');
+                                  setStoreItemDropPlacement('before');
+                                }}
+                              >
+                                <span className="product-category-assignment-drag" title="Drag to reorder item">
+                                  <IconGripVertical size={18} />
+                                </span>
+                                <span className="product-category-assignment-card-main">
+                                  <strong className="item-color-inline">
+                                    <span className="item-color-dot" style={{ backgroundColor: itemColorMeta(item).hex }} />
+                                    {item.name}
+                                  </strong>
+                                  <small>{item.price_display} · {item.duration_label}</small>
+                                  <small>{item.access_scope_label}{item.allowed_barangay ? ` · ${item.allowed_barangay}` : ''} · {item.status}</small>
+                                </span>
+                                <button
+                                  className="product-category-assignment-action"
+                                  type="button"
+                                  title="Remove from store"
+                                  onClick={() => removeStoreItem(item.id)}
+                                >
+                                  <IconX size={17} />
+                                </button>
+                              </div>
+                            ))}
+                            {!storeSelectedItems.length && (
+                              <div className="product-category-assignment-empty">
+                                <IconGripVertical size={22} />
+                                <span>No selected items yet. Choose items from the left.</span>
+                              </div>
+                            )}
+                          </div>
+                        </section>
                       </div>
                     </>
                   )}
@@ -17364,6 +17698,9 @@ function ProductItemsPage() {
   const [draggedCategoryId, setDraggedCategoryId] = useState('');
   const [categoryDragOverId, setCategoryDragOverId] = useState('');
   const [categoryReorderSaving, setCategoryReorderSaving] = useState(false);
+  const [categoryItemDragId, setCategoryItemDragId] = useState('');
+  const [categoryItemDragOverId, setCategoryItemDragOverId] = useState('');
+  const [categoryItemDropPlacement, setCategoryItemDropPlacement] = useState('before');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const productDiscountPanelRefs = useRef({});
@@ -17612,12 +17949,33 @@ function ProductItemsPage() {
     };
   }
 
-  function toggleCategoryItem(itemId) {
+  function addCategoryItem(itemId) {
     setCategoryForm((current) => {
-      const existing = new Set(current.item_ids || []);
-      if (existing.has(itemId)) existing.delete(itemId);
-      else existing.add(itemId);
-      return { ...current, item_ids: Array.from(existing) };
+      const currentIds = current.item_ids || [];
+      if (currentIds.includes(itemId)) return current;
+      return { ...current, item_ids: [...currentIds, itemId] };
+    });
+  }
+
+  function removeCategoryItem(itemId) {
+    setCategoryForm((current) => ({
+      ...current,
+      item_ids: (current.item_ids || []).filter((id) => id !== itemId),
+    }));
+  }
+
+  function reorderCategoryAssignedItem(sourceId, targetId, placement = 'before') {
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    setCategoryForm((current) => {
+      const currentIds = [...(current.item_ids || [])];
+      const sourceIndex = currentIds.indexOf(sourceId);
+      const targetIndex = currentIds.indexOf(targetId);
+      if (sourceIndex < 0 || targetIndex < 0) return current;
+      const [movedId] = currentIds.splice(sourceIndex, 1);
+      let insertIndex = currentIds.indexOf(targetId);
+      if (placement === 'after') insertIndex += 1;
+      currentIds.splice(insertIndex, 0, movedId);
+      return { ...current, item_ids: currentIds };
     });
   }
 
@@ -17744,6 +18102,12 @@ function ProductItemsPage() {
     if (!discounts.length) return <span className="badge bg-secondary-lt text-secondary">No tiers</span>;
     return <span className="badge bg-yellow-lt text-yellow">{discounts.length} tier{discounts.length === 1 ? '' : 's'}</span>;
   }
+
+  const categorySelectedItemIds = categoryForm.item_ids || [];
+  const categorySelectedItemSet = new Set(categorySelectedItemIds);
+  const categoryItemsById = new Map(items.map((item) => [item.id, item]));
+  const categorySelectedItems = categorySelectedItemIds.map((itemId) => categoryItemsById.get(itemId)).filter(Boolean);
+  const categoryUnselectedItems = items.filter((item) => !categorySelectedItemSet.has(item.id));
 
   return (
     <div className="row row-cards">
@@ -18229,33 +18593,142 @@ function ProductItemsPage() {
                   <div className="physical-store-panel-header">
                     <div>
                       <div className="fw-semibold">Assigned Items</div>
-                      <div className="text-muted small">Select reusable items that should appear under this category in the captive portal.</div>
+                      <div className="text-muted small">Move items into Selected Items, then drag them top-to-bottom to control captive portal display order.</div>
                     </div>
                     <span className="badge bg-blue-lt text-blue">{(categoryForm.item_ids || []).length} selected</span>
                   </div>
-                  <div className="physical-store-assigned-items">
-                    {items.map((item) => (
-                      <label className="physical-store-site-choice" key={`product-category-item-choice-${item.id}`}>
-                        <input type="checkbox" checked={(categoryForm.item_ids || []).includes(item.id)} onChange={() => toggleCategoryItem(item.id)} />
-                        <span>
-                          <strong className="item-color-inline">
-                            <span className="item-color-dot" style={{ backgroundColor: itemColorMeta(item).hex }} />
-                            {item.name}
-                          </strong>
-                          <small>{item.price_display || formatPrice(item.price)} · {durationText(item)} · {productKindLabel(item.product_kind)}</small>
-                          <small>{(item.discounts || []).filter((discount) => discount.enabled).length} discount tier(s) · {item.status}</small>
-                        </span>
-                      </label>
-                    ))}
-                    {!items.length && (
-                      <div className="empty py-4">
-                        <IconShoppingBag size={28} />
-                        <p className="mb-2">No reusable items yet.</p>
-                        <button className="btn btn-primary btn-sm" type="button" onClick={() => { setCategoryModalMode(''); openCreate(); }}>
-                          <IconPlus size={16} className="me-1" />Add item in Items tab
-                        </button>
+                  <div className="product-category-assignment-grid">
+                    <section className="product-category-assignment-column">
+                      <div className="product-category-assignment-column-head">
+                        <div>
+                          <div className="fw-semibold">Unselected Items</div>
+                          <small className="text-muted">Available reusable items</small>
+                        </div>
+                        <span className="badge bg-secondary-lt text-secondary">{categoryUnselectedItems.length}</span>
                       </div>
-                    )}
+                      <div className="product-category-assignment-list">
+                        {categoryUnselectedItems.map((item) => (
+                          <button
+                            className="product-category-assignment-card"
+                            type="button"
+                            key={`product-category-unselected-${item.id}`}
+                            onClick={() => addCategoryItem(item.id)}
+                          >
+                            <span className="product-category-assignment-card-main">
+                              <strong className="item-color-inline">
+                                <span className="item-color-dot" style={{ backgroundColor: itemColorMeta(item).hex }} />
+                                {item.name}
+                              </strong>
+                              <small>{item.price_display || formatPrice(item.price)} · {durationText(item)} · {productKindLabel(item.product_kind)}</small>
+                              <small>{(item.discounts || []).filter((discount) => discount.enabled).length} discount tier(s) · {item.status}</small>
+                            </span>
+                            <span className="product-category-assignment-action" title="Assign item">
+                              <IconChevronRight size={17} />
+                            </span>
+                          </button>
+                        ))}
+                        {!items.length && (
+                          <div className="empty py-4">
+                            <IconShoppingBag size={28} />
+                            <p className="mb-2">No reusable items yet.</p>
+                            <button className="btn btn-primary btn-sm" type="button" onClick={() => { setCategoryModalMode(''); openCreate(); }}>
+                              <IconPlus size={16} className="me-1" />Add item in Items tab
+                            </button>
+                          </div>
+                        )}
+                        {items.length > 0 && !categoryUnselectedItems.length && (
+                          <div className="product-category-assignment-empty">
+                            <IconCircleCheck size={22} />
+                            <span>All items are selected.</span>
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                    <section className="product-category-assignment-column is-selected">
+                      <div className="product-category-assignment-column-head">
+                        <div className="d-flex align-items-center gap-2">
+                          <span className="product-category-selected-header-icon"><IconCircleCheck size={16} /></span>
+                          <div>
+                            <div className="fw-semibold">Selected Items</div>
+                            <small className="text-muted">Drag to set portal order</small>
+                          </div>
+                        </div>
+                        <span className="badge bg-blue-lt text-blue">{categorySelectedItems.length}</span>
+                      </div>
+                      <div
+                        className={`product-category-assignment-list is-sortable ${categoryItemDragId ? 'is-sorting' : ''}`}
+                        onDragOver={(event) => {
+                          if (!categorySelectedItems.length) return;
+                          event.preventDefault();
+                        }}
+                      >
+                        {categorySelectedItems.map((item) => (
+                          <div
+                            className={`product-category-assignment-card is-selected ${categoryItemDragId === item.id ? 'is-dragging' : ''} ${categoryItemDragOverId === item.id && categoryItemDragId !== item.id ? `is-drop-${categoryItemDropPlacement}` : ''}`}
+                            key={`product-category-selected-${item.id}`}
+                            draggable
+                            onDragStart={(event) => {
+                              setCategoryItemDragId(item.id);
+                              setCategoryItemDropPlacement('before');
+                              event.dataTransfer.effectAllowed = 'move';
+                              event.dataTransfer.setData('text/plain', item.id);
+                            }}
+                            onDragOver={(event) => {
+                              event.preventDefault();
+                              event.dataTransfer.dropEffect = 'move';
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              const placement = event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+                              setCategoryItemDragOverId(item.id);
+                              setCategoryItemDropPlacement(placement);
+                            }}
+                            onDragLeave={() => {
+                              setCategoryItemDragOverId((current) => current === item.id ? '' : current);
+                            }}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              const sourceId = event.dataTransfer.getData('text/plain') || categoryItemDragId;
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              const placement = event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+                              reorderCategoryAssignedItem(sourceId, item.id, placement);
+                              setCategoryItemDragId('');
+                              setCategoryItemDragOverId('');
+                              setCategoryItemDropPlacement('before');
+                            }}
+                            onDragEnd={() => {
+                              setCategoryItemDragId('');
+                              setCategoryItemDragOverId('');
+                              setCategoryItemDropPlacement('before');
+                            }}
+                          >
+                            <span className="product-category-assignment-drag" title="Drag to reorder item">
+                              <IconGripVertical size={18} />
+                            </span>
+                            <span className="product-category-assignment-card-main">
+                              <strong className="item-color-inline">
+                                <span className="item-color-dot" style={{ backgroundColor: itemColorMeta(item).hex }} />
+                                {item.name}
+                              </strong>
+                              <small>{item.price_display || formatPrice(item.price)} · {durationText(item)} · {productKindLabel(item.product_kind)}</small>
+                              <small>{(item.discounts || []).filter((discount) => discount.enabled).length} discount tier(s) · {item.status}</small>
+                            </span>
+                            <button
+                              className="product-category-assignment-action"
+                              type="button"
+                              title="Remove from category"
+                              onClick={() => removeCategoryItem(item.id)}
+                            >
+                              <IconX size={17} />
+                            </button>
+                          </div>
+                        ))}
+                        {!categorySelectedItems.length && (
+                          <div className="product-category-assignment-empty">
+                            <IconGripVertical size={22} />
+                            <span>No selected items yet. Choose items from the left.</span>
+                          </div>
+                        )}
+                      </div>
+                    </section>
                   </div>
                 </div>
               </div>
@@ -30405,20 +30878,7 @@ function StatusBadge({ value }) {
   return <span className={`badge bg-${tone}-lt text-${tone}`}>{value || 'Not Configured'}</span>;
 }
 
-function OmadaControllerPage({ refresh }) {
-  const [settings, setSettings] = useState(null);
-  const [logs, setLogs] = useState([]);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState('');
-  const [tab, setTab] = useState('Status');
-  const [apiTab, setApiTab] = useState('Connection');
-  const [autoChecked, setAutoChecked] = useState(false);
-  const [installLog, setInstallLog] = useState(null);
-  const [webResult, setWebResult] = useState(null);
-  const [sshResult, setSshResult] = useState(null);
-  const [nasResult, setNasResult] = useState(null);
-  const [apiSettings, setApiSettings] = useState(null);
+function PaymentAccessPage() {
   const [paymentAccess, setPaymentAccess] = useState(null);
   const [paymentAccessForm, setPaymentAccessForm] = useState(null);
   const [paymentAccessTab, setPaymentAccessTab] = useState('Overview');
@@ -30427,303 +30887,64 @@ function OmadaControllerPage({ refresh }) {
   const [paymentAccessTableStatus, setPaymentAccessTableStatus] = useState('');
   const [paymentAccessTablePageSize, setPaymentAccessTablePageSize] = useState(20);
   const [paymentAccessTablePage, setPaymentAccessTablePage] = useState(1);
-  const [sites, setSites] = useState([]);
-  const [automationLogs, setAutomationLogs] = useState([]);
-  const [automationResult, setAutomationResult] = useState(null);
-  const [uninstallOpen, setUninstallOpen] = useState(false);
-  const [uninstallConfirmation, setUninstallConfirmation] = useState('');
-  const [environment, setEnvironment] = useState('STAGING');
-  const [profileForm, setProfileForm] = useState({ environment: 'STAGING', profile_name: '3JCentralPisowifi Staging RADIUS', radius_server_ip: '192.168.50.70', auth_port: 11812, accounting_port: 11813, shared_secret: generateSharedSecret(), accounting_enabled: true, interim_update_seconds: 300 });
-  const [ssidForm, setSsidForm] = useState({ environment: 'STAGING', ssid_name: '3J-Test-WiFi' });
-  const [fallback, setFallback] = useState(null);
-  const [nasForm, setNasForm] = useState({ name: 'Omada Controller Staging', ip_address: '192.168.50.71', shortname: 'omada-staging', secret: generateSharedSecret(), type: 'Omada Controller' });
-  const checklist = [
-    'Omada API login works.',
-    'Omada site selected.',
-    'Matching NAS client created in 3JCentralPisowifi.',
-    'Omada RADIUS profile created.',
-    'Test SSID created.',
-    'One AP is adopted and broadcasting SSID.',
-    'Test user exists in 3JCentralPisowifi.',
-    'Test user has active access time.',
-    'Phone/laptop connects using test credentials.',
-    'Access-Accept appears in RADIUS logs.',
-    'Accounting Start creates active session.',
-    'Interim update is no longer used in the active Omada captive portal flow.',
-    'Second device using same account is rejected.',
-    'Disconnect creates Stop packet or session becomes stale.',
-    'Install and open Omada Controller.',
-    'Complete Omada first-time setup.',
-    'Adopt one Omada AP.',
-    'Create SSID 3J-Test-WiFi with WPA2-Enterprise.',
-    'Add RADIUS profile using 192.168.50.70 and staging ports 11812 / 11813.',
-    'Enable accounting if available.',
-    'Create a test user in 3JCentralPisowifi.',
-    'Add a WiFi Bag item from Customer Devices.',
-    'Connect phone or laptop to 3J-Test-WiFi.',
-    'Confirm Access-Accept in RADIUS logs.',
-    'Confirm Accounting Start creates active session.',
-    'Confirm portal access expiry is tracked in the customer WiFi Bag.',
-    'Confirm second device with same account is rejected.'
-  ];
-  const installed = Boolean(settings && ['INSTALLED', 'RUNNING', 'STOPPED', 'ERROR'].includes(settings.install_status));
-  const installOnly = Boolean(settings && settings.install_status === 'NOT_INSTALLED');
-  const omadaTabs = installOnly ? ['Install'] : ['Status', 'Settings', 'Payment Access', 'Logs'];
-  const webReachable = Boolean(webResult && (webResult.http?.status === 'Reachable' || webResult.https?.status === 'Reachable'));
-  const canOpenOmada = installed && settings?.install_status !== 'NOT_INSTALLED' && webReachable;
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [paymentAccessLastUpdatedAt, setPaymentAccessLastUpdatedAt] = useState('');
+  const paymentAccessRefreshSeq = useRef(0);
 
-  async function load() {
-    setSettings(await request('/omada/settings'));
-    setLogs(await request('/omada/logs'));
-    setApiSettings(await request('/omada/api-settings'));
-    const paymentAccessData = await request('/omada/payment-auth-free').catch(() => null);
-    setPaymentAccess(paymentAccessData);
-    if (paymentAccessData?.settings) setPaymentAccessForm(paymentAccessData.settings);
-    setAutomationLogs(await request('/omada/automation-logs'));
+  async function refreshPaymentAccess(options = {}) {
+    const { background = false, syncSettings = true, surfaceError = true } = options;
+    const refreshSeq = paymentAccessRefreshSeq.current + 1;
+    paymentAccessRefreshSeq.current = refreshSeq;
+    try {
+      const data = await request('/omada/payment-auth-free');
+      if (paymentAccessRefreshSeq.current !== refreshSeq) return data;
+      setPaymentAccess(data);
+      if (data?.settings && syncSettings) setPaymentAccessForm(data.settings);
+      setPaymentAccessLastUpdatedAt(new Date().toISOString());
+      if (!background) setError('');
+      return data;
+    } catch (err) {
+      if (surfaceError) setError(err.message);
+      throw err;
+    }
   }
-  useEffect(() => { load(); }, []);
+
   useEffect(() => {
-    if (!settings) return;
-    const allowedTabs = settings.install_status === 'NOT_INSTALLED' ? ['Install'] : ['Status', 'Settings', 'Payment Access', 'Logs'];
-    if (!allowedTabs.includes(tab)) setTab(allowedTabs[0]);
-  }, [settings?.install_status, tab]);
+    refreshPaymentAccess().catch((err) => setError(err.message));
+  }, []);
+
   useEffect(() => {
-    const staging = environment === 'STAGING';
-    const nextSecret = profileForm.shared_secret || generateSharedSecret();
-    setProfileForm({
-      ...profileForm,
-      environment,
-      profile_name: `3JCentralPisowifi ${staging ? 'Staging' : 'Production'} RADIUS`,
-      auth_port: staging ? 11812 : 1812,
-      accounting_port: staging ? 11813 : 1813,
-      shared_secret: nextSecret
-    });
-    setSsidForm({ ...ssidForm, environment });
-    setNasForm({
-      ...nasForm,
-      name: `Omada Controller ${staging ? 'Staging' : 'Production'}`,
-      shortname: `omada-${staging ? 'staging' : 'production'}`,
-      secret: nextSecret
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [environment]);
-  useEffect(() => {
-    if (installLog?.status !== 'RUNNING') return undefined;
-    const timer = window.setInterval(async () => {
-      try {
-        const nextLogs = await request('/omada/logs');
-        setLogs(nextLogs);
-        const current = nextLogs.find((row) => row.id === installLog.id) || nextLogs.find((row) => row.action === installLog.action && row.status === 'RUNNING');
-        if (current) {
-          setInstallLog(current);
-          if (current.status !== 'RUNNING') {
-            setBusy('');
-            const saved = await request('/omada/settings');
-            setSettings(saved);
-            if (current.action === 'UNINSTALL' && current.status === 'SUCCESS') {
-              setTab('Install');
-              setMessage('Omada Controller uninstalled. The page is now showing installation setup only.');
-              setWebResult(null);
-            }
-          }
-        }
-      } catch (_err) {
-        // Keep polling on transient network/API errors.
-      }
-    }, 2000);
-    return () => window.clearInterval(timer);
-  }, [installLog?.id, installLog?.status]);
-  useEffect(() => {
-    if (!settings || !['INSTALLED', 'RUNNING'].includes(settings.install_status) || webReachable) return undefined;
     let cancelled = false;
-    const checkReachability = async () => {
-      try {
-        const data = await request('/omada/test-web', { method: 'POST', body: JSON.stringify({ host: settings.host, http_port: settings.http_port, https_port: settings.https_port }) });
-        if (!cancelled) {
-          setWebResult(data);
-          if (data.http?.status === 'Reachable' || data.https?.status === 'Reachable') {
-            setSettings(await request('/omada/settings'));
-          }
-        }
-      } catch (_err) {
-        // Keep the existing result; the next interval will retry.
-      }
+    const refreshInBackground = () => {
+      if (cancelled || document.hidden) return;
+      refreshPaymentAccess({ background: true, syncSettings: false, surfaceError: false }).catch(() => {});
     };
-    checkReachability();
-    const timer = window.setInterval(checkReachability, 5000);
+    const intervalId = window.setInterval(refreshInBackground, 8000);
+    const handleFocus = () => refreshInBackground();
+    const handleVisibilityChange = () => {
+      if (!document.hidden) refreshInBackground();
+    };
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('pageshow', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pageshow', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [settings?.install_status, settings?.host, settings?.http_port, settings?.https_port, webReachable]);
-  useEffect(() => {
-    if (webReachable && installLog?.action === 'INSTALL') {
-      setInstallLog(null);
-      setBusy('');
-    }
-  }, [webReachable, installLog]);
+  }, []);
+
   useEffect(() => {
     setPaymentAccessTablePage(1);
   }, [paymentAccessTableTab, paymentAccessTableSearch, paymentAccessTableStatus, paymentAccessTablePageSize]);
+
   useEffect(() => {
     setPaymentAccessTableStatus('');
   }, [paymentAccessTableTab]);
-  useEffect(() => {
-    if (!settings || autoChecked) return;
-    setAutoChecked(true);
-    async function runAutoDetect() {
-      try {
-        const data = await request('/omada/test-web', { method: 'POST', body: JSON.stringify({ host: settings.host, http_port: settings.http_port, https_port: settings.https_port }) });
-        setWebResult(data);
-      } catch (_err) {
-        setWebResult(null);
-      }
-      if (settings.ssh_username && (settings.has_ssh_password || settings.has_ssh_private_key)) {
-        try {
-          const data = await request('/omada/detect', { method: 'POST' });
-          if (data.settings) setSettings(data.settings);
-          setLogs(await request('/omada/logs'));
-        } catch (_err) {
-          await load().catch(() => {});
-        }
-      }
-    }
-    runAutoDetect();
-  }, [settings, autoChecked]);
-  if (!settings) return <div className="empty">Loading Omada Controller settings...</div>;
-
-  async function save(e) {
-    e.preventDefault();
-    setError('');
-    setMessage('');
-    try {
-      const saved = await request('/omada/settings', { method: 'PUT', body: JSON.stringify(settings) });
-      setSettings(saved);
-      setMessage('Omada settings saved.');
-      refresh();
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function action(name, confirmText) {
-    if (confirmText && !window.confirm(confirmText)) return;
-    setBusy(name);
-    setError('');
-    setMessage('');
-    try {
-      const data = await request(`/omada/${name}`, { method: 'POST' });
-      if (data.settings) setSettings(data.settings);
-      if (name === 'install') {
-        setInstallLog({ id: data.log_id, action: 'INSTALL', status: 'RUNNING', progress_percent: 2, current_step: 'Queued' });
-        setMessage('Omada install started.');
-        await load();
-        return;
-      }
-      setMessage(`Omada ${name} completed.`);
-      await load();
-    } catch (err) {
-      setError(err.message);
-      await load().catch(() => {});
-    } finally {
-      if (name !== 'install') setBusy('');
-    }
-  }
-
-  async function uninstallOmada() {
-    setBusy('uninstall');
-    setError('');
-    setMessage('');
-    try {
-      const data = await request('/omada/uninstall', { method: 'POST', body: JSON.stringify({ confirmation: uninstallConfirmation }) });
-      if (data.settings) setSettings(data.settings);
-      setInstallLog({ id: data.log_id, action: 'UNINSTALL', status: 'RUNNING', progress_percent: 2, current_step: 'Queued' });
-      setUninstallOpen(false);
-      setUninstallConfirmation('');
-      setMessage('Omada uninstall started.');
-      await load();
-    } catch (err) {
-      setError(err.message);
-      setBusy('');
-    }
-  }
-
-  async function testWeb() {
-    setBusy('test-web');
-    setError('');
-    try {
-      const data = await request('/omada/test-web', { method: 'POST', body: JSON.stringify({ host: settings.host, http_port: settings.http_port, https_port: settings.https_port }) });
-      setWebResult(data);
-      await load();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function testSsh() {
-    setBusy('test-ssh');
-    setError('');
-    try {
-      const data = await request('/omada/test-ssh', { method: 'POST' });
-      setSshResult(data);
-      await load();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function createNas(e) {
-    e.preventDefault();
-    setError('');
-    const data = await request('/omada/create-matching-nas', { method: 'POST', body: JSON.stringify({ environment, name: nasForm.name, ip_address: nasForm.ip_address, shortname: nasForm.shortname, type: nasForm.type, shared_secret: nasForm.secret }) });
-    setNasResult(data);
-    setProfileForm({ ...profileForm, shared_secret: data.secret });
-    setMessage('Matching RADIUS trust entry created.');
-    setAutomationLogs(await request('/omada/automation-logs'));
-    refresh();
-  }
-
-  async function saveApiSettings(e) {
-    e.preventDefault();
-    setBusy('save-api-settings');
-    setError('');
-    setMessage('');
-    try {
-      const saved = await request('/omada/api-settings', { method: 'PUT', body: JSON.stringify(apiSettings) });
-      setApiSettings(saved);
-      setMessage('Omada API settings saved.');
-      setAutomationLogs(await request('/omada/automation-logs'));
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function clearApiCredentials() {
-    setBusy('clear-api-settings');
-    setError('');
-    try {
-      const saved = await request('/omada/api-settings', { method: 'PUT', body: JSON.stringify({ remember_credentials: false }) });
-      setApiSettings(saved);
-      setMessage('Saved Omada API credentials cleared.');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function refreshPaymentAccess() {
-    const data = await request('/omada/payment-auth-free');
-    setPaymentAccess(data);
-    if (data?.settings) setPaymentAccessForm(data.settings);
-    return data;
-  }
 
   async function savePaymentAccessSettings(event) {
     event.preventDefault();
@@ -30949,6 +31170,540 @@ function OmadaControllerPage({ refresh }) {
     });
   }
 
+  const paymentAccessTableTabs = [
+    { key: 'GRANTED', label: 'Currently Granted Clients', icon: IconWifi },
+    { key: 'ABUSE', label: 'Abuse Watchlist', icon: IconBan },
+    { key: 'RECENT', label: 'Recent Payment Access Activity', icon: IconActivity },
+  ];
+  const paymentAccessStatusFilterOptions = paymentAccessStatusOptions();
+  const paymentAccessFilteredTableRows = paymentAccessFilteredRows();
+  const paymentAccessTotalRows = paymentAccessFilteredTableRows.length;
+  const paymentAccessTotalPages = Math.max(1, Math.ceil(paymentAccessTotalRows / Number(paymentAccessTablePageSize || 20)));
+  const paymentAccessCurrentPage = Math.min(paymentAccessTablePage, paymentAccessTotalPages);
+  const paymentAccessPageStart = (paymentAccessCurrentPage - 1) * Number(paymentAccessTablePageSize || 20);
+  const paymentAccessVisibleTableRows = paymentAccessFilteredTableRows.slice(paymentAccessPageStart, paymentAccessPageStart + Number(paymentAccessTablePageSize || 20));
+
+  return (
+    <div className="row row-cards">
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
+      {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
+      <div className="col-12">
+        <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
+          <div>
+            <h2 className="page-title mb-1">Payment Access</h2>
+            <div className="text-muted">Temporary Omada Authentication-Free Client access used while customers complete online payments in Chrome or Safari.</div>
+          </div>
+          <div className="d-flex align-items-center gap-2 flex-wrap justify-content-end">
+            <div className="text-muted small text-end">
+              Auto-refresh every 8s{paymentAccessLastUpdatedAt ? ` · Last ${formatPortalDateTime(paymentAccessLastUpdatedAt)}` : ''}
+            </div>
+            <button className="btn btn-outline-primary" type="button" disabled={!!busy} onClick={() => refreshPaymentAccess().catch((err) => setError(err.message))}>
+              <IconRefresh size={18} className="me-2" />Refresh
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="col-12">
+        <Card title="PayMongo Authentication-Free Client" subtitle="Temporary Omada access used only while a customer completes online payment in Chrome or Safari.">
+          <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+            <ul className="nav nav-tabs">
+              {['Overview', 'Settings'].map((item) => (
+                <li className="nav-item" key={item}>
+                  <button className={`nav-link ${paymentAccessTab === item ? 'active' : ''}`} type="button" onClick={() => setPaymentAccessTab(item)}>
+                    {item}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {paymentAccessTab === 'Overview' && (
+            <>
+              <div className="row g-3 mb-3">
+                <KpiCard icon={IconWifi} label="Active grants" value={paymentAccess?.overview?.active_count || 0} tone="green" />
+                <KpiCard icon={IconClock} label="Grants today" value={paymentAccess?.overview?.grants_today || 0} tone="blue" />
+                <KpiCard icon={IconAlertTriangle} label="Failures" value={paymentAccess?.overview?.failed_count || 0} tone="red" />
+                <KpiCard icon={IconBan} label="Abuse blocks" value={paymentAccess?.overview?.active_blocks || 0} tone="orange" />
+                <KpiCard icon={IconWifi} label="Omada live clients" value={paymentAccess?.overview?.remote_client_count || 0} tone="cyan" />
+                <KpiCard icon={IconAlertTriangle} label="Omada orphaned" value={paymentAccess?.overview?.orphaned_remote_clients || 0} tone={(paymentAccess?.overview?.orphaned_remote_clients || 0) > 0 ? 'red' : 'green'} />
+              </div>
+
+              {(paymentAccess?.remote_errors || []).length > 0 && (
+                <div className="alert alert-warning">
+                  Omada live state could not be checked for {(paymentAccess?.remote_errors || []).length} site(s).
+                  <div className="small mt-1">{(paymentAccess?.remote_errors || [])[0]?.message}</div>
+                </div>
+              )}
+              {(paymentAccess?.orphaned_remote_clients || []).length > 0 && (
+                <div className="alert alert-danger">
+                  Omada has Authentication-Free Client entries that are not active in this system. Remove them from the table below so customers do not keep unintended internet access.
+                </div>
+              )}
+
+              <div className="alert alert-info">
+                {paymentAccess?.guide?.summary || 'When a customer starts checkout from a real browser, Omada can allow that client temporarily for payment traffic.'}
+                <div className="small mt-1">{paymentAccess?.guide?.cleanup || 'The temporary entry is removed on success, cancel, or timeout.'}</div>
+              </div>
+
+              <div className="card">
+                <div className="card-header flex-wrap gap-2">
+                  <div>
+                    <h3 className="card-title mb-1">{paymentAccessTableTitle()}</h3>
+                    <div className="text-muted small">Review temporary checkout access, abuse activity, and recent Omada payment-access events.</div>
+                  </div>
+                </div>
+                <div className="card-body border-bottom">
+                  <ul className="nav nav-tabs mb-3">
+                    {paymentAccessTableTabs.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <li className="nav-item" key={item.key}>
+                          <button className={`nav-link ${paymentAccessTableTab === item.key ? 'active' : ''}`} type="button" onClick={() => setPaymentAccessTableTab(item.key)}>
+                            <Icon size={16} className="me-1" />
+                            {item.label}
+                            <span className="badge bg-secondary-lt text-secondary ms-2">{paymentAccessRowsFor(item.key).length}</span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div className="row g-2 align-items-end">
+                    <div className="col-md-5">
+                      <label className="form-label">Search</label>
+                      <div className="input-icon">
+                        <span className="input-icon-addon"><IconSearch size={16} /></span>
+                        <input
+                          className="form-control"
+                          value={paymentAccessTableSearch}
+                          onChange={(event) => setPaymentAccessTableSearch(event.target.value)}
+                          placeholder="Search customer, MAC, IP, site, order, or error"
+                        />
+                      </div>
+                    </div>
+                    {paymentAccessStatusFilterOptions.length > 0 && (
+                      <div className="col-md-3">
+                        <label className="form-label">Filter</label>
+                        <select className="form-select" value={paymentAccessTableStatus} onChange={(event) => setPaymentAccessTableStatus(event.target.value)}>
+                          <option value="">All statuses</option>
+                          {paymentAccessStatusFilterOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+                        </select>
+                      </div>
+                    )}
+                    <div className="col-md-2">
+                      <label className="form-label">Show entries</label>
+                      <select className="form-select" value={paymentAccessTablePageSize} onChange={(event) => setPaymentAccessTablePageSize(Number(event.target.value))}>
+                        {[10, 20, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+                      </select>
+                    </div>
+                    <div className="col-md-2">
+                      <button
+                        className="btn w-100"
+                        type="button"
+                        disabled={!paymentAccessTableSearch && !paymentAccessTableStatus}
+                        onClick={() => {
+                          setPaymentAccessTableSearch('');
+                          setPaymentAccessTableStatus('');
+                        }}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="table-responsive">
+                  <table className="table table-vcenter card-table">
+                    <thead>{renderPaymentAccessTableHead()}</thead>
+                    <tbody>{renderPaymentAccessTableRows(paymentAccessVisibleTableRows)}</tbody>
+                  </table>
+                </div>
+                <div className="card-footer d-flex flex-wrap align-items-center justify-content-between gap-2">
+                  <div className="text-muted small">
+                    Showing {paymentAccessTotalRows ? paymentAccessPageStart + 1 : 0}-{Math.min(paymentAccessPageStart + Number(paymentAccessTablePageSize || 20), paymentAccessTotalRows)} of {paymentAccessTotalRows}
+                  </div>
+                  <div className="btn-list">
+                    <button className="btn btn-sm" type="button" disabled={paymentAccessCurrentPage <= 1} onClick={() => setPaymentAccessTablePage((page) => Math.max(1, page - 1))}>
+                      <IconChevronLeft size={16} className="me-1" />Previous
+                    </button>
+                    <span className="btn btn-sm disabled">Page {paymentAccessCurrentPage} of {paymentAccessTotalPages}</span>
+                    <button className="btn btn-sm" type="button" disabled={paymentAccessCurrentPage >= paymentAccessTotalPages} onClick={() => setPaymentAccessTablePage((page) => Math.min(paymentAccessTotalPages, page + 1))}>
+                      Next<IconChevronRight size={16} className="ms-1" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {paymentAccessTab === 'Settings' && (
+            <form onSubmit={savePaymentAccessSettings}>
+              <div className="row g-3">
+                <div className="col-md-6">
+                  <div className="border rounded p-3 h-100">
+                    <div className="d-flex align-items-center justify-content-between gap-3">
+                      <div>
+                        <div className="fw-semibold">Enable temporary Authentication-Free Client</div>
+                        <div className="text-muted small">Adds the checkout device MAC in Omada only during the payment window.</div>
+                      </div>
+                      <label className="form-check form-switch m-0">
+                        <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.enabled !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), enabled: event.target.checked })} />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <div className="col-md-6">
+                  <div className="border rounded p-3 h-100">
+                    <div className="d-flex align-items-center justify-content-between gap-3">
+                      <div>
+                        <div className="fw-semibold">Force browser handoff from captive popup</div>
+                        <div className="text-muted small">Captive popup customers must copy/open the portal in Chrome or Safari before PayMongo checkout starts.</div>
+                      </div>
+                      <label className="form-check form-switch m-0">
+                        <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.browser_transfer_required !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), browser_transfer_required: event.target.checked })} />
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <div className="col-md-3">
+                  <label className="form-label">Payment window timeout (seconds)</label>
+                  <input className="form-control" type="number" min="30" max="900" value={paymentAccessForm?.grant_timeout_seconds ?? 120} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), grant_timeout_seconds: Number(event.target.value) })} />
+                  <div className="text-muted small mt-1">Default 120 seconds. The Omada free-client entry is removed after this window.</div>
+                </div>
+                <div className="col-md-3">
+                  <label className="form-label">Daily checkout window limit</label>
+                  <input className="form-control" type="number" min="1" max="100" value={paymentAccessForm?.daily_attempt_limit ?? 5} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), daily_attempt_limit: Number(event.target.value) })} />
+                </div>
+                <div className="col-md-3">
+                  <label className="form-label">Attempt cooldown (seconds)</label>
+                  <input className="form-control" type="number" min="0" max="3600" value={paymentAccessForm?.cooldown_seconds ?? 60} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), cooldown_seconds: Number(event.target.value) })} />
+                </div>
+                <div className="col-md-3">
+                  <label className="form-label">Abuse block duration (hours)</label>
+                  <input className="form-control" type="number" min="1" max="168" value={paymentAccessForm?.abuse_block_hours ?? 24} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), abuse_block_hours: Number(event.target.value) })} />
+                </div>
+                <div className="col-md-6">
+                  <label className="form-check">
+                    <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.block_online_payment_on_abuse !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), block_online_payment_on_abuse: event.target.checked })} />
+                    <span className="form-check-label">Block online payment after daily limit is reached</span>
+                  </label>
+                </div>
+                <div className="col-12">
+                  <label className="form-label">Operator notes / guide</label>
+                  <textarea className="form-control" rows={3} value={paymentAccessForm?.notes || ''} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), notes: event.target.value })} />
+                </div>
+                <div className="col-12">
+                  <div className="alert alert-warning mb-0">
+                    This feature does not authorize free internet permanently. It only gives the device a short Omada Authentication-Free Client window so PayMongo checkout can finish outside the captive popup.
+                  </div>
+                </div>
+                <div className="col-12 d-flex gap-2">
+                  <button className="btn btn-primary" disabled={busy === 'save-payment-access'}><IconDeviceFloppy size={18} className="me-2" />Save Payment Access Settings</button>
+                  <button className="btn" type="button" disabled={!!busy} onClick={() => refreshPaymentAccess().catch((err) => setError(err.message))}>Reload</button>
+                </div>
+              </div>
+            </form>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function OmadaControllerPage({ refresh }) {
+  const [settings, setSettings] = useState(null);
+  const [logs, setLogs] = useState([]);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState('');
+  const [tab, setTab] = useState('Status');
+  const [apiTab, setApiTab] = useState('Connection');
+  const [autoChecked, setAutoChecked] = useState(false);
+  const [installLog, setInstallLog] = useState(null);
+  const [webResult, setWebResult] = useState(null);
+  const [sshResult, setSshResult] = useState(null);
+  const [nasResult, setNasResult] = useState(null);
+  const [apiSettings, setApiSettings] = useState(null);
+  const [sites, setSites] = useState([]);
+  const [automationLogs, setAutomationLogs] = useState([]);
+  const [automationResult, setAutomationResult] = useState(null);
+  const [uninstallOpen, setUninstallOpen] = useState(false);
+  const [uninstallConfirmation, setUninstallConfirmation] = useState('');
+  const [environment, setEnvironment] = useState('STAGING');
+  const [profileForm, setProfileForm] = useState({ environment: 'STAGING', profile_name: '3JCentralPisowifi Staging RADIUS', radius_server_ip: '192.168.50.70', auth_port: 11812, accounting_port: 11813, shared_secret: generateSharedSecret(), accounting_enabled: true, interim_update_seconds: 300 });
+  const [ssidForm, setSsidForm] = useState({ environment: 'STAGING', ssid_name: '3J-Test-WiFi' });
+  const [fallback, setFallback] = useState(null);
+  const [nasForm, setNasForm] = useState({ name: 'Omada Controller Staging', ip_address: '192.168.50.71', shortname: 'omada-staging', secret: generateSharedSecret(), type: 'Omada Controller' });
+  const checklist = [
+    'Omada API login works.',
+    'Omada site selected.',
+    'Matching NAS client created in 3JCentralPisowifi.',
+    'Omada RADIUS profile created.',
+    'Test SSID created.',
+    'One AP is adopted and broadcasting SSID.',
+    'Test user exists in 3JCentralPisowifi.',
+    'Test user has active access time.',
+    'Phone/laptop connects using test credentials.',
+    'Access-Accept appears in RADIUS logs.',
+    'Accounting Start creates active session.',
+    'Interim update is no longer used in the active Omada captive portal flow.',
+    'Second device using same account is rejected.',
+    'Disconnect creates Stop packet or session becomes stale.',
+    'Install and open Omada Controller.',
+    'Complete Omada first-time setup.',
+    'Adopt one Omada AP.',
+    'Create SSID 3J-Test-WiFi with WPA2-Enterprise.',
+    'Add RADIUS profile using 192.168.50.70 and staging ports 11812 / 11813.',
+    'Enable accounting if available.',
+    'Create a test user in 3JCentralPisowifi.',
+    'Add a WiFi Bag item from Customer Devices.',
+    'Connect phone or laptop to 3J-Test-WiFi.',
+    'Confirm Access-Accept in RADIUS logs.',
+    'Confirm Accounting Start creates active session.',
+    'Confirm portal access expiry is tracked in the customer WiFi Bag.',
+    'Confirm second device with same account is rejected.'
+  ];
+  const installed = Boolean(settings && ['INSTALLED', 'RUNNING', 'STOPPED', 'ERROR'].includes(settings.install_status));
+  const installOnly = Boolean(settings && settings.install_status === 'NOT_INSTALLED');
+  const omadaTabs = installOnly ? ['Install'] : ['Status', 'Settings', 'Logs'];
+  const webReachable = Boolean(webResult && (webResult.http?.status === 'Reachable' || webResult.https?.status === 'Reachable'));
+  const canOpenOmada = installed && settings?.install_status !== 'NOT_INSTALLED' && webReachable;
+
+  async function load() {
+    setSettings(await request('/omada/settings'));
+    setLogs(await request('/omada/logs'));
+    setApiSettings(await request('/omada/api-settings'));
+    setAutomationLogs(await request('/omada/automation-logs'));
+  }
+  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (!settings) return;
+    const allowedTabs = settings.install_status === 'NOT_INSTALLED' ? ['Install'] : ['Status', 'Settings', 'Logs'];
+    if (!allowedTabs.includes(tab)) setTab(allowedTabs[0]);
+  }, [settings?.install_status, tab]);
+  useEffect(() => {
+    const staging = environment === 'STAGING';
+    const nextSecret = profileForm.shared_secret || generateSharedSecret();
+    setProfileForm({
+      ...profileForm,
+      environment,
+      profile_name: `3JCentralPisowifi ${staging ? 'Staging' : 'Production'} RADIUS`,
+      auth_port: staging ? 11812 : 1812,
+      accounting_port: staging ? 11813 : 1813,
+      shared_secret: nextSecret
+    });
+    setSsidForm({ ...ssidForm, environment });
+    setNasForm({
+      ...nasForm,
+      name: `Omada Controller ${staging ? 'Staging' : 'Production'}`,
+      shortname: `omada-${staging ? 'staging' : 'production'}`,
+      secret: nextSecret
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [environment]);
+  useEffect(() => {
+    if (installLog?.status !== 'RUNNING') return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const nextLogs = await request('/omada/logs');
+        setLogs(nextLogs);
+        const current = nextLogs.find((row) => row.id === installLog.id) || nextLogs.find((row) => row.action === installLog.action && row.status === 'RUNNING');
+        if (current) {
+          setInstallLog(current);
+          if (current.status !== 'RUNNING') {
+            setBusy('');
+            const saved = await request('/omada/settings');
+            setSettings(saved);
+            if (current.action === 'UNINSTALL' && current.status === 'SUCCESS') {
+              setTab('Install');
+              setMessage('Omada Controller uninstalled. The page is now showing installation setup only.');
+              setWebResult(null);
+            }
+          }
+        }
+      } catch (_err) {
+        // Keep polling on transient network/API errors.
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [installLog?.id, installLog?.status]);
+  useEffect(() => {
+    if (!settings || !['INSTALLED', 'RUNNING'].includes(settings.install_status) || webReachable) return undefined;
+    let cancelled = false;
+    const checkReachability = async () => {
+      try {
+        const data = await request('/omada/test-web', { method: 'POST', body: JSON.stringify({ host: settings.host, http_port: settings.http_port, https_port: settings.https_port }) });
+        if (!cancelled) {
+          setWebResult(data);
+          if (data.http?.status === 'Reachable' || data.https?.status === 'Reachable') {
+            setSettings(await request('/omada/settings'));
+          }
+        }
+      } catch (_err) {
+        // Keep the existing result; the next interval will retry.
+      }
+    };
+    checkReachability();
+    const timer = window.setInterval(checkReachability, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [settings?.install_status, settings?.host, settings?.http_port, settings?.https_port, webReachable]);
+  useEffect(() => {
+    if (webReachable && installLog?.action === 'INSTALL') {
+      setInstallLog(null);
+      setBusy('');
+    }
+  }, [webReachable, installLog]);
+  useEffect(() => {
+    if (!settings || autoChecked) return;
+    setAutoChecked(true);
+    async function runAutoDetect() {
+      try {
+        const data = await request('/omada/test-web', { method: 'POST', body: JSON.stringify({ host: settings.host, http_port: settings.http_port, https_port: settings.https_port }) });
+        setWebResult(data);
+      } catch (_err) {
+        setWebResult(null);
+      }
+      if (settings.ssh_username && (settings.has_ssh_password || settings.has_ssh_private_key)) {
+        try {
+          const data = await request('/omada/detect', { method: 'POST' });
+          if (data.settings) setSettings(data.settings);
+          setLogs(await request('/omada/logs'));
+        } catch (_err) {
+          await load().catch(() => {});
+        }
+      }
+    }
+    runAutoDetect();
+  }, [settings, autoChecked]);
+  if (!settings) return <div className="empty">Loading Omada Controller settings...</div>;
+
+  async function save(e) {
+    e.preventDefault();
+    setError('');
+    setMessage('');
+    try {
+      const saved = await request('/omada/settings', { method: 'PUT', body: JSON.stringify(settings) });
+      setSettings(saved);
+      setMessage('Omada settings saved.');
+      refresh();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function action(name, confirmText) {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setBusy(name);
+    setError('');
+    setMessage('');
+    try {
+      const data = await request(`/omada/${name}`, { method: 'POST' });
+      if (data.settings) setSettings(data.settings);
+      if (name === 'install') {
+        setInstallLog({ id: data.log_id, action: 'INSTALL', status: 'RUNNING', progress_percent: 2, current_step: 'Queued' });
+        setMessage('Omada install started.');
+        await load();
+        return;
+      }
+      setMessage(`Omada ${name} completed.`);
+      await load();
+    } catch (err) {
+      setError(err.message);
+      await load().catch(() => {});
+    } finally {
+      if (name !== 'install') setBusy('');
+    }
+  }
+
+  async function uninstallOmada() {
+    setBusy('uninstall');
+    setError('');
+    setMessage('');
+    try {
+      const data = await request('/omada/uninstall', { method: 'POST', body: JSON.stringify({ confirmation: uninstallConfirmation }) });
+      if (data.settings) setSettings(data.settings);
+      setInstallLog({ id: data.log_id, action: 'UNINSTALL', status: 'RUNNING', progress_percent: 2, current_step: 'Queued' });
+      setUninstallOpen(false);
+      setUninstallConfirmation('');
+      setMessage('Omada uninstall started.');
+      await load();
+    } catch (err) {
+      setError(err.message);
+      setBusy('');
+    }
+  }
+
+  async function testWeb() {
+    setBusy('test-web');
+    setError('');
+    try {
+      const data = await request('/omada/test-web', { method: 'POST', body: JSON.stringify({ host: settings.host, http_port: settings.http_port, https_port: settings.https_port }) });
+      setWebResult(data);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function testSsh() {
+    setBusy('test-ssh');
+    setError('');
+    try {
+      const data = await request('/omada/test-ssh', { method: 'POST' });
+      setSshResult(data);
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function createNas(e) {
+    e.preventDefault();
+    setError('');
+    const data = await request('/omada/create-matching-nas', { method: 'POST', body: JSON.stringify({ environment, name: nasForm.name, ip_address: nasForm.ip_address, shortname: nasForm.shortname, type: nasForm.type, shared_secret: nasForm.secret }) });
+    setNasResult(data);
+    setProfileForm({ ...profileForm, shared_secret: data.secret });
+    setMessage('Matching RADIUS trust entry created.');
+    setAutomationLogs(await request('/omada/automation-logs'));
+    refresh();
+  }
+
+  async function saveApiSettings(e) {
+    e.preventDefault();
+    setBusy('save-api-settings');
+    setError('');
+    setMessage('');
+    try {
+      const saved = await request('/omada/api-settings', { method: 'PUT', body: JSON.stringify(apiSettings) });
+      setApiSettings(saved);
+      setMessage('Omada API settings saved.');
+      setAutomationLogs(await request('/omada/automation-logs'));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function clearApiCredentials() {
+    setBusy('clear-api-settings');
+    setError('');
+    try {
+      const saved = await request('/omada/api-settings', { method: 'PUT', body: JSON.stringify({ remember_credentials: false }) });
+      setApiSettings(saved);
+      setMessage('Saved Omada API credentials cleared.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function testApiLogin() {
     setBusy('test-api-login');
     setError('');
@@ -31044,18 +31799,6 @@ function OmadaControllerPage({ refresh }) {
   const omadaProgressAction = visibleInstallLog?.action === 'UNINSTALL' ? 'Uninstall' : 'Install';
   const latestLog = logs[0];
   const radiusSecret = nasResult?.secret || nasForm.secret;
-  const paymentAccessTableTabs = [
-    { key: 'GRANTED', label: 'Currently Granted Clients', icon: IconWifi },
-    { key: 'ABUSE', label: 'Abuse Watchlist', icon: IconBan },
-    { key: 'RECENT', label: 'Recent Payment Access Activity', icon: IconActivity },
-  ];
-  const paymentAccessStatusFilterOptions = paymentAccessStatusOptions();
-  const paymentAccessFilteredTableRows = paymentAccessFilteredRows();
-  const paymentAccessTotalRows = paymentAccessFilteredTableRows.length;
-  const paymentAccessTotalPages = Math.max(1, Math.ceil(paymentAccessTotalRows / Number(paymentAccessTablePageSize || 20)));
-  const paymentAccessCurrentPage = Math.min(paymentAccessTablePage, paymentAccessTotalPages);
-  const paymentAccessPageStart = (paymentAccessCurrentPage - 1) * Number(paymentAccessTablePageSize || 20);
-  const paymentAccessVisibleTableRows = paymentAccessFilteredTableRows.slice(paymentAccessPageStart, paymentAccessPageStart + Number(paymentAccessTablePageSize || 20));
 
   return (
     <div className="row row-cards">
@@ -31318,211 +32061,6 @@ function OmadaControllerPage({ refresh }) {
       {tab === 'Advanced' && apiTab === 'Automation Logs' && <div className="col-12">
         <Card title="Automation Logs">
           {automationLogs.length > 0 ? <Table rows={automationLogs.slice(0, 10)} columns={['action', 'status', 'error_message', 'created_at']} /> : <div className="empty">No Omada automation logs yet.</div>}
-        </Card>
-      </div>}
-
-      {tab === 'Payment Access' && <div className="col-12">
-        <Card title="PayMongo Authentication-Free Client" subtitle="Temporary Omada access used only while a customer completes online payment in Chrome or Safari.">
-          <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-            <ul className="nav nav-tabs">
-              {['Overview', 'Settings'].map((item) => (
-                <li className="nav-item" key={item}>
-                  <button className={`nav-link ${paymentAccessTab === item ? 'active' : ''}`} type="button" onClick={() => setPaymentAccessTab(item)}>
-                    {item}
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <button className="btn btn-outline-primary" type="button" disabled={!!busy} onClick={() => refreshPaymentAccess().catch((err) => setError(err.message))}>
-              <IconRefresh size={18} className="me-2" />Refresh
-            </button>
-          </div>
-
-          {paymentAccessTab === 'Overview' && (
-            <>
-              <div className="row g-3 mb-3">
-                <KpiCard icon={IconWifi} label="Active grants" value={paymentAccess?.overview?.active_count || 0} tone="green" />
-                <KpiCard icon={IconClock} label="Grants today" value={paymentAccess?.overview?.grants_today || 0} tone="blue" />
-                <KpiCard icon={IconAlertTriangle} label="Failures" value={paymentAccess?.overview?.failed_count || 0} tone="red" />
-                <KpiCard icon={IconBan} label="Abuse blocks" value={paymentAccess?.overview?.active_blocks || 0} tone="orange" />
-                <KpiCard icon={IconWifi} label="Omada live clients" value={paymentAccess?.overview?.remote_client_count || 0} tone="cyan" />
-                <KpiCard icon={IconAlertTriangle} label="Omada orphaned" value={paymentAccess?.overview?.orphaned_remote_clients || 0} tone={(paymentAccess?.overview?.orphaned_remote_clients || 0) > 0 ? 'red' : 'green'} />
-              </div>
-
-              {(paymentAccess?.remote_errors || []).length > 0 && (
-                <div className="alert alert-warning">
-                  Omada live state could not be checked for {(paymentAccess?.remote_errors || []).length} site(s).
-                  <div className="small mt-1">{(paymentAccess?.remote_errors || [])[0]?.message}</div>
-                </div>
-              )}
-              {(paymentAccess?.orphaned_remote_clients || []).length > 0 && (
-                <div className="alert alert-danger">
-                  Omada has Authentication-Free Client entries that are not active in this system. Remove them from the table below so customers do not keep unintended internet access.
-                </div>
-              )}
-
-              <div className="alert alert-info">
-                {paymentAccess?.guide?.summary || 'When a customer starts checkout from a real browser, Omada can allow that client temporarily for payment traffic.'}
-                <div className="small mt-1">{paymentAccess?.guide?.cleanup || 'The temporary entry is removed on success, cancel, or timeout.'}</div>
-              </div>
-
-              <div className="card">
-                <div className="card-header flex-wrap gap-2">
-                  <div>
-                    <h3 className="card-title mb-1">{paymentAccessTableTitle()}</h3>
-                    <div className="text-muted small">Review temporary checkout access, abuse activity, and recent Omada payment-access events.</div>
-                  </div>
-                </div>
-                <div className="card-body border-bottom">
-                  <ul className="nav nav-tabs mb-3">
-                    {paymentAccessTableTabs.map((item) => {
-                      const Icon = item.icon;
-                      return (
-                        <li className="nav-item" key={item.key}>
-                          <button className={`nav-link ${paymentAccessTableTab === item.key ? 'active' : ''}`} type="button" onClick={() => setPaymentAccessTableTab(item.key)}>
-                            <Icon size={16} className="me-1" />
-                            {item.label}
-                            <span className="badge bg-secondary-lt text-secondary ms-2">{paymentAccessRowsFor(item.key).length}</span>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                  <div className="row g-2 align-items-end">
-                    <div className="col-md-5">
-                      <label className="form-label">Search</label>
-                      <div className="input-icon">
-                        <span className="input-icon-addon"><IconSearch size={16} /></span>
-                        <input
-                          className="form-control"
-                          value={paymentAccessTableSearch}
-                          onChange={(event) => setPaymentAccessTableSearch(event.target.value)}
-                          placeholder="Search customer, MAC, IP, site, order, or error"
-                        />
-                      </div>
-                    </div>
-                    {paymentAccessStatusFilterOptions.length > 0 && (
-                      <div className="col-md-3">
-                        <label className="form-label">Filter</label>
-                        <select className="form-select" value={paymentAccessTableStatus} onChange={(event) => setPaymentAccessTableStatus(event.target.value)}>
-                          <option value="">All statuses</option>
-                          {paymentAccessStatusFilterOptions.map((status) => <option key={status} value={status}>{status}</option>)}
-                        </select>
-                      </div>
-                    )}
-                    <div className="col-md-2">
-                      <label className="form-label">Show entries</label>
-                      <select className="form-select" value={paymentAccessTablePageSize} onChange={(event) => setPaymentAccessTablePageSize(Number(event.target.value))}>
-                        {[10, 20, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
-                      </select>
-                    </div>
-                    <div className="col-md-2">
-                      <button
-                        className="btn w-100"
-                        type="button"
-                        disabled={!paymentAccessTableSearch && !paymentAccessTableStatus}
-                        onClick={() => {
-                          setPaymentAccessTableSearch('');
-                          setPaymentAccessTableStatus('');
-                        }}
-                      >
-                        Clear
-                      </button>
-                    </div>
-                  </div>
-                </div>
-                <div className="table-responsive">
-                  <table className="table table-vcenter card-table">
-                    <thead>{renderPaymentAccessTableHead()}</thead>
-                    <tbody>{renderPaymentAccessTableRows(paymentAccessVisibleTableRows)}</tbody>
-                  </table>
-                </div>
-                <div className="card-footer d-flex flex-wrap align-items-center justify-content-between gap-2">
-                  <div className="text-muted small">
-                    Showing {paymentAccessTotalRows ? paymentAccessPageStart + 1 : 0}-{Math.min(paymentAccessPageStart + Number(paymentAccessTablePageSize || 20), paymentAccessTotalRows)} of {paymentAccessTotalRows}
-                  </div>
-                  <div className="btn-list">
-                    <button className="btn btn-sm" type="button" disabled={paymentAccessCurrentPage <= 1} onClick={() => setPaymentAccessTablePage((page) => Math.max(1, page - 1))}>
-                      <IconChevronLeft size={16} className="me-1" />Previous
-                    </button>
-                    <span className="btn btn-sm disabled">Page {paymentAccessCurrentPage} of {paymentAccessTotalPages}</span>
-                    <button className="btn btn-sm" type="button" disabled={paymentAccessCurrentPage >= paymentAccessTotalPages} onClick={() => setPaymentAccessTablePage((page) => Math.min(paymentAccessTotalPages, page + 1))}>
-                      Next<IconChevronRight size={16} className="ms-1" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-
-          {paymentAccessTab === 'Settings' && (
-            <form onSubmit={savePaymentAccessSettings}>
-              <div className="row g-3">
-                <div className="col-md-6">
-                  <div className="border rounded p-3 h-100">
-                    <div className="d-flex align-items-center justify-content-between gap-3">
-                      <div>
-                        <div className="fw-semibold">Enable temporary Authentication-Free Client</div>
-                        <div className="text-muted small">Adds the checkout device MAC in Omada only during the payment window.</div>
-                      </div>
-                      <label className="form-check form-switch m-0">
-                        <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.enabled !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), enabled: event.target.checked })} />
-                      </label>
-                    </div>
-                  </div>
-                </div>
-                <div className="col-md-6">
-                  <div className="border rounded p-3 h-100">
-                    <div className="d-flex align-items-center justify-content-between gap-3">
-                      <div>
-                        <div className="fw-semibold">Force browser handoff from captive popup</div>
-                        <div className="text-muted small">Captive popup customers must copy/open the portal in Chrome or Safari before PayMongo checkout starts.</div>
-                      </div>
-                      <label className="form-check form-switch m-0">
-                        <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.browser_transfer_required !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), browser_transfer_required: event.target.checked })} />
-                      </label>
-                    </div>
-                  </div>
-                </div>
-                <div className="col-md-3">
-                  <label className="form-label">Payment window timeout (seconds)</label>
-                  <input className="form-control" type="number" min="30" max="900" value={paymentAccessForm?.grant_timeout_seconds ?? 120} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), grant_timeout_seconds: Number(event.target.value) })} />
-                  <div className="text-muted small mt-1">Default 120 seconds. The Omada free-client entry is removed after this window.</div>
-                </div>
-                <div className="col-md-3">
-                  <label className="form-label">Daily checkout window limit</label>
-                  <input className="form-control" type="number" min="1" max="100" value={paymentAccessForm?.daily_attempt_limit ?? 5} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), daily_attempt_limit: Number(event.target.value) })} />
-                </div>
-                <div className="col-md-3">
-                  <label className="form-label">Attempt cooldown (seconds)</label>
-                  <input className="form-control" type="number" min="0" max="3600" value={paymentAccessForm?.cooldown_seconds ?? 60} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), cooldown_seconds: Number(event.target.value) })} />
-                </div>
-                <div className="col-md-3">
-                  <label className="form-label">Abuse block duration (hours)</label>
-                  <input className="form-control" type="number" min="1" max="168" value={paymentAccessForm?.abuse_block_hours ?? 24} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), abuse_block_hours: Number(event.target.value) })} />
-                </div>
-                <div className="col-md-6">
-                  <label className="form-check">
-                    <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.block_online_payment_on_abuse !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), block_online_payment_on_abuse: event.target.checked })} />
-                    <span className="form-check-label">Block online payment after daily limit is reached</span>
-                  </label>
-                </div>
-                <div className="col-12">
-                  <label className="form-label">Operator notes / guide</label>
-                  <textarea className="form-control" rows={3} value={paymentAccessForm?.notes || ''} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), notes: event.target.value })} />
-                </div>
-                <div className="col-12">
-                  <div className="alert alert-warning mb-0">
-                    This feature does not authorize free internet permanently. It only gives the device a short Omada Authentication-Free Client window so PayMongo checkout can finish outside the captive popup.
-                  </div>
-                </div>
-                <div className="col-12 d-flex gap-2">
-                  <button className="btn btn-primary" disabled={busy === 'save-payment-access'}><IconDeviceFloppy size={18} className="me-2" />Save Payment Access Settings</button>
-                  <button className="btn" type="button" disabled={!!busy} onClick={() => refreshPaymentAccess().catch((err) => setError(err.message))}>Reload</button>
-                </div>
-              </div>
-            </form>
-          )}
         </Card>
       </div>}
 
@@ -31893,6 +32431,7 @@ const nav = [
   },
   { page: 'Sales', icon: IconCalendarStats, tone: 'green' },
   { page: 'PayMongo', icon: IconCash, tone: 'green' },
+  { page: 'Payment Access', icon: IconBrowserCheck, tone: 'cyan' },
   { page: 'IPTV', icon: IconPlayerPlay, tone: 'purple' },
   { page: 'Captive Portal', icon: IconWifi, tone: 'blue' },
   { page: 'Support Inbox', icon: IconMessageCircle, tone: 'orange' },
@@ -32149,7 +32688,7 @@ function NotificationsPage({ onNavigate }) {
 function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnreadCount = 0 }) {
   const [open, setOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [openGroups, setOpenGroups] = useState({ 'APs Deployment': true });
+  const [openGroups, setOpenGroups] = useState({});
   const setActivePage = (nextPage) => {
     setPage(nextPage);
     setOpen(false);
@@ -32178,7 +32717,7 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnread
               const hasChildren = Boolean(item.children?.length);
               const groupActive = hasChildren && item.children.some((child) => child.page === page);
               if (hasChildren) {
-                const expanded = openGroups[item.page] || groupActive;
+                const expanded = Boolean(openGroups[item.page] || (item.page !== 'APs Deployment' && groupActive));
                 return (
                   <li className={`nav-item nav-group ${groupActive ? 'active' : ''}`} key={item.page}>
                     <button className={`nav-link nav-group-toggle ${groupActive ? 'active' : ''}`} type="button" onClick={() => toggleGroup(item)} aria-expanded={expanded}>
@@ -32585,6 +33124,7 @@ function App() {
 	            {page === 'Physical Stores' && <PhysicalStoresPage />}
 	            {page === 'Sales' && <SalesPage />}
 	            {page === 'PayMongo' && <PayMongoPage />}
+	            {page === 'Payment Access' && <PaymentAccessPage />}
 	            {page === 'IPTV' && <IptvPage />}
 	            {page === 'Captive Portal' && <CaptivePortalPage />}
             {page === 'Support Inbox' && <SupportInboxPage />}
