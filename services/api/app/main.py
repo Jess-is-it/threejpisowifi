@@ -17724,6 +17724,69 @@ def record_rejected_paymongo_webhook(payload: dict, event_type: str, reason: str
         print(f"PayMongo rejected webhook record failed: {exc}")
 
 
+def safe_paymongo_diagnostic_headers(request: Request) -> dict:
+    blocked = {"authorization", "cookie", "set-cookie"}
+    return {
+        key: normalize_payment_text(value, 1200)
+        for key, value in request.headers.items()
+        if key.lower() not in blocked
+    }
+
+
+def paymongo_signature_timestamp(header: str) -> Optional[str]:
+    parsed = parse_paymongo_signature(header or "")
+    return parsed.get("t")
+
+
+def record_paymongo_webhook_diagnostic(request: Request, raw_body: bytes, payload: dict) -> dict:
+    signature_header = request.headers.get("Paymongo-Signature") or request.headers.get("paymongo-signature") or ""
+    headers = safe_paymongo_diagnostic_headers(request)
+    cf_connecting_ip = host_ip(request.headers.get("cf-connecting-ip"))
+    request_ip = host_ip(public_ip(request))
+    content_length = request.headers.get("content-length")
+    try:
+        content_length_int = int(content_length) if content_length is not None else len(raw_body)
+    except (TypeError, ValueError):
+        content_length_int = len(raw_body)
+    event_id = paymongo_event_id(payload) or normalize_payment_text(nested_value(payload, ["data", "id"]), 160)
+    event_type = paymongo_event_type(payload)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO paymongo_webhook_diagnostics(
+                    request_method, request_path, event_id, event_type, request_ip, cf_connecting_ip,
+                    x_forwarded_for, user_agent, cf_ray, content_type, content_length,
+                    signature_present, signature_timestamp, body_sha256, payload_json,
+                    header_names, headers_json
+                )
+                VALUES (%s, %s, %s, %s, NULLIF(%s, '')::inet, NULLIF(%s, '')::inet,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    request.method,
+                    str(request.url.path),
+                    normalize_payment_text(event_id, 160) or None,
+                    normalize_payment_text(event_type, 160) or None,
+                    request_ip or "",
+                    cf_connecting_ip or "",
+                    normalize_payment_text(request.headers.get("x-forwarded-for"), 1200),
+                    normalize_payment_text(request.headers.get("user-agent"), 1200),
+                    normalize_payment_text(request.headers.get("cf-ray"), 160),
+                    normalize_payment_text(request.headers.get("content-type"), 300),
+                    content_length_int,
+                    bool(signature_header),
+                    normalize_payment_text(paymongo_signature_timestamp(signature_header), 80),
+                    sha256(raw_body).hexdigest(),
+                    Json(sanitize_summary(payload) if payload else {"raw_body_sha256": sha256(raw_body).hexdigest()}),
+                    list(headers.keys()),
+                    Json(headers),
+                ),
+            )
+            return cur.fetchone()
+
+
 class DetachedRequestClient:
     def __init__(self, host: str = ""):
         self.host = host
@@ -17899,6 +17962,35 @@ async def paymongo_webhook_health():
         "status": "OK",
         "provider": "PAYMONGO",
         "message": "PayMongo webhook endpoint is reachable. Payment events must use POST.",
+    }
+
+
+@app.api_route("/api/payments/paymongo/webhook-diagnostic", methods=["GET", "HEAD", "OPTIONS"])
+async def paymongo_webhook_diagnostic_health():
+    return {
+        "status": "OK",
+        "provider": "PAYMONGO",
+        "diagnostic": True,
+        "message": "Diagnostic webhook endpoint is reachable. Send PayMongo test events here to confirm delivery.",
+    }
+
+
+@app.post("/api/payments/paymongo/webhook-diagnostic")
+async def paymongo_webhook_diagnostic(request: Request):
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except ValueError:
+        payload = {"raw_body_sha256": sha256(raw_body).hexdigest(), "invalid_json": True}
+    row = record_paymongo_webhook_diagnostic(request, raw_body, payload)
+    return {
+        "received": True,
+        "status": "DIAGNOSTIC_RECORDED",
+        "diagnostic_id": str(row["id"]),
+        "event_id": row.get("event_id"),
+        "event_type": row.get("event_type"),
+        "signature_present": bool(row.get("signature_present")),
+        "body_sha256": row.get("body_sha256"),
     }
 
 
@@ -41253,6 +41345,27 @@ def check_paymongo_webhooks(admin=Depends(current_admin)):
         "results": results,
         "remote_webhooks": paymongo_remote_webhooks_summary(payment_gateway_store()),
     }
+
+
+@app.get("/api/paymongo/webhook-diagnostics")
+def list_paymongo_webhook_diagnostics(limit: int = 50, admin=Depends(current_admin)):
+    safe_limit = max(1, min(int(limit or 50), 200))
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, request_method, request_path, event_id, event_type,
+                       request_ip, cf_connecting_ip, x_forwarded_for, user_agent, cf_ray,
+                       content_type, content_length, signature_present, signature_timestamp,
+                       body_sha256, header_names, headers_json, created_at
+                FROM paymongo_webhook_diagnostics
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (safe_limit,),
+            )
+            rows = cur.fetchall()
+    return {"rows": rows, "count": len(rows), "limit": safe_limit}
 
 
 @app.post("/api/paymongo/telegram-test")
