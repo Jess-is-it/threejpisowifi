@@ -1864,7 +1864,7 @@ function PortalAppLegacy() {
           device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || null,
           product_item_id: item.id,
           product_category_id: item.category_id || item.assigned_category_id || null,
-          payment_method: 'gcash',
+          payment_method: 'paymongo_checkout',
           purchase_quantity: safeQuantity
         })
       });
@@ -1958,7 +1958,7 @@ function PortalAppLegacy() {
   const productCategories = settings?.product_categories || [];
   const productCategoryGroups = (productCategories || []).filter((category) => category?.id && (category.items || []).length);
   const payments = settings?.payments || {};
-  const canCheckoutWithGcash = Boolean(payments.enabled && payments.ready_for_checkout && (payments.enabled_payment_methods || []).includes('gcash'));
+  const canCheckoutWithGcash = Boolean(payments.enabled && payments.ready_for_checkout && (payments.enabled_payment_methods || []).length);
   const remainingTimeSlot = (
     <div className={`client-portal-remaining-overview ${timerExpired ? 'is-expired' : connected ? 'is-connected' : hasTime ? 'is-loaded' : 'is-empty'}`}>
       <div className="client-portal-remaining-row">
@@ -2265,6 +2265,7 @@ function PortalApp() {
   const [bagClaimMessage, setBagClaimMessage] = useState(null);
   const [bagHistoryFilter, setBagHistoryFilter] = useState('ALL');
   const [bagHistoryQuery, setBagHistoryQuery] = useState('');
+  const [bagPassDetail, setBagPassDetail] = useState(null);
   const [bagStoreRequestQuery, setBagStoreRequestQuery] = useState('');
   const [pendingBagActivationItem, setPendingBagActivationItem] = useState(null);
   const [purchaseSuccessModal, setPurchaseSuccessModal] = useState(null);
@@ -2275,6 +2276,7 @@ function PortalApp() {
   const [outsidePurchaseConfirm, setOutsidePurchaseConfirm] = useState(null);
   const [checkoutBrowserReminder, setCheckoutBrowserReminder] = useState(null);
   const [paymentHandoff, setPaymentHandoff] = useState(null);
+  const [checkoutErrorModal, setCheckoutErrorModal] = useState(null);
   const [checkoutCopyMessage, setCheckoutCopyMessage] = useState('');
   const [portalScreen, setPortalScreen] = useState(() => {
     const initialParams = new URLSearchParams(window.location.search);
@@ -2312,7 +2314,6 @@ function PortalApp() {
   const [storeRequestModal, setStoreRequestModal] = useState(null);
   const [storeRequestQrDataUrl, setStoreRequestQrDataUrl] = useState('');
   const [storeRequestFilter, setStoreRequestFilter] = useState('ALL');
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('gcash');
   const [portalCoverage, setPortalCoverage] = useState(null);
   const [portalCoverageOpen, setPortalCoverageOpen] = useState(false);
   const [portalCoverageLoading, setPortalCoverageLoading] = useState(false);
@@ -2402,6 +2403,8 @@ function PortalApp() {
   const dismissedPaymentNoticeKeyRef = useRef('');
   const cancelledPaymentOrdersRef = useRef(new Set());
   const checkoutCopyMessageTimerRef = useRef(null);
+  const portalStateSyncInFlightRef = useRef(false);
+  const lastPortalStateSyncAtRef = useRef(0);
   const handledStoreApprovalRef = useRef(new Set());
   const storeRequestStatusRef = useRef(new Map());
   const storePendingRequestsRef = useRef([]);
@@ -2410,6 +2413,7 @@ function PortalApp() {
   const [avatarEventNoteSignal, setAvatarEventNoteSignal] = useState(0);
   const params = new URLSearchParams(window.location.search);
   const paymentOrderFromUrl = params.get('payment_order_id') || params.get('payment_order') || params.get('order');
+  const paymentReturnStatus = params.get('payment') || '';
   const handoffBridge = params.get('handoff_bridge') === '1';
   const bridgeChecked = params.get('bridge_checked') === '1';
   const rawQueryParams = Object.fromEntries(params.entries());
@@ -2472,12 +2476,14 @@ function PortalApp() {
   }, [paymentResult]);
   useEffect(() => {
     const handlePageShow = (event) => {
-      if (!event.persisted) return;
+      if (!event.persisted && !pageWasRestoredByBackForward()) return;
       const restoredParams = new URLSearchParams(window.location.search);
       const restoredPaymentOrder = restoredParams.get('payment_order_id') || restoredParams.get('payment_order') || restoredParams.get('order');
       if (restoredPaymentOrder) return;
       const restoredPayment = paymentResultRef.current;
-      if (restoredPayment && !paymentResultIsTerminal(restoredPayment)) dismissPaymentNotice(restoredPayment);
+      const storedPayment = readPendingPaymentCheckout();
+      const pendingPayment = restoredPayment && !paymentResultIsTerminal(restoredPayment) ? restoredPayment : storedPayment;
+      if (pendingPayment && !paymentResultIsTerminal(pendingPayment)) cancelPaymentCheckout(pendingPayment);
       setPaymentChecking(false);
       setPaymentLoading('');
     };
@@ -2742,7 +2748,7 @@ function PortalApp() {
       checkout_url: payment.checkout_url,
       provider: payment.provider || 'PAYMONGO',
       mode: payment.mode,
-      payment_method: payment.payment_method || selectedPaymentMethod || 'gcash',
+      payment_method: payment.payment_method || 'paymongo_checkout',
       amount_centavos: payment.amount_centavos,
       currency: payment.currency || 'PHP',
       product_name: payment.product_name,
@@ -2785,6 +2791,20 @@ function PortalApp() {
     }
   }
 
+  function pageWasRestoredByBackForward() {
+    try {
+      const navigationEntry = performance.getEntriesByType?.('navigation')?.[0];
+      if (navigationEntry?.type === 'back_forward') return true;
+    } catch {
+      // Captive browsers can omit Navigation Timing details.
+    }
+    try {
+      return performance.navigation?.type === 2;
+    } catch {
+      return false;
+    }
+  }
+
   function clearPendingPaymentCheckout(orderId = '') {
     try {
       if (!orderId) {
@@ -2805,8 +2825,13 @@ function PortalApp() {
     savePendingPaymentCheckout(payment);
     showPaymentResult(payment, { force: true });
     setCheckoutCopyMessage('');
-    setPaymentHandoff(payment);
     setPortalScreen('shop');
+    if (isCaptivePortalPlaybackBrowser()) {
+      setPaymentHandoff(payment);
+      return;
+    }
+    setPaymentHandoff(null);
+    window.setTimeout(() => openCheckoutUrl(payment.checkout_url, { sameTab: true }), 0);
   }
 
   function showPaymentResult(payment, options = {}) {
@@ -3023,6 +3048,26 @@ function PortalApp() {
     return nextStatus;
   }
 
+  async function syncPortalState(options = {}) {
+    const id = options.sessionId || sessionId || localStorage.getItem('centralwifi_portal_session');
+    if (!id || portalStateSyncInFlightRef.current) return null;
+    const throttleMs = Number(options.throttleMs ?? 0);
+    if (throttleMs > 0 && Date.now() - lastPortalStateSyncAtRef.current < throttleMs) return status;
+    portalStateSyncInFlightRef.current = true;
+    lastPortalStateSyncAtRef.current = Date.now();
+    try {
+      const nextStatus = await refreshStatus(id, { includeContext: true, quiet: true });
+      try {
+        await loadBag();
+      } catch {
+        // Status response often includes bag details already; this second fetch is best effort.
+      }
+      return nextStatus;
+    } finally {
+      portalStateSyncInFlightRef.current = false;
+    }
+  }
+
   async function loadPortal() {
     const portalSettings = await publicRequest('/portal/settings');
     setSettings(portalSettings);
@@ -3122,6 +3167,10 @@ function PortalApp() {
     if (paymentOrderFromUrl) return;
     const restoredPayment = readPendingPaymentCheckout();
     if (!restoredPayment?.payment_order_id || cancelledPaymentOrdersRef.current.has(restoredPayment.payment_order_id)) return;
+    if (pageWasRestoredByBackForward()) {
+      cancelPaymentCheckout(restoredPayment);
+      return;
+    }
     setPortalScreen('shop');
     showPaymentResult(restoredPayment, { force: false });
     checkPaymentStatus(restoredPayment.payment_order_id).catch(() => null);
@@ -3263,9 +3312,10 @@ function PortalApp() {
     }
   }
 
-  async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false, paymentMethod = selectedPaymentMethod, confirmedBrowserReminder = false) {
+  async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false, paymentMethod = 'paymongo_checkout', confirmedBrowserReminder = false) {
     setResult(null);
     setPaymentResult(null);
+    setCheckoutErrorModal(null);
     if (guardPortalBlockedAction()) return;
     const safeQuantity = Math.max(1, Math.min(Number(purchaseQuantity || 1), 365));
     let currentStatus = status;
@@ -3279,7 +3329,7 @@ function PortalApp() {
       setCheckoutBrowserReminder({
         item,
         quantity: safeQuantity,
-        paymentMethod: paymentMethod || selectedPaymentMethod || 'gcash',
+        paymentMethod: 'paymongo_checkout',
         forceBrowserTransfer: true,
       });
       return;
@@ -3299,7 +3349,7 @@ function PortalApp() {
       return;
     }
     if (!portalProfileConfigured(currentProfile) && !confirmedBrowserReminder) {
-      setCheckoutBrowserReminder({ item, quantity: safeQuantity, paymentMethod: paymentMethod || selectedPaymentMethod || 'gcash' });
+      setCheckoutBrowserReminder({ item, quantity: safeQuantity, paymentMethod: 'paymongo_checkout' });
       return;
     }
     if (
@@ -3323,7 +3373,7 @@ function PortalApp() {
         body: JSON.stringify(payload({
           product_item_id: item.id,
           product_category_id: item.category_id || item.assigned_category_id || selectedProductCategory?.id || null,
-          payment_method: paymentMethod || selectedPaymentMethod || 'gcash',
+          payment_method: 'paymongo_checkout',
           purchase_quantity: safeQuantity,
           selected_barangay: barangayOnly ? selectedBarangay : null,
           outside_network_purchase: outside3jNetwork,
@@ -3331,9 +3381,16 @@ function PortalApp() {
       });
       if (!data.checkout_url) throw new Error('PayMongo did not return a checkout link.');
       setPaymentLoading('');
+      setCheckoutErrorModal(null);
       showCheckoutHandoff(data);
     } catch (err) {
+      const message = err.status === 429 ? err.message : friendlyPayMongoError(err.message);
       showPaymentResult({ status: 'FAILED', last_error: err.message }, { force: true });
+      setCheckoutErrorModal({
+        status: err.status,
+        title: err.status === 429 ? t('Checkout temporarily limited') : t('Checkout could not start'),
+        message: t(message),
+      });
       setPaymentLoading('');
     }
   }
@@ -3937,16 +3994,19 @@ function PortalApp() {
   const portalPaymentMethodOptions = payments.payment_method_options || [
     { id: 'gcash', label: 'GCash' },
     { id: 'qrph', label: 'QR Ph' },
-    { id: 'card', label: 'Card' },
     { id: 'paymaya', label: 'Maya / PayMaya' },
-    { id: 'grab_pay', label: 'GrabPay' }
+    { id: 'grab_pay', label: 'GrabPay' },
+    { id: 'shopee_pay', label: 'ShopeePay' },
+    { id: 'dob', label: 'BPI / UnionBank Online Banking' },
+    { id: 'brankas', label: 'BDO / LandBank / Metrobank Online Banking' },
+    { id: 'billease', label: 'BillEase' },
+    { id: 'card', label: 'Visa / Mastercard' }
   ];
   const enabledPaymentMethods = payments.enabled_payment_methods?.length ? payments.enabled_payment_methods : ['gcash'];
   const onlinePaymentMethods = portalPaymentMethodOptions.filter((method) => enabledPaymentMethods.includes(method.id));
-  const selectedPaymentMethodRow = onlinePaymentMethods.find((method) => method.id === selectedPaymentMethod) || onlinePaymentMethods[0] || null;
-  const canCheckoutOnline = Boolean(payments.enabled && payments.ready_for_checkout && selectedPaymentMethodRow);
+  const canCheckoutOnline = Boolean(payments.enabled && payments.ready_for_checkout && onlinePaymentMethods.length);
   const canCheckoutWithGcash = canCheckoutOnline;
-  const selectedPaymentLabel = selectedPaymentMethodRow?.label || 'Online';
+  const selectedPaymentLabel = 'PayMongo checkout';
   const visibleProductCategoryGroups = productCategoryGroups;
   const portalProductKind = (item = {}) => item.product_kind || 'WIFI';
   const portalProductKindUsesIptv = (item = {}) => ['IPTV', 'WIFI_IPTV'].includes(portalProductKind(item));
@@ -4021,31 +4081,28 @@ function PortalApp() {
   useEffect(() => {
     if (!sessionId || portalBooting || portalBlocked) return undefined;
     const hasBagItems = activeBagItems.length > 0 || queuedBagItems.length > 0;
-    const shouldPoll = Boolean(status) || hasBagItems || status?.status === 'ACCESS_GRANTED';
-    if (!shouldPoll) return undefined;
     let stopped = false;
-    let inFlight = false;
-    const pollStatus = async () => {
-      if (stopped || inFlight || document.hidden) return;
-      inFlight = true;
+    const syncState = async (options = {}) => {
+      if (stopped || document.hidden) return;
       try {
-        await refreshStatus(sessionId, { quiet: true });
+        await syncPortalState({ throttleMs: options.throttleMs ?? 0 });
       } catch {
         // Background sync should never interrupt the captive portal UI.
-      } finally {
-        inFlight = false;
       }
     };
-    const intervalId = window.setInterval(pollStatus, hasBagItems ? 5000 : 15000);
+    const intervalId = window.setInterval(() => syncState({ throttleMs: 2500 }), hasBagItems ? 5000 : 10000);
     const handleVisibility = () => {
-      if (!document.hidden) pollStatus();
+      if (!document.hidden) syncState({ throttleMs: 1000 });
     };
-    window.addEventListener('focus', pollStatus);
+    const handleFocus = () => syncState({ throttleMs: 1000 });
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('pageshow', handleFocus);
     document.addEventListener('visibilitychange', handleVisibility);
     return () => {
       stopped = true;
       window.clearInterval(intervalId);
-      window.removeEventListener('focus', pollStatus);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pageshow', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
   }, [
@@ -4260,13 +4317,6 @@ function PortalApp() {
     if (hasReadyBagItems && portalNotice?.type === 'EXPIRED') setPortalNotice(null);
   }, [hasReadyBagItems, portalNotice?.type]);
 
-  useEffect(() => {
-    if (!onlinePaymentMethods.length) return;
-    if (!onlinePaymentMethods.some((method) => method.id === selectedPaymentMethod)) {
-      setSelectedPaymentMethod(onlinePaymentMethods[0].id);
-    }
-  }, [payments.enabled_payment_methods?.join(','), payments.payment_method_options?.length, selectedPaymentMethod]);
-
 	  function togglePortalDarkMode() {
 	    const nextMode = portalDark ? 'light' : 'dark';
 	    setPortalDarkOverride(writePortalThemeMode(nextMode));
@@ -4289,7 +4339,29 @@ function PortalApp() {
     if (id === 'paymaya') return 'Maya';
     if (id === 'grab_pay') return 'GrabPay';
     if (id === 'qrph') return 'QR Ph';
+    if (id === 'shopee_pay') return 'Shopee';
+    if (id === 'dob') return 'BPI UBP';
+    if (id === 'brankas') return 'Banks';
+    if (id === 'billease') return 'BillEase';
     return method.label || id.toUpperCase();
+  }
+
+  function showOnlineBrowserTransferPrompt() {
+    setCheckoutCopyMessage('');
+    setCheckoutBrowserReminder({
+      item: { id: 'online-payment', name: t('Buy Online') },
+      quantity: 1,
+      paymentMethod: 'paymongo_checkout',
+      forceBrowserTransfer: true,
+    });
+  }
+
+  function handlePortalOnlinePurchaseChannel() {
+    if (settings?.payment_browser_handoff?.enabled !== false && isCaptivePortalPlaybackBrowser()) {
+      showOnlineBrowserTransferPrompt();
+      return;
+    }
+    selectPortalPurchaseChannel('ONLINE');
   }
 
   function selectPortalPurchaseChannel(nextChannel) {
@@ -4873,7 +4945,7 @@ function PortalApp() {
   function clearPaymentOrderFromUrl() {
     if (!paymentOrderFromUrl || !window.history?.replaceState) return;
     const url = new URL(window.location.href);
-    ['payment_order_id', 'payment_order', 'order', 'bridge_checked'].forEach((key) => url.searchParams.delete(key));
+    ['payment', 'payment_order_id', 'payment_order', 'order', 'bridge_checked'].forEach((key) => url.searchParams.delete(key));
     const nextUrl = `${url.pathname}${url.search}${url.hash}`;
     window.history.replaceState({}, document.title, nextUrl || '/portal');
   }
@@ -5091,19 +5163,120 @@ function PortalApp() {
     );
   }
 
-  function renderBagHistoryRow(item) {
+  function bagPassStatusLabel(item) {
     const status = String(item?.status || 'HISTORY').toUpperCase();
+    if (status === 'QUEUED') return 'Unused';
+    return status.charAt(0) + status.slice(1).toLowerCase();
+  }
+
+  function bagPassStatusBadgeClass(item) {
+    const status = String(item?.status || '').toUpperCase();
+    if (status === 'ACTIVE') return 'bg-green-lt text-green';
+    if (status === 'QUEUED') return 'bg-yellow-lt text-yellow';
+    if (status === 'CONSUMED') return 'bg-blue-lt text-blue';
+    if (status === 'EXPIRED') return 'bg-red-lt text-red';
+    if (status === 'CANCELLED') return 'bg-secondary-lt text-secondary';
+    return 'bg-secondary-lt text-secondary';
+  }
+
+  function bagPassSourceLabel(item) {
+    if (item?.purchase_source_label) return item.purchase_source_label;
+    const source = String(item?.source || '').toUpperCase();
+    if (source === 'PAYMENT') return `Online: ${item?.payment_method_label || 'PayMongo checkout'}`;
+    if (source === 'STORE_PURCHASE') return `Store: ${item?.store_name || item?.product_category_name || 'Physical store'}`;
+    if (source === 'WELCOME_GIFT') return 'Welcome gift';
+    if (source === 'VOUCHER') return 'Voucher';
+    if (source === 'MANUAL') return 'Admin given';
+    return source ? source.replaceAll('_', ' ') : 'Unknown source';
+  }
+
+  function bagPassBoughtAt(item) {
+    return item?.bought_at || item?.created_at;
+  }
+
+  function bagPassTimeStatusLine(item) {
+    const status = String(item?.status || '').toUpperCase();
+    if (status === 'ACTIVE') return item?.active_until ? `Active until ${formatPortalDateTime(item.active_until)}` : 'Currently active';
+    if (status === 'QUEUED') return item?.expires_at ? `Unused · expires ${formatPortalDateTime(item.expires_at)}` : 'Unused · not consumed yet';
+    if (item?.consumed_at) return `Consumed ${formatPortalDateTime(item.consumed_at)}`;
+    if (status === 'EXPIRED') return 'Expired before use';
+    if (status === 'CANCELLED') return 'Cancelled';
+    return 'No consumption record yet';
+  }
+
+  function renderBagHistoryRow(item) {
     return (
-      <div className="portal-bag-history-row" key={item.id}>
+      <button className="portal-bag-history-row portal-bag-history-clickable" type="button" key={item.id} onClick={() => setBagPassDetail(item)}>
         <div className="portal-bag-history-main">
           <span className="portal-bag-history-name">{item.product_name || 'WiFi package'}</span>
-          <span className="badge bg-secondary-lt text-secondary">{status}</span>
+          <span className={`badge ${bagPassStatusBadgeClass(item)}`}>{bagPassStatusLabel(item)}</span>
         </div>
         <small className="portal-bag-history-date">
-          {item.consumed_at ? `Consumed ${formatPortalDateTime(item.consumed_at)}` : 'Consumed time not recorded'}
+          {bagPassSourceLabel(item)}
         </small>
+        <small className="portal-bag-history-date">
+          {bagPassBoughtAt(item) ? `Bought ${formatPortalDateTime(bagPassBoughtAt(item))}` : 'Bought date not recorded'}
+        </small>
+        <small className="portal-bag-history-date">{bagPassTimeStatusLine(item)}</small>
         {item.product_category_name && <small className="portal-bag-history-date">{item.product_category_name}</small>}
-      </div>
+      </button>
+    );
+  }
+
+  function BagPassDetailModal() {
+    if (!bagPassDetail) return null;
+    const item = bagPassDetail;
+    const detailRows = [
+      ['Pass', item.product_name || 'WiFi package'],
+      ['Status', bagPassStatusLabel(item)],
+      ['Bought from', bagPassSourceLabel(item)],
+      ['Bought at', bagPassBoughtAt(item) ? formatPortalDateTime(bagPassBoughtAt(item)) : 'Not recorded'],
+      ['Duration', formatSeconds(item.duration_seconds || 0)],
+      ['Remaining', formatSeconds(item.remaining_seconds || 0)],
+      ['Consumption', bagPassTimeStatusLine(item)],
+      ['Category', item.product_category_name || 'None'],
+      ['Access scope', item.access_scope === 'BARANGAY_ONLY' ? `Barangay only${item.allowed_barangay ? ` · ${item.allowed_barangay}` : ''}` : 'All locations'],
+      ['Amount', item.amount_centavos !== null && item.amount_centavos !== undefined ? formatCentavos(item.amount_centavos, item.currency || 'PHP') : 'Not recorded'],
+      ['Quantity', String(item.purchase_quantity || 1)],
+    ];
+    if (item.payment_order_public_id) detailRows.push(['Payment order', item.payment_order_public_id]);
+    if (item.store_purchase_public_id) detailRows.push(['Store request', item.store_purchase_public_id]);
+    if (item.iptv_enabled) {
+      detailRows.push(['IPTV status', item.iptv_status || 'Not required']);
+      if (item.iptv_account_username) detailRows.push(['IPTV line', item.iptv_account_username]);
+    }
+    return (
+      <Modal
+        title={t('Pass details')}
+        onClose={() => setBagPassDetail(null)}
+        size="md"
+        dialogClassName="portal-profile-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className="portal-bag-pass-detail">
+          <div className="portal-bag-pass-detail-head">
+            <span className="portal-bag-pass-detail-icon"><IconShoppingBag size={22} /></span>
+            <div>
+              <strong>{item.product_name || 'WiFi package'}</strong>
+              <small>{bagPassSourceLabel(item)}</small>
+            </div>
+            <span className={`badge ${bagPassStatusBadgeClass(item)}`}>{bagPassStatusLabel(item)}</span>
+          </div>
+          <div className="portal-bag-pass-detail-grid">
+            {detailRows.map(([label, value]) => (
+              <div className="portal-bag-pass-detail-row" key={label}>
+                <span>{label}</span>
+                <strong>{value || '-'}</strong>
+              </div>
+            ))}
+          </div>
+          <button className="btn btn-primary w-100 mt-3" type="button" onClick={() => setBagPassDetail(null)}>
+            {t('Close')}
+          </button>
+        </div>
+      </Modal>
     );
   }
 
@@ -5138,14 +5311,20 @@ function PortalApp() {
   }
 
   function BagHistoryPage() {
-    const historyItems = bag?.history_items || [];
+    const historyItems = [];
+    const seenPassIds = new Set();
+    [...(bag?.active_items || []), ...(bag?.queued_items || []), ...(bag?.history_items || [])].forEach((item) => {
+      if (!item?.id || seenPassIds.has(item.id)) return;
+      seenPassIds.add(item.id);
+      historyItems.push(item);
+    });
     const normalizedQuery = bagHistoryQuery.trim().toLowerCase();
     const historyCounts = historyItems.reduce((counts, item) => {
       const status = String(item.status || 'HISTORY').toUpperCase();
       counts.ALL += 1;
       counts[status] = (counts[status] || 0) + 1;
       return counts;
-    }, { ALL: 0, CONSUMED: 0, EXPIRED: 0, CANCELLED: 0 });
+    }, { ALL: 0, ACTIVE: 0, QUEUED: 0, CONSUMED: 0, EXPIRED: 0, CANCELLED: 0 });
     const visibleHistory = historyItems.filter((item) => {
       const status = String(item.status || 'HISTORY').toUpperCase();
       if (bagHistoryFilter !== 'ALL' && status !== bagHistoryFilter) return false;
@@ -5156,6 +5335,12 @@ function PortalApp() {
         item.status,
         item.source,
         item.payment_method,
+        item.payment_method_label,
+        item.purchase_source_label,
+        item.store_name,
+        item.payment_order_public_id,
+        item.store_purchase_public_id,
+        item.bought_at ? formatPortalDateTime(item.bought_at) : '',
       ].filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(normalizedQuery);
     });
@@ -5174,7 +5359,7 @@ function PortalApp() {
           </button>
           <div>
             <div className="portal-history-title">My WiFi Bag History</div>
-            <div className="portal-history-subtitle">{historyItems.length} saved history item{historyItems.length === 1 ? '' : 's'}</div>
+            <div className="portal-history-subtitle">{historyItems.length} saved pass{historyItems.length === 1 ? '' : 'es'}</div>
           </div>
         </div>
         <div className="portal-history-card">
@@ -5184,18 +5369,18 @@ function PortalApp() {
               className="form-control"
               value={bagHistoryQuery}
               onChange={(event) => setBagHistoryQuery(event.target.value)}
-              placeholder="Search history"
+              placeholder="Search passes"
             />
           </div>
           <div className="portal-history-filters" role="tablist" aria-label="History filters">
-            {['ALL', 'CONSUMED', 'EXPIRED', 'CANCELLED'].map((filter) => (
+            {['ALL', 'ACTIVE', 'QUEUED', 'CONSUMED', 'EXPIRED', 'CANCELLED'].map((filter) => (
               <button
                 className={`btn btn-sm ${bagHistoryFilter === filter ? 'btn-primary' : 'btn-outline-secondary'}`}
                 type="button"
                 key={filter}
                 onClick={() => setBagHistoryFilter(filter)}
               >
-                <span>{filter === 'ALL' ? 'All' : filter.charAt(0) + filter.slice(1).toLowerCase()}</span>
+                <span>{filter === 'ALL' ? 'All' : filter === 'QUEUED' ? 'Unused' : filter.charAt(0) + filter.slice(1).toLowerCase()}</span>
                 <span className={`badge ms-1 ${bagHistoryFilter === filter ? 'bg-white text-primary' : 'bg-secondary-lt text-secondary'}`}>
                   {historyCounts[filter] || 0}
                 </span>
@@ -5204,7 +5389,7 @@ function PortalApp() {
           </div>
           <div className="portal-history-results">
             {visibleHistory.length ? visibleHistory.map((item) => renderBagHistoryRow(item)) : (
-              <div className="text-muted small">No history matched your search or filter.</div>
+              <div className="text-muted small">No passes matched your search or filter.</div>
             )}
           </div>
         </div>
@@ -5877,17 +6062,22 @@ function PortalApp() {
       return;
     }
     setCheckoutBrowserReminder(null);
-    startProductCheckout(next.item, next.quantity || 1, false, next.paymentMethod || selectedPaymentMethod, true);
+    startProductCheckout(next.item, next.quantity || 1, false, 'paymongo_checkout', true);
   }
 
   function checkoutPaymentMethodLabel(payment = null) {
-    const methodId = payment?.payment_method || selectedPaymentMethod || 'gcash';
+    const methodId = payment?.payment_method || 'paymongo_checkout';
+    if (methodId === 'paymongo_checkout' || methodId === 'hosted_checkout') return t('PayMongo checkout');
     return portalPaymentMethodOptions.find((method) => method.id === methodId)?.label || selectedPaymentLabel || 'Online payment';
   }
 
-  function openCheckoutUrl(url = paymentHandoff?.checkout_url || paymentResult?.checkout_url) {
+  function openCheckoutUrl(url = paymentHandoff?.checkout_url || paymentResult?.checkout_url, options = {}) {
     if (!url) return;
     setCheckoutCopyMessage('');
+    if (options.sameTab) {
+      window.location.href = url;
+      return;
+    }
     try {
       const checkoutWindow = window.open(url, '_blank', 'noopener,noreferrer');
       if (!checkoutWindow) {
@@ -7080,7 +7270,7 @@ function PortalApp() {
                 <strong className="portal-selected-total-final">{formatCentavos(selectedAmount.total)}</strong>
               </span>
             </div>
-            <button className="btn btn-primary" type="button" disabled={!canCheckoutOnline || !selectedItem || !selectedQuantity || paymentLoading === selectedItem?.id} onClick={() => startProductCheckout(selectedItem, selectedQuantity, false, selectedPaymentMethod)}>
+            <button className="btn btn-primary" type="button" disabled={!canCheckoutOnline || !selectedItem || !selectedQuantity || paymentLoading === selectedItem?.id} onClick={() => startProductCheckout(selectedItem, selectedQuantity)}>
               {paymentLoading === selectedItem?.id ? t('Opening...') : (
                 <>
                   <span>{t('BUY')}</span>
@@ -7282,8 +7472,8 @@ function PortalApp() {
       : '';
     return (
       <Modal
-        title={t('Complete payment')}
-        onClose={() => setPaymentHandoff(null)}
+        title={captiveBrowser ? t('Open payment in browser') : t('Continue payment')}
+        onClose={() => cancelPaymentCheckout(paymentHandoff)}
         dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
         bodyClassName="portal-profile-modal-body"
         contentClassName={`portal-profile-modal-content portal-payment-handoff-modal ${portalDark ? 'is-dark' : ''}`}
@@ -7296,8 +7486,8 @@ function PortalApp() {
               <div className="fw-semibold mb-1">{paymentHandoff.product_name || t('WiFi package')}</div>
               <div className="text-muted small">
                 {captiveBrowser
-                  ? t('You are inside the WiFi sign-in window. For GCash, open the secure PayMongo checkout in Chrome or Safari, then return here and tap Check.')
-                  : t('Open the secure PayMongo checkout, complete the payment, then return here and tap Check if the page does not update automatically.')}
+                  ? t('Online payment cannot continue inside the WiFi sign-in window. Copy this payment link, open it in Chrome or Safari, then complete PayMongo checkout there.')
+                  : t('Continue to the secure PayMongo checkout in this browser. After payment, PayMongo will return you to the portal automatically.')}
               </div>
             </div>
           </div>
@@ -7321,7 +7511,7 @@ function PortalApp() {
 
           <div className="portal-payment-handoff-note">
             <IconBrandChrome size={18} />
-            <span>{t('If the checkout tries to open GCash from the WiFi sign-in window, use Copy link and paste it in Chrome or Safari for a clearer payment flow.')}</span>
+            <span>{captiveBrowser ? t('Use Chrome on Android or Safari on iPhone for GCash, Maya, card, and other online payment methods.') : t('If checkout does not open automatically, use the button below to continue payment.')}</span>
           </div>
 
           {checkoutCopyMessage && (
@@ -7332,9 +7522,9 @@ function PortalApp() {
           )}
 
           <div className="portal-payment-handoff-actions">
-            <button className="btn btn-primary portal-outside-modal-primary" type="button" onClick={() => openCheckoutUrl(paymentHandoff.checkout_url)}>
+            <button className="btn btn-primary portal-outside-modal-primary" type="button" onClick={() => openCheckoutUrl(paymentHandoff.checkout_url, { sameTab: !captiveBrowser })}>
               <IconExternalLink size={18} />
-              {t('Open secure checkout')}
+              {captiveBrowser ? t('Open secure checkout') : t('Continue to PayMongo')}
             </button>
             <button className="btn portal-outside-modal-cancel" type="button" onClick={() => copyCheckoutLink(paymentHandoff)}>
               <IconCopy size={18} />
@@ -7349,6 +7539,33 @@ function PortalApp() {
               {t('Cancel order')}
             </button>
           </div>
+        </div>
+      </Modal>
+    );
+  }
+
+  function CheckoutErrorModal() {
+    if (!checkoutErrorModal) return null;
+    return (
+      <Modal
+        title={checkoutErrorModal.title || t('Checkout could not start')}
+        onClose={() => setCheckoutErrorModal(null)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className="d-flex align-items-start gap-3">
+          <span className="avatar bg-red-lt text-red"><IconAlertTriangle size={24} /></span>
+          <div>
+            <div className="fw-semibold mb-1">{t('Online payment was not opened')}</div>
+            <div className="text-muted small">{checkoutErrorModal.message || t('Please try again or ask the operator.')}</div>
+          </div>
+        </div>
+        <div className="modal-footer portal-outside-modal-footer px-0 pb-0">
+          <button className="btn btn-primary portal-outside-modal-primary" type="button" onClick={() => setCheckoutErrorModal(null)}>
+            {t('OK')}
+          </button>
         </div>
       </Modal>
     );
@@ -7514,7 +7731,8 @@ function PortalApp() {
 	          </button>
 	        </div>
 	      )}
-	      {PurchaseSuccessModal()}
+		      {PurchaseSuccessModal()}
+		      {BagPassDetailModal()}
       {bagFlyAnimation && (
         <div
           className="portal-bag-fly-item"
@@ -7745,7 +7963,7 @@ function PortalApp() {
                 actions={paymentResult.payment_order_id && (
                   <>
                     {!paymentResultIsTerminal(paymentResult) && paymentResult.checkout_url && (
-                      <button className="btn btn-sm btn-primary" type="button" disabled={paymentChecking} onClick={() => setPaymentHandoff(paymentResult)}>
+                      <button className="btn btn-sm btn-primary" type="button" disabled={paymentChecking} onClick={() => openCheckoutUrl(paymentResult.checkout_url, { sameTab: !isCaptivePortalPlaybackBrowser() })}>
                         <IconExternalLink size={15} className="me-1" />
                         {t('Open checkout')}
                       </button>
@@ -7774,10 +7992,7 @@ function PortalApp() {
                   <button
                     className="portal-choice-card"
                     type="button"
-                    onClick={() => {
-                      if (onlinePaymentMethods[0] && !selectedPaymentMethodRow) setSelectedPaymentMethod(onlinePaymentMethods[0].id);
-                      selectPortalPurchaseChannel('ONLINE');
-                    }}
+                    onClick={handlePortalOnlinePurchaseChannel}
                   >
                     <span className="portal-choice-icon"><IconCash size={24} /></span>
                     <span>
@@ -7800,7 +8015,7 @@ function PortalApp() {
                   <div className="portal-purchase-tabbar">
                     <ul className="nav nav-tabs portal-profile-tabs portal-purchase-tabs" role="tablist" aria-label="Purchase channel">
                       <li className="nav-item" role="presentation">
-                        <button className={`nav-link ${purchaseChannel === 'ONLINE' ? 'active' : ''}`} type="button" role="tab" aria-selected={purchaseChannel === 'ONLINE'} onClick={() => selectPortalPurchaseChannel('ONLINE')}>
+                        <button className={`nav-link ${purchaseChannel === 'ONLINE' ? 'active' : ''}`} type="button" role="tab" aria-selected={purchaseChannel === 'ONLINE'} onClick={handlePortalOnlinePurchaseChannel}>
                           <IconCash size={16} /> {t('ONLINE')}
                         </button>
                       </li>
@@ -7902,24 +8117,10 @@ function PortalApp() {
                           </div>
                         )}
                       </div>
-                    ) : (
-                      <div className="portal-online-payment-panel">
-                        {onlinePaymentMethods.length > 1 ? (
-                          <div className="portal-payment-method-strip">
-                            {onlinePaymentMethods.map((method) => (
-                              <button
-                                className={`portal-payment-method-pill ${selectedPaymentMethod === method.id ? 'is-active' : ''}`}
-                                type="button"
-                                key={method.id}
-                                onClick={() => setSelectedPaymentMethod(method.id)}
-                              >
-                                <span className={`portal-payment-logo is-${method.id}`}>{paymentMethodLogo(method)}</span>
-                                <span>{method.label}</span>
-                              </button>
-                            ))}
-                          </div>
-                        ) : !onlinePaymentMethods.length ? <div className="alert alert-warning mb-0">{t('Online payment methods are not configured yet. Ask the operator for help.')}</div> : null}
-                        {onlinePaymentMethods.length && visibleProductCategoryGroups.length ? (
+	                    ) : (
+	                      <div className="portal-online-payment-panel">
+	                        {!onlinePaymentMethods.length && <div className="alert alert-warning mb-0">{t('Online payment methods are not configured yet. Ask the operator for help.')}</div>}
+	                        {onlinePaymentMethods.length && visibleProductCategoryGroups.length ? (
                           <div className="portal-product-category-list">
                             {visibleProductCategoryGroups.map((category, groupIndex) => (
                               <div className="portal-product-category-block" key={category.id || `category-${groupIndex}`}>
@@ -7970,6 +8171,7 @@ function PortalApp() {
       {OutsidePurchaseModal()}
       {BrowserReminderCheckoutModal()}
       {PaymentCheckoutHandoffModal()}
+      {CheckoutErrorModal()}
       {IptvProfileRequiredModal()}
       {IptvChromeOnlyModal()}
       {PortalCoverageModal()}
@@ -28910,7 +29112,7 @@ function PayMongoOverviewTab() {
           <div>
             <div className="page-pretitle">Gateway monitoring</div>
             <h2 className="page-title mb-1">PayMongo Overview</h2>
-            <div className="text-muted">Readiness, webhook status, and recent payment failures before live GCash testing.</div>
+            <div className="text-muted">Readiness, webhook status, and recent payment failures before live checkout testing.</div>
           </div>
           <button className="btn btn-outline-secondary" type="button" onClick={loadOverview} disabled={loading}><IconRefresh size={17} className="me-2" />Refresh</button>
         </div>
@@ -29323,9 +29525,13 @@ function PaymentSettingsTab() {
   const methodOptions = config?.payment_method_options || [
     { id: 'gcash', label: 'GCash' },
     { id: 'qrph', label: 'QR Ph' },
-    { id: 'card', label: 'Card' },
     { id: 'paymaya', label: 'Maya / PayMaya' },
-    { id: 'grab_pay', label: 'GrabPay' }
+    { id: 'grab_pay', label: 'GrabPay' },
+    { id: 'shopee_pay', label: 'ShopeePay' },
+    { id: 'dob', label: 'BPI / UnionBank Online Banking' },
+    { id: 'brankas', label: 'BDO / LandBank / Metrobank Online Banking' },
+    { id: 'billease', label: 'BillEase' },
+    { id: 'card', label: 'Visa / Mastercard' }
   ];
   const credentialModes = [
     { mode: 'TEST', label: 'Test Keys', help: 'Use pk_test_ and sk_test_ while developing. These keys do not process real payments.' },
@@ -29334,7 +29540,7 @@ function PaymentSettingsTab() {
   const requirements = config?.requirements || {};
   const requirementRows = [
     ['Payments enabled', requirements.payments_enabled],
-    ['GCash enabled', requirements.gcash_enabled],
+    ['At least one checkout method enabled', requirements.checkout_method_enabled ?? requirements.gcash_enabled],
     [`${form.mode === 'LIVE' ? 'Live' : 'Test'} public key saved`, requirements.public_key],
     [`${form.mode === 'LIVE' ? 'Live' : 'Test'} secret key saved`, requirements.secret_key],
     ['Webhook signing secret saved', requirements.webhook_secret]
@@ -29489,7 +29695,7 @@ function PaymentSettingsTab() {
               </div>
               <div className="col-12">
                 <label className="form-label">Notes</label>
-                <textarea className="form-control" rows="3" value={form.notes} onChange={(e) => updateField('notes', e.target.value)} placeholder="PayMongo account notes, GCash activation status, or webhook setup notes." />
+                <textarea className="form-control" rows="3" value={form.notes} onChange={(e) => updateField('notes', e.target.value)} placeholder="PayMongo account notes, enabled payment methods, or webhook setup notes." />
               </div>
               <div className="col-12 text-end">
                 <button className="btn btn-primary" disabled={saving}><IconDeviceFloppy size={18} className="me-2" />{saving ? 'Saving...' : 'Save Payment Settings'}</button>
@@ -29533,7 +29739,7 @@ function PaymentSettingsTab() {
                 </div>
                 <div className="d-flex gap-2">
                   <IconExternalLink size={22} className="text-primary flex-shrink-0" />
-                  <div><strong>GCash redirect</strong><div className="text-muted small">Send the customer to PayMongo/GCash checkout from the captive portal.</div></div>
+                  <div><strong>Hosted checkout</strong><div className="text-muted small">Send the customer to PayMongo hosted checkout so they can choose any enabled payment method.</div></div>
                 </div>
                 <div className="d-flex gap-2">
                   <IconShieldLock size={22} className="text-primary flex-shrink-0" />
@@ -30216,6 +30422,11 @@ function OmadaControllerPage({ refresh }) {
   const [paymentAccess, setPaymentAccess] = useState(null);
   const [paymentAccessForm, setPaymentAccessForm] = useState(null);
   const [paymentAccessTab, setPaymentAccessTab] = useState('Overview');
+  const [paymentAccessTableTab, setPaymentAccessTableTab] = useState('GRANTED');
+  const [paymentAccessTableSearch, setPaymentAccessTableSearch] = useState('');
+  const [paymentAccessTableStatus, setPaymentAccessTableStatus] = useState('');
+  const [paymentAccessTablePageSize, setPaymentAccessTablePageSize] = useState(20);
+  const [paymentAccessTablePage, setPaymentAccessTablePage] = useState(1);
   const [sites, setSites] = useState([]);
   const [automationLogs, setAutomationLogs] = useState([]);
   const [automationResult, setAutomationResult] = useState(null);
@@ -30351,6 +30562,12 @@ function OmadaControllerPage({ refresh }) {
       setBusy('');
     }
   }, [webReachable, installLog]);
+  useEffect(() => {
+    setPaymentAccessTablePage(1);
+  }, [paymentAccessTableTab, paymentAccessTableSearch, paymentAccessTableStatus, paymentAccessTablePageSize]);
+  useEffect(() => {
+    setPaymentAccessTableStatus('');
+  }, [paymentAccessTableTab]);
   useEffect(() => {
     if (!settings || autoChecked) return;
     setAutoChecked(true);
@@ -30525,17 +30742,211 @@ function OmadaControllerPage({ refresh }) {
     }
   }
 
+  async function removeRemotePaymentAccess(row) {
+    if (!row?.site_id || (!row?.client_mac && !row?.client_ip)) return;
+    if (!window.confirm(`Remove ${row.client_mac || row.client_ip} from Omada Authentication-Free Client?`)) return;
+    setBusy(`remove-payment-access-${row.id}`);
+    setError('');
+    setMessage('');
+    try {
+      const data = await request('/omada/payment-auth-free/remote/remove', {
+        method: 'POST',
+        body: JSON.stringify({ site_id: row.site_id, client_mac: row.client_mac, client_ip: row.client_ip })
+      });
+      setPaymentAccess(data);
+      if (data?.settings) setPaymentAccessForm(data.settings);
+      setMessage('Omada Authentication-Free Client entry removed.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
   function paymentAccessTone(status) {
     const value = String(status || '').toUpperCase();
-    if (['ACTIVE'].includes(value)) return 'green';
-    if (['FAILED', 'REMOVE_FAILED', 'ABUSE_BLOCKED'].includes(value)) return 'red';
+    if (['ACTIVE', 'REMOTE_ACTIVE'].includes(value)) return 'green';
+    if (['FAILED', 'REMOVE_FAILED', 'ABUSE_BLOCKED', 'ORPHANED_IN_OMADA'].includes(value)) return 'red';
     if (['REMOVED', 'EXPIRED', 'CANCELLED'].includes(value)) return 'secondary';
     if (['GRANT_SKIPPED'].includes(value)) return 'yellow';
     return 'blue';
   }
 
   function paymentAccessCustomer(row) {
-    return row?.profile_name || row?.profile_contact_number || row?.client_mac || 'Unprofiled device';
+    return row?.profile_name || row?.profile_contact_number || row?.client_mac || row?.client_ip || 'Unprofiled device';
+  }
+
+  function paymentAccessRowsFor(tabKey) {
+    if (tabKey === 'ABUSE') return paymentAccess?.abuse_profiles || [];
+    if (tabKey === 'RECENT') return paymentAccess?.recent_grants || [];
+    return [
+      ...(paymentAccess?.active_grants || []),
+      ...(paymentAccess?.orphaned_remote_clients || []),
+    ];
+  }
+
+  function paymentAccessTableTitle(tabKey = paymentAccessTableTab) {
+    if (tabKey === 'ABUSE') return 'Abuse Watchlist';
+    if (tabKey === 'RECENT') return 'Recent Payment Access Activity';
+    return 'Currently Granted Clients';
+  }
+
+  function paymentAccessTableEmptyMessage(tabKey = paymentAccessTableTab) {
+    if (tabKey === 'ABUSE') return 'No profile has reached the daily limit today.';
+    if (tabKey === 'RECENT') return 'No payment access activity yet.';
+    return 'No active payment access grants.';
+  }
+
+  function paymentAccessTableColumnCount(tabKey = paymentAccessTableTab) {
+    if (tabKey === 'ABUSE') return 4;
+    if (tabKey === 'GRANTED') return 7;
+    return 6;
+  }
+
+  function paymentAccessRowSearchText(row) {
+    return [
+      paymentAccessCustomer(row),
+      row?.profile_contact_number,
+      row?.client_mac,
+      row?.client_ip,
+      row?.site_name,
+      row?.site_id,
+      row?.status,
+      row?.payment_order_id,
+      row?.last_error,
+      row?.attempts_today,
+      row?.source,
+      row?.remote_policy_id,
+    ].filter(Boolean).join(' ').toLowerCase();
+  }
+
+  function paymentAccessStatusOptions() {
+    return Array.from(new Set(
+      paymentAccessRowsFor(paymentAccessTableTab)
+        .map((row) => String(row?.status || '').trim())
+        .filter(Boolean)
+    )).sort();
+  }
+
+  function paymentAccessFilteredRows() {
+    const search = paymentAccessTableSearch.trim().toLowerCase();
+    return paymentAccessRowsFor(paymentAccessTableTab).filter((row) => {
+      if (search && !paymentAccessRowSearchText(row).includes(search)) return false;
+      if (paymentAccessTableStatus && String(row?.status || '') !== paymentAccessTableStatus) return false;
+      return true;
+    });
+  }
+
+  function renderPaymentAccessTableHead() {
+    if (paymentAccessTableTab === 'ABUSE') {
+      return (
+        <tr>
+          <th>Customer / Device</th>
+          <th>Attempts Today</th>
+          <th>MAC</th>
+          <th>Last Attempt</th>
+        </tr>
+      );
+    }
+    if (paymentAccessTableTab === 'RECENT') {
+      return (
+        <tr>
+          <th>Customer / Device</th>
+          <th>Status</th>
+          <th>Site</th>
+          <th>Order</th>
+          <th>Created</th>
+          <th>Details</th>
+        </tr>
+      );
+    }
+    return (
+      <tr>
+        <th>Customer / Device</th>
+        <th>Site</th>
+        <th>MAC / IP</th>
+        <th>Status</th>
+        <th>Expires</th>
+        <th>Remaining</th>
+        <th>Action</th>
+      </tr>
+    );
+  }
+
+  function renderPaymentAccessTableRows(rows) {
+    if (!rows.length) {
+      return (
+        <tr>
+          <td colSpan={paymentAccessTableColumnCount()} className="text-center text-muted py-4">
+            {paymentAccessTableEmptyMessage()}
+          </td>
+        </tr>
+      );
+    }
+    if (paymentAccessTableTab === 'ABUSE') {
+      return rows.map((row, index) => (
+        <tr key={`${row.client_mac || row.user_id || index}`}>
+          <td>
+            <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
+            {row.profile_contact_number && <div className="text-muted small">{row.profile_contact_number}</div>}
+          </td>
+          <td><span className="badge bg-red-lt text-red">{row.attempts_today}</span></td>
+          <td>{row.client_mac || '-'}</td>
+          <td className="text-muted">{formatPortalDateTime(row.last_attempt_at)}</td>
+        </tr>
+      ));
+    }
+    if (paymentAccessTableTab === 'RECENT') {
+      return rows.map((row) => {
+        const tone = paymentAccessTone(row.status);
+        return (
+          <tr key={row.id}>
+            <td>
+              <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
+              <div className="text-muted small">{row.client_mac || row.client_ip || '-'}</div>
+            </td>
+            <td><span className={`badge bg-${tone}-lt text-${tone}`}>{row.status}</span></td>
+            <td>{row.site_name || row.site_id || '-'}</td>
+            <td className="text-muted">{row.payment_order_id || '-'}</td>
+            <td className="text-muted">{formatPortalDateTime(row.created_at)}</td>
+            <td className="text-muted small">{row.last_error || '-'}</td>
+          </tr>
+        );
+      });
+    }
+    return rows.map((row) => {
+      const tone = paymentAccessTone(row.status);
+      return (
+        <tr key={row.id}>
+          <td>
+            <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
+            {row.profile_contact_number && <div className="text-muted small">{row.profile_contact_number}</div>}
+          </td>
+          <td>{row.site_name || row.site_id || '-'}</td>
+          <td>
+            <div>{row.client_mac || '-'}</div>
+            <div className="text-muted small">{row.client_ip || '-'}</div>
+          </td>
+          <td><span className={`badge bg-${tone}-lt text-${tone}`}>{row.status}</span></td>
+          <td className="text-muted">{row.orphaned ? 'Remote only' : formatPortalDateTime(row.expires_at)}</td>
+          <td>{row.remaining_seconds == null ? '-' : formatSeconds(row.remaining_seconds || 0)}</td>
+          <td>
+            {row.orphaned ? (
+              <button
+                className="btn btn-sm btn-outline-danger"
+                type="button"
+                disabled={!!busy}
+                onClick={() => removeRemotePaymentAccess(row)}
+              >
+                <IconTrash size={16} className="me-1" />Remove from Omada
+              </button>
+            ) : (
+              <span className="badge bg-green-lt text-green">Synced</span>
+            )}
+          </td>
+        </tr>
+      );
+    });
   }
 
   async function testApiLogin() {
@@ -30633,6 +31044,18 @@ function OmadaControllerPage({ refresh }) {
   const omadaProgressAction = visibleInstallLog?.action === 'UNINSTALL' ? 'Uninstall' : 'Install';
   const latestLog = logs[0];
   const radiusSecret = nasResult?.secret || nasForm.secret;
+  const paymentAccessTableTabs = [
+    { key: 'GRANTED', label: 'Currently Granted Clients', icon: IconWifi },
+    { key: 'ABUSE', label: 'Abuse Watchlist', icon: IconBan },
+    { key: 'RECENT', label: 'Recent Payment Access Activity', icon: IconActivity },
+  ];
+  const paymentAccessStatusFilterOptions = paymentAccessStatusOptions();
+  const paymentAccessFilteredTableRows = paymentAccessFilteredRows();
+  const paymentAccessTotalRows = paymentAccessFilteredTableRows.length;
+  const paymentAccessTotalPages = Math.max(1, Math.ceil(paymentAccessTotalRows / Number(paymentAccessTablePageSize || 20)));
+  const paymentAccessCurrentPage = Math.min(paymentAccessTablePage, paymentAccessTotalPages);
+  const paymentAccessPageStart = (paymentAccessCurrentPage - 1) * Number(paymentAccessTablePageSize || 20);
+  const paymentAccessVisibleTableRows = paymentAccessFilteredTableRows.slice(paymentAccessPageStart, paymentAccessPageStart + Number(paymentAccessTablePageSize || 20));
 
   return (
     <div className="row row-cards">
@@ -30901,7 +31324,7 @@ function OmadaControllerPage({ refresh }) {
       {tab === 'Payment Access' && <div className="col-12">
         <Card title="PayMongo Authentication-Free Client" subtitle="Temporary Omada access used only while a customer completes online payment in Chrome or Safari.">
           <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
-            <ul className="nav nav-pills">
+            <ul className="nav nav-tabs">
               {['Overview', 'Settings'].map((item) => (
                 <li className="nav-item" key={item}>
                   <button className={`nav-link ${paymentAccessTab === item ? 'active' : ''}`} type="button" onClick={() => setPaymentAccessTab(item)}>
@@ -30922,118 +31345,110 @@ function OmadaControllerPage({ refresh }) {
                 <KpiCard icon={IconClock} label="Grants today" value={paymentAccess?.overview?.grants_today || 0} tone="blue" />
                 <KpiCard icon={IconAlertTriangle} label="Failures" value={paymentAccess?.overview?.failed_count || 0} tone="red" />
                 <KpiCard icon={IconBan} label="Abuse blocks" value={paymentAccess?.overview?.active_blocks || 0} tone="orange" />
+                <KpiCard icon={IconWifi} label="Omada live clients" value={paymentAccess?.overview?.remote_client_count || 0} tone="cyan" />
+                <KpiCard icon={IconAlertTriangle} label="Omada orphaned" value={paymentAccess?.overview?.orphaned_remote_clients || 0} tone={(paymentAccess?.overview?.orphaned_remote_clients || 0) > 0 ? 'red' : 'green'} />
               </div>
+
+              {(paymentAccess?.remote_errors || []).length > 0 && (
+                <div className="alert alert-warning">
+                  Omada live state could not be checked for {(paymentAccess?.remote_errors || []).length} site(s).
+                  <div className="small mt-1">{(paymentAccess?.remote_errors || [])[0]?.message}</div>
+                </div>
+              )}
+              {(paymentAccess?.orphaned_remote_clients || []).length > 0 && (
+                <div className="alert alert-danger">
+                  Omada has Authentication-Free Client entries that are not active in this system. Remove them from the table below so customers do not keep unintended internet access.
+                </div>
+              )}
 
               <div className="alert alert-info">
                 {paymentAccess?.guide?.summary || 'When a customer starts checkout from a real browser, Omada can allow that client temporarily for payment traffic.'}
                 <div className="small mt-1">{paymentAccess?.guide?.cleanup || 'The temporary entry is removed on success, cancel, or timeout.'}</div>
               </div>
 
-              <div className="row g-3">
-                <div className="col-12">
-                  <div className="card">
-                    <div className="card-header"><h3 className="card-title">Currently Granted Clients</h3></div>
-                    <div className="table-responsive">
-                      <table className="table table-vcenter card-table">
-                        <thead>
-                          <tr>
-                            <th>Customer / Device</th>
-                            <th>Site</th>
-                            <th>MAC / IP</th>
-                            <th>Status</th>
-                            <th>Expires</th>
-                            <th>Remaining</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(paymentAccess?.active_grants || []).map((row) => (
-                            <tr key={row.id}>
-                              <td>
-                                <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
-                                {row.profile_contact_number && <div className="text-muted small">{row.profile_contact_number}</div>}
-                              </td>
-                              <td>{row.site_name || row.site_id || '-'}</td>
-                              <td>
-                                <div>{row.client_mac || '-'}</div>
-                                <div className="text-muted small">{row.client_ip || '-'}</div>
-                              </td>
-                              <td><span className={`badge bg-${paymentAccessTone(row.status)}-lt text-${paymentAccessTone(row.status)}`}>{row.status}</span></td>
-                              <td className="text-muted">{formatPortalDateTime(row.expires_at)}</td>
-                              <td>{formatSeconds(row.remaining_seconds || 0)}</td>
-                            </tr>
-                          ))}
-                          {!(paymentAccess?.active_grants || []).length && <tr><td colSpan="6" className="text-center text-muted py-4">No active payment access grants.</td></tr>}
-                        </tbody>
-                      </table>
+              <div className="card">
+                <div className="card-header flex-wrap gap-2">
+                  <div>
+                    <h3 className="card-title mb-1">{paymentAccessTableTitle()}</h3>
+                    <div className="text-muted small">Review temporary checkout access, abuse activity, and recent Omada payment-access events.</div>
+                  </div>
+                </div>
+                <div className="card-body border-bottom">
+                  <ul className="nav nav-tabs mb-3">
+                    {paymentAccessTableTabs.map((item) => {
+                      const Icon = item.icon;
+                      return (
+                        <li className="nav-item" key={item.key}>
+                          <button className={`nav-link ${paymentAccessTableTab === item.key ? 'active' : ''}`} type="button" onClick={() => setPaymentAccessTableTab(item.key)}>
+                            <Icon size={16} className="me-1" />
+                            {item.label}
+                            <span className="badge bg-secondary-lt text-secondary ms-2">{paymentAccessRowsFor(item.key).length}</span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div className="row g-2 align-items-end">
+                    <div className="col-md-5">
+                      <label className="form-label">Search</label>
+                      <div className="input-icon">
+                        <span className="input-icon-addon"><IconSearch size={16} /></span>
+                        <input
+                          className="form-control"
+                          value={paymentAccessTableSearch}
+                          onChange={(event) => setPaymentAccessTableSearch(event.target.value)}
+                          placeholder="Search customer, MAC, IP, site, order, or error"
+                        />
+                      </div>
+                    </div>
+                    {paymentAccessStatusFilterOptions.length > 0 && (
+                      <div className="col-md-3">
+                        <label className="form-label">Filter</label>
+                        <select className="form-select" value={paymentAccessTableStatus} onChange={(event) => setPaymentAccessTableStatus(event.target.value)}>
+                          <option value="">All statuses</option>
+                          {paymentAccessStatusFilterOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+                        </select>
+                      </div>
+                    )}
+                    <div className="col-md-2">
+                      <label className="form-label">Show entries</label>
+                      <select className="form-select" value={paymentAccessTablePageSize} onChange={(event) => setPaymentAccessTablePageSize(Number(event.target.value))}>
+                        {[10, 20, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+                      </select>
+                    </div>
+                    <div className="col-md-2">
+                      <button
+                        className="btn w-100"
+                        type="button"
+                        disabled={!paymentAccessTableSearch && !paymentAccessTableStatus}
+                        onClick={() => {
+                          setPaymentAccessTableSearch('');
+                          setPaymentAccessTableStatus('');
+                        }}
+                      >
+                        Clear
+                      </button>
                     </div>
                   </div>
                 </div>
-
-                <div className="col-12">
-                  <div className="card">
-                    <div className="card-header"><h3 className="card-title">Abuse Watchlist</h3></div>
-                    <div className="table-responsive">
-                      <table className="table table-vcenter card-table">
-                        <thead>
-                          <tr>
-                            <th>Customer / Device</th>
-                            <th>Attempts Today</th>
-                            <th>MAC</th>
-                            <th>Last Attempt</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(paymentAccess?.abuse_profiles || []).map((row, index) => (
-                            <tr key={`${row.client_mac || row.user_id || index}`}>
-                              <td>
-                                <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
-                                {row.profile_contact_number && <div className="text-muted small">{row.profile_contact_number}</div>}
-                              </td>
-                              <td><span className="badge bg-red-lt text-red">{row.attempts_today}</span></td>
-                              <td>{row.client_mac || '-'}</td>
-                              <td className="text-muted">{formatPortalDateTime(row.last_attempt_at)}</td>
-                            </tr>
-                          ))}
-                          {!(paymentAccess?.abuse_profiles || []).length && <tr><td colSpan="4" className="text-center text-muted py-4">No profile has reached the daily limit today.</td></tr>}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+                <div className="table-responsive">
+                  <table className="table table-vcenter card-table">
+                    <thead>{renderPaymentAccessTableHead()}</thead>
+                    <tbody>{renderPaymentAccessTableRows(paymentAccessVisibleTableRows)}</tbody>
+                  </table>
                 </div>
-
-                <div className="col-12">
-                  <div className="card">
-                    <div className="card-header"><h3 className="card-title">Recent Payment Access Activity</h3></div>
-                    <div className="table-responsive">
-                      <table className="table table-vcenter card-table">
-                        <thead>
-                          <tr>
-                            <th>Customer / Device</th>
-                            <th>Status</th>
-                            <th>Site</th>
-                            <th>Order</th>
-                            <th>Created</th>
-                            <th>Details</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(paymentAccess?.recent_grants || []).map((row) => (
-                            <tr key={row.id}>
-                              <td>
-                                <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
-                                <div className="text-muted small">{row.client_mac || row.client_ip || '-'}</div>
-                              </td>
-                              <td><span className={`badge bg-${paymentAccessTone(row.status)}-lt text-${paymentAccessTone(row.status)}`}>{row.status}</span></td>
-                              <td>{row.site_name || row.site_id || '-'}</td>
-                              <td className="text-muted">{row.payment_order_id || '-'}</td>
-                              <td className="text-muted">{formatPortalDateTime(row.created_at)}</td>
-                              <td className="text-muted small">{row.last_error || '-'}</td>
-                            </tr>
-                          ))}
-                          {!(paymentAccess?.recent_grants || []).length && <tr><td colSpan="6" className="text-center text-muted py-4">No payment access activity yet.</td></tr>}
-                        </tbody>
-                      </table>
-                    </div>
+                <div className="card-footer d-flex flex-wrap align-items-center justify-content-between gap-2">
+                  <div className="text-muted small">
+                    Showing {paymentAccessTotalRows ? paymentAccessPageStart + 1 : 0}-{Math.min(paymentAccessPageStart + Number(paymentAccessTablePageSize || 20), paymentAccessTotalRows)} of {paymentAccessTotalRows}
+                  </div>
+                  <div className="btn-list">
+                    <button className="btn btn-sm" type="button" disabled={paymentAccessCurrentPage <= 1} onClick={() => setPaymentAccessTablePage((page) => Math.max(1, page - 1))}>
+                      <IconChevronLeft size={16} className="me-1" />Previous
+                    </button>
+                    <span className="btn btn-sm disabled">Page {paymentAccessCurrentPage} of {paymentAccessTotalPages}</span>
+                    <button className="btn btn-sm" type="button" disabled={paymentAccessCurrentPage >= paymentAccessTotalPages} onClick={() => setPaymentAccessTablePage((page) => Math.min(paymentAccessTotalPages, page + 1))}>
+                      Next<IconChevronRight size={16} className="ms-1" />
+                    </button>
                   </div>
                 </div>
               </div>
@@ -31098,7 +31513,7 @@ function OmadaControllerPage({ refresh }) {
                 </div>
                 <div className="col-12">
                   <div className="alert alert-warning mb-0">
-                    This feature does not authorize free internet permanently. It only gives the device a short Omada Authentication-Free Client window so GCash/PayMongo can finish outside the captive popup.
+                    This feature does not authorize free internet permanently. It only gives the device a short Omada Authentication-Free Client window so PayMongo checkout can finish outside the captive popup.
                   </div>
                 </div>
                 <div className="col-12 d-flex gap-2">

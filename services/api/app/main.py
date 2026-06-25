@@ -35,7 +35,7 @@ import requests
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
@@ -49,6 +49,7 @@ from .security import create_token, current_admin, hash_password, verify_passwor
 
 app = FastAPI(title="3JCentralPisowifi API", version="0.1.0")
 BAG_AUTO_ACTIVATION_THREAD_STARTED = False
+PAYMONGO_RECONCILIATION_THREAD_STARTED = False
 store_owner_bearer = HTTPBearer(auto_error=False)
 app.add_middleware(
     CORSMiddleware,
@@ -336,6 +337,12 @@ class OmadaPaymentAuthFreeSettingsUpdate(BaseModel):
     abuse_block_hours: Optional[int] = Field(default=None, ge=1, le=168)
     block_online_payment_on_abuse: Optional[bool] = None
     notes: Optional[str] = None
+
+
+class OmadaPaymentAuthFreeRemoteRemoveRequest(BaseModel):
+    site_id: str
+    client_mac: Optional[str] = None
+    client_ip: Optional[str] = None
 
 
 class OmadaSiteSelect(BaseModel):
@@ -4425,6 +4432,10 @@ def start_saved_public_endpoint_connector():
     except Exception:
         pass
     try:
+        start_paymongo_checkout_reconciliation_worker()
+    except Exception:
+        pass
+    try:
         store = public_endpoint_store()
         if store.get("enabled") and decrypt_secret(store.get("tunnel_token_encrypted")):
             start_cloudflared_connector()
@@ -4438,10 +4449,35 @@ PAYMENT_MODE_OPTIONS = ("TEST", "LIVE")
 PAYMENT_METHOD_OPTIONS = {
     "gcash": "GCash",
     "qrph": "QR Ph",
-    "card": "Card",
     "paymaya": "Maya / PayMaya",
     "grab_pay": "GrabPay",
+    "shopee_pay": "ShopeePay",
+    "dob": "BPI / UnionBank Online Banking",
+    "brankas": "BDO / LandBank / Metrobank Online Banking",
+    "billease": "BillEase",
+    "card": "Visa / Mastercard",
 }
+PAYMENT_METHOD_ALIASES = {
+    "maya": "paymaya",
+    "pay_maya": "paymaya",
+    "paymaya": "paymaya",
+    "shopeepay": "shopee_pay",
+    "shopee": "shopee_pay",
+    "bpi": "dob",
+    "ubp": "dob",
+    "unionbank": "dob",
+    "union_bank": "dob",
+    "direct_online_banking": "dob",
+    "online_banking": "dob",
+    "bank": "dob",
+    "bank_transfer": "brankas",
+    "visa": "card",
+    "mastercard": "card",
+    "master_card": "card",
+    "credit_card": "card",
+    "debit_card": "card",
+}
+PAYMONGO_HOSTED_CHECKOUT_METHOD = "paymongo_checkout"
 PAYMENT_GATEWAY_DEFAULT_SETTINGS = {
     "enabled": False,
     "provider": "PAYMONGO",
@@ -4507,11 +4543,16 @@ def normalize_payment_methods(value) -> list[str]:
     seen = set()
     for item in raw_items:
         method = normalize_payment_text(item, 40).lower()
+        method = PAYMENT_METHOD_ALIASES.get(method, method)
         if method not in PAYMENT_METHOD_OPTIONS or method in seen:
             continue
         seen.add(method)
         methods.append(method)
     return methods or ["gcash"]
+
+
+def payment_enabled_checkout_methods(store: dict) -> list[str]:
+    return normalize_payment_methods(store.get("enabled_payment_methods"))
 
 
 def normalize_payment_url(value, fallback: str) -> str:
@@ -4653,7 +4694,7 @@ def public_payment_gateway_settings() -> dict:
     active_mode = normalize_payment_mode(store.get("mode"))
     active_credentials = credential_payloads[active_mode]
     enabled_methods = store.get("enabled_payment_methods") or []
-    ready_for_gcash = bool(active_credentials["public_key_configured"] and active_credentials["secret_key_configured"] and "gcash" in enabled_methods)
+    ready_for_checkout = bool(active_credentials["public_key_configured"] and active_credentials["secret_key_configured"] and enabled_methods)
     ready_for_webhooks = bool(active_credentials["webhook_secret_configured"])
     return {
         "enabled": bool(store.get("enabled")),
@@ -4676,13 +4717,15 @@ def public_payment_gateway_settings() -> dict:
         "telegram": public_paymongo_telegram_settings(store),
         "notes": store.get("notes"),
         "phase": "PHASE_2_CHECKOUT_FOUNDATION",
-        "ready_for_gcash": ready_for_gcash,
+        "ready_for_gcash": ready_for_checkout,
+        "ready_for_checkout": ready_for_checkout,
         "ready_for_webhooks": ready_for_webhooks,
         "webhook_endpoint_path": "/api/payments/paymongo/webhook",
         "requirements": {
             "public_key": active_credentials["public_key_configured"],
             "secret_key": active_credentials["secret_key_configured"],
             "webhook_secret": active_credentials["webhook_secret_configured"],
+            "checkout_method_enabled": bool(enabled_methods),
             "gcash_enabled": "gcash" in enabled_methods,
             "payments_enabled": bool(store.get("enabled")),
         },
@@ -4816,7 +4859,10 @@ def paymongo_checkout_billing(order: dict) -> dict:
     return billing
 
 
-def paymongo_create_checkout_session(store: dict, secret_key: str, order: dict, session: dict, payment_method: str) -> dict:
+def paymongo_create_checkout_session(store: dict, secret_key: str, order: dict, session: dict) -> dict:
+    payment_method_types = payment_enabled_checkout_methods(store)
+    if not payment_method_types:
+        raise HTTPException(status_code=400, detail="Enable at least one PayMongo checkout method before accepting online payments")
     purchase_quantity = max(1, int(order.get("purchase_quantity") or 1))
     discount_amount = int(order.get("discount_amount_centavos") or 0)
     quantity_label = f" x{purchase_quantity}" if purchase_quantity > 1 else ""
@@ -4844,7 +4890,7 @@ def paymongo_create_checkout_session(store: dict, secret_key: str, order: dict, 
                 "quantity": 1,
             }
         ],
-        "payment_method_types": [payment_method],
+        "payment_method_types": payment_method_types,
         "reference_number": order["public_order_id"],
         "send_email_receipt": False,
         "show_description": True,
@@ -4877,6 +4923,13 @@ def paymongo_create_checkout_session(store: dict, secret_key: str, order: dict, 
         }
     }
     return paymongo_request(store, secret_key, "POST", "/checkout_sessions", payload)
+
+
+def paymongo_expire_checkout_session(store: dict, secret_key: str, checkout_session_id: str) -> dict:
+    session_id = normalize_payment_text(checkout_session_id, 120)
+    if not session_id:
+        return {}
+    return paymongo_request(store, secret_key, "POST", f"/checkout_sessions/{session_id}/expire")
 
 
 def parse_paymongo_signature(header: str) -> dict:
@@ -4970,6 +5023,7 @@ def paymongo_checkout_session_id(payload: dict) -> Optional[str]:
 def paymongo_event_is_paid(event_type: str) -> bool:
     return normalize_payment_text(event_type, 120).lower() in {
         "payment.paid",
+        "link.payment.paid",
         "checkout_session.payment.paid",
         "checkout_session.paid",
     }
@@ -5116,6 +5170,18 @@ def paymongo_checkout_is_paid(payload: dict) -> bool:
     return normalize_payment_text(intent_attributes.get("status"), 40).lower() in {"succeeded", "paid"}
 
 
+def paymongo_checkout_is_expired(payload: dict) -> bool:
+    attributes = paymongo_checkout_attributes(payload)
+    status = normalize_payment_text(attributes.get("status"), 40).lower()
+    if status == "expired":
+        return True
+    expires_at = attributes.get("expires_at") or attributes.get("expiresAt")
+    try:
+        return expires_at is not None and int(expires_at) <= int(datetime.now(timezone.utc).timestamp())
+    except (TypeError, ValueError, OSError):
+        return False
+
+
 def paymongo_checkout_paid_amount(payload: dict) -> Optional[int]:
     payment = paymongo_paid_payment_from_checkout(payload)
     payment_attributes = payment.get("attributes") if isinstance(payment, dict) and isinstance(payment.get("attributes"), dict) else {}
@@ -5163,6 +5229,32 @@ def sync_paymongo_checkout_status(cur, order: dict, request: Request) -> dict:
     provider_payment_id = paymongo_checkout_payment_id(checkout)
 
     if not paid:
+        if paymongo_checkout_is_expired(checkout):
+            cur.execute(
+                """
+                UPDATE payment_orders
+                SET status = 'EXPIRED',
+                    fulfillment_status = 'NOT_REQUIRED',
+                    provider_response_json = %s,
+                    last_error = 'Payment session expired. Please start checkout again.',
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (Json(sanitize_summary(checkout)), order["id"]),
+            )
+            order = cur.fetchone()
+            finalize_omada_payment_auth_free_grants_for_order(cur, order, final_status="CANCELLED")
+            if order.get("portal_session_id"):
+                create_portal_event(
+                    cur,
+                    order["portal_session_id"],
+                    "PAYMENT_EXPIRED",
+                    request,
+                    "PayMongo checkout session expired.",
+                    raw_context={"payment_order_id": order["public_order_id"], "source": "checkout_status_reconciliation"},
+                )
+            return order
         cur.execute(
             """
             UPDATE payment_orders
@@ -5230,6 +5322,71 @@ def sync_paymongo_checkout_status(cur, order: dict, request: Request) -> dict:
         if order.get("portal_session_id"):
             create_portal_event(cur, order["portal_session_id"], "PAYMENT_FULFILLMENT_FAILED", request, message, raw_context={"payment_order_id": order["public_order_id"], "source": "checkout_status_reconciliation"})
         return order
+
+
+def process_paymongo_checkout_reconciliation_once(limit: int = 20) -> int:
+    reconciled = 0
+    request_context = InternalRequestContext("3J PayMongo checkout reconciliation worker")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM payment_orders
+                WHERE provider = 'PAYMONGO'
+                  AND checkout_session_id IS NOT NULL
+                  AND status IN ('PENDING', 'CHECKOUT_CREATED')
+                  AND created_at >= now() - interval '3 days'
+                  AND updated_at <= now() - interval '20 seconds'
+                ORDER BY created_at ASC
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+                """,
+                (limit,),
+            )
+            orders = cur.fetchall()
+            for order in orders:
+                try:
+                    synced = sync_paymongo_checkout_status(cur, order, request_context)
+                    if synced and synced.get("status") != order.get("status"):
+                        reconciled += 1
+                except Exception as exc:
+                    cur.execute(
+                        """
+                        UPDATE payment_orders
+                        SET last_error = %s,
+                            updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (f"PayMongo reconciliation failed: {exc}", order["id"]),
+                    )
+                    if order.get("portal_session_id"):
+                        create_portal_event(
+                            cur,
+                            order["portal_session_id"],
+                            "PAYMENT_RECONCILIATION_FAILED",
+                            request_context,
+                            str(exc),
+                            raw_context={"payment_order_id": order["public_order_id"], "source": "background_paymongo_reconciliation"},
+                        )
+    return reconciled
+
+
+def start_paymongo_checkout_reconciliation_worker():
+    global PAYMONGO_RECONCILIATION_THREAD_STARTED
+    if PAYMONGO_RECONCILIATION_THREAD_STARTED:
+        return
+    PAYMONGO_RECONCILIATION_THREAD_STARTED = True
+
+    def worker():
+        while True:
+            try:
+                process_paymongo_checkout_reconciliation_once()
+            except Exception as exc:
+                print(f"PayMongo reconciliation worker failed: {exc}")
+            time.sleep(20)
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def payment_order_status_payload(order: Optional[dict]) -> dict:
@@ -5447,19 +5604,26 @@ def create_paymongo_admin_notification(
             return str(existing["id"])
     except Exception:
         pass
-    notification_id = create_admin_notification(
-        "PAYMONGO_ALERT",
-        severity,
-        title,
-        message,
-        "PayMongo",
-        "/admin/paymongo",
-        "payment_orders",
-        clean_related_id,
-        metadata or {},
-    )
+    try:
+        notification_id = create_admin_notification(
+            "PAYMONGO_ALERT",
+            severity,
+            title,
+            message,
+            "PayMongo",
+            "/admin/paymongo",
+            "payment_orders",
+            clean_related_id,
+            metadata or {},
+        )
+    except Exception as exc:
+        print(f"PayMongo admin notification failed: {exc}")
+        notification_id = None
     if telegram:
-        send_paymongo_telegram_alert(title, message, metadata)
+        try:
+            send_paymongo_telegram_alert(title, message, metadata)
+        except Exception as exc:
+            print(f"PayMongo Telegram alert failed: {exc}")
     return notification_id
 
 
@@ -6025,6 +6189,148 @@ def omada_payment_auth_free_public_grant(row: Optional[dict]) -> Optional[dict]:
     }
 
 
+def omada_payment_auth_free_site_rows(cur) -> list[dict]:
+    cur.execute(
+        """
+        SELECT DISTINCT site_id, site_name
+        FROM (
+            SELECT omada_site_id AS site_id, site_name
+            FROM site_deployments
+            WHERE omada_site_id IS NOT NULL
+              AND omada_site_id <> ''
+              AND COALESCE(deployment_status, '') <> 'DELETED'
+            UNION ALL
+            SELECT site_id, site_name
+            FROM omada_payment_auth_free_grants
+            WHERE site_id IS NOT NULL
+              AND site_id <> ''
+            UNION ALL
+            SELECT selected_omada_site_id AS site_id, selected_omada_site_name AS site_name
+            FROM captive_portal_settings
+            WHERE selected_omada_site_id IS NOT NULL
+              AND selected_omada_site_id <> ''
+        ) sites
+        WHERE site_id IS NOT NULL
+          AND site_id <> ''
+        ORDER BY site_name NULLS LAST, site_id
+        """
+    )
+    return cur.fetchall()
+
+
+def omada_payment_auth_free_remote_snapshot(cur, active_grants: list[dict]) -> dict:
+    site_rows = omada_payment_auth_free_site_rows(cur)
+    active_by_mac = {}
+    active_by_ip = {}
+    for row in active_grants:
+        site_id = row.get("site_id")
+        mac = normalize_mac_if_valid(row.get("client_mac"))
+        client_ip = str(row.get("client_ip") or "").strip()
+        if site_id and mac:
+            active_by_mac[(site_id, mac)] = row
+        if site_id and client_ip:
+            active_by_ip[(site_id, client_ip)] = row
+
+    cur.execute(
+        """
+        SELECT *
+        FROM omada_payment_auth_free_grants
+        WHERE site_id IS NOT NULL AND site_id <> ''
+        ORDER BY updated_at DESC NULLS LAST, created_at DESC
+        LIMIT 500
+        """
+    )
+    history_by_mac = {}
+    history_by_ip = {}
+    for row in cur.fetchall():
+        public = omada_payment_auth_free_public_grant(row)
+        if not public:
+            continue
+        site_id = public.get("site_id")
+        mac = normalize_mac_if_valid(public.get("client_mac"))
+        client_ip = str(public.get("client_ip") or "").strip()
+        if site_id and mac and (site_id, mac) not in history_by_mac:
+            history_by_mac[(site_id, mac)] = public
+        if site_id and client_ip and (site_id, client_ip) not in history_by_ip:
+            history_by_ip[(site_id, client_ip)] = public
+
+    remote_clients = []
+    errors = []
+    try:
+        _, client = omada_api_client_from_settings()
+    except Exception as exc:
+        return {
+            "remote_clients": [],
+            "orphaned_remote_clients": [],
+            "remote_errors": [{"message": normalize_payment_text(str(exc), 1000)}],
+        }
+
+    for site in site_rows:
+        site_id = site.get("site_id")
+        if not site_id:
+            continue
+        site_name = site.get("site_name") or site_id
+        try:
+            data = client.get_access_control(site_id)
+            access = data.get("access_control") or {}
+            policies = access.get("freeAuthClientPolicies") or []
+            enabled = bool(access.get("freeAuthClientEnable"))
+            if not isinstance(policies, list):
+                policies = []
+            for index, policy in enumerate(policies):
+                if not isinstance(policy, dict):
+                    continue
+                policy_type = int(policy.get("type") or 0)
+                client_mac = normalize_mac_if_valid(policy.get("clientMac")) if policy_type == 4 else None
+                client_ip = str(policy.get("clientIp") or "").strip() if policy_type == 3 else None
+                if not client_mac and not client_ip:
+                    continue
+                local_match = None
+                if client_mac:
+                    local_match = active_by_mac.get((site_id, client_mac)) or history_by_mac.get((site_id, client_mac))
+                if not local_match and client_ip:
+                    local_match = active_by_ip.get((site_id, client_ip)) or history_by_ip.get((site_id, client_ip))
+                locally_active = bool(
+                    (client_mac and (site_id, client_mac) in active_by_mac)
+                    or (client_ip and (site_id, client_ip) in active_by_ip)
+                )
+                status = "REMOTE_ACTIVE" if locally_active else "ORPHANED_IN_OMADA"
+                remote_clients.append(
+                    {
+                        "id": f"omada:{site_id}:{client_mac or client_ip or index}",
+                        "source": "OMADA_LIVE",
+                        "orphaned": not locally_active,
+                        "site_id": site_id,
+                        "site_name": site_name,
+                        "client_mac": client_mac,
+                        "client_ip": client_ip,
+                        "profile_name": (local_match or {}).get("profile_name"),
+                        "profile_contact_number": (local_match or {}).get("profile_contact_number"),
+                        "status": status,
+                        "remote_enabled": enabled,
+                        "remote_policy_type": policy_type,
+                        "remote_policy_id": policy.get("id") or policy.get("idInt"),
+                        "remaining_seconds": (local_match or {}).get("remaining_seconds") if locally_active else None,
+                        "expires_at": (local_match or {}).get("expires_at") if locally_active else None,
+                        "last_error": None if locally_active else "Exists in Omada Authentication-Free Client but no active local grant exists.",
+                    }
+                )
+        except Exception as exc:
+            errors.append(
+                {
+                    "site_id": site_id,
+                    "site_name": site_name,
+                    "message": normalize_payment_text(str(exc), 1000),
+                }
+            )
+
+    return {
+        "remote_clients": remote_clients,
+        "orphaned_remote_clients": [row for row in remote_clients if row.get("orphaned")],
+        "remote_errors": errors,
+    }
+
+
 def omada_payment_auth_free_identity(session: dict, user: Optional[dict] = None, profile: Optional[dict] = None, payload: Optional[PortalSessionRequest] = None, request: Optional[Request] = None) -> dict:
     ctx = portal_context(payload) if payload else {}
     client_mac = (
@@ -6044,25 +6350,58 @@ def omada_payment_auth_free_identity(session: dict, user: Optional[dict] = None,
     }
 
 
+def record_omada_payment_auth_free_abuse_block(identity: dict, attempts_today: int, block_until: datetime) -> None:
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO omada_payment_auth_free_abuse_blocks(
+                        user_id, portal_session_id, client_mac, device_token_hash, profile_name,
+                        profile_contact_number, attempts_today, reason, block_until
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, 'DAILY_LIMIT', %s)
+                    """,
+                    (
+                        identity.get("user_id"),
+                        identity.get("portal_session_id"),
+                        identity.get("client_mac"),
+                        identity.get("device_token_hash"),
+                        identity.get("profile_name"),
+                        identity.get("profile_contact_number"),
+                        attempts_today,
+                        block_until,
+                    ),
+                )
+    except Exception as exc:
+        print(f"[omada-payment-auth-free] failed to record abuse block: {exc}")
+
+
 def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, profile: Optional[dict], payload: PortalSessionRequest, request: Request) -> dict:
     store = omada_payment_auth_free_store()
     if not store.get("enabled") or not store.get("block_online_payment_on_abuse"):
         return {"status": "OK", "attempts_today": 0, "limit": store["daily_attempt_limit"]}
     identity = omada_payment_auth_free_identity(session, user, profile, payload, request)
     clauses = []
+    grant_clauses = []
     params = []
     if identity.get("user_id"):
         clauses.append("user_id = %s")
+        grant_clauses.append("g.user_id = %s")
         params.append(identity["user_id"])
     if identity.get("client_mac"):
         clauses.append("client_mac = %s")
+        grant_clauses.append("g.client_mac = %s")
         params.append(identity["client_mac"])
     if identity.get("device_token_hash"):
         clauses.append("device_token_hash = %s")
+        grant_clauses.append("g.device_token_hash = %s")
         params.append(identity["device_token_hash"])
     if not clauses:
         return {"status": "OK", "attempts_today": 0, "limit": store["daily_attempt_limit"]}
     where_clause = " OR ".join(clauses)
+    grant_where_clause = " OR ".join(grant_clauses)
+    unpaid_grant_clause = "(po.id IS NULL OR NOT (po.status = 'PAID' AND po.fulfillment_status = 'FULFILLED'))"
     cur.execute(
         f"""
         SELECT *
@@ -6083,10 +6422,12 @@ def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, 
     if store["cooldown_seconds"] > 0:
         cur.execute(
             f"""
-            SELECT created_at
-            FROM omada_payment_auth_free_grants
-            WHERE ({where_clause})
-            ORDER BY created_at DESC
+            SELECT g.created_at
+            FROM omada_payment_auth_free_grants g
+            LEFT JOIN payment_orders po ON po.id = g.payment_order_id
+            WHERE ({grant_where_clause})
+              AND {unpaid_grant_clause}
+            ORDER BY g.created_at DESC
             LIMIT 1
             """,
             tuple(params),
@@ -6102,9 +6443,11 @@ def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, 
     cur.execute(
         f"""
         SELECT count(*)::int AS attempts
-        FROM omada_payment_auth_free_grants
-        WHERE created_at >= date_trunc('day', now())
-          AND ({where_clause})
+        FROM omada_payment_auth_free_grants g
+        LEFT JOIN payment_orders po ON po.id = g.payment_order_id
+        WHERE g.created_at >= date_trunc('day', now())
+          AND ({grant_where_clause})
+          AND {unpaid_grant_clause}
         """,
         tuple(params),
     )
@@ -6112,27 +6455,7 @@ def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, 
     if attempts_today < store["daily_attempt_limit"]:
         return {"status": "OK", "attempts_today": attempts_today, "limit": store["daily_attempt_limit"]}
     block_until = datetime.now(timezone.utc) + timedelta(hours=store["abuse_block_hours"])
-    cur.execute(
-        """
-        INSERT INTO omada_payment_auth_free_abuse_blocks(
-            user_id, portal_session_id, client_mac, device_token_hash, profile_name,
-            profile_contact_number, attempts_today, reason, block_until
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'DAILY_LIMIT', %s)
-        RETURNING *
-        """,
-        (
-            identity.get("user_id"),
-            identity.get("portal_session_id"),
-            identity.get("client_mac"),
-            identity.get("device_token_hash"),
-            identity.get("profile_name"),
-            identity.get("profile_contact_number"),
-            attempts_today,
-            block_until,
-        ),
-    )
-    cur.fetchone()
+    record_omada_payment_auth_free_abuse_block(identity, attempts_today, block_until)
     raise HTTPException(
         status_code=429,
         detail="Online payment access is temporarily blocked for this device/profile because too many checkout windows were started today. Try again later or ask the operator.",
@@ -6376,16 +6699,18 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
     cur.execute(
         """
         SELECT
-          COALESCE(profile_name, 'Unprofiled device') AS profile_name,
-          profile_contact_number,
-          client_mac,
-          device_token_hash,
-          user_id,
+          COALESCE(g.profile_name, 'Unprofiled device') AS profile_name,
+          g.profile_contact_number,
+          g.client_mac,
+          g.device_token_hash,
+          g.user_id,
           count(*)::int AS attempts_today,
-          max(created_at) AS last_attempt_at
-        FROM omada_payment_auth_free_grants
-        WHERE created_at >= date_trunc('day', now())
-        GROUP BY COALESCE(profile_name, 'Unprofiled device'), profile_contact_number, client_mac, device_token_hash, user_id
+          max(g.created_at) AS last_attempt_at
+        FROM omada_payment_auth_free_grants g
+        LEFT JOIN payment_orders po ON po.id = g.payment_order_id
+        WHERE g.created_at >= date_trunc('day', now())
+          AND (po.id IS NULL OR NOT (po.status = 'PAID' AND po.fulfillment_status = 'FULFILLED'))
+        GROUP BY COALESCE(g.profile_name, 'Unprofiled device'), g.profile_contact_number, g.client_mac, g.device_token_hash, g.user_id
         HAVING count(*) >= %s
         ORDER BY attempts_today DESC, last_attempt_at DESC
         LIMIT 100
@@ -6428,7 +6753,11 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
         }
         for row in cur.fetchall()
     ]
+    remote_snapshot = omada_payment_auth_free_remote_snapshot(cur, active_grants)
     overview["active_blocks"] = len(active_blocks)
+    overview["remote_client_count"] = len(remote_snapshot["remote_clients"])
+    overview["orphaned_remote_clients"] = len(remote_snapshot["orphaned_remote_clients"])
+    overview["remote_sync_errors"] = len(remote_snapshot["remote_errors"])
     return {
         "settings": settings,
         "overview": {key: int(value or 0) for key, value in overview.items()},
@@ -6436,9 +6765,12 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
         "recent_grants": recent_grants,
         "abuse_profiles": abuse_rows,
         "active_blocks": active_blocks,
+        "remote_clients": remote_snapshot["remote_clients"],
+        "orphaned_remote_clients": remote_snapshot["orphaned_remote_clients"],
+        "remote_errors": remote_snapshot["remote_errors"],
         "guide": {
             "summary": "When a customer starts PayMongo checkout from a real browser, the system can place that client MAC in Omada Authentication-Free Client for a short time.",
-            "cleanup": "The entry is removed when payment succeeds, payment is cancelled, or the timeout expires.",
+            "cleanup": "The entry is removed when payment succeeds, payment is cancelled, or the timeout expires. The dashboard also checks Omada live state so orphaned remote entries are visible.",
             "abuse": "The daily limit prevents customers from repeatedly opening free payment windows without paying.",
         },
     }
@@ -9067,10 +9399,23 @@ def system_display_name() -> str:
 
 
 def public_ip(request: Request) -> str:
+    if not request:
+        return ""
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else ""
+
+
+class InternalRequestClient:
+    def __init__(self, host: str = "127.0.0.1"):
+        self.host = host
+
+
+class InternalRequestContext:
+    def __init__(self, user_agent: str):
+        self.headers = {"user-agent": user_agent}
+        self.client = InternalRequestClient()
 
 
 def mask_voucher_code(code: str) -> str:
@@ -11679,6 +12024,65 @@ def portal_network_presence(session: Optional[dict], request: Optional[Request] 
     }
 
 
+def payment_method_display_label(method: Optional[str]) -> str:
+    clean = normalize_payment_text(method, 80).lower()
+    if not clean:
+        return "PayMongo checkout"
+    clean = PAYMENT_METHOD_ALIASES.get(clean, clean)
+    if clean in {PAYMONGO_HOSTED_CHECKOUT_METHOD, "hosted_checkout"}:
+        return "PayMongo checkout"
+    return PAYMENT_METHOD_OPTIONS.get(clean, method or "PayMongo checkout")
+
+
+def bag_item_purchase_details(row: dict) -> dict:
+    metadata = row.get("metadata_json") or {}
+    source = str(row.get("source") or "").upper()
+    bought_at = (
+        row.get("payment_paid_at")
+        or row.get("store_purchase_approved_at")
+        or row.get("store_purchase_created_at")
+        or row.get("created_at")
+    )
+    payment_method = row.get("payment_method") or metadata.get("payment_method")
+    payment_method_label = payment_method_display_label(payment_method)
+    store_name = (
+        row.get("store_name")
+        or metadata.get("store_name")
+        or (row.get("product_category_name") if source == "STORE_PURCHASE" else None)
+    )
+    if source == "PAYMENT":
+        channel = "ONLINE"
+        label = f"Online: {payment_method_label}"
+    elif source == "STORE_PURCHASE":
+        channel = "STORE"
+        label = f"Store: {store_name or 'Physical store'}"
+    elif source == "WELCOME_GIFT":
+        channel = "WELCOME_GIFT"
+        label = "Welcome gift"
+    elif source == "VOUCHER":
+        channel = "VOUCHER"
+        label = "Voucher"
+    elif source == "MANUAL":
+        channel = "ADMIN"
+        label = "Admin given"
+    else:
+        channel = source or "UNKNOWN"
+        label = source.title().replace("_", " ") if source else "Unknown source"
+    return {
+        "purchase_channel": channel,
+        "purchase_source_label": label,
+        "bought_at": bought_at,
+        "payment_method": payment_method,
+        "payment_method_label": payment_method_label,
+        "payment_order_public_id": row.get("payment_order_public_id") or metadata.get("payment_order_id"),
+        "payment_provider": row.get("payment_provider"),
+        "payment_provider_mode": row.get("payment_provider_mode"),
+        "store_name": store_name,
+        "store_purchase_public_id": row.get("store_purchase_public_id") or metadata.get("store_purchase_request_id"),
+        "store_purchase_method": row.get("store_purchase_method") or metadata.get("request_method"),
+    }
+
+
 def bag_item_public(row: Optional[dict]) -> Optional[dict]:
     if not row:
         return None
@@ -11691,6 +12095,7 @@ def bag_item_public(row: Optional[dict]) -> Optional[dict]:
     metadata = row.get("metadata_json") or {}
     admin_created = bool(row.get("source") == "MANUAL" and (metadata.get("admin_created") or row.get("admin_created_by")))
     product_kind = normalize_product_kind(row.get("product_kind"))
+    purchase_details = bag_item_purchase_details(row)
     return {
         "id": str(row["id"]),
         "product_name": row.get("product_name"),
@@ -11706,6 +12111,7 @@ def bag_item_public(row: Optional[dict]) -> Optional[dict]:
         "iptv_account_username": row.get("iptv_account_username") or "",
         "iptv_account_expires_at": row.get("iptv_account_expires_at"),
         "source": row.get("source"),
+        **purchase_details,
         "status": row.get("status"),
         "priority": int(row.get("priority") or 0),
         "duration_seconds": int(row.get("duration_seconds") or 0),
@@ -12056,25 +12462,55 @@ def customer_bag_payload(cur, user_id) -> dict:
     sync_gateway_access_for_sessions(cur, consumed_session_ids, "BAG_PAYLOAD_EXPIRED")
     cur.execute(
         """
-        SELECT *
-        FROM customer_bag_items
-        WHERE user_id = %s AND status IN ('ACTIVE', 'QUEUED')
+        SELECT
+          i.*,
+          po.public_order_id AS payment_order_public_id,
+          po.payment_method AS payment_method,
+          po.provider AS payment_provider,
+          po.provider_mode AS payment_provider_mode,
+          po.paid_at AS payment_paid_at,
+          po.created_at AS payment_created_at,
+          spr.public_id AS store_purchase_public_id,
+          spr.request_method AS store_purchase_method,
+          spr.created_at AS store_purchase_created_at,
+          spr.approved_at AS store_purchase_approved_at,
+          ps_store.store_name AS store_name
+        FROM customer_bag_items i
+        LEFT JOIN payment_orders po ON po.id = i.payment_order_id
+        LEFT JOIN store_purchase_requests spr ON spr.fulfilled_bag_item_id = i.id
+        LEFT JOIN physical_stores ps_store ON ps_store.id = spr.store_id
+        WHERE i.user_id = %s AND i.status IN ('ACTIVE', 'QUEUED')
         ORDER BY
-          CASE status WHEN 'ACTIVE' THEN 0 ELSE 1 END,
-          CASE WHEN status = 'ACTIVE' THEN active_until END ASC NULLS LAST,
-          priority ASC,
-          created_at ASC
+          CASE i.status WHEN 'ACTIVE' THEN 0 ELSE 1 END,
+          CASE WHEN i.status = 'ACTIVE' THEN i.active_until END ASC NULLS LAST,
+          i.priority ASC,
+          i.created_at ASC
         """,
         (user_id,),
     )
     active_and_queued = cur.fetchall()
     cur.execute(
         """
-        SELECT *
-        FROM customer_bag_items
-        WHERE user_id = ANY(%s::uuid[])
-          AND status IN ('CONSUMED', 'EXPIRED', 'CANCELLED')
-        ORDER BY COALESCE(consumed_at, updated_at, created_at) DESC
+        SELECT
+          i.*,
+          po.public_order_id AS payment_order_public_id,
+          po.payment_method AS payment_method,
+          po.provider AS payment_provider,
+          po.provider_mode AS payment_provider_mode,
+          po.paid_at AS payment_paid_at,
+          po.created_at AS payment_created_at,
+          spr.public_id AS store_purchase_public_id,
+          spr.request_method AS store_purchase_method,
+          spr.created_at AS store_purchase_created_at,
+          spr.approved_at AS store_purchase_approved_at,
+          ps_store.store_name AS store_name
+        FROM customer_bag_items i
+        LEFT JOIN payment_orders po ON po.id = i.payment_order_id
+        LEFT JOIN store_purchase_requests spr ON spr.fulfilled_bag_item_id = i.id
+        LEFT JOIN physical_stores ps_store ON ps_store.id = spr.store_id
+        WHERE i.user_id = ANY(%s::uuid[])
+          AND i.status IN ('CONSUMED', 'EXPIRED', 'CANCELLED')
+        ORDER BY COALESCE(i.consumed_at, i.updated_at, i.created_at) DESC
         """,
         (history_user_ids,),
     )
@@ -16784,12 +17220,10 @@ def resolve_iptv_login_token(payload: IptvTokenResolvePayload, request: Request)
 
 
 def payment_checkout_method(store: dict, value: str) -> str:
-    method = normalize_payment_text(value or "gcash", 40).lower()
-    if method not in PAYMENT_METHOD_OPTIONS:
-        raise HTTPException(status_code=400, detail="Unsupported payment method")
-    if method not in (store.get("enabled_payment_methods") or []):
-        raise HTTPException(status_code=400, detail=f"{PAYMENT_METHOD_OPTIONS[method]} is not enabled")
-    return method
+    methods = payment_enabled_checkout_methods(store)
+    if not methods:
+        raise HTTPException(status_code=400, detail="Enable at least one PayMongo checkout method before accepting online payments")
+    return PAYMONGO_HOSTED_CHECKOUT_METHOD
 
 
 @app.post("/api/portal/payments/checkout")
@@ -16801,6 +17235,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
     if store.get("provider") != "PAYMONGO":
         raise HTTPException(status_code=400, detail="Only PayMongo payments are supported")
     method = payment_checkout_method(store, payload.payment_method)
+    enabled_checkout_methods = payment_enabled_checkout_methods(store)
     if not active_credentials.get("secret_key"):
         raise HTTPException(status_code=400, detail=f"PayMongo {active_credentials['mode']} secret key is not configured")
 
@@ -16955,7 +17390,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
             )
             order = cur.fetchone()
             try:
-                checkout = paymongo_create_checkout_session(store, active_credentials["secret_key"], order, session, method)
+                checkout = paymongo_create_checkout_session(store, active_credentials["secret_key"], order, session)
                 checkout_data = checkout.get("data") if isinstance(checkout.get("data"), dict) else {}
                 checkout_attributes = checkout_data.get("attributes") if isinstance(checkout_data.get("attributes"), dict) else {}
                 checkout_session_id = checkout_data.get("id")
@@ -16978,7 +17413,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                 )
                 order = cur.fetchone()
                 auth_free_grant = create_omada_payment_auth_free_grant(cur, order, session, user, profile, payload, request)
-                create_portal_event(cur, session["id"], "PAYMENT_CHECKOUT_CREATED", request, "PayMongo checkout created", raw_context={"payment_order_id": public_order_id, "product_item_id": str(product["id"]), "method": method, "category": product.get("category_name"), "current_barangay": current_barangay})
+                create_portal_event(cur, session["id"], "PAYMENT_CHECKOUT_CREATED", request, "PayMongo checkout created", raw_context={"payment_order_id": public_order_id, "product_item_id": str(product["id"]), "method": method, "payment_method_types": enabled_checkout_methods, "category": product.get("category_name"), "current_barangay": current_barangay})
                 response_payload = {
                     "status": "CHECKOUT_CREATED",
                     "payment_order_id": order["public_order_id"],
@@ -16986,6 +17421,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     "provider": order["provider"],
                     "mode": order["provider_mode"],
                     "payment_method": order["payment_method"],
+                    "payment_method_types": enabled_checkout_methods,
                     "amount_centavos": order["amount_centavos"],
                     "base_amount_centavos": order.get("base_amount_centavos"),
                     "purchase_quantity": order.get("purchase_quantity") or 1,
@@ -17018,7 +17454,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     """,
                     (str(exc.detail), order["id"]),
                 )
-                create_portal_event(cur, session["id"], "PAYMENT_CHECKOUT_FAILED", request, str(exc.detail), raw_context={"payment_order_id": public_order_id, "product_item_id": str(product["id"]), "method": method})
+                create_portal_event(cur, session["id"], "PAYMENT_CHECKOUT_FAILED", request, str(exc.detail), raw_context={"payment_order_id": public_order_id, "product_item_id": str(product["id"]), "method": method, "payment_method_types": enabled_checkout_methods})
     if checkout_error:
         raise checkout_error
     return response_payload
@@ -17099,17 +17535,52 @@ def cancel_portal_payment(public_order_id: str, payload: PortalPaymentCancelRequ
                 raise HTTPException(status_code=403, detail="This payment checkout belongs to another portal session.")
 
             if order.get("status") in {"PENDING", "CHECKOUT_CREATED"}:
+                if order.get("checkout_session_id"):
+                    try:
+                        order = sync_paymongo_checkout_status(cur, order, request)
+                    except Exception as exc:
+                        cur.execute(
+                            """
+                            UPDATE payment_orders
+                            SET last_error = %s,
+                                updated_at = now()
+                            WHERE id = %s
+                            RETURNING *
+                            """,
+                            (str(exc), order["id"]),
+                        )
+                        order = cur.fetchone()
+                if order.get("status") == "PAID":
+                    order["_bag_item"] = customer_bag_item_for_payment(cur, order["id"])
+                    return {**payment_order_status_payload(order), "message": "Payment was already paid and cannot be cancelled."}
+                expire_payload = None
+                expire_error = ""
+                if order.get("checkout_session_id") and order.get("provider") == "PAYMONGO":
+                    try:
+                        store = payment_gateway_store()
+                        credentials = payment_gateway_active_credentials(store, order.get("provider_mode") or store.get("mode"))
+                        expire_payload = paymongo_expire_checkout_session(store, credentials.get("secret_key"), order.get("checkout_session_id"))
+                    except Exception as exc:
+                        expire_error = normalize_payment_text(str(exc), 500)
+                        if "already expired" in expire_error.lower():
+                            expire_payload = {"status": "already_expired", "message": expire_error}
+                            expire_error = ""
                 cur.execute(
                     """
                     UPDATE payment_orders
                     SET status = 'CANCELLED',
                         fulfillment_status = 'NOT_REQUIRED',
-                        last_error = 'Checkout cancelled by customer.',
+                        provider_response_json = COALESCE(%s::jsonb, provider_response_json),
+                        last_error = %s,
                         updated_at = now()
                     WHERE id = %s
                     RETURNING *
                     """,
-                    (order["id"],),
+                    (
+                        Json(sanitize_summary(expire_payload)) if expire_payload else None,
+                        f"Checkout cancelled by customer. PayMongo expire failed: {expire_error}" if expire_error else "Checkout cancelled by customer.",
+                        order["id"],
+                    ),
                 )
                 order = cur.fetchone()
                 if order.get("portal_session_id"):
@@ -17251,6 +17722,29 @@ def record_rejected_paymongo_webhook(payload: dict, event_type: str, reason: str
                 )
     except Exception as exc:
         print(f"PayMongo rejected webhook record failed: {exc}")
+
+
+class DetachedRequestClient:
+    def __init__(self, host: str = ""):
+        self.host = host
+
+
+class DetachedRequestContext:
+    def __init__(self, request: Request):
+        self.headers = dict(request.headers)
+        self.client = DetachedRequestClient(request.client.host if request.client else "")
+
+
+def enqueue_paymongo_webhook_processing(webhook_event_id: str, request: Request):
+    request_context = DetachedRequestContext(request)
+
+    def worker():
+        try:
+            process_paymongo_webhook_event(webhook_event_id, request_context)
+        except Exception as exc:
+            print(f"PayMongo webhook worker failed for {webhook_event_id}: {exc}")
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
@@ -17399,8 +17893,17 @@ def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
         )
 
 
+@app.api_route("/api/payments/paymongo/webhook", methods=["GET", "HEAD", "OPTIONS"])
+async def paymongo_webhook_health():
+    return {
+        "status": "OK",
+        "provider": "PAYMONGO",
+        "message": "PayMongo webhook endpoint is reachable. Payment events must use POST.",
+    }
+
+
 @app.post("/api/payments/paymongo/webhook")
-async def paymongo_webhook(request: Request, background_tasks: BackgroundTasks):
+async def paymongo_webhook(request: Request):
     raw_body = await request.body()
     try:
         verification = verify_paymongo_webhook_signature(raw_body, request.headers.get("Paymongo-Signature") or request.headers.get("paymongo-signature") or "")
@@ -17424,6 +17927,24 @@ async def paymongo_webhook(request: Request, background_tasks: BackgroundTasks):
             "received": True,
             "status": "REJECTED",
             "message": "Webhook was acknowledged but not processed because signature verification failed.",
+        }
+    except Exception as exc:
+        reason = f"Webhook signature verification could not run: {exc}"
+        body_hash = sha256(raw_body).hexdigest()
+        record_rejected_paymongo_webhook({"raw_body_sha256": body_hash}, "verification_error", reason)
+        create_paymongo_admin_notification(
+            "PayMongo webhook verification error",
+            reason,
+            severity="DANGER",
+            related_id=f"verify:{body_hash[:24]}",
+            metadata={"body_hash": body_hash[:24]},
+            telegram=True,
+        )
+        return {
+            "received": True,
+            "status": "REJECTED",
+            "operator_review_required": True,
+            "message": "Webhook was acknowledged, but signature verification could not be completed.",
         }
     try:
         payload = json.loads(raw_body.decode("utf-8"))
@@ -17475,7 +17996,7 @@ async def paymongo_webhook(request: Request, background_tasks: BackgroundTasks):
             "message": "Webhook was acknowledged, but local recording failed.",
         }
 
-    background_tasks.add_task(process_paymongo_webhook_event, str(webhook_event["id"]), request)
+    enqueue_paymongo_webhook_processing(str(webhook_event["id"]), request)
     return {"received": True, "status": "QUEUED", "event_type": event_type}
 
 
@@ -19763,6 +20284,7 @@ def create_customer_bag_item_from_store_purchase(cur, purchase: dict, items: lis
         "store_purchase_request_id": purchase.get("public_id"),
         "request_method": purchase.get("request_method"),
         "store_id": str(purchase.get("store_id")),
+        "store_name": purchase.get("store_name"),
         "approved_by_owner_id": str((owner or {}).get("id")) if owner else None,
         "items": sanitize_summary(items),
     }
@@ -39679,6 +40201,56 @@ def save_omada_payment_auth_free_settings(payload: OmadaPaymentAuthFreeSettingsU
             return omada_payment_auth_free_dashboard_payload(cur)
 
 
+@app.post("/api/omada/payment-auth-free/remote/remove")
+def remove_remote_omada_payment_auth_free(payload: OmadaPaymentAuthFreeRemoteRemoveRequest, admin=Depends(current_admin)):
+    site_id = normalize_payment_text(payload.site_id, 160)
+    client_mac = normalize_mac_if_valid(payload.client_mac)
+    client_ip = host_ip(payload.client_ip)
+    if not site_id:
+        raise HTTPException(status_code=400, detail="Omada site ID is required.")
+    if not client_mac and not client_ip:
+        raise HTTPException(status_code=400, detail="Client MAC or IP is required.")
+    try:
+        _, client = omada_api_client_from_settings()
+        result = client.remove_auth_free_client(site_id, client_mac=client_mac, client_ip=client_ip)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not remove Omada Authentication-Free Client: {exc}")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            clauses = ["site_id = %s", "status IN ('ACTIVE', 'REMOVE_FAILED')"]
+            params = [site_id]
+            match_clauses = []
+            if client_mac:
+                match_clauses.append("client_mac = %s")
+                params.append(client_mac)
+            if client_ip:
+                match_clauses.append("client_ip = NULLIF(%s, '')::inet")
+                params.append(client_ip)
+            if match_clauses:
+                cur.execute(
+                    f"""
+                    UPDATE omada_payment_auth_free_grants
+                    SET status = 'REMOVED',
+                        removed_at = now(),
+                        removal_response_summary = %s,
+                        last_error = NULL,
+                        updated_at = now()
+                    WHERE {' AND '.join(clauses)}
+                      AND ({' OR '.join(match_clauses)})
+                    """,
+                    (Json(sanitize_summary(result)), *params),
+                )
+            audit(
+                admin["id"],
+                "remove_remote_omada_payment_auth_free",
+                "omada_controller",
+                site_id,
+                {"site_id": site_id, "client_mac": client_mac, "client_ip": client_ip, "result": sanitize_summary(result)},
+            )
+            conn.commit()
+            return omada_payment_auth_free_dashboard_payload(cur)
+
+
 @app.get("/api/omada/api-settings")
 def get_omada_api_settings(admin=Depends(current_admin)):
     return public_omada_api_settings()
@@ -40542,6 +41114,69 @@ def paymongo_remote_webhooks_summary(store: dict) -> dict:
     return {"modes": summaries, "errors": errors}
 
 
+def paymongo_webhook_url_is_ours(url: Optional[str]) -> bool:
+    parsed = urlparse(normalize_payment_text(url, 500))
+    return parsed.scheme == "https" and parsed.path.rstrip("/") == "/api/payments/paymongo/webhook"
+
+
+def paymongo_webhook_events_include_payments(events) -> bool:
+    if not isinstance(events, list):
+        return False
+    expected = {"checkout_session.payment.paid", "link.payment.paid", "payment.paid", "payment.failed", "checkout_session.payment.failed", "checkout_session.expired"}
+    return bool(expected.intersection({normalize_payment_text(event, 80) for event in events}))
+
+
+def inspect_paymongo_remote_webhooks(reason: str = "ADMIN_CHECK") -> list[dict]:
+    results = []
+    try:
+        store = payment_gateway_store()
+    except Exception as exc:
+        print(f"PayMongo webhook check skipped: settings unavailable: {exc}")
+        return [{"status": "ERROR", "message": str(exc)}]
+    for mode in PAYMENT_MODE_OPTIONS:
+        try:
+            credentials = payment_gateway_active_credentials(store, mode)
+            if not credentials.get("secret_key"):
+                continue
+            data = paymongo_request(store, credentials["secret_key"], "GET", "/webhooks")
+            for item in data.get("data", []) if isinstance(data, dict) else []:
+                attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
+                hook_id = normalize_payment_text(item.get("id"), 120)
+                status = normalize_payment_text(attrs.get("status"), 40).lower()
+                disabled_reason = normalize_payment_text(attrs.get("disabled_reason"), 120)
+                url = attrs.get("url")
+                events = attrs.get("events") or []
+                if (
+                    hook_id
+                    and status == "disabled"
+                    and disabled_reason == "max_retries_exceeded"
+                    and paymongo_webhook_url_is_ours(url)
+                    and paymongo_webhook_events_include_payments(events)
+                ):
+                    result = {
+                        "mode": mode,
+                        "id": hook_id,
+                        "status": "DISABLED",
+                        "disabled_reason": disabled_reason,
+                        "url": url,
+                        "reason": reason,
+                    }
+                    results.append(result)
+                    create_paymongo_admin_notification(
+                        f"PayMongo {mode} webhook is disabled",
+                        "PayMongo disabled this webhook after max retries. The system did not re-enable it automatically. Check Cloudflare delivery, server logs, and PayMongo delivery history before enabling it again.",
+                        severity="DANGER",
+                        related_id=f"webhook-disabled:{mode}:{hook_id}",
+                        metadata=result,
+                        telegram=True,
+                    )
+        except Exception as exc:
+            message = str(exc)
+            print(f"PayMongo webhook check failed for {mode}: {message}")
+            results.append({"mode": mode, "status": "ERROR", "message": message})
+    return results
+
+
 @app.get("/api/paymongo/overview")
 def get_paymongo_overview(admin=Depends(current_admin)):
     store = payment_gateway_store()
@@ -40606,6 +41241,17 @@ def get_paymongo_overview(admin=Depends(current_admin)):
         "webhook_stats": webhook_stats,
         "recent_failed_orders": recent_failed_orders,
         "recent_webhook_errors": recent_webhook_errors,
+    }
+
+
+@app.post("/api/paymongo/webhooks/check")
+def check_paymongo_webhooks(admin=Depends(current_admin)):
+    results = inspect_paymongo_remote_webhooks(reason=f"ADMIN:{admin.get('username') or admin.get('full_name') or admin.get('id')}")
+    audit(admin["id"], "paymongo_webhooks_checked", "payment_gateway", "paymongo", {"results": sanitize_summary(results)})
+    return {
+        "status": "SUCCESS",
+        "results": results,
+        "remote_webhooks": paymongo_remote_webhooks_summary(payment_gateway_store()),
     }
 
 

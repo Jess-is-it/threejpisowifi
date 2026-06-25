@@ -9346,6 +9346,24 @@ button.portal-bag-control-card {
   padding: 0.62rem 0;
 }
 
+.portal-bag-history-clickable {
+  appearance: none;
+  background: transparent;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.portal-bag-history-clickable:hover,
+.portal-bag-history-clickable:focus-visible {
+  background: rgba(32, 107, 196, 0.05);
+  outline: none;
+}
+
 .portal-bag-history-main {
   align-items: center;
   display: flex;
@@ -9363,6 +9381,67 @@ button.portal-bag-control-card {
 
 .portal-bag-history-row small {
   color: #6c7a91;
+}
+
+.portal-bag-pass-detail {
+  display: grid;
+  gap: 1rem;
+}
+
+.portal-bag-pass-detail-head {
+  align-items: center;
+  background: rgba(32, 107, 196, 0.06);
+  border: 1px solid rgba(32, 107, 196, 0.12);
+  border-radius: 12px;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: auto 1fr auto;
+  padding: 0.85rem;
+}
+
+.portal-bag-pass-detail-head small {
+  color: #6c7a91;
+  display: block;
+  margin-top: 0.12rem;
+}
+
+.portal-bag-pass-detail-icon {
+  align-items: center;
+  background: rgba(32, 107, 196, 0.12);
+  border-radius: 12px;
+  color: #206bc4;
+  display: inline-flex;
+  height: 42px;
+  justify-content: center;
+  width: 42px;
+}
+
+.portal-bag-pass-detail-grid {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.portal-bag-pass-detail-row {
+  align-items: start;
+  border-bottom: 1px solid rgba(98, 105, 118, 0.12);
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(92px, 0.42fr) 1fr;
+  padding: 0.5rem 0;
+}
+
+.portal-bag-pass-detail-row span {
+  color: #6c7a91;
+  font-size: 0.82rem;
+}
+
+.portal-bag-pass-detail-row strong {
+  color: #1d273b;
+  font-size: 0.9rem;
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .portal-history-page {
@@ -9788,6 +9867,34 @@ button.portal-bag-control-card {
 
 .portal-profile-modal-content.is-dark .portal-bag-history-row {
   border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+.portal-profile-modal-content.is-dark .portal-bag-history-clickable:hover,
+.portal-profile-modal-content.is-dark .portal-bag-history-clickable:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.portal-profile-modal-content.is-dark .portal-bag-pass-detail-head {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.portal-profile-modal-content.is-dark .portal-bag-pass-detail-head small,
+.portal-profile-modal-content.is-dark .portal-bag-pass-detail-row span {
+  color: #9caec5;
+}
+
+.portal-profile-modal-content.is-dark .portal-bag-pass-detail-row {
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+.portal-profile-modal-content.is-dark .portal-bag-pass-detail-row strong {
+  color: #e5edf7;
+}
+
+.portal-profile-modal-content.is-dark .portal-bag-pass-detail-icon {
+  background: rgba(96, 165, 250, 0.16);
+  color: #93c5fd;
 }
 
 .portal-profile-modal-content.is-dark .portal-store-rejection-reason {

@@ -1839,13 +1839,35 @@ class OmadaApiClient:
             else:
                 remaining.append(item)
 
-        payload = {
+        base_payload = {
             "preAuthAccessEnable": bool(current.get("preAuthAccessEnable")),
             "preAuthAccessPolicies": current.get("preAuthAccessPolicies") or [],
-            "freeAuthClientEnable": bool(remaining),
-            "freeAuthClientPolicies": remaining,
         }
-        response, patch_summary = self._patch_json_candidates([access_path], payload, timeout=25)
+
+        if removed and not remaining:
+            clear_payload = {
+                **base_payload,
+                "freeAuthClientEnable": True,
+                "freeAuthClientPolicies": [],
+            }
+            _, clear_summary = self._patch_json_candidates([access_path], clear_payload, timeout=25)
+            payload = {
+                **base_payload,
+                "freeAuthClientEnable": False,
+                "freeAuthClientPolicies": [],
+            }
+            response, patch_summary = self._patch_json_candidates([access_path], payload, timeout=25)
+            patch_summary = {
+                "clear_policies": clear_summary,
+                "disable_free_auth": patch_summary,
+            }
+        else:
+            payload = {
+                **base_payload,
+                "freeAuthClientEnable": bool(remaining),
+                "freeAuthClientPolicies": remaining,
+            }
+            response, patch_summary = self._patch_json_candidates([access_path], payload, timeout=25)
         data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
         return {
             "site_id": site_id,
