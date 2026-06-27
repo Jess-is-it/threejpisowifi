@@ -2160,6 +2160,10 @@ button.nav-link {
   text-align: center;
 }
 
+.nav-payment-access-badge {
+  background: #0891b2;
+}
+
 .admin-notification-overlay {
   position: fixed;
   inset: 0;
@@ -4713,6 +4717,98 @@ body.modal-open {
   font-weight: 800;
 }
 
+.portal-payment-pending-message {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.portal-payment-window-box {
+  color: #334155;
+  display: grid;
+  gap: 0.48rem;
+  padding: 0;
+  width: 100%;
+}
+
+.portal-payment-window-line {
+  background: rgba(100, 116, 139, 0.18);
+  border-radius: 999px;
+  height: 0.38rem;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.portal-payment-window-line > span {
+  background: linear-gradient(90deg, rgba(var(--portal-brand-rgb, 6, 111, 209), 0.78), var(--portal-brand-color, #066fd1), rgba(var(--portal-brand-rgb, 6, 111, 209), 0.78));
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  transition: width 1s linear;
+}
+
+.portal-payment-window-line > span::after {
+  animation: portal-payment-line-sweep 1.15s linear infinite;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.72), transparent);
+  content: "";
+  inset: 0;
+  position: absolute;
+  transform: translateX(-100%);
+}
+
+.portal-payment-window-copy {
+  align-items: center;
+  color: #334155;
+  display: flex;
+  font-size: 0.82rem;
+  font-weight: 850;
+  gap: 0.5rem;
+  justify-content: space-between;
+  line-height: 1.25;
+}
+
+.portal-payment-window-copy strong {
+  color: #111827;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.portal-payment-window-description {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.portal-payment-window-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  justify-content: flex-start;
+}
+
+.portal-payment-window-actions .btn {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-weight: 850;
+  justify-content: center;
+  width: auto;
+}
+
+@keyframes portal-payment-line-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
 .portal-payment-handoff-actions {
   display: grid;
   gap: 0.65rem;
@@ -4745,6 +4841,31 @@ body.modal-open {
   background: rgba(245, 158, 11, 0.12);
   border-color: rgba(245, 158, 11, 0.22);
   color: #fde68a;
+}
+
+.portal-profile-modal-content.is-dark .portal-payment-window-box,
+.portal-tabler-page.is-dark .portal-payment-window-box {
+  color: #cbd5e1;
+}
+
+.portal-profile-modal-content.is-dark .portal-payment-window-line,
+.portal-tabler-page.is-dark .portal-payment-window-line {
+  background: rgba(203, 213, 225, 0.18);
+}
+
+.portal-profile-modal-content.is-dark .portal-payment-window-copy,
+.portal-tabler-page.is-dark .portal-payment-window-copy {
+  color: #cbd5e1;
+}
+
+.portal-profile-modal-content.is-dark .portal-payment-window-copy strong,
+.portal-tabler-page.is-dark .portal-payment-window-copy strong {
+  color: #f8fafc;
+}
+
+.portal-profile-modal-content.is-dark .portal-payment-window-description,
+.portal-tabler-page.is-dark .portal-payment-window-description {
+  color: #94a3b8;
 }
 
 .portal-profile-modal-content.is-dark .portal-browser-copy-inline,
@@ -9443,10 +9564,71 @@ button.portal-bag-control-card {
 
 .portal-bag-item.is-draggable {
   cursor: grab;
+  position: relative;
 }
 
 .portal-bag-item.is-draggable:active {
   cursor: grabbing;
+}
+
+.portal-bag-item.is-draggable .portal-bag-item-title,
+.portal-bag-item.is-draggable .portal-bag-item-main {
+  cursor: grab;
+  user-select: none;
+}
+
+.portal-bag-item.is-draggable:active .portal-bag-item-title,
+.portal-bag-item.is-draggable:active .portal-bag-item-main {
+  cursor: grabbing;
+}
+
+.portal-bag-item.is-dragging {
+  border-color: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.35);
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+  opacity: 0.58;
+  transform: scale(0.985);
+}
+
+.portal-bag-item.is-drop-before::before,
+.portal-bag-item.is-drop-after::before {
+  background: var(--portal-brand-color, var(--tblr-primary, #066fd1));
+  border-radius: 999px;
+  box-shadow: 0 0 0 3px rgba(var(--portal-brand-rgb, 6, 111, 209), 0.12);
+  content: "";
+  height: 3px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  z-index: 3;
+}
+
+.portal-bag-item.is-drop-before::after,
+.portal-bag-item.is-drop-after::after {
+  background: #ffffff;
+  border: 3px solid var(--portal-brand-color, var(--tblr-primary, #066fd1));
+  border-radius: 999px;
+  content: "";
+  height: 0.75rem;
+  left: -0.1rem;
+  position: absolute;
+  width: 0.75rem;
+  z-index: 4;
+}
+
+.portal-bag-item.is-drop-before::before {
+  top: -0.37rem;
+}
+
+.portal-bag-item.is-drop-before::after {
+  top: -0.68rem;
+}
+
+.portal-bag-item.is-drop-after::before {
+  bottom: -0.37rem;
+}
+
+.portal-bag-item.is-drop-after::after {
+  bottom: -0.68rem;
 }
 
 .portal-bag-drag {
@@ -12465,6 +12647,16 @@ button.portal-bag-control-card {
   width: 2rem;
 }
 
+.store-owner-toast-danger {
+  border-color: rgba(214, 57, 57, 0.22);
+  border-left-color: #d63939;
+}
+
+.store-owner-toast-danger .store-owner-toast-icon {
+  background: rgba(214, 57, 57, 0.12);
+  color: #d63939;
+}
+
 .store-owner-toast-body {
   display: grid;
   flex: 1 1 auto;
@@ -13353,6 +13545,26 @@ button.portal-bag-control-card {
 .portal-customer-message-icon {
   flex: 0 0 auto;
   margin-top: 0.08rem;
+}
+
+.portal-payment-customer-message .portal-customer-message-icon {
+  display: none;
+}
+
+.portal-tabler-page.is-dark .portal-payment-customer-message {
+  background: rgba(15, 23, 42, 0.86);
+  border-color: rgba(148, 163, 184, 0.24);
+  color: #dbe7f5;
+}
+
+.portal-tabler-page.is-dark .portal-payment-customer-message .portal-customer-message-close {
+  filter: invert(1) grayscale(100%) brightness(160%);
+  opacity: 0.75;
+}
+
+.portal-tabler-page.is-dark .portal-payment-customer-message .portal-customer-message-close:hover,
+.portal-tabler-page.is-dark .portal-payment-customer-message .portal-customer-message-close:focus-visible {
+  opacity: 1;
 }
 
 .portal-customer-message-body {

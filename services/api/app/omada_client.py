@@ -1887,10 +1887,33 @@ class OmadaApiClient:
             self.discover_controller_id()
         official_payload = {
             key: payload.get(key)
-            for key in ("clientMac", "apMac", "ssidName", "radioId", "authType", "time")
+            for key in (
+                "clientMac",
+                "clientIp",
+                "clientIP",
+                "apMac",
+                "gatewayMac",
+                "ssidName",
+                "radioId",
+                "authType",
+                "time",
+                "duration",
+                "site",
+                "siteId",
+                "siteName",
+                "redirectUrl",
+                "authToken",
+                "token",
+                "t",
+                "expire",
+            )
             if payload.get(key) is not None
         }
         official_payload["authType"] = official_payload.get("authType") or 4
+        if payload.get("siteId") and not official_payload.get("site"):
+            official_payload["site"] = payload.get("siteId")
+        if payload.get("token") and not official_payload.get("t"):
+            official_payload["t"] = payload.get("token")
         official_paths = []
         compatibility_paths = []
         if self.controller_id:

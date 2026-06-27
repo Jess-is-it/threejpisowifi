@@ -345,6 +345,14 @@ class OmadaPaymentAuthFreeRemoteRemoveRequest(BaseModel):
     client_ip: Optional[str] = None
 
 
+class OmadaPaymentAuthFreeAbuseRemoveRequest(BaseModel):
+    user_id: Optional[str] = None
+    client_mac: Optional[str] = None
+    device_token_hash: Optional[str] = None
+    profile_contact_number: Optional[str] = None
+    profile_name: Optional[str] = None
+
+
 class OmadaSiteSelect(BaseModel):
     site_id: str
     site_name: Optional[str] = None
@@ -5393,6 +5401,7 @@ def payment_order_status_payload(order: Optional[dict]) -> dict:
     if not order:
         return {"found": False, "status": "NOT_FOUND"}
     bag_item = order.get("_bag_item")
+    payment_access_grant = order.get("_payment_access_grant")
     return {
         "found": True,
         "payment_order_id": order["public_order_id"],
@@ -5418,6 +5427,8 @@ def payment_order_status_payload(order: Optional[dict]) -> dict:
         "customer_contact_number": order.get("customer_contact_number"),
         "outside_network_purchase": bool(order.get("outside_network_purchase")),
         "checkout_url": order.get("checkout_url"),
+        "payment_access_grant": payment_access_grant,
+        "payment_window_expires_at": payment_access_grant.get("expires_at") if payment_access_grant else None,
         "last_error": order.get("last_error"),
         "portal_session_id": order.get("_portal_session_public_id"),
         "portal_handoff_url": order.get("_portal_handoff_url"),
@@ -6377,11 +6388,104 @@ def record_omada_payment_auth_free_abuse_block(identity: dict, attempts_today: i
         print(f"[omada-payment-auth-free] failed to record abuse block: {exc}")
 
 
+def omada_payment_auth_free_abuse_identity(data: Optional[dict]) -> dict:
+    data = data or {}
+    return {
+        "user_id": normalize_payment_text(data.get("user_id"), 80) or None,
+        "client_mac": normalize_mac_if_valid(data.get("client_mac")) or normalize_payment_text(data.get("client_mac"), 64) or None,
+        "device_token_hash": normalize_payment_text(data.get("device_token_hash"), 160) or None,
+        "profile_contact_number": normalize_payment_text(data.get("profile_contact_number"), 40) or None,
+        "profile_name": normalize_payment_text(data.get("profile_name"), 180) or None,
+    }
+
+
+def omada_payment_auth_free_abuse_identity_matches(left: dict, right: dict) -> bool:
+    if not left or not right:
+        return False
+    for key in ("user_id", "client_mac", "device_token_hash", "profile_contact_number"):
+        left_value = normalize_payment_text(left.get(key), 180)
+        right_value = normalize_payment_text(right.get(key), 180)
+        if left_value and right_value and left_value == right_value:
+            return True
+    return False
+
+
+def omada_payment_auth_free_abuse_override_store() -> list[dict]:
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'omada_payment_auth_free_abuse_overrides'")
+    value = row["value"] if row and isinstance(row["value"], dict) else {}
+    raw_items = value.get("items") if isinstance(value.get("items"), list) else []
+    now = datetime.now(timezone.utc)
+    items = []
+    for item in raw_items:
+        if not isinstance(item, dict):
+            continue
+        ignore_until = aware_utc(item.get("ignore_until"))
+        if not ignore_until or ignore_until <= now:
+            continue
+        identity = omada_payment_auth_free_abuse_identity(item)
+        if not any(identity.get(key) for key in ("user_id", "client_mac", "device_token_hash", "profile_contact_number")):
+            continue
+        items.append({**identity, "ignore_until": ignore_until, "removed_by_admin_id": item.get("removed_by_admin_id"), "removed_at": item.get("removed_at")})
+    return items
+
+
+def save_omada_payment_auth_free_abuse_overrides(items: list[dict]):
+    clean_items = []
+    for item in items:
+        identity = omada_payment_auth_free_abuse_identity(item)
+        if not any(identity.get(key) for key in ("user_id", "client_mac", "device_token_hash", "profile_contact_number")):
+            continue
+        clean_items.append({
+            **identity,
+            "ignore_until": item.get("ignore_until").isoformat() if hasattr(item.get("ignore_until"), "isoformat") else item.get("ignore_until"),
+            "removed_by_admin_id": str(item.get("removed_by_admin_id")) if item.get("removed_by_admin_id") else None,
+            "removed_at": item.get("removed_at").isoformat() if hasattr(item.get("removed_at"), "isoformat") else item.get("removed_at"),
+        })
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES ('omada_payment_auth_free_abuse_overrides', %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (Json({"items": clean_items}),),
+            )
+
+
+def add_omada_payment_auth_free_abuse_override(identity: dict, admin_id) -> dict:
+    clean_identity = omada_payment_auth_free_abuse_identity(identity)
+    if not any(clean_identity.get(key) for key in ("user_id", "client_mac", "device_token_hash", "profile_contact_number")):
+        raise HTTPException(status_code=400, detail="Customer, MAC, device token, or contact number is required.")
+    now = datetime.now(timezone.utc)
+    ignore_until = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    items = [
+        item for item in omada_payment_auth_free_abuse_override_store()
+        if not omada_payment_auth_free_abuse_identity_matches(clean_identity, item)
+    ]
+    override = {
+        **clean_identity,
+        "ignore_until": ignore_until.isoformat(),
+        "removed_by_admin_id": str(admin_id) if admin_id else None,
+        "removed_at": now.isoformat(),
+    }
+    items.append(override)
+    save_omada_payment_auth_free_abuse_overrides(items)
+    return override
+
+
+def omada_payment_auth_free_abuse_is_overridden(identity: dict, overrides: Optional[list[dict]] = None) -> bool:
+    active_overrides = overrides if overrides is not None else omada_payment_auth_free_abuse_override_store()
+    return any(omada_payment_auth_free_abuse_identity_matches(identity, override) for override in active_overrides)
+
+
 def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, profile: Optional[dict], payload: PortalSessionRequest, request: Request) -> dict:
     store = omada_payment_auth_free_store()
     if not store.get("enabled") or not store.get("block_online_payment_on_abuse"):
         return {"status": "OK", "attempts_today": 0, "limit": store["daily_attempt_limit"]}
     identity = omada_payment_auth_free_identity(session, user, profile, payload, request)
+    if omada_payment_auth_free_abuse_is_overridden(identity):
+        return {"status": "OK", "attempts_today": 0, "limit": store["daily_attempt_limit"], "admin_override": True}
     clauses = []
     grant_clauses = []
     params = []
@@ -6666,6 +6770,7 @@ def finalize_omada_payment_auth_free_grants_for_order(cur, order: dict, final_st
 def omada_payment_auth_free_dashboard_payload(cur) -> dict:
     cleanup_expired_omada_payment_auth_free_grants(cur, limit=50)
     settings = public_omada_payment_auth_free_settings()
+    abuse_overrides = omada_payment_auth_free_abuse_override_store()
     cur.execute(
         """
         SELECT
@@ -6717,8 +6822,9 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
         """,
         (settings["daily_attempt_limit"],),
     )
-    abuse_rows = [
-        {
+    abuse_rows = []
+    for row in cur.fetchall():
+        public_row = {
             "profile_name": row.get("profile_name"),
             "profile_contact_number": row.get("profile_contact_number"),
             "client_mac": row.get("client_mac"),
@@ -6727,8 +6833,9 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
             "attempts_today": int(row.get("attempts_today") or 0),
             "last_attempt_at": row.get("last_attempt_at"),
         }
-        for row in cur.fetchall()
-    ]
+        if omada_payment_auth_free_abuse_is_overridden(public_row, abuse_overrides):
+            continue
+        abuse_rows.append(public_row)
     cur.execute(
         """
         SELECT *
@@ -6738,12 +6845,14 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
         LIMIT 100
         """
     )
-    active_blocks = [
-        {
+    active_blocks = []
+    for row in cur.fetchall():
+        public_row = {
             "id": str(row["id"]),
             "user_id": str(row["user_id"]) if row.get("user_id") else None,
             "portal_session_id": str(row["portal_session_id"]) if row.get("portal_session_id") else None,
             "client_mac": row.get("client_mac"),
+            "device_token_hash": row.get("device_token_hash"),
             "profile_name": row.get("profile_name"),
             "profile_contact_number": row.get("profile_contact_number"),
             "attempts_today": int(row.get("attempts_today") or 0),
@@ -6751,8 +6860,9 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
             "block_until": row.get("block_until"),
             "created_at": row.get("created_at"),
         }
-        for row in cur.fetchall()
-    ]
+        if omada_payment_auth_free_abuse_is_overridden(public_row, abuse_overrides):
+            continue
+        active_blocks.append(public_row)
     remote_snapshot = omada_payment_auth_free_remote_snapshot(cur, active_grants)
     overview["active_blocks"] = len(active_blocks)
     overview["remote_client_count"] = len(remote_snapshot["remote_clients"])
@@ -12765,6 +12875,84 @@ def latest_gateway_authorization_covers_until(cur, session: dict, target_until) 
     return bool(latest_until and latest_until >= target - timedelta(seconds=5))
 
 
+def request_has_live_gateway_context(request: Optional[Request]) -> bool:
+    if not request:
+        return False
+    ctx = portal_context(PortalSessionRequest(raw_query_params=dict(request.query_params)))
+    return bool(
+        ctx.get("client_mac")
+        or ctx.get("ap_mac")
+        or ctx.get("gateway_mac")
+        or ctx.get("ssid")
+        or ctx.get("site")
+        or ctx.get("site_id")
+        or ctx.get("site_name")
+        or ctx.get("auth_token")
+    )
+
+
+def omada_timestamp_to_utc(value) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric > 100000000000:
+        numeric = numeric / 1000
+    try:
+        return datetime.fromtimestamp(numeric, timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def omada_remote_authorization_covers_until(session: dict, target_until) -> dict:
+    target = aware_utc(target_until)
+    if not session or session.get("source") != "OMADA" or not target:
+        return {"checked": False, "covers": False, "reason": "not_omada"}
+    site_id = str(session.get("omada_site_id") or "").strip()
+    if not site_id:
+        return {"checked": False, "covers": False, "reason": "missing_site_id"}
+    mac_candidates = set(portal_device_mac_values(
+        session.get("omada_client_mac"),
+        session.get("client_mac"),
+        session.get("previous_client_macs") or [],
+    ))
+    if not mac_candidates:
+        return {"checked": False, "covers": False, "reason": "missing_client_mac"}
+    ssid = str(session.get("ssid") or "").strip()
+    try:
+        _, client = omada_api_client_from_settings()
+        authorized = client.get_hotspot_authorized_clients(site_id)
+    except Exception as exc:
+        return {"checked": True, "covers": False, "reason": "lookup_failed", "error": str(exc)}
+    matches = []
+    for row in authorized.get("clients") or []:
+        row_mac = normalize_mac_if_valid(row.get("mac") or row.get("clientMac") or row.get("client_mac"))
+        if row_mac not in mac_candidates:
+            continue
+        if ssid and row.get("ssid") and str(row.get("ssid")).strip() != ssid:
+            continue
+        row_end = omada_timestamp_to_utc(row.get("end") or row.get("expire") or row.get("expireTime"))
+        row_summary = {
+            "id": row.get("id"),
+            "mac": row_mac,
+            "ssid": row.get("ssid"),
+            "ip": row.get("ip"),
+            "valid": row.get("valid"),
+            "permanent": row.get("permanent"),
+            "end": row_end.isoformat() if row_end else None,
+        }
+        matches.append(row_summary)
+        if row.get("valid") is not None and not routeros_truthy(row.get("valid")):
+            continue
+        if routeros_truthy(row.get("permanent")):
+            return {"checked": True, "covers": True, "reason": "remote_permanent", "match": row_summary}
+        if row_end and row_end >= target - timedelta(seconds=5):
+            return {"checked": True, "covers": True, "reason": "remote_valid", "match": row_summary}
+    return {"checked": True, "covers": False, "reason": "remote_not_valid_or_short", "matches": matches}
+
+
 def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active_items: list[dict], request: Request = None, reason: str = "ACTIVE_ITEM_REFRESH") -> dict:
     if not session or session.get("source") not in {"OMADA", "MIKROTIK"}:
         return {"status": "NOT_REQUIRED"}
@@ -12780,7 +12968,21 @@ def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active
         return {"status": "NO_ACTIVE_TIME"}
     target_until, target_item = max(candidates, key=lambda pair: pair[0])
     if latest_gateway_authorization_covers_until(cur, session, target_until):
-        return {"status": "COVERED", "message": "Gateway authorization already covers the active bag time."}
+        if session.get("source") == "OMADA" and request_has_live_gateway_context(request):
+            remote_cover = omada_remote_authorization_covers_until(session, target_until)
+            if remote_cover.get("covers"):
+                return {"status": "COVERED", "message": "Gateway authorization already covers the active bag time.", "remote": sanitize_summary(remote_cover)}
+            create_customer_bag_event(
+                cur,
+                target_item["user_id"],
+                target_item["id"],
+                session["id"],
+                "ACTIVE_GATEWAY_AUTH_STALE",
+                "Local Omada authorization was still active, but Omada no longer had a valid authorized-client row.",
+                metadata={"reason": reason, "remote": sanitize_summary(remote_cover), "target_until": target_until.isoformat()},
+            )
+        else:
+            return {"status": "COVERED", "message": "Gateway authorization already covers the active bag time."}
 
     voucher = ensure_bag_item_voucher(cur, target_item)
     duration_seconds = max(int((target_until - now).total_seconds()), 1)
@@ -12873,7 +13075,24 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
     portal_payload = payment_fulfillment_payload_from_session(session, voucher["code"])
     authorization = {"status": "NOT_REQUIRED"}
     if session["source"] == "OMADA":
-        if portal_session_has_current_gateway_access(session) and latest_gateway_authorization_covers_until(cur, session, active_until):
+        reuse_existing_omada_auth = bool(
+            portal_session_has_current_gateway_access(session)
+            and latest_gateway_authorization_covers_until(cur, session, active_until)
+        )
+        if reuse_existing_omada_auth:
+            remote_cover = omada_remote_authorization_covers_until(session, active_until)
+            reuse_existing_omada_auth = bool(remote_cover.get("covers"))
+            if not reuse_existing_omada_auth:
+                create_customer_bag_event(
+                    cur,
+                    item["user_id"],
+                    item["id"],
+                    session["id"],
+                    "ACTIVATION_GATEWAY_AUTH_STALE",
+                    "Local Omada authorization was still active, but Omada no longer had a valid authorized-client row.",
+                    metadata={"reason": reason, "remote": sanitize_summary(remote_cover), "target_until": active_until.isoformat()},
+                )
+        if reuse_existing_omada_auth:
             authorization = {
                 "status": "REUSED_EXISTING_OMADA_AUTHORIZATION",
                 "message": "Device already has a current Omada authorization that covers the activated bag item.",
@@ -14656,16 +14875,20 @@ def attempt_omada_authorization(cur, session, voucher, user, duration_seconds: i
 
     omada_payload = {
         "clientMac": client_mac,
+        "clientIp": ctx["client_ip"] or str(session.get("client_ip") or ""),
         "apMac": ap_mac,
         "gatewayMac": gateway_mac,
         "ssidName": ssid_name,
         "ssid": ssid_name,
-        "site": site_name or ctx["site_name"] or ctx["site"],
+        "site": ctx["site"] or site_id or site_name or ctx["site_name"],
         "siteId": site_id,
+        "siteName": site_name or ctx["site_name"] or ctx["site"],
         "radioId": radio_id,
         "authType": 4,
         "authToken": ctx["auth_token"],
         "token": ctx["auth_token"],
+        "t": ctx["auth_token"],
+        "redirectUrl": ctx["redirect_url"] or session.get("omada_redirect_url") or session.get("redirect_url"),
         "duration": duration_seconds,
         "time": int(duration_seconds * 1000),
         "expire": int(access_expires_at.timestamp()) if access_expires_at else None,
@@ -17508,6 +17731,17 @@ def portal_payment_status(public_order_id: str, request: Request, response: Resp
                     order["_portal_handoff_url"] = portal_handoff_url(session_row["public_session_id"])
                     set_portal_session_cookies(response, session_row["public_session_id"], device_token)
             if order:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM omada_payment_auth_free_grants
+                    WHERE payment_order_id = %s
+                    ORDER BY expires_at DESC, created_at DESC
+                    LIMIT 1
+                    """,
+                    (order["id"],),
+                )
+                order["_payment_access_grant"] = omada_payment_auth_free_public_grant(cur.fetchone())
                 order["_bag_item"] = customer_bag_item_for_payment(cur, order["id"])
     return payment_order_status_payload(order)
 
@@ -40290,6 +40524,50 @@ def save_omada_payment_auth_free_settings(payload: OmadaPaymentAuthFreeSettingsU
     audit(admin["id"], "save_omada_payment_auth_free_settings", "omada_controller", "payment_auth_free", saved)
     with get_conn() as conn:
         with conn.cursor() as cur:
+            return omada_payment_auth_free_dashboard_payload(cur)
+
+
+@app.post("/api/omada/payment-auth-free/abuse/remove")
+def remove_omada_payment_auth_free_abuse(payload: OmadaPaymentAuthFreeAbuseRemoveRequest, admin=Depends(current_admin)):
+    identity = omada_payment_auth_free_abuse_identity(payload.model_dump(exclude_none=True))
+    if not any(identity.get(key) for key in ("user_id", "client_mac", "device_token_hash", "profile_contact_number")):
+        raise HTTPException(status_code=400, detail="Customer, MAC, device token, or contact number is required.")
+    override = add_omada_payment_auth_free_abuse_override(identity, admin["id"])
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            clauses = []
+            params = []
+            if identity.get("user_id"):
+                clauses.append("user_id::text = %s")
+                params.append(identity["user_id"])
+            if identity.get("client_mac"):
+                clauses.append("client_mac = %s")
+                params.append(identity["client_mac"])
+            if identity.get("device_token_hash"):
+                clauses.append("device_token_hash = %s")
+                params.append(identity["device_token_hash"])
+            if identity.get("profile_contact_number"):
+                clauses.append("profile_contact_number = %s")
+                params.append(identity["profile_contact_number"])
+            cur.execute(
+                f"""
+                UPDATE omada_payment_auth_free_abuse_blocks
+                SET block_until = now(),
+                    reason = 'ADMIN_REMOVED',
+                    updated_at = now()
+                WHERE block_until > now()
+                  AND ({' OR '.join(clauses)})
+                """,
+                tuple(params),
+            )
+            audit(
+                admin["id"],
+                "remove_omada_payment_auth_free_abuse",
+                "omada_controller",
+                identity.get("user_id") or identity.get("client_mac") or identity.get("device_token_hash") or identity.get("profile_contact_number"),
+                {"identity": identity, "override": sanitize_summary(override)},
+            )
+            conn.commit()
             return omada_payment_auth_free_dashboard_payload(cur)
 
 

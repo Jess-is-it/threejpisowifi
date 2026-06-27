@@ -1355,6 +1355,7 @@ Safety:
 - Bag history records whether Auto Activate was enabled when an item was consumed.
 - Purchases made outside a 3J AP can be saved to the bag. Omada/MikroTik authorization still only happens when the customer is connected through a supported 3J captive portal session.
 - The deterministic backend still performs gateway authorization. The frontend bag UI cannot grant internet access by itself.
+- If an Omada client is redirected back to the captive portal while the local DB still shows active bag time, do not trust only the latest local `omada_portal_authorizations` success row. Verify the live Omada hotspot authorized-client row is still `valid` and covers the target expiry; if Omada marks it invalid or too short, re-authorize the client with the full redirect context (`site`, `siteId`, `siteName`, `clientMac`, `clientIp`, `apMac`, `ssidName`, `radioId`, `token`/`t`, and millisecond `time`).
 
 ## Shared Device Pass / Multi-Pass Removed — 2026-06-07
 

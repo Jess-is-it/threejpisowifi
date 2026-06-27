@@ -133,6 +133,39 @@ function BrowserBrandIcon({ browser = 'Google Chrome', size = 20, className = ''
   return <IconifyIcon icon={icon} width={size} height={size} className={className} aria-hidden="true" />;
 }
 
+function PaymentWindowProgress({ label, countdownLabel, progressPercent, description = '', actions = null }) {
+  const safeProgress = Math.max(0, Math.min(100, Number(progressPercent || 0)));
+  return (
+    <div className="portal-payment-window-box">
+      <div className="portal-payment-window-copy">
+        <span>{label}</span>
+        <strong>{countdownLabel}</strong>
+      </div>
+      {description && <div className="portal-payment-window-description">{description}</div>}
+      <div
+        className="portal-payment-window-line"
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(safeProgress)}
+      >
+        <span style={{ width: `${safeProgress}%` }} />
+      </div>
+      {actions && <div className="portal-payment-window-actions">{actions}</div>}
+    </div>
+  );
+}
+
+function liveRemainingSeconds(expiresAt, fallbackSeconds = null, nowMs = Date.now()) {
+  if (expiresAt) {
+    const expiresMs = new Date(expiresAt).getTime();
+    if (Number.isFinite(expiresMs)) return Math.max(0, Math.ceil((expiresMs - nowMs) / 1000));
+  }
+  if (fallbackSeconds === null || fallbackSeconds === undefined) return null;
+  const fallback = Number(fallbackSeconds);
+  return Number.isFinite(fallback) ? Math.max(0, Math.ceil(fallback)) : null;
+}
+
 function usePortalSingleTapFix() {
   return {};
   const stateRef = useRef({
@@ -577,7 +610,6 @@ const PORTAL_TRANSLATIONS = {
     'No packages are available yet. Ask the operator for help.': 'Wala pang available na package. Humingi ng tulong sa operator.',
     'Payment received. Internet access is active.': 'Natanggap ang bayad. Aktibo na ang internet access.',
     'Payment was not completed.': 'Hindi natapos ang bayad.',
-    'Checking PayMongo payment confirmation...': 'Tinitingnan ang kumpirmasyon ng PayMongo payment...',
     'Waiting for PayMongo payment confirmation.': 'Naghihintay ng kumpirmasyon ng PayMongo payment.',
     'Checking...': 'Tinitingnan...',
     'Check': 'Tingnan',
@@ -640,7 +672,13 @@ const PORTAL_TRANSLATIONS = {
     'Open My WiFi Bag': 'Buksan ang My WiFi Bag',
     'Unused': 'Hindi pa nagagamit',
     'Ready to use': 'Handa nang gamitin',
-    'You have a saved WiFi pass ready to use.': 'May naka-save kang WiFi pass na handa nang gamitin.',
+    'You have {count} saved WiFi pass ready to use.': 'May {count} naka-save na WiFi pass na handa nang gamitin.',
+    'You have {count} saved WiFi passes ready to use.': 'May {count} naka-save na WiFi passes na handa nang gamitin.',
+    'Payment is not completed yet. Open the secure checkout to finish your payment.': 'Hindi pa tapos ang payment. Buksan ang secure checkout para matapos ang bayad.',
+    'Payment window closes in': 'Magsasara ang payment window sa',
+    'Payment is ongoing. Complete the payment in the checkout window before this timer ends.': 'May ongoing payment. Tapusin ang bayad sa checkout window bago matapos ang timer.',
+    'Payment window expired': 'Nag-expire ang payment window',
+    'The online payment window closed because the checkout time ended. Start a new checkout when you are ready.': 'Nagsara ang online payment window dahil tapos na ang oras ng checkout. Gumawa ulit ng bagong checkout kapag handa ka na.',
     'Ready pass': 'Handang pass',
     'Activate now': 'I-activate ngayon',
     'Allowed': 'Pinapayagan',
@@ -2118,9 +2156,9 @@ function PortalAppLegacy() {
             : paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FAILED'
               ? `Payment received, but access activation failed: ${friendlyPayMongoError(paymentResult.last_error || 'Please ask the operator.')}`
               : paymentResult.status === 'PAID'
-                ? 'Payment received. Waiting for access activation.'
-                : paymentResult.status === 'CHECKOUT_CREATED' || paymentResult.status === 'PENDING'
-                  ? paymentChecking ? 'Checking PayMongo payment confirmation...' : 'Waiting for PayMongo payment confirmation.'
+                  ? 'Payment received. Waiting for access activation.'
+                  : paymentResult.status === 'CHECKOUT_CREATED' || paymentResult.status === 'PENDING'
+                    ? 'Waiting for PayMongo payment confirmation.'
                   : friendlyPayMongoError(paymentResult.last_error)}
           tone={paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'success' : paymentResult.status === 'FAILED' ? 'danger' : 'info'}
           className="mt-3"
@@ -2130,7 +2168,6 @@ function PortalAppLegacy() {
           actions={(
             <>
               {paymentResult.portal_handoff_url && <button className="btn btn-sm btn-outline-primary" type="button" onClick={() => openPortalStatusUrl(paymentResult.portal_handoff_url)}>Open Status</button>}
-              {paymentResult.payment_order_id && <button className="btn btn-sm btn-outline-secondary" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id)}>{paymentChecking ? 'Checking...' : 'Check'}</button>}
             </>
           )}
         />
@@ -2332,6 +2369,7 @@ function PortalApp() {
   const [paymentLoading, setPaymentLoading] = useState('');
   const [paymentChecking, setPaymentChecking] = useState(false);
   const [paymentResult, setPaymentResult] = useState(null);
+  const [paymentWindowNow, setPaymentWindowNow] = useState(() => Date.now());
   const [dismissedPaymentNoticeKey, setDismissedPaymentNoticeKey] = useState('');
   const [portalNotice, setPortalNotice] = useState(null);
   const [portalToast, setPortalToast] = useState(null);
@@ -2345,6 +2383,8 @@ function PortalApp() {
   const [iptvChromeOnlyModal, setIptvChromeOnlyModal] = useState(null);
   const [iptvProfileRequiredItem, setIptvProfileRequiredItem] = useState(null);
   const [bagDraggingItemId, setBagDraggingItemId] = useState('');
+  const [bagDragOverItemId, setBagDragOverItemId] = useState('');
+  const [bagDragDropPlacement, setBagDragDropPlacement] = useState('before');
   const [bagClaimOpen, setBagClaimOpen] = useState(false);
   const [bagVoucherCode, setBagVoucherCode] = useState('');
   const [bagClaiming, setBagClaiming] = useState(false);
@@ -2486,6 +2526,7 @@ function PortalApp() {
   const portalOpenedNoticeSentRef = useRef('');
   const paymentNotificationSentRef = useRef('');
   const paymentResultRef = useRef(null);
+  const checkoutWindowRef = useRef(null);
   const dismissedPaymentNoticeKeyRef = useRef('');
   const cancelledPaymentOrdersRef = useRef(new Set());
   const checkoutCopyMessageTimerRef = useRef(null);
@@ -2571,7 +2612,13 @@ function PortalApp() {
       const restoredPayment = paymentResultRef.current;
       const storedPayment = readPendingPaymentCheckout();
       const pendingPayment = restoredPayment && !paymentResultIsTerminal(restoredPayment) ? restoredPayment : storedPayment;
-      if (pendingPayment && !paymentResultIsTerminal(pendingPayment)) cancelPaymentCheckout(pendingPayment);
+      if (pendingPayment && !paymentResultIsTerminal(pendingPayment)) {
+        setPortalScreen('shop');
+        showPaymentResult(pendingPayment, { force: true });
+        if (pendingPayment.payment_order_id) {
+          checkPaymentStatus(pendingPayment.payment_order_id, { silent: true }).catch(() => null);
+        }
+      }
       setPaymentChecking(false);
       setPaymentLoading('');
     };
@@ -2826,25 +2873,85 @@ function PortalApp() {
     return payment.status === 'PAID' && ['FULFILLED', 'FAILED'].includes(payment.fulfillment_status);
   }
 
+  function paymentWindowTimeoutSeconds(payment = null) {
+    const candidates = [
+      payment?.payment_window_timeout_seconds,
+      payment?.auth_free_timeout_seconds,
+      payment?.payment_access_grant?.timeout_seconds,
+      payment?.payment_access_grant?.grant_timeout_seconds,
+      settings?.payment_browser_handoff?.auth_free_timeout_seconds,
+    ];
+    const timeout = candidates.map((value) => Number(value)).find((value) => Number.isFinite(value) && value > 0);
+    return Math.max(30, Math.min(900, Math.round(timeout || 120)));
+  }
+
+  function paymentWindowDeadlineMs(payment = null) {
+    const deadline = payment?.payment_window_expires_at || payment?.payment_access_grant?.expires_at;
+    if (!deadline) return 0;
+    const ms = new Date(deadline).getTime();
+    return Number.isFinite(ms) ? ms : 0;
+  }
+
+  function ensurePaymentWindowDeadline(payment = null) {
+    if (!payment || paymentResultIsTerminal(payment) || !payment.checkout_url) return payment;
+    const current = paymentResultRef.current;
+    const sameOrder = current?.payment_order_id && current.payment_order_id === payment.payment_order_id;
+    const currentDeadline = sameOrder ? paymentWindowDeadlineMs(current) : 0;
+    const grantDeadline = paymentWindowDeadlineMs(payment);
+    const timeoutSeconds = paymentWindowTimeoutSeconds(payment);
+    const deadlineMs = grantDeadline || currentDeadline || (Date.now() + timeoutSeconds * 1000);
+    return {
+      ...payment,
+      payment_window_timeout_seconds: timeoutSeconds,
+      payment_window_expires_at: new Date(deadlineMs).toISOString(),
+    };
+  }
+
+  function paymentWindowRemainingSeconds(payment = null, nowMs = Date.now()) {
+    const deadlineMs = paymentWindowDeadlineMs(payment);
+    if (!deadlineMs) return null;
+    return Math.max(0, Math.ceil((deadlineMs - nowMs) / 1000));
+  }
+
+  function paymentWindowProgressPercent(payment = null, remainingSeconds = null) {
+    if (remainingSeconds === null || remainingSeconds === undefined) return 0;
+    const timeoutSeconds = paymentWindowTimeoutSeconds(payment);
+    if (!timeoutSeconds) return 0;
+    return Math.max(0, Math.min(100, (Number(remainingSeconds || 0) / timeoutSeconds) * 100));
+  }
+
+  function closeCheckoutWindowIfPossible() {
+    try {
+      if (checkoutWindowRef.current && !checkoutWindowRef.current.closed) checkoutWindowRef.current.close();
+    } catch {
+      // Browsers only allow closing checkout windows/tabs opened by this page.
+    }
+    checkoutWindowRef.current = null;
+  }
+
   function pendingPaymentSnapshot(payment = null) {
     if (!payment?.payment_order_id || !payment?.checkout_url) return null;
+    const normalized = ensurePaymentWindowDeadline(payment);
     return {
-      found: payment.found !== false,
-      status: payment.status || 'CHECKOUT_CREATED',
-      fulfillment_status: payment.fulfillment_status || 'PENDING',
-      payment_order_id: payment.payment_order_id,
-      checkout_url: payment.checkout_url,
-      provider: payment.provider || 'PAYMONGO',
-      mode: payment.mode,
-      payment_method: payment.payment_method || 'paymongo_checkout',
-      amount_centavos: payment.amount_centavos,
-      currency: payment.currency || 'PHP',
-      product_name: payment.product_name,
-      product_kind: payment.product_kind,
-      product_kind_label: payment.product_kind_label,
-      product_category_name: payment.product_category_name,
-      outside_network_purchase: Boolean(payment.outside_network_purchase),
-      portal_session_id: payment.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session') || '',
+      found: normalized.found !== false,
+      status: normalized.status || 'CHECKOUT_CREATED',
+      fulfillment_status: normalized.fulfillment_status || 'PENDING',
+      payment_order_id: normalized.payment_order_id,
+      checkout_url: normalized.checkout_url,
+      provider: normalized.provider || 'PAYMONGO',
+      mode: normalized.mode,
+      payment_method: normalized.payment_method || 'paymongo_checkout',
+      amount_centavos: normalized.amount_centavos,
+      currency: normalized.currency || 'PHP',
+      product_name: normalized.product_name,
+      product_kind: normalized.product_kind,
+      product_kind_label: normalized.product_kind_label,
+      product_category_name: normalized.product_category_name,
+      outside_network_purchase: Boolean(normalized.outside_network_purchase),
+      portal_session_id: normalized.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session') || '',
+      payment_access_grant: normalized.payment_access_grant || null,
+      payment_window_timeout_seconds: normalized.payment_window_timeout_seconds,
+      payment_window_expires_at: normalized.payment_window_expires_at,
       saved_at: Date.now(),
     };
   }
@@ -2872,7 +2979,7 @@ function PortalApp() {
         sessionStorage.removeItem(PORTAL_PENDING_PAYMENT_STORAGE_KEY);
         return null;
       }
-      return parsed;
+      return ensurePaymentWindowDeadline(parsed);
     } catch {
       try { sessionStorage.removeItem(PORTAL_PENDING_PAYMENT_STORAGE_KEY); } catch {}
       return null;
@@ -2910,16 +3017,17 @@ function PortalApp() {
 
   function showCheckoutHandoff(payment) {
     if (!payment?.checkout_url) return;
-    savePendingPaymentCheckout(payment);
-    showPaymentResult(payment, { force: true });
+    const normalizedPayment = ensurePaymentWindowDeadline(payment);
+    savePendingPaymentCheckout(normalizedPayment);
+    showPaymentResult(normalizedPayment, { force: true });
     setCheckoutCopyMessage('');
     setPortalScreen('shop');
     if (isCaptivePortalPlaybackBrowser()) {
-      setPaymentHandoff(payment);
+      setPaymentHandoff(normalizedPayment);
       return;
     }
     setPaymentHandoff(null);
-    window.setTimeout(() => openCheckoutUrl(payment.checkout_url, { sameTab: true }), 0);
+    window.setTimeout(() => openCheckoutUrl(normalizedPayment.checkout_url, { sameTab: true }), 0);
   }
 
   function showPaymentResult(payment, options = {}) {
@@ -2927,16 +3035,34 @@ function PortalApp() {
       setPaymentResult(null);
       return;
     }
-    const key = paymentNoticeKey(payment);
-    const terminal = paymentResultIsTerminal(payment);
+    const existing = paymentResultRef.current;
+    const sameOrder = existing?.payment_order_id && existing.payment_order_id === payment.payment_order_id;
+    const existingDeadlineMs = sameOrder ? paymentWindowDeadlineMs(existing) : 0;
+    const incomingDeadlineMs = sameOrder ? paymentWindowDeadlineMs(payment) : 0;
+    const preservedDeadlineMs = existingDeadlineMs && incomingDeadlineMs
+      ? Math.min(existingDeadlineMs, incomingDeadlineMs)
+      : (existingDeadlineMs || incomingDeadlineMs);
+    const mergedPayment = sameOrder
+      ? {
+          ...existing,
+          ...payment,
+          payment_access_grant: payment.payment_access_grant || existing.payment_access_grant,
+          payment_window_expires_at: preservedDeadlineMs
+            ? new Date(preservedDeadlineMs).toISOString()
+            : (payment.payment_window_expires_at || existing.payment_window_expires_at),
+        }
+      : payment;
+    const normalizedPayment = ensurePaymentWindowDeadline(mergedPayment);
+    const key = paymentNoticeKey(normalizedPayment);
+    const terminal = paymentResultIsTerminal(normalizedPayment);
     if (!options.force && key && dismissedPaymentNoticeKeyRef.current === key && !terminal) return;
     if (terminal && key && dismissedPaymentNoticeKeyRef.current === key) {
       dismissedPaymentNoticeKeyRef.current = '';
       setDismissedPaymentNoticeKey('');
     }
-    if (terminal) clearPendingPaymentCheckout(payment.payment_order_id);
-    else if (payment.checkout_url) savePendingPaymentCheckout(payment);
-    setPaymentResult(payment);
+    if (terminal) clearPendingPaymentCheckout(normalizedPayment.payment_order_id);
+    else if (normalizedPayment.checkout_url) savePendingPaymentCheckout(normalizedPayment);
+    setPaymentResult(normalizedPayment);
   }
 
   function dismissPaymentNotice(payment = paymentResultRef.current) {
@@ -2951,6 +3077,7 @@ function PortalApp() {
   async function cancelPaymentCheckout(payment = paymentResultRef.current) {
     const orderId = payment?.payment_order_id;
     if (orderId) cancelledPaymentOrdersRef.current.add(orderId);
+    closeCheckoutWindowIfPossible();
     clearPendingPaymentCheckout(orderId);
     setPaymentHandoff(null);
     dismissPaymentNotice(payment);
@@ -2966,6 +3093,19 @@ function PortalApp() {
     } catch {
       // Local cancellation still hides the stale pending panel; backend cancellation is best effort.
     }
+  }
+
+  function expirePaymentWindow(payment = paymentResultRef.current) {
+    if (!payment?.payment_order_id || paymentResultIsTerminal(payment)) return;
+    cancelPaymentCheckout(payment);
+    setPortalToast({
+      key: `payment-window-expired-${payment.payment_order_id}-${Date.now()}`,
+      tone: 'danger',
+      icon: 'x',
+      title: t('Payment window expired'),
+      message: t('The online payment window closed because the checkout time ended. Start a new checkout when you are ready.'),
+      timeoutMs: portalMessageAutoHideMs,
+    });
   }
 
   function openBlockedContactAdmin() {
@@ -3287,17 +3427,60 @@ function PortalApp() {
   }, []);
 
   useEffect(() => {
-    if (paymentOrderFromUrl) return;
-    const restoredPayment = readPendingPaymentCheckout();
-    if (!restoredPayment?.payment_order_id || cancelledPaymentOrdersRef.current.has(restoredPayment.payment_order_id)) return;
-    if (pageWasRestoredByBackForward()) {
-      cancelPaymentCheckout(restoredPayment);
-      return;
-    }
-    setPortalScreen('shop');
-    showPaymentResult(restoredPayment, { force: false });
+	    if (paymentOrderFromUrl) return;
+	    const restoredPayment = readPendingPaymentCheckout();
+	    if (!restoredPayment?.payment_order_id || cancelledPaymentOrdersRef.current.has(restoredPayment.payment_order_id)) return;
+	    setPortalScreen('shop');
+	    showPaymentResult(restoredPayment, { force: false });
     checkPaymentStatus(restoredPayment.payment_order_id).catch(() => null);
   }, []);
+
+  useEffect(() => {
+    if (!paymentResult?.payment_order_id || paymentResultIsTerminal(paymentResult) || !paymentResult.checkout_url) return undefined;
+    const deadlineMs = paymentWindowDeadlineMs(paymentResult);
+    if (!deadlineMs) return undefined;
+    setPaymentWindowNow(Date.now());
+    const intervalId = window.setInterval(() => {
+      const now = Date.now();
+      setPaymentWindowNow(now);
+      if (deadlineMs <= now) {
+        window.clearInterval(intervalId);
+        expirePaymentWindow(paymentResultRef.current);
+      }
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [
+    paymentResult?.payment_order_id,
+    paymentResult?.payment_window_expires_at,
+    paymentResult?.checkout_url,
+    paymentResult?.status,
+    paymentResult?.fulfillment_status,
+  ]);
+
+  useEffect(() => {
+    const orderId = paymentResult?.payment_order_id;
+    if (!orderId || paymentResultIsTerminal(paymentResult) || cancelledPaymentOrdersRef.current.has(orderId)) return undefined;
+    let stopped = false;
+    const poll = () => {
+      if (stopped || document.hidden || cancelledPaymentOrdersRef.current.has(orderId)) return;
+      checkPaymentStatus(orderId, { silent: true }).catch(() => null);
+    };
+    const intervalId = window.setInterval(poll, 5000);
+    const handleVisibility = () => {
+      if (!document.hidden) poll();
+    };
+    const handleFocus = () => poll();
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('pageshow', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      stopped = true;
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('pageshow', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [paymentResult?.payment_order_id, paymentResult?.status, paymentResult?.fulfillment_status]);
 
   useEffect(() => {
     if (!selectedProductCategory || !selectedCategoryProductId) return;
@@ -3345,6 +3528,7 @@ function PortalApp() {
   useEffect(() => () => {
     if (profileMessageTimerRef.current) window.clearTimeout(profileMessageTimerRef.current);
     if (checkoutCopyMessageTimerRef.current) window.clearTimeout(checkoutCopyMessageTimerRef.current);
+    closeCheckoutWindowIfPossible();
   }, []);
 
   useEffect(() => {
@@ -3408,7 +3592,7 @@ function PortalApp() {
 
   async function checkPaymentStatus(orderId = paymentOrderFromUrl, options = {}) {
     if (!orderId) return null;
-    setPaymentChecking(true);
+    if (!options.silent) setPaymentChecking(true);
     try {
       const data = await publicRequest(`/portal/payments/${encodeURIComponent(orderId)}/status`);
       showPaymentResult(data, { force: Boolean(options.force) });
@@ -3427,11 +3611,12 @@ function PortalApp() {
       }
       return data;
     } catch (err) {
+      if (options.silent) return null;
       const failedResult = { status: 'FAILED', last_error: err.message };
       showPaymentResult(failedResult, { force: true });
       return failedResult;
     } finally {
-      setPaymentChecking(false);
+      if (!options.silent) setPaymentChecking(false);
     }
   }
 
@@ -4147,6 +4332,11 @@ function PortalApp() {
     && dismissedPaymentNoticeKey === paymentResultNoticeKey
     && !paymentResultIsTerminal(paymentResult)
   );
+  const pendingPaymentRemainingSeconds = paymentResult && !paymentResultIsTerminal(paymentResult)
+    ? paymentWindowRemainingSeconds(paymentResult, paymentWindowNow)
+    : null;
+  const pendingPaymentCountdownLabel = pendingPaymentRemainingSeconds === null ? '' : formatCountdown(pendingPaymentRemainingSeconds);
+  const pendingPaymentProgressPercent = paymentWindowProgressPercent(paymentResult, pendingPaymentRemainingSeconds);
   const autoPortalDark = (() => {
     const hour = new Date(themeClock).getHours();
     return hour >= 18 || hour < 6;
@@ -4179,6 +4369,7 @@ function PortalApp() {
   const firstReadyBagItemIptvReady = Boolean(firstReadyBagItem?.iptv_watch_ready || firstReadyBagItem?.iptv_status === 'PROVISIONED');
   const firstReadyBagItemIptvFailed = Boolean(firstReadyBagItem?.iptv_status === 'FAILED');
   const firstReadyBagTimeLabel = formatSeconds(firstReadyBagItem?.remaining_seconds || firstReadyBagItem?.duration_seconds || 0);
+  const readyBagItemCount = queuedBagItems.length;
   const bagItemCount = activeBagItems.length + queuedBagItems.length + pendingStoreRequestCount;
   const activeRemainingCards = activeBagItems.length ? activeBagItems : [null];
   const activeBagItemRemainingSeconds = (item) => {
@@ -5586,6 +5777,25 @@ function PortalApp() {
     const storeRequestCounts = storeRequestCountsFor(storePendingRequests || []);
     const filteredStoreRequests = filteredStoreRequestRows(storePendingRequests || [], storeRequestFilter, '');
     const recentStoreRequests = filteredStoreRequests.slice(0, 5);
+    const resetBagDragState = () => {
+      setBagDraggingItemId('');
+      setBagDragOverItemId('');
+      setBagDragDropPlacement('before');
+    };
+    const reorderQueuedBagItem = (sourceId, targetId, placement = 'before') => {
+      if (!sourceId || !targetId || sourceId === targetId) return;
+      const currentItems = bag?.queued_items || [];
+      const fromIndex = currentItems.findIndex((entry) => entry.id === sourceId);
+      const targetIndex = currentItems.findIndex((entry) => entry.id === targetId);
+      if (fromIndex < 0 || targetIndex < 0) return;
+      const nextItems = [...currentItems];
+      const [moved] = nextItems.splice(fromIndex, 1);
+      let insertIndex = nextItems.findIndex((entry) => entry.id === targetId);
+      if (insertIndex < 0) return;
+      if (placement === 'after') insertIndex += 1;
+      nextItems.splice(insertIndex, 0, moved);
+      reorderBagItems(nextItems);
+    };
     const renderItem = (item, options = {}) => {
       const statusLabel = item.status === 'QUEUED' ? 'UNUSED' : item.status;
       const showStatusBadge = Boolean(statusLabel);
@@ -5597,30 +5807,39 @@ function PortalApp() {
       const iptvStatusLabel = iptvReady ? 'IPTV ready' : item.iptv_status === 'FAILED' ? 'IPTV failed' : item.iptv_status === 'MANUAL_REVIEW' ? 'Manual review' : 'IPTV pending';
       return (
         <div
-          className={`portal-bag-item ${options.draggable ? 'is-draggable' : ''}`}
+          className={`portal-bag-item ${options.draggable ? 'is-draggable' : ''} ${bagDraggingItemId === item.id ? 'is-dragging' : ''} ${bagDragOverItemId === item.id && bagDraggingItemId !== item.id ? `is-drop-${bagDragDropPlacement}` : ''}`}
           key={item.id}
           draggable={Boolean(options.draggable)}
-          onDragStart={() => {
-            if (options.draggable) setBagDraggingItemId(item.id);
+          onDragStart={(event) => {
+            if (!options.draggable) return;
+            setBagDraggingItemId(item.id);
+            setBagDragDropPlacement('before');
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', item.id);
           }}
           onDragOver={(event) => {
-            if (options.draggable) event.preventDefault();
+            if (!options.draggable) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            const rect = event.currentTarget.getBoundingClientRect();
+            const placement = event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+            setBagDragOverItemId(item.id);
+            setBagDragDropPlacement(placement);
+          }}
+          onDragLeave={() => {
+            if (!options.draggable) return;
+            setBagDragOverItemId((current) => current === item.id ? '' : current);
           }}
           onDrop={(event) => {
             if (!options.draggable) return;
             event.preventDefault();
-            if (!bagDraggingItemId || bagDraggingItemId === item.id) return;
-            const currentItems = bag?.queued_items || [];
-            const fromIndex = currentItems.findIndex((entry) => entry.id === bagDraggingItemId);
-            const toIndex = currentItems.findIndex((entry) => entry.id === item.id);
-            if (fromIndex < 0 || toIndex < 0) return;
-            const nextItems = [...currentItems];
-            const [moved] = nextItems.splice(fromIndex, 1);
-            nextItems.splice(toIndex, 0, moved);
-            setBagDraggingItemId('');
-            reorderBagItems(nextItems);
+            const sourceId = event.dataTransfer.getData('text/plain') || bagDraggingItemId;
+            const rect = event.currentTarget.getBoundingClientRect();
+            const placement = event.clientY > rect.top + rect.height / 2 ? 'after' : 'before';
+            reorderQueuedBagItem(sourceId, item.id, placement);
+            resetBagDragState();
           }}
-          onDragEnd={() => setBagDraggingItemId('')}
+          onDragEnd={resetBagDragState}
         >
           {options.draggable && <span className="portal-bag-drag"><IconGripVertical size={18} /></span>}
           <div className="portal-bag-item-main">
@@ -6245,9 +6464,12 @@ function PortalApp() {
       return;
     }
     try {
-      const checkoutWindow = window.open(url, '_blank', 'noopener,noreferrer');
+      const checkoutWindow = window.open(url, '_blank');
       if (!checkoutWindow) {
         window.location.href = url;
+      } else {
+        checkoutWindowRef.current = checkoutWindow;
+        try { checkoutWindow.opener = null; } catch {}
       }
     } catch {
       window.location.href = url;
@@ -7638,6 +7860,9 @@ function PortalApp() {
     const amountLabel = paymentHandoff.amount_centavos !== undefined
       ? formatCentavos(paymentHandoff.amount_centavos, paymentHandoff.currency || 'PHP')
       : '';
+    const remainingSeconds = paymentWindowRemainingSeconds(paymentHandoff, paymentWindowNow);
+    const remainingLabel = remainingSeconds === null ? '' : formatCountdown(remainingSeconds);
+    const progressPercent = paymentWindowProgressPercent(paymentHandoff, remainingSeconds);
     return (
       <Modal
         title={captiveBrowser ? t('Open payment in browser') : t('Continue payment')}
@@ -7682,25 +7907,19 @@ function PortalApp() {
             <span>{captiveBrowser ? t('Use Chrome on Android or Safari on iPhone for GCash, Maya, card, and other online payment methods.') : t('If checkout does not open automatically, use the button below to continue payment.')}</span>
           </div>
 
-          {checkoutCopyMessage && (
-            <div className="portal-payment-copy-status">
-              <IconCircleCheck size={17} />
-              <span>{checkoutCopyMessage}</span>
-            </div>
+          {remainingLabel && (
+            <PaymentWindowProgress
+              label={t('Payment window closes in')}
+              countdownLabel={remainingLabel}
+              progressPercent={progressPercent}
+              description={t('Payment is ongoing. Complete the payment in the checkout window before this timer ends.')}
+            />
           )}
 
           <div className="portal-payment-handoff-actions">
             <button className="btn btn-primary portal-outside-modal-primary" type="button" onClick={() => openCheckoutUrl(paymentHandoff.checkout_url, { sameTab: !captiveBrowser })}>
               <IconExternalLink size={18} />
               {captiveBrowser ? t('Open secure checkout') : t('Continue to PayMongo')}
-            </button>
-            <button className="btn portal-outside-modal-cancel" type="button" onClick={() => copyCheckoutLink(paymentHandoff)}>
-              <IconCopy size={18} />
-              {t('Copy link')}
-            </button>
-            <button className="btn portal-outside-modal-cancel" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentHandoff.payment_order_id, { force: true })}>
-              <IconRefresh size={18} />
-              {paymentChecking ? t('Checking...') : t('I paid, check')}
             </button>
             <button className="btn btn-outline-danger" type="button" disabled={paymentChecking} onClick={() => cancelPaymentCheckout(paymentHandoff)}>
               <IconX size={18} />
@@ -8048,7 +8267,9 @@ function PortalApp() {
                           : firstReadyBagItemIptvFailed
                             ? t('IPTV access needs operator attention before watching.')
                             : t('Your IPTV account is being prepared automatically.'))
-                        : t('You have a saved WiFi pass ready to use.')}
+                        : readyBagItemCount === 1
+                          ? t('You have {count} saved WiFi pass ready to use.', { count: readyBagItemCount })
+                          : t('You have {count} saved WiFi passes ready to use.', { count: readyBagItemCount })}
                     </div>
                   </div>
                 </div>
@@ -8117,42 +8338,46 @@ function PortalApp() {
             )}
             {paymentResult && !paymentSuccessReady && !paymentResultDismissed && (
               <PortalCustomerMessage
-                message={paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
-                  ? (paymentResult.bag_item_status === 'QUEUED' ? t(status?.outside_network_warning?.purchase_success_message || 'Payment received. Package saved to your bag.') : t('Payment received. Internet access is active.'))
-                  : paymentResult.status === 'FAILED'
-                    ? t(friendlyPayMongoError(paymentResult.last_error))
-                    : paymentChecking ? t('Checking PayMongo payment confirmation...') : t('Payment is not completed yet. Open the secure checkout, then return here and tap Check.')}
                 tone={paymentResult.status === 'FAILED' ? 'danger' : paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED' ? 'success' : 'info'}
+                className={!paymentResultIsTerminal(paymentResult) ? 'portal-payment-customer-message' : ''}
                 timeoutMs={portalMessageAutoHideMs}
                 autoDismiss={paymentResultIsTerminal(paymentResult)}
                 onSuccessNote={queueAvatarCustomerMessage}
-                onDismiss={() => cancelPaymentCheckout(paymentResult)}
-                dismissKey={`${paymentResult.payment_order_id || ''}-${paymentResult.status}-${paymentResult.fulfillment_status || ''}-${paymentChecking ? 'checking' : 'idle'}`}
-                actions={paymentResult.payment_order_id && (
-                  <>
-                    {!paymentResultIsTerminal(paymentResult) && paymentResult.checkout_url && (
-                      <button className="btn btn-sm btn-primary" type="button" disabled={paymentChecking} onClick={() => openCheckoutUrl(paymentResult.checkout_url, { sameTab: !isCaptivePortalPlaybackBrowser() })}>
-                        <IconExternalLink size={15} className="me-1" />
-                        {t('Open checkout')}
-                      </button>
+                onDismiss={paymentResultIsTerminal(paymentResult) ? () => cancelPaymentCheckout(paymentResult) : undefined}
+                dismissKey={`${paymentResult.payment_order_id || ''}-${paymentResult.status}-${paymentResult.fulfillment_status || ''}`}
+              >
+                {paymentResult.status === 'PAID' && paymentResult.fulfillment_status === 'FULFILLED'
+                  ? (
+                    <div>{paymentResult.bag_item_status === 'QUEUED' ? t(status?.outside_network_warning?.purchase_success_message || 'Payment received. Package saved to your bag.') : t('Payment received. Internet access is active.')}</div>
+                  ) : paymentResult.status === 'FAILED'
+                    ? (
+                      <div>{t(friendlyPayMongoError(paymentResult.last_error))}</div>
+                    ) : (
+                      <div className="portal-payment-pending-message">
+                        {pendingPaymentCountdownLabel && (
+                          <PaymentWindowProgress
+                            label={t('Payment window closes in')}
+                            countdownLabel={pendingPaymentCountdownLabel}
+                            progressPercent={pendingPaymentProgressPercent}
+                            description={t('Payment is ongoing. Complete the payment in the checkout window before this timer ends.')}
+                            actions={paymentResult.payment_order_id && (
+                              <>
+                                {paymentResult.checkout_url && (
+                                  <button className="btn btn-sm btn-primary" type="button" disabled={paymentChecking} onClick={() => openCheckoutUrl(paymentResult.checkout_url, { sameTab: !isCaptivePortalPlaybackBrowser() })}>
+                                    <IconExternalLink size={15} className="me-1" />
+                                    {t('Open checkout')}
+                                  </button>
+                                )}
+                                <button className="btn btn-sm btn-outline-danger" type="button" disabled={paymentChecking} onClick={() => cancelPaymentCheckout(paymentResult)}>
+                                  {t('Cancel')}
+                                </button>
+                              </>
+                            )}
+                          />
+                        )}
+                      </div>
                     )}
-                    {!paymentResultIsTerminal(paymentResult) && paymentResult.checkout_url && (
-                      <button className="btn btn-sm btn-outline-secondary" type="button" disabled={paymentChecking} onClick={() => copyCheckoutLink(paymentResult)}>
-                        <IconCopy size={15} className="me-1" />
-                        {t('Copy link')}
-                      </button>
-                    )}
-                    <button className="btn btn-sm btn-outline-secondary" type="button" disabled={paymentChecking} onClick={() => checkPaymentStatus(paymentResult.payment_order_id, { force: true })}>
-                      {paymentChecking ? t('Checking...') : t('Check')}
-                    </button>
-                    {!paymentResultIsTerminal(paymentResult) && (
-                      <button className="btn btn-sm btn-outline-danger" type="button" disabled={paymentChecking} onClick={() => cancelPaymentCheckout(paymentResult)}>
-                        {t('Cancel')}
-                      </button>
-                    )}
-                  </>
-                )}
-              />
+              </PortalCustomerMessage>
             )}
             <div className="portal-purchase-flow">
               {!purchaseChannel ? (
@@ -8937,7 +9162,7 @@ function StoreOwnerToast({ toast, onDismiss, timeoutMs = 6000 }) {
     return () => window.clearTimeout(timer);
   }, [toast?.key, timeoutMs]);
   if (!toast) return null;
-  const ToastIcon = toast.tone === 'danger' ? IconAlertTriangle : IconCircleCheck;
+  const ToastIcon = toast.icon === 'x' ? IconX : toast.tone === 'danger' ? IconAlertTriangle : IconCircleCheck;
   return (
     <div
       className={`store-owner-toast store-owner-toast-${toast.tone || 'success'} ${swipeDismiss.className}`.trim()}
@@ -30891,6 +31116,7 @@ function PaymentAccessPage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [paymentAccessLastUpdatedAt, setPaymentAccessLastUpdatedAt] = useState('');
+  const [paymentAccessNowMs, setPaymentAccessNowMs] = useState(() => Date.now());
   const paymentAccessRefreshSeq = useRef(0);
 
   async function refreshPaymentAccess(options = {}) {
@@ -30903,6 +31129,7 @@ function PaymentAccessPage() {
       setPaymentAccess(data);
       if (data?.settings && syncSettings) setPaymentAccessForm(data.settings);
       setPaymentAccessLastUpdatedAt(new Date().toISOString());
+      window.dispatchEvent(new CustomEvent('payment-access-summary-refresh', { detail: { active_count: data?.overview?.active_count || 0 } }));
       if (!background) setError('');
       return data;
     } catch (err) {
@@ -30913,6 +31140,11 @@ function PaymentAccessPage() {
 
   useEffect(() => {
     refreshPaymentAccess().catch((err) => setError(err.message));
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setPaymentAccessNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -30984,6 +31216,35 @@ function PaymentAccessPage() {
     }
   }
 
+  async function removePaymentAccessAbuse(row) {
+    if (!row) return;
+    const label = paymentAccessCustomer(row);
+    if (!window.confirm(`Remove ${label} from the Abuse Watchlist for today?`)) return;
+    const rowKey = row.user_id || row.client_mac || row.device_token_hash || row.profile_contact_number || label;
+    setBusy(`remove-payment-abuse-${rowKey}`);
+    setError('');
+    setMessage('');
+    try {
+      const data = await request('/omada/payment-auth-free/abuse/remove', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_id: row.user_id,
+          client_mac: row.client_mac,
+          device_token_hash: row.device_token_hash,
+          profile_contact_number: row.profile_contact_number,
+          profile_name: row.profile_name,
+        })
+      });
+      setPaymentAccess(data);
+      if (data?.settings) setPaymentAccessForm(data.settings);
+      setMessage('Customer removed from Abuse Watchlist for today.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
   function paymentAccessTone(status) {
     const value = String(status || '').toUpperCase();
     if (['ACTIVE', 'REMOTE_ACTIVE'].includes(value)) return 'green';
@@ -31018,8 +31279,12 @@ function PaymentAccessPage() {
     return 'No active payment access grants.';
   }
 
+  function paymentAccessRemainingSeconds(row) {
+    return liveRemainingSeconds(row?.expires_at, row?.remaining_seconds, paymentAccessNowMs);
+  }
+
   function paymentAccessTableColumnCount(tabKey = paymentAccessTableTab) {
-    if (tabKey === 'ABUSE') return 4;
+    if (tabKey === 'ABUSE') return 5;
     if (tabKey === 'GRANTED') return 7;
     return 6;
   }
@@ -31066,6 +31331,7 @@ function PaymentAccessPage() {
           <th>Attempts Today</th>
           <th>MAC</th>
           <th>Last Attempt</th>
+          <th>Action</th>
         </tr>
       );
     }
@@ -31105,17 +31371,31 @@ function PaymentAccessPage() {
       );
     }
     if (paymentAccessTableTab === 'ABUSE') {
-      return rows.map((row, index) => (
-        <tr key={`${row.client_mac || row.user_id || index}`}>
-          <td>
-            <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
-            {row.profile_contact_number && <div className="text-muted small">{row.profile_contact_number}</div>}
-          </td>
-          <td><span className="badge bg-red-lt text-red">{row.attempts_today}</span></td>
-          <td>{row.client_mac || '-'}</td>
-          <td className="text-muted">{formatPortalDateTime(row.last_attempt_at)}</td>
-        </tr>
-      ));
+      return rows.map((row, index) => {
+        const rowKey = row.user_id || row.client_mac || row.device_token_hash || row.profile_contact_number || index;
+        return (
+          <tr key={`${rowKey}`}>
+            <td>
+              <div className="fw-semibold">{paymentAccessCustomer(row)}</div>
+              {row.profile_contact_number && <div className="text-muted small">{row.profile_contact_number}</div>}
+            </td>
+            <td><span className="badge bg-red-lt text-red">{row.attempts_today}</span></td>
+            <td>{row.client_mac || '-'}</td>
+            <td className="text-muted">{formatPortalDateTime(row.last_attempt_at)}</td>
+            <td>
+              <button
+                className="btn btn-sm btn-outline-danger"
+                type="button"
+                disabled={busy === `remove-payment-abuse-${rowKey}`}
+                onClick={() => removePaymentAccessAbuse(row)}
+              >
+                <IconTrash size={16} className="me-1" />
+                {busy === `remove-payment-abuse-${rowKey}` ? 'Removing...' : 'Remove'}
+              </button>
+            </td>
+          </tr>
+        );
+      });
     }
     if (paymentAccessTableTab === 'RECENT') {
       return rows.map((row) => {
@@ -31137,6 +31417,7 @@ function PaymentAccessPage() {
     }
     return rows.map((row) => {
       const tone = paymentAccessTone(row.status);
+      const remainingSeconds = paymentAccessRemainingSeconds(row);
       return (
         <tr key={row.id}>
           <td>
@@ -31150,7 +31431,16 @@ function PaymentAccessPage() {
           </td>
           <td><span className={`badge bg-${tone}-lt text-${tone}`}>{row.status}</span></td>
           <td className="text-muted">{row.orphaned ? 'Remote only' : formatPortalDateTime(row.expires_at)}</td>
-          <td>{row.remaining_seconds == null ? '-' : formatSeconds(row.remaining_seconds || 0)}</td>
+          <td>
+            {remainingSeconds === null ? (
+              <span className="text-muted">-</span>
+            ) : (
+              <span className={`badge bg-${remainingSeconds > 0 ? 'green' : 'red'}-lt text-${remainingSeconds > 0 ? 'green' : 'red'} d-inline-flex align-items-center gap-1`}>
+                <IconClock size={14} />
+                {formatCountdown(remainingSeconds)}
+              </span>
+            )}
+          </td>
           <td>
             {row.orphaned ? (
               <button
@@ -32685,7 +32975,7 @@ function NotificationsPage({ onNavigate }) {
   );
 }
 
-function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnreadCount = 0 }) {
+function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnreadCount = 0, paymentAccessGrantedCount = 0 }) {
   const [open, setOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [openGroups, setOpenGroups] = useState({});
@@ -32746,12 +33036,15 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnread
               return (
                 <li className="nav-item" key={item.page}>
                   <button className={`nav-link ${page === item.page ? 'active' : ''}`} onClick={() => setActivePage(item.page)}>
-                    <IconWrap><Icon size={20} /></IconWrap>
-                    <span className="nav-link-title">{item.page}</span>
-                    {item.page === 'Support Inbox' && supportUnreadCount > 0 && (
-                      <span className="nav-unread-badge">{supportUnreadCount > 99 ? '99+' : supportUnreadCount}</span>
-                    )}
-                  </button>
+	                    <IconWrap><Icon size={20} /></IconWrap>
+	                    <span className="nav-link-title">{item.page}</span>
+	                    {item.page === 'Support Inbox' && supportUnreadCount > 0 && (
+	                      <span className="nav-unread-badge">{supportUnreadCount > 99 ? '99+' : supportUnreadCount}</span>
+	                    )}
+	                    {item.page === 'Payment Access' && paymentAccessGrantedCount > 0 && (
+	                      <span className="nav-unread-badge nav-payment-access-badge">{paymentAccessGrantedCount > 99 ? '99+' : paymentAccessGrantedCount}</span>
+	                    )}
+	                  </button>
                 </li>
               );
             })}
@@ -33002,6 +33295,7 @@ function App() {
   const [omadaPortalStatus, setOmadaPortalStatus] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [supportUnreadCount, setSupportUnreadCount] = useState(0);
+  const [paymentAccessGrantedCount, setPaymentAccessGrantedCount] = useState(0);
   const [branding, setBranding] = useState({ display_name: '3JCentralPisowifi', portal_subtitle: 'Captive Portal + WiFi Pass Access', accent_color: '#206bc4', company_logo_url: null, browser_logo_url: null });
 
   async function refresh() {
@@ -33089,6 +33383,31 @@ function App() {
       window.clearInterval(timer);
     };
   }, [authed]);
+  useEffect(() => {
+    if (!authed) return undefined;
+    let mounted = true;
+    const loadPaymentAccessSummary = async () => {
+      try {
+        const data = await request('/omada/payment-auth-free');
+        if (mounted) setPaymentAccessGrantedCount(Number(data?.overview?.active_count || data?.active_grants?.length || 0));
+      } catch (_err) {
+        if (mounted) setPaymentAccessGrantedCount(0);
+      }
+    };
+    const handleSummaryRefresh = (event) => {
+      const nextCount = Number(event?.detail?.active_count);
+      if (Number.isFinite(nextCount)) setPaymentAccessGrantedCount(nextCount);
+      else loadPaymentAccessSummary();
+    };
+    loadPaymentAccessSummary();
+    const timer = window.setInterval(loadPaymentAccessSummary, 30000);
+    window.addEventListener('payment-access-summary-refresh', handleSummaryRefresh);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+      window.removeEventListener('payment-access-summary-refresh', handleSummaryRefresh);
+    };
+  }, [authed]);
   if (portalPath === '/store') return <StoreOwnerPortalApp />;
   if (portalPath === '/portal/ap-coverage') return <PortalCoveragePage />;
   if (portalPath === '/portal/store-map') return <PortalStoreMapPage />;
@@ -33102,7 +33421,7 @@ function App() {
 
   return (
     <div className={`page ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
-      <Sidebar page={page} setPage={navigatePage} me={me} logout={logout} branding={branding} collapsed={sidebarCollapsed} supportUnreadCount={supportUnreadCount} />
+      <Sidebar page={page} setPage={navigatePage} me={me} logout={logout} branding={branding} collapsed={sidebarCollapsed} supportUnreadCount={supportUnreadCount} paymentAccessGrantedCount={paymentAccessGrantedCount} />
       <div className="page-wrapper">
         <Header page={page} dashboard={dashboard} resources={resources} omadaPortalStatus={omadaPortalStatus} onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)} sidebarCollapsed={sidebarCollapsed} onOpenCaptivePortal={() => navigatePage('Captive Portal')} onNavigatePage={navigatePage} onSupportCountChange={setSupportUnreadCount} />
         {page === 'Long Lat' ? (
