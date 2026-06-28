@@ -1431,6 +1431,8 @@ Safety:
   - `GET /api/integrations/monthly-subscribers/health`
   - `POST /api/integrations/monthly-subscribers/upsert`
 - Signed requests use `X-3J-Integration-Key`, `X-3J-Timestamp`, `X-3J-Signature`, and `X-3J-Idempotency-Key`. The signature is HMAC-SHA256 over `<timestamp>.<raw request body>` using the Monthly Subscribers API secret.
+- The upsert payload supports `sync_mode`. `FULL`/`SYNC_ALL`/`AUTHORITATIVE` means 3J Main is sending the complete current subscriber list, so Pisowifi marks missing subscribers inactive, disables their contacts, and revokes monthly subscriber gateway authorization. `PARTIAL` only updates submitted rows.
+- When a monthly contact is disabled, removed, or reset, Pisowifi clears monthly subscriber authorization for linked portal sessions and then syncs gateway access to any active paid WiFi Bag item before revoking Omada access.
 - New tables are `monthly_subscriber_settings`, `monthly_subscribers`, `monthly_subscriber_contacts`, `monthly_subscriber_login_challenges`, and `monthly_subscriber_sync_logs`. `portal_sessions` now stores the monthly contact binding and rolling authorization state.
 - Captive portal Login is enabled for monthly subscribers. The user enters a registered contact number, receives an A2P OTP, and on success the contact number is bound to the current portal device.
 - One monthly contact number equals one allowed device. If the same contact is already bound to another device, the portal rejects login until an admin resets the binding from `Monthly Subscribers`.

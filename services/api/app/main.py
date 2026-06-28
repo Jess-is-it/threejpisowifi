@@ -820,6 +820,7 @@ class MonthlySubscriberSyncRow(BaseModel):
 class MonthlySubscriberUpsertPayload(BaseModel):
     source_system: str = Field(default="3J Main", max_length=120)
     synced_by: Optional[str] = Field(default=None, max_length=120)
+    sync_mode: str = Field(default="PARTIAL", max_length=20)
     subscribers: list[MonthlySubscriberSyncRow] = Field(default_factory=list)
 
 
@@ -11527,6 +11528,68 @@ def authorize_monthly_subscriber_session(cur, session: dict, contact: dict, user
     )
     session = cur.fetchone()
     return {"authorization": authorization, "session": session, "access_until": access_until}
+
+
+def revoke_monthly_subscriber_sessions_for_contact_ids(cur, contact_ids: list, reason: str, admin=None) -> dict:
+    clean_ids = [str(value) for value in (contact_ids or []) if value]
+    if not clean_ids:
+        return {"revoked_session_count": 0, "results": []}
+    cur.execute(
+        """
+        SELECT *
+        FROM portal_sessions
+        WHERE monthly_subscriber_contact_id = ANY(%s::uuid[])
+        FOR UPDATE
+        """,
+        (clean_ids,),
+    )
+    sessions = cur.fetchall()
+    results = []
+    for session in sessions:
+        cur.execute(
+            """
+            UPDATE portal_sessions
+            SET monthly_subscriber_contact_id = NULL,
+                monthly_subscriber_authorized_until = NULL,
+                monthly_subscriber_status = 'REVOKED',
+                access_expires_at = LEAST(COALESCE(access_expires_at, now()), now()),
+                last_error = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (reason, session["id"]),
+        )
+        updated_session = cur.fetchone() or session
+        try:
+            if not updated_session.get("user_id") and updated_session.get("source") == "OMADA":
+                revoke_result = revoke_omada_authorized_clients(cur, updated_session, admin)
+                cur.execute(
+                    """
+                    UPDATE portal_sessions
+                    SET status = 'EXPIRED',
+                        access_expires_at = now(),
+                        omada_authorization_status = 'EXPIRED',
+                        last_error = %s,
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (reason, updated_session["id"]),
+                )
+                gateway_result = {"status": "REVOKED", "revoke_result": sanitize_summary(revoke_result)}
+            else:
+                gateway_result = sync_gateway_access_to_active_bag(cur, updated_session, reason, admin=admin)
+        except Exception as exc:
+            gateway_result = {"status": "FAILED", "error": str(exc)}
+        results.append(
+            {
+                "session_id": str(session.get("id") or ""),
+                "contact_id": str(session.get("monthly_subscriber_contact_id") or ""),
+                "gateway_result": sanitize_summary(gateway_result),
+            }
+        )
+    return {"revoked_session_count": len(sessions), "results": results}
 
 
 def portal_device_link_qr_payload(code: str) -> str:
@@ -26680,8 +26743,19 @@ def revoke_monthly_subscriber_contact_device(contact_id: str, admin=Depends(curr
             contact = cur.fetchone()
             if not contact:
                 raise HTTPException(status_code=404, detail="Monthly subscriber contact was not found.")
+            revoke_result = revoke_monthly_subscriber_sessions_for_contact_ids(
+                cur,
+                [clean_contact_id],
+                "Monthly subscriber device binding was reset by admin.",
+                admin,
+            )
     audit(admin["id"], "revoke_monthly_subscriber_device", "monthly_subscriber_contacts", clean_contact_id, {})
-    return {"status": "SUCCESS", "message": "Monthly subscriber device binding reset.", "contact": public_monthly_contact(contact)}
+    return {
+        "status": "SUCCESS",
+        "message": "Monthly subscriber device binding reset.",
+        "contact": public_monthly_contact(contact),
+        "access_revoke_result": sanitize_summary(revoke_result),
+    }
 
 
 @app.get("/api/integrations/monthly-subscribers/health")
@@ -26705,15 +26779,22 @@ async def monthly_subscriber_integration_health(request: Request):
 async def monthly_subscriber_integration_upsert(payload: MonthlySubscriberUpsertPayload, request: Request):
     body = await request.body()
     source_system = normalize_payment_text(payload.source_system, 120) or "3J Main"
+    sync_mode = normalize_payment_text(payload.sync_mode, 20).upper() or "PARTIAL"
+    full_sync = sync_mode in {"FULL", "SYNC_ALL", "AUTHORITATIVE"}
     request_id = normalize_payment_text(request.headers.get("x-3j-idempotency-key"), 120)
     subscriber_count = 0
     contact_count = 0
+    disabled_subscriber_count = 0
+    disabled_contact_ids: list[str] = []
+    source_external_ids: set[str] = set()
     with get_conn() as conn:
         with conn.cursor() as cur:
             require_monthly_subscriber_integration_signature(cur, request, body)
             for subscriber in payload.subscribers:
                 status = monthly_status(subscriber.status)
                 source_payload = subscriber.model_dump()
+                external_subscriber_id = normalize_payment_text(subscriber.external_subscriber_id, 160)
+                source_external_ids.add(external_subscriber_id)
                 cur.execute(
                     """
                     INSERT INTO monthly_subscribers(
@@ -26733,7 +26814,7 @@ async def monthly_subscriber_integration_upsert(payload: MonthlySubscriberUpsert
                     RETURNING *
                     """,
                     (
-                        normalize_payment_text(subscriber.external_subscriber_id, 160),
+                        external_subscriber_id,
                         normalize_payment_text(subscriber.account_number, 120),
                         normalize_payment_text(subscriber.service_account_number, 120),
                         normalize_payment_text(subscriber.customer_name, 180),
@@ -26753,6 +26834,7 @@ async def monthly_subscriber_integration_upsert(payload: MonthlySubscriberUpsert
                         normalized, _ = normalize_portal_contact_number(normalized)
                     display_contact = portal_contact_display_number(contact.contact_number or normalized)
                     seen_contacts.add(normalized)
+                    next_contact_status = monthly_contact_status(bool(contact.enabled) and status == "ACTIVE")
                     cur.execute(
                         """
                         INSERT INTO monthly_subscriber_contacts(
@@ -26772,10 +26854,12 @@ async def monthly_subscriber_integration_upsert(payload: MonthlySubscriberUpsert
                             display_contact,
                             normalized,
                             normalize_payment_text(contact.label, 120),
-                            monthly_contact_status(bool(contact.enabled) and status == "ACTIVE"),
+                            next_contact_status,
                         ),
                     )
-                    cur.fetchone()
+                    contact_row = cur.fetchone()
+                    if contact_row and next_contact_status != "ACTIVE":
+                        disabled_contact_ids.append(str(contact_row["id"]))
                     contact_count += 1
                 if seen_contacts:
                     cur.execute(
@@ -26784,18 +26868,68 @@ async def monthly_subscriber_integration_upsert(payload: MonthlySubscriberUpsert
                         SET status = 'DISABLED', updated_at = now()
                         WHERE subscriber_id = %s
                           AND normalized_contact <> ALL(%s)
+                        RETURNING id
                         """,
                         (subscriber_row["id"], list(seen_contacts)),
                     )
+                    disabled_contact_ids.extend(str(row["id"]) for row in cur.fetchall())
                 else:
                     cur.execute(
                         """
                         UPDATE monthly_subscriber_contacts
                         SET status = 'DISABLED', updated_at = now()
                         WHERE subscriber_id = %s
+                        RETURNING id
                         """,
                         (subscriber_row["id"],),
                     )
+                    disabled_contact_ids.extend(str(row["id"]) for row in cur.fetchall())
+            if full_sync:
+                if source_external_ids:
+                    cur.execute(
+                        """
+                        UPDATE monthly_subscribers
+                        SET status = 'INACTIVE',
+                            last_synced_at = now(),
+                            updated_at = now()
+                        WHERE external_subscriber_id <> ALL(%s)
+                          AND status <> 'INACTIVE'
+                        RETURNING id
+                        """,
+                        (list(source_external_ids),),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE monthly_subscribers
+                        SET status = 'INACTIVE',
+                            last_synced_at = now(),
+                            updated_at = now()
+                        WHERE status <> 'INACTIVE'
+                        RETURNING id
+                        """
+                    )
+                disabled_subscriber_ids = [str(row["id"]) for row in cur.fetchall()]
+                disabled_subscriber_count = len(disabled_subscriber_ids)
+                if disabled_subscriber_ids:
+                    cur.execute(
+                        """
+                        UPDATE monthly_subscriber_contacts
+                        SET status = 'DISABLED', updated_at = now()
+                        WHERE subscriber_id = ANY(%s::uuid[])
+                          AND status = 'ACTIVE'
+                        RETURNING id
+                        """,
+                        (disabled_subscriber_ids,),
+                    )
+                    disabled_contact_ids.extend(str(row["id"]) for row in cur.fetchall())
+            disabled_contact_ids = list(dict.fromkeys(disabled_contact_ids))
+            revoke_result = revoke_monthly_subscriber_sessions_for_contact_ids(
+                cur,
+                disabled_contact_ids,
+                "Monthly subscriber access was removed by source sync.",
+                None,
+            )
             cur.execute(
                 """
                 INSERT INTO monthly_subscriber_sync_logs(
@@ -26810,7 +26944,16 @@ async def monthly_subscriber_integration_upsert(payload: MonthlySubscriberUpsert
                     subscriber_count,
                     contact_count,
                     f"Synced {subscriber_count} monthly subscriber(s) from {source_system}.",
-                    Json({"synced_by": payload.synced_by or "", "source_system": source_system}),
+                    Json(
+                        {
+                            "synced_by": payload.synced_by or "",
+                            "source_system": source_system,
+                            "sync_mode": sync_mode,
+                            "disabled_subscriber_count": disabled_subscriber_count,
+                            "disabled_contact_count": len(disabled_contact_ids),
+                            "access_revoke_result": sanitize_summary(revoke_result),
+                        }
+                    ),
                 ),
             )
             log_row = cur.fetchone()
@@ -26818,6 +26961,10 @@ async def monthly_subscriber_integration_upsert(payload: MonthlySubscriberUpsert
         "status": "SUCCESS",
         "subscriber_count": subscriber_count,
         "contact_count": contact_count,
+        "sync_mode": sync_mode,
+        "disabled_subscriber_count": disabled_subscriber_count,
+        "disabled_contact_count": len(disabled_contact_ids),
+        "revoked_session_count": int(revoke_result.get("revoked_session_count") or 0),
         "sync_log_id": str(log_row.get("id") or ""),
     }
 
