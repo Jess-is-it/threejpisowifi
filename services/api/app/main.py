@@ -11530,6 +11530,50 @@ def authorize_monthly_subscriber_session(cur, session: dict, contact: dict, user
     return {"authorization": authorization, "session": session, "access_until": access_until}
 
 
+def revoke_monthly_subscriber_session_row(cur, session: dict, reason: str, admin=None) -> dict:
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET monthly_subscriber_contact_id = NULL,
+            monthly_subscriber_authorized_until = NULL,
+            monthly_subscriber_status = 'REVOKED',
+            access_expires_at = LEAST(COALESCE(access_expires_at, now()), now()),
+            last_error = %s,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (reason, session["id"]),
+    )
+    updated_session = cur.fetchone() or session
+    try:
+        if not updated_session.get("user_id") and updated_session.get("source") == "OMADA":
+            revoke_result = revoke_omada_authorized_clients(cur, updated_session, admin)
+            cur.execute(
+                """
+                UPDATE portal_sessions
+                SET status = 'EXPIRED',
+                    access_expires_at = now(),
+                    omada_authorization_status = 'EXPIRED',
+                    last_error = %s,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (reason, updated_session["id"]),
+            )
+            gateway_result = {"status": "REVOKED", "revoke_result": sanitize_summary(revoke_result)}
+        else:
+            gateway_result = sync_gateway_access_to_active_bag(cur, updated_session, reason, admin=admin)
+    except Exception as exc:
+        gateway_result = {"status": "FAILED", "error": str(exc)}
+    return {
+        "session_id": str(session.get("id") or ""),
+        "contact_id": str(session.get("monthly_subscriber_contact_id") or ""),
+        "gateway_result": sanitize_summary(gateway_result),
+    }
+
+
 def revoke_monthly_subscriber_sessions_for_contact_ids(cur, contact_ids: list, reason: str, admin=None) -> dict:
     clean_ids = [str(value) for value in (contact_ids or []) if value]
     if not clean_ids:
@@ -11544,52 +11588,267 @@ def revoke_monthly_subscriber_sessions_for_contact_ids(cur, contact_ids: list, r
         (clean_ids,),
     )
     sessions = cur.fetchall()
-    results = []
-    for session in sessions:
+    results = [
+        revoke_monthly_subscriber_session_row(cur, session, reason, admin)
+        for session in sessions
+    ]
+    return {"revoked_session_count": len(sessions), "results": results}
+
+
+def public_monthly_subscriber_session(row: dict) -> dict:
+    now = datetime.now(timezone.utc)
+    access_expires_at = aware_utc(row.get("access_expires_at"))
+    monthly_authorized_until = aware_utc(row.get("monthly_subscriber_authorized_until"))
+    effective_until = monthly_authorized_until or access_expires_at
+    remaining_seconds = max(int((effective_until - now).total_seconds()), 0) if effective_until else 0
+    client_mac = (
+        normalize_mac_if_valid(row.get("omada_client_mac"))
+        or normalize_mac_if_valid(row.get("client_mac"))
+        or normalize_mac_if_valid(row.get("mikrotik_client_mac"))
+        or row.get("omada_client_mac")
+        or row.get("client_mac")
+        or row.get("mikrotik_client_mac")
+        or ""
+    )
+    client_ip = row.get("client_ip") or row.get("mikrotik_client_ip")
+    subscriber_active = row.get("subscriber_status") == "ACTIVE"
+    contact_active = row.get("contact_status") == "ACTIVE"
+    gateway_status = row.get("mikrotik_authorization_status") if row.get("source") == "MIKROTIK" else row.get("omada_authorization_status")
+    return {
+        "id": str(row.get("id") or ""),
+        "public_session_id": row.get("public_session_id") or "",
+        "customer_name": row.get("customer_name") or row.get("profile_name") or row.get("username") or "Monthly Subscriber",
+        "account_number": row.get("account_number") or "",
+        "service_account_number": row.get("service_account_number") or "",
+        "plan_name": row.get("plan_name") or "",
+        "contact_id": str(row.get("contact_id") or ""),
+        "contact_number": row.get("contact_number") or row.get("profile_contact_number") or "",
+        "contact_label": row.get("contact_label") or "",
+        "subscriber_status": row.get("subscriber_status") or "",
+        "contact_status": row.get("contact_status") or "",
+        "monthly_status": row.get("monthly_subscriber_status") or "",
+        "session_status": row.get("status") or "",
+        "source": row.get("source") or "",
+        "gateway_status": gateway_status or "",
+        "authorization_error": row.get("omada_authorization_error") or row.get("last_error") or "",
+        "latest_authorization_status": row.get("latest_authorization_status") or "",
+        "latest_authorization_error": row.get("latest_authorization_error") or "",
+        "authorized_until": effective_until.isoformat() if effective_until else None,
+        "monthly_authorized_until": monthly_authorized_until.isoformat() if monthly_authorized_until else None,
+        "access_expires_at": access_expires_at.isoformat() if access_expires_at else None,
+        "remaining_seconds": remaining_seconds,
+        "connected": bool(gateway_status == "AUTHORIZED" and subscriber_active and contact_active and (not effective_until or effective_until > now)),
+        "client_mac": client_mac,
+        "client_ip": str(client_ip or ""),
+        "ssid": row.get("ssid") or "",
+        "site": row.get("omada_site_name") or row.get("site") or "",
+        "site_id": row.get("omada_site_id") or "",
+        "ap_mac": normalize_mac_if_valid(row.get("omada_ap_mac")) or normalize_mac_if_valid(row.get("ap_mac")) or row.get("omada_ap_mac") or row.get("ap_mac") or "",
+        "bound_at": row.get("bound_at").isoformat() if row.get("bound_at") else None,
+        "last_seen_at": row.get("updated_at").isoformat() if row.get("updated_at") else None,
+        "created_at": row.get("created_at").isoformat() if row.get("created_at") else None,
+        "can_reauthorize": bool(row.get("source") == "OMADA" and subscriber_active and contact_active and client_mac),
+        "can_revoke": bool(row.get("monthly_subscriber_status") in {"ACTIVE", "FAILED"} or row.get("contact_id")),
+        "can_reset_binding": bool(row.get("contact_id")),
+    }
+
+
+def monthly_subscriber_session_rows(cur, search: str = "", status: str = "") -> tuple[list[dict], dict]:
+    clean_search = normalize_payment_text(search, 120).lower()
+    clean_status = normalize_payment_text(status, 40).upper()
+    params = []
+    where = ["s.monthly_subscriber_contact_id IS NOT NULL"]
+    if clean_status == "CONNECTED":
+        where.append("s.monthly_subscriber_status = 'ACTIVE' AND s.omada_authorization_status = 'AUTHORIZED'")
+    elif clean_status in {"ACTIVE", "FAILED", "REVOKED"}:
+        where.append("s.monthly_subscriber_status = %s")
+        params.append(clean_status)
+    elif clean_status == "STALE":
+        where.append("(s.monthly_subscriber_authorized_until IS NOT NULL AND s.monthly_subscriber_authorized_until <= now())")
+    if clean_search:
+        where.append(
+            """
+            (
+                lower(COALESCE(ms.customer_name, '')) LIKE %s
+                OR lower(COALESCE(ms.account_number, '')) LIKE %s
+                OR lower(COALESCE(ms.service_account_number, '')) LIKE %s
+                OR lower(COALESCE(c.contact_number, '')) LIKE %s
+                OR lower(COALESCE(c.normalized_contact, '')) LIKE %s
+                OR lower(COALESCE(s.client_mac, s.omada_client_mac, s.mikrotik_client_mac, '')) LIKE %s
+                OR lower(COALESCE(s.client_ip::text, s.mikrotik_client_ip::text, '')) LIKE %s
+                OR lower(COALESCE(s.ssid, '')) LIKE %s
+                OR lower(COALESCE(s.omada_site_name, s.site, '')) LIKE %s
+            )
+            """
+        )
+        like = f"%{clean_search}%"
+        params.extend([like, like, like, like, like, like, like, like, like])
+    cur.execute(
+        f"""
+        SELECT s.*,
+               u.username,
+               p.display_name AS profile_name,
+               p.contact_number AS profile_contact_number,
+               c.id AS contact_id,
+               c.contact_number,
+               c.label AS contact_label,
+               c.status AS contact_status,
+               c.bound_at,
+               ms.customer_name,
+               ms.account_number,
+               ms.service_account_number,
+               ms.plan_name,
+               ms.status AS subscriber_status,
+               latest_auth.status AS latest_authorization_status,
+               latest_auth.error_message AS latest_authorization_error
+        FROM portal_sessions s
+        JOIN monthly_subscriber_contacts c ON c.id = s.monthly_subscriber_contact_id
+        JOIN monthly_subscribers ms ON ms.id = c.subscriber_id
+        LEFT JOIN users u ON u.id = s.user_id
+        LEFT JOIN portal_customer_profiles p ON p.user_id = s.user_id
+        LEFT JOIN LATERAL (
+            SELECT status, error_message
+            FROM omada_portal_authorizations auth
+            WHERE auth.portal_session_id = s.id
+            ORDER BY auth.created_at DESC
+            LIMIT 1
+        ) latest_auth ON true
+        WHERE {' AND '.join(where)}
+        ORDER BY
+            CASE WHEN s.monthly_subscriber_status = 'ACTIVE' AND s.omada_authorization_status = 'AUTHORIZED' THEN 0 ELSE 1 END,
+            s.updated_at DESC
+        LIMIT 200
+        """,
+        tuple(params),
+    )
+    rows = [public_monthly_subscriber_session(row) for row in cur.fetchall()]
+    cur.execute(
+        """
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE s.monthly_subscriber_status = 'ACTIVE') AS active,
+            COUNT(*) FILTER (WHERE s.monthly_subscriber_status = 'FAILED') AS failed,
+            COUNT(*) FILTER (WHERE s.monthly_subscriber_status = 'ACTIVE' AND s.omada_authorization_status = 'AUTHORIZED') AS connected,
+            COUNT(*) FILTER (WHERE s.monthly_subscriber_authorized_until IS NOT NULL AND s.monthly_subscriber_authorized_until <= now()) AS stale
+        FROM portal_sessions s
+        WHERE s.monthly_subscriber_contact_id IS NOT NULL
+        """
+    )
+    metrics = dict(cur.fetchone() or {})
+    return rows, {
+        "total": int(metrics.get("total") or 0),
+        "active": int(metrics.get("active") or 0),
+        "failed": int(metrics.get("failed") or 0),
+        "connected": int(metrics.get("connected") or 0),
+        "stale": int(metrics.get("stale") or 0),
+    }
+
+
+def fetch_monthly_subscriber_session_for_admin(cur, session_id: str) -> dict:
+    cur.execute(
+        """
+        SELECT s.*, u.username,
+               c.id AS contact_id,
+               c.contact_number,
+               c.normalized_contact,
+               c.label AS contact_label,
+               c.status AS contact_status,
+               ms.customer_name,
+               ms.account_number,
+               ms.service_account_number,
+               ms.plan_name,
+               ms.status AS subscriber_status
+        FROM portal_sessions s
+        JOIN monthly_subscriber_contacts c ON c.id = s.monthly_subscriber_contact_id
+        JOIN monthly_subscribers ms ON ms.id = c.subscriber_id
+        LEFT JOIN users u ON u.id = s.user_id
+        WHERE s.id::text = %s OR s.public_session_id = %s
+        FOR UPDATE OF s, c
+        """,
+        (str(session_id), str(session_id)),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Monthly subscriber session was not found.")
+    return row
+
+
+def reauthorize_monthly_subscriber_session(cur, session: dict) -> dict:
+    if session.get("subscriber_status") != "ACTIVE" or session.get("contact_status") != "ACTIVE":
+        raise HTTPException(status_code=400, detail="Monthly subscriber/contact is not active. Sync from 3J Main first.")
+    if not session.get("user_id"):
+        raise HTTPException(status_code=400, detail="Monthly subscriber session has no linked portal user.")
+    settings = ensure_monthly_subscriber_settings(cur)
+    duration_seconds = max(300, min(2_592_000, int(settings.get("rolling_authorization_seconds") or 2592000)))
+    access_until = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    if session.get("source") == "OMADA":
         cur.execute(
             """
-            UPDATE portal_sessions
-            SET monthly_subscriber_contact_id = NULL,
-                monthly_subscriber_authorized_until = NULL,
-                monthly_subscriber_status = 'REVOKED',
-                access_expires_at = LEAST(COALESCE(access_expires_at, now()), now()),
-                last_error = %s,
-                updated_at = now()
-            WHERE id = %s
-            RETURNING *
+            SELECT *
+            FROM omada_portal_authorizations
+            WHERE portal_session_id = %s
+            ORDER BY created_at DESC
+            LIMIT 1
             """,
-            (reason, session["id"]),
+            (session["id"],),
         )
-        updated_session = cur.fetchone() or session
-        try:
-            if not updated_session.get("user_id") and updated_session.get("source") == "OMADA":
-                revoke_result = revoke_omada_authorized_clients(cur, updated_session, admin)
-                cur.execute(
-                    """
-                    UPDATE portal_sessions
-                    SET status = 'EXPIRED',
-                        access_expires_at = now(),
-                        omada_authorization_status = 'EXPIRED',
-                        last_error = %s,
-                        updated_at = now()
-                    WHERE id = %s
-                    RETURNING *
-                    """,
-                    (reason, updated_session["id"]),
-                )
-                gateway_result = {"status": "REVOKED", "revoke_result": sanitize_summary(revoke_result)}
-            else:
-                gateway_result = sync_gateway_access_to_active_bag(cur, updated_session, reason, admin=admin)
-        except Exception as exc:
-            gateway_result = {"status": "FAILED", "error": str(exc)}
-        results.append(
-            {
-                "session_id": str(session.get("id") or ""),
-                "contact_id": str(session.get("monthly_subscriber_contact_id") or ""),
-                "gateway_result": sanitize_summary(gateway_result),
-            }
+        latest_auth = cur.fetchone() or {}
+        request_summary = latest_auth.get("omada_request_summary") if isinstance(latest_auth.get("omada_request_summary"), dict) else {}
+        payload = PortalRedeemRequest(
+            portal_session_id=session.get("public_session_id"),
+            voucher_code="MONTHLY",
+            client_mac=latest_auth.get("client_mac") or session.get("omada_client_mac") or session.get("client_mac"),
+            ap_mac=latest_auth.get("ap_mac") or session.get("omada_ap_mac") or session.get("ap_mac"),
+            gateway_mac=latest_auth.get("gateway_mac") or session.get("omada_gateway_mac") or session.get("gateway_mac"),
+            ssid=latest_auth.get("ssid") or session.get("ssid"),
+            site_id=latest_auth.get("site_id") or session.get("omada_site_id"),
+            site=latest_auth.get("site_name") or session.get("omada_site_name") or session.get("site"),
+            radio_id=request_summary.get("radio_id"),
+            raw_query_params=session.get("raw_query_params") or {},
         )
-    return {"revoked_session_count": len(sessions), "results": results}
+        result = attempt_omada_authorization(
+            cur,
+            session,
+            None,
+            {"id": session["user_id"], "username": session.get("username") or "monthly"},
+            duration_seconds,
+            access_until,
+            payload,
+        )
+    elif session.get("source") == "MIKROTIK":
+        result = {"status": "FAILED", "error": "MikroTik HotSpot authorization is removed. Use Omada captive portal for monthly subscriber login."}
+    else:
+        result = {"status": "NOT_REQUIRED"}
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET monthly_subscriber_authorized_until = %s,
+            monthly_subscriber_status = CASE WHEN %s = 'FAILED' THEN 'FAILED' ELSE 'ACTIVE' END,
+            status = CASE WHEN %s = 'FAILED' THEN status ELSE 'ACCESS_GRANTED' END,
+            access_expires_at = CASE WHEN %s = 'FAILED' THEN access_expires_at ELSE %s END,
+            last_error = CASE WHEN %s = 'FAILED' THEN COALESCE(%s, 'Monthly subscriber re-authorization failed.') ELSE NULL END,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (
+            access_until,
+            result.get("status"),
+            result.get("status"),
+            result.get("status"),
+            access_until,
+            result.get("status"),
+            result.get("error"),
+            session["id"],
+        ),
+    )
+    updated = cur.fetchone()
+    return {
+        "status": "SUCCESS" if result.get("status") not in {"FAILED"} else "FAILED",
+        "message": "Monthly subscriber session re-authorized." if result.get("status") not in {"FAILED"} else "Monthly subscriber re-authorization failed.",
+        "authorization": sanitize_summary(result),
+        "session": updated,
+    }
 
 
 def portal_device_link_qr_payload(code: str) -> str:
@@ -26656,6 +26915,7 @@ def admin_monthly_subscribers(search: str = "", status: str = "", admin=Depends(
                 }
                 for row in cur.fetchall()
             ]
+            monthly_sessions, session_metrics = monthly_subscriber_session_rows(cur, clean_search, "")
     return {
         "settings": public_monthly_subscriber_settings(settings),
         "metrics": {
@@ -26667,7 +26927,9 @@ def admin_monthly_subscribers(search: str = "", status: str = "", admin=Depends(
             "active_contacts": int(contact_metrics.get("active") or 0),
             "bound_contacts": int(contact_metrics.get("bound") or 0),
         },
+        "session_metrics": session_metrics,
         "subscribers": subscribers,
+        "sessions": monthly_sessions,
         "logs": logs,
     }
 
@@ -26755,6 +27017,44 @@ def revoke_monthly_subscriber_contact_device(contact_id: str, admin=Depends(curr
         "message": "Monthly subscriber device binding reset.",
         "contact": public_monthly_contact(contact),
         "access_revoke_result": sanitize_summary(revoke_result),
+    }
+
+
+@app.get("/api/monthly-subscribers/sessions")
+def admin_monthly_subscriber_sessions(search: str = "", status: str = "", admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            rows, metrics = monthly_subscriber_session_rows(cur, search, status)
+    return {"sessions": rows, "metrics": metrics}
+
+
+@app.post("/api/monthly-subscribers/sessions/{session_id}/revoke")
+def revoke_monthly_subscriber_session(session_id: str, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = fetch_monthly_subscriber_session_for_admin(cur, session_id)
+            revoke_result = revoke_monthly_subscriber_session_row(
+                cur,
+                session,
+                "Monthly subscriber access revoked by admin.",
+                admin,
+            )
+            audit(admin["id"], "revoke_monthly_subscriber_session", "portal_session", str(session["id"]), sanitize_summary(revoke_result))
+    return {"status": "SUCCESS", "message": "Monthly subscriber session revoked.", "result": sanitize_summary(revoke_result)}
+
+
+@app.post("/api/monthly-subscribers/sessions/{session_id}/reauthorize")
+def reauthorize_monthly_subscriber_session_endpoint(session_id: str, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = fetch_monthly_subscriber_session_for_admin(cur, session_id)
+            result = reauthorize_monthly_subscriber_session(cur, session)
+            audit(admin["id"], "reauthorize_monthly_subscriber_session", "portal_session", str(session["id"]), sanitize_summary(result))
+    http_status = result.get("status") or "SUCCESS"
+    return {
+        "status": http_status,
+        "message": result.get("message") or ("Monthly subscriber session re-authorized." if http_status == "SUCCESS" else "Monthly subscriber re-authorization failed."),
+        "result": sanitize_summary(result),
     }
 
 

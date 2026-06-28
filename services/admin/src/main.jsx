@@ -11214,8 +11214,29 @@ function MonthlySubscribersPage() {
     }
   }
 
+  async function monthlySessionAction(sessionId, action) {
+    if (!sessionId || !action) return;
+    const busyKey = `${action}-${sessionId}`;
+    setBusy(busyKey);
+    setMessage('');
+    try {
+      const result = await request(`/monthly-subscribers/sessions/${encodeURIComponent(sessionId)}/${action}`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setMessage(result.message || 'Monthly subscriber session updated.');
+      await load();
+    } catch (err) {
+      setMessage(err.message || 'Request failed');
+    } finally {
+      setBusy('');
+    }
+  }
+
   const metrics = data.metrics || {};
+  const sessionMetrics = data.session_metrics || {};
   const subscribers = data.subscribers || [];
+  const monthlySessions = data.sessions || [];
   const logs = data.logs || [];
   const latestSyncLog = logs.find((log) => log.action === 'UPSERT') || logs[0] || null;
   const latestImpact = monthlySyncLogImpact(latestSyncLog || {});
@@ -11227,6 +11248,8 @@ function MonthlySubscribersPage() {
       <KpiCard icon={IconCircleCheck} label="Active" value={metrics.active || 0} tone="green" />
       <KpiCard icon={IconPhone} label="Contacts" value={metrics.contacts || 0} tone="cyan" />
       <KpiCard icon={IconShieldLock} label="Bound Devices" value={metrics.bound_contacts || 0} tone="purple" />
+      <KpiCard icon={IconWifi} label="Monthly Sessions" value={sessionMetrics.total || 0} tone="blue" />
+      <KpiCard icon={IconActivity} label="Connected Monthly" value={sessionMetrics.connected || 0} tone="green" />
       <KpiCard icon={IconHistory} label="Last Sync Mode" value={latestImpact.syncMode || '-'} tone={latestImpact.syncMode === 'FULL' ? 'blue' : 'secondary'} />
       <KpiCard icon={IconBan} label="Revoked Last Sync" value={latestImpact.revokedSessionCount || 0} tone={latestImpact.revokedSessionCount ? 'red' : 'secondary'} />
 
@@ -11326,6 +11349,82 @@ function MonthlySubscribersPage() {
                     </td>
                     <td><span className={`badge bg-${subscriber.status === 'ACTIVE' ? 'green' : subscriber.status === 'SUSPENDED' ? 'yellow' : 'secondary'}-lt text-${subscriber.status === 'ACTIVE' ? 'green' : subscriber.status === 'SUSPENDED' ? 'yellow' : 'secondary'}`}>{subscriber.status}</span></td>
                     <td className="text-muted">{formatPortalDateTime(subscriber.last_synced_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        <Card title="Active Monthly Sessions" subtitle="Live monthly subscriber devices currently bound through captive portal login." className="mt-3">
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead>
+                <tr>
+                  <th>Customer</th>
+                  <th>Device</th>
+                  <th>Network</th>
+                  <th>Access</th>
+                  <th>Status</th>
+                  <th className="w-1">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && <tr><td colSpan="6" className="text-muted">Loading monthly sessions...</td></tr>}
+                {!loading && monthlySessions.length === 0 && <tr><td colSpan="6"><div className="empty">No active monthly subscriber sessions yet.</div></td></tr>}
+                {!loading && monthlySessions.map((session) => (
+                  <tr key={session.id || session.public_session_id}>
+                    <td>
+                      <div className="fw-semibold">{session.customer_name}</div>
+                      <div className="text-muted small">{session.account_number || session.service_account_number || '-'}</div>
+                      <div className="text-muted small">{session.contact_number || '-'}</div>
+                    </td>
+                    <td>
+                      <div>{session.client_mac || 'MAC not detected'}</div>
+                      <div className="text-muted small">{session.client_ip || 'IP not detected'}</div>
+                      <div className="text-muted small">{session.public_session_id}</div>
+                    </td>
+                    <td>
+                      <div>{session.ssid || '-'}</div>
+                      <div className="text-muted small">{session.site || session.site_id || '-'}</div>
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{session.remaining_seconds > 0 ? formatSeconds(session.remaining_seconds) : 'No active window'}</div>
+                      <div className="text-muted small">{session.authorized_until ? `Until ${formatPortalDateTime(session.authorized_until)}` : 'No authorization window'}</div>
+                    </td>
+                    <td>
+                      <div className="d-flex flex-wrap gap-1">
+                        <span className={`badge ${session.connected ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{session.connected ? 'Connected' : 'Not connected'}</span>
+                        <span className={`badge ${session.monthly_status === 'ACTIVE' ? 'bg-green-lt text-green' : session.monthly_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-secondary-lt text-secondary'}`}>{session.monthly_status || '-'}</span>
+                        <span className={`badge ${session.gateway_status === 'AUTHORIZED' ? 'bg-blue-lt text-blue' : session.gateway_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-secondary-lt text-secondary'}`}>{session.gateway_status || '-'}</span>
+                      </div>
+                      {(session.authorization_error || session.latest_authorization_error) && <div className="text-danger small mt-1" title={session.authorization_error || session.latest_authorization_error}>Authorization issue</div>}
+                    </td>
+                    <td>
+                      <ActionBadgeGroup>
+                        <ActionBadgeButton
+                          icon={IconRefresh}
+                          label="Re-authorize monthly access"
+                          tone="green"
+                          disabled={!!busy || !session.can_reauthorize}
+                          onClick={() => monthlySessionAction(session.id, 'reauthorize')}
+                        />
+                        <ActionBadgeButton
+                          icon={IconBan}
+                          label="Revoke monthly access"
+                          tone="red"
+                          disabled={!!busy || !session.can_revoke}
+                          onClick={() => monthlySessionAction(session.id, 'revoke')}
+                        />
+                        <ActionBadgeButton
+                          icon={IconX}
+                          label="Reset device binding"
+                          tone="orange"
+                          disabled={!!busy || !session.can_reset_binding}
+                          onClick={() => revokeContact(session.contact_id)}
+                        />
+                      </ActionBadgeGroup>
+                    </td>
                   </tr>
                 ))}
               </tbody>
