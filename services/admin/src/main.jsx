@@ -11102,6 +11102,32 @@ function sitesDeploymentInitialTab() {
   return new URLSearchParams(window.location.search).get('tab') === 'configurations' ? 'Configurations' : 'Sites';
 }
 
+function monthlySyncLogImpact(log = {}) {
+  const details = log.details || {};
+  const result = details.result || {};
+  return {
+    syncMode: String(details.sync_mode || result.sync_mode || '').toUpperCase(),
+    disabledSubscriberCount: Number(details.disabled_subscriber_count || result.disabled_subscriber_count || 0),
+    disabledContactCount: Number(details.disabled_contact_count || result.disabled_contact_count || 0),
+    revokedSessionCount: Number(details.revoked_session_count || result.revoked_session_count || 0),
+  };
+}
+
+function MonthlySyncImpactBadges({ log }) {
+  const impact = monthlySyncLogImpact(log);
+  const chips = [];
+  if (impact.syncMode) chips.push({ label: impact.syncMode, tone: impact.syncMode === 'FULL' ? 'blue' : 'secondary' });
+  if (impact.disabledSubscriberCount) chips.push({ label: `${impact.disabledSubscriberCount} subscriber(s) disabled`, tone: 'orange' });
+  if (impact.disabledContactCount) chips.push({ label: `${impact.disabledContactCount} contact(s) disabled`, tone: 'orange' });
+  if (impact.revokedSessionCount) chips.push({ label: `${impact.revokedSessionCount} session(s) revoked`, tone: 'red' });
+  if (!chips.length) return <span className="text-muted small">No cleanup changes</span>;
+  return (
+    <div className="d-flex flex-wrap gap-1">
+      {chips.map((chip) => <span className={`badge bg-${chip.tone}-lt text-${chip.tone}`} key={`${chip.tone}-${chip.label}`}>{chip.label}</span>)}
+    </div>
+  );
+}
+
 function MonthlySubscribersPage() {
   const [data, setData] = useState({ settings: {}, metrics: {}, subscribers: [], logs: [] });
   const [settings, setSettings] = useState({ integration_enabled: true, api_key: '', api_secret: '', rolling_authorization_seconds: 2592000, login_otp_ttl_seconds: 300, login_otp_cooldown_seconds: 60, source_system_label: '3J Main' });
@@ -11190,6 +11216,9 @@ function MonthlySubscribersPage() {
 
   const metrics = data.metrics || {};
   const subscribers = data.subscribers || [];
+  const logs = data.logs || [];
+  const latestSyncLog = logs.find((log) => log.action === 'UPSERT') || logs[0] || null;
+  const latestImpact = monthlySyncLogImpact(latestSyncLog || {});
 
   return (
     <div className="row row-cards">
@@ -11198,6 +11227,8 @@ function MonthlySubscribersPage() {
       <KpiCard icon={IconCircleCheck} label="Active" value={metrics.active || 0} tone="green" />
       <KpiCard icon={IconPhone} label="Contacts" value={metrics.contacts || 0} tone="cyan" />
       <KpiCard icon={IconShieldLock} label="Bound Devices" value={metrics.bound_contacts || 0} tone="purple" />
+      <KpiCard icon={IconHistory} label="Last Sync Mode" value={latestImpact.syncMode || '-'} tone={latestImpact.syncMode === 'FULL' ? 'blue' : 'secondary'} />
+      <KpiCard icon={IconBan} label="Revoked Last Sync" value={latestImpact.revokedSessionCount || 0} tone={latestImpact.revokedSessionCount ? 'red' : 'secondary'} />
 
       <div className="col-lg-4">
         <Card title="Integration Settings" subtitle="Use the same API key and secret in 3J Main Account Admin > Hotspot Access.">
@@ -11309,20 +11340,27 @@ function MonthlySubscribersPage() {
                 <tr>
                   <th>Time</th>
                   <th>Source</th>
+                  <th>Mode</th>
                   <th>Status</th>
+                  <th>Impact</th>
                   <th>Summary</th>
                 </tr>
               </thead>
               <tbody>
-                {(data.logs || []).map((log) => (
+                {logs.map((log) => {
+                  const impact = monthlySyncLogImpact(log);
+                  return (
                   <tr key={log.id}>
                     <td className="text-muted">{formatPortalDateTime(log.created_at)}</td>
                     <td>{log.source_system || '-'}</td>
+                    <td>{impact.syncMode ? <span className={`badge bg-${impact.syncMode === 'FULL' ? 'blue' : 'secondary'}-lt text-${impact.syncMode === 'FULL' ? 'blue' : 'secondary'}`}>{impact.syncMode}</span> : <span className="text-muted">-</span>}</td>
                     <td><span className={`badge bg-${log.status === 'SUCCESS' ? 'green' : 'red'}-lt text-${log.status === 'SUCCESS' ? 'green' : 'red'}`}>{log.status}</span></td>
+                    <td><MonthlySyncImpactBadges log={log} /></td>
                     <td>{log.message || `${log.subscriber_count || 0} subscribers, ${log.contact_count || 0} contacts`}</td>
                   </tr>
-                ))}
-                {!(data.logs || []).length && <tr><td colSpan="4" className="text-muted">No sync logs yet.</td></tr>}
+                  );
+                })}
+                {!logs.length && <tr><td colSpan="6" className="text-muted">No sync logs yet.</td></tr>}
               </tbody>
             </table>
           </div>
