@@ -1422,3 +1422,17 @@ Safety:
   - `GET /iptv-customers?status=all|active|inactive` returns only contactable customers with IPTV provisioning history. Active rows have current IPTV time and an XUI username; inactive rows have IPTV history but no current active IPTV access.
 - XUI lines are not treated as customers. They are exposed only as access-status fields linked to profiled customers from Customer Devices -> Profiled Customers and IPTV -> Provisioning.
 - 2026-06-18 update: `/api/integrations/3jtv/iptv-customers` now includes an `iptv_accounts` array for each profiled customer so 3J TV can show one inactive customer row and a View modal listing all historical XUI usernames/accounts.
+
+## 2026-06-28 — Monthly Subscriber Captive Portal Login
+
+- Monthly subscriber hotspot access is sourced from 3J Main Account Admin. Pisowifi is the captive portal target and must not be treated as the source of monthly subscription truth.
+- New admin navigation: `Monthly Subscribers`. It shows inbound integration settings, subscriber/contact KPIs, synced subscriber rows, device bindings, and recent sync logs.
+- Inbound signed endpoint:
+  - `GET /api/integrations/monthly-subscribers/health`
+  - `POST /api/integrations/monthly-subscribers/upsert`
+- Signed requests use `X-3J-Integration-Key`, `X-3J-Timestamp`, `X-3J-Signature`, and `X-3J-Idempotency-Key`. The signature is HMAC-SHA256 over `<timestamp>.<raw request body>` using the Monthly Subscribers API secret.
+- New tables are `monthly_subscriber_settings`, `monthly_subscribers`, `monthly_subscriber_contacts`, `monthly_subscriber_login_challenges`, and `monthly_subscriber_sync_logs`. `portal_sessions` now stores the monthly contact binding and rolling authorization state.
+- Captive portal Login is enabled for monthly subscribers. The user enters a registered contact number, receives an A2P OTP, and on success the contact number is bound to the current portal device.
+- One monthly contact number equals one allowed device. If the same contact is already bound to another device, the portal rejects login until an admin resets the binding from `Monthly Subscribers`.
+- Monthly subscriber access displays as unlimited to the customer, but Omada still receives a rolling authorization duration configured in Monthly Subscribers settings.
+- Monthly subscriber login must still use Omada captive portal authorization. The frontend cannot grant access by itself.

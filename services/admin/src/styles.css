@@ -4717,6 +4717,107 @@ body.modal-open {
   font-weight: 800;
 }
 
+.portal-checkout-limit-warning {
+  align-items: center;
+  display: grid;
+  gap: 0.85rem;
+  justify-items: center;
+  text-align: center;
+}
+
+.portal-checkout-limit-icon {
+  align-items: center;
+  animation: portal-checkout-limit-attention 1.35s ease-in-out infinite;
+  background: rgba(245, 158, 11, 0.13);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: 999px;
+  box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.34);
+  color: #d97706;
+  display: inline-flex;
+  height: 5.5rem;
+  justify-content: center;
+  width: 5.5rem;
+}
+
+.portal-checkout-limit-warning.is-last-try .portal-checkout-limit-icon {
+  animation: portal-checkout-limit-danger-attention 1.05s ease-in-out infinite;
+  background: rgba(220, 38, 38, 0.12);
+  border-color: rgba(220, 38, 38, 0.28);
+  box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.32);
+  color: #dc2626;
+}
+
+.portal-checkout-limit-copy {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.portal-checkout-limit-kicker {
+  color: #64748b;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.portal-checkout-limit-count {
+  color: #111827;
+  font-size: 1.35rem;
+  font-weight: 900;
+  line-height: 1.1;
+}
+
+.portal-checkout-limit-copy p {
+  color: #475467;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.portal-checkout-limit-store-note {
+  align-items: flex-start;
+  background: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.08);
+  border: 1px solid rgba(var(--portal-brand-rgb, 6, 111, 209), 0.16);
+  border-radius: 0.9rem;
+  color: #334155;
+  display: flex;
+  font-size: 0.82rem;
+  font-weight: 750;
+  gap: 0.55rem;
+  line-height: 1.35;
+  padding: 0.75rem 0.85rem;
+  text-align: left;
+  width: 100%;
+}
+
+@keyframes portal-checkout-limit-attention {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.34);
+    transform: scale(1);
+  }
+  55% {
+    box-shadow: 0 0 0 0.85rem rgba(245, 158, 11, 0);
+    transform: scale(1.045);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+    transform: scale(1);
+  }
+}
+
+@keyframes portal-checkout-limit-danger-attention {
+  0% {
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.34);
+    transform: scale(1);
+  }
+  55% {
+    box-shadow: 0 0 0 0.85rem rgba(220, 38, 38, 0);
+    transform: scale(1.045);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
+    transform: scale(1);
+  }
+}
+
 .portal-payment-pending-message {
   display: grid;
   gap: 0.55rem;
@@ -4797,7 +4898,16 @@ body.modal-open {
   flex: 0 0 auto;
   font-weight: 850;
   justify-content: center;
+  opacity: 1 !important;
+  transform: none !important;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease !important;
   width: auto;
+}
+
+.portal-payment-window-actions .btn:active,
+.portal-payment-window-actions .btn:focus,
+.portal-payment-window-actions .btn:focus-visible {
+  transform: none !important;
 }
 
 @keyframes portal-payment-line-sweep {
@@ -4841,6 +4951,33 @@ body.modal-open {
   background: rgba(245, 158, 11, 0.12);
   border-color: rgba(245, 158, 11, 0.22);
   color: #fde68a;
+}
+
+.portal-profile-modal-content.is-dark .portal-checkout-limit-icon {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.32);
+  color: #fbbf24;
+}
+
+.portal-profile-modal-content.is-dark .portal-checkout-limit-warning.is-last-try .portal-checkout-limit-icon {
+  background: rgba(248, 113, 113, 0.15);
+  border-color: rgba(248, 113, 113, 0.34);
+  color: #f87171;
+}
+
+.portal-profile-modal-content.is-dark .portal-checkout-limit-kicker,
+.portal-profile-modal-content.is-dark .portal-checkout-limit-copy p {
+  color: #cbd5e1;
+}
+
+.portal-profile-modal-content.is-dark .portal-checkout-limit-count {
+  color: #f8fafc;
+}
+
+.portal-profile-modal-content.is-dark .portal-checkout-limit-store-note {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #dbe4f0;
 }
 
 .portal-profile-modal-content.is-dark .portal-payment-window-box,
@@ -8316,11 +8453,21 @@ button.product-category-assignment-action:focus-visible,
   border: 1px dashed rgba(98, 105, 118, 0.24);
   border-radius: 0.9rem;
   color: #344054;
+  cursor: pointer;
   display: flex;
+  font: inherit;
   gap: 0.8rem;
   opacity: 0.86;
   padding: 0.9rem;
   text-align: left;
+  width: 100%;
+}
+
+.portal-login-placeholder-card:hover,
+.portal-login-placeholder-card:focus-visible {
+  border-color: rgba(var(--portal-brand-rgb, 6, 111, 209), 0.42);
+  box-shadow: 0 0.55rem 1.35rem rgba(15, 23, 42, 0.08);
+  outline: 0;
 }
 
 .portal-login-placeholder-card strong {
@@ -13595,9 +13742,222 @@ button.portal-bag-control-card {
   max-width: 6rem;
 }
 
+.portal-pwa-install-panel {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 16px;
+  cursor: pointer;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  margin-bottom: 0.85rem;
+  padding: 0.85rem;
+  position: relative;
+  transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+}
+
+.portal-pwa-install-panel:focus-visible {
+  outline: 2px solid rgba(var(--portal-accent-rgb, 255, 56, 56), 0.45);
+  outline-offset: 2px;
+}
+
+.portal-pwa-install-panel:hover {
+  background: rgba(248, 250, 252, 0.96);
+  border-color: rgba(15, 23, 42, 0.16);
+}
+
+.portal-pwa-install-panel.is-settings {
+  margin-bottom: 0;
+}
+
+.portal-pwa-install-close {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  color: #64748b;
+  display: inline-flex;
+  height: 1.6rem;
+  justify-content: center;
+  position: absolute;
+  right: 0.45rem;
+  top: 0.45rem;
+  width: 1.6rem;
+  z-index: 2;
+}
+
+.portal-pwa-install-art {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  display: inline-flex;
+  height: 54px;
+  justify-content: center;
+  overflow: hidden;
+  width: 54px;
+}
+
+.portal-pwa-install-art img {
+  display: block;
+  height: 100%;
+  object-fit: cover;
+  width: 100%;
+}
+
+.portal-pwa-install-copy {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  padding-right: 1.2rem;
+}
+
+.portal-pwa-install-copy strong {
+  color: #1f2937;
+  font-size: 0.92rem;
+}
+
+.portal-pwa-install-copy span,
+.portal-pwa-install-copy small {
+  color: #667085;
+  font-size: 0.76rem;
+  line-height: 1.25;
+}
+
+.portal-pwa-install-copy small {
+  align-items: center;
+  color: rgb(var(--portal-accent-rgb, 255, 56, 56));
+  display: inline-flex;
+  gap: 0.25rem;
+  font-weight: 600;
+}
+
+.portal-tabler-page.is-dark .portal-pwa-install-panel,
+.portal-profile-modal-content.is-dark .portal-pwa-install-panel {
+  background: rgba(30, 41, 59, 0.72);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.portal-tabler-page.is-dark .portal-pwa-install-panel:hover,
+.portal-profile-modal-content.is-dark .portal-pwa-install-panel:hover {
+  background: rgba(30, 41, 59, 0.88);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.portal-tabler-page.is-dark .portal-pwa-install-copy strong,
+.portal-profile-modal-content.is-dark .portal-pwa-install-copy strong {
+  color: #f8fafc;
+}
+
+.portal-tabler-page.is-dark .portal-pwa-install-copy span,
+.portal-profile-modal-content.is-dark .portal-pwa-install-copy span {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.portal-tabler-page.is-dark .portal-pwa-install-close {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.78);
+}
+
+.portal-ios-pwa-guide {
+  display: grid;
+  gap: 1rem;
+}
+
+.portal-ios-pwa-guide-head {
+  align-items: center;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.portal-ios-pwa-guide-head strong {
+  color: #1f2937;
+  display: block;
+  font-size: 0.95rem;
+}
+
+.portal-ios-pwa-guide-head small {
+  color: #667085;
+  display: block;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.portal-ios-pwa-guide-icon {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  display: inline-flex;
+  height: 54px;
+  justify-content: center;
+  width: 54px;
+}
+
+.portal-ios-pwa-steps {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.portal-ios-pwa-step {
+  align-items: center;
+  background: rgba(248, 250, 252, 0.92);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 14px;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 0.65rem 0.75rem;
+}
+
+.portal-ios-pwa-step span {
+  align-items: center;
+  background: rgba(var(--portal-accent-rgb, 255, 56, 56), 0.1);
+  border-radius: 999px;
+  color: rgb(var(--portal-accent-rgb, 255, 56, 56));
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 700;
+  height: 1.65rem;
+  justify-content: center;
+  width: 1.65rem;
+}
+
+.portal-ios-pwa-step p {
+  color: #344054;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.portal-profile-modal-content.is-dark .portal-ios-pwa-guide-head strong {
+  color: #f8fafc;
+}
+
+.portal-profile-modal-content.is-dark .portal-ios-pwa-guide-head small {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+.portal-profile-modal-content.is-dark .portal-ios-pwa-guide-icon,
+.portal-profile-modal-content.is-dark .portal-ios-pwa-step {
+  background: rgba(30, 41, 59, 0.72);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.portal-profile-modal-content.is-dark .portal-ios-pwa-step p {
+  color: rgba(255, 255, 255, 0.78);
+}
+
 @media (max-width: 575.98px) {
   .portal-store-card {
     grid-template-columns: 80px minmax(0, 1fr);
+  }
+
+  .portal-pwa-install-panel.has-close {
+    padding-right: 2.25rem;
   }
 
   .portal-message-timeout-field {

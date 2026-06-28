@@ -82,6 +82,8 @@ import './styles.css';
 const API = '/api';
 const PORTAL_PENDING_PAYMENT_STORAGE_KEY = 'centralwifi_pending_paymongo_checkout';
 const PORTAL_PENDING_PAYMENT_MAX_AGE_MS = 60 * 60 * 1000;
+const PORTAL_PWA_INSTALL_PANEL_HIDDEN_KEY = 'centralwifi_pwa_install_panel_hidden';
+const PORTAL_PWA_INSTALLED_KEY = 'centralwifi_pwa_installed';
 
 const PORTAL_TAP_TARGET_SELECTOR = [
   'button:not(:disabled)',
@@ -125,6 +127,12 @@ function isIosWebKitTouchBrowser() {
 function isAndroidDevice() {
   if (typeof navigator === 'undefined') return false;
   return /Android/i.test(navigator.userAgent || '');
+}
+
+function isPortalStandaloneDisplay() {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia?.('(display-mode: standalone)')?.matches
+    || window.navigator?.standalone === true;
 }
 
 function BrowserBrandIcon({ browser = 'Google Chrome', size = 20, className = '' }) {
@@ -939,6 +947,7 @@ const routePages = {
   'customers-accounts': 'Customer Devices',
   'connected-devices': 'Customer Devices',
   'customer-devices': 'Customer Devices',
+  'monthly-subscribers': 'Monthly Subscribers',
   'integrations/3jtv-api': 'System Settings',
   '3jtv-api': 'System Settings',
   'sites-deployments': 'Sites',
@@ -987,6 +996,7 @@ function routeForPage(page) {
   if (page === 'AP & Client Map') return '/admin/ap-client-map';
   if (page === 'MikroTik Scan Result') return '/admin/network/mikrotik/scan-result';
   if (page === 'Customer Devices') return '/admin/customer-devices';
+  if (page === 'Monthly Subscribers') return '/admin/monthly-subscribers';
   if (page === 'Sites' || page === 'Sites Deployments') return '/admin/aps-deployment/sites';
   if (page === 'List of APs') return '/admin/aps-deployment/list-of-aps';
   if (page === 'Long Lat') return '/admin/aps-deployment/long-lat';
@@ -2339,6 +2349,30 @@ function probeLocalPortalPresence(portalSettings, portalSessionId, timeoutMs = 2
   });
 }
 
+function upsertPortalDocumentIcon(rel, href) {
+  if (!href || typeof document === 'undefined') return;
+  let link = document.head.querySelector(`link[data-portal-runtime-icon="${rel}"]`);
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = rel;
+    link.setAttribute('data-portal-runtime-icon', rel);
+    document.head.appendChild(link);
+  }
+  link.href = href;
+}
+
+function upsertPortalManifestLink(href) {
+  if (!href || typeof document === 'undefined') return;
+  const manifestUrl = new URL(href, window.location.origin).toString();
+  let link = document.head.querySelector('link[rel="manifest"]');
+  if (!link) {
+    link = document.createElement('link');
+    link.rel = 'manifest';
+    document.head.appendChild(link);
+  }
+  link.href = manifestUrl;
+}
+
 function PortalApp() {
   const iosSingleTapHandlers = usePortalSingleTapFix();
   function isGoogleChromeBrowser() {
@@ -2401,6 +2435,7 @@ function PortalApp() {
   const purchaseSuccessKeyRef = useRef('');
   const [outsidePurchaseConfirm, setOutsidePurchaseConfirm] = useState(null);
   const [checkoutBrowserReminder, setCheckoutBrowserReminder] = useState(null);
+  const [checkoutLimitWarning, setCheckoutLimitWarning] = useState(null);
   const [paymentHandoff, setPaymentHandoff] = useState(null);
   const [checkoutErrorModal, setCheckoutErrorModal] = useState(null);
   const [checkoutCopyMessage, setCheckoutCopyMessage] = useState('');
@@ -2456,6 +2491,12 @@ function PortalApp() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileViewOpen, setProfileViewOpen] = useState(false);
   const [profileViewTab, setProfileViewTab] = useState('PROFILE');
+  const [monthlyLoginOpen, setMonthlyLoginOpen] = useState(false);
+  const [monthlyLoginForm, setMonthlyLoginForm] = useState({ contact_number: '', verification_code: '' });
+  const [monthlyLoginMessage, setMonthlyLoginMessage] = useState('');
+  const [monthlyLoginSending, setMonthlyLoginSending] = useState(false);
+  const [monthlyLoginVerifying, setMonthlyLoginVerifying] = useState(false);
+  const [monthlyLoginCooldown, setMonthlyLoginCooldown] = useState(0);
   const [profileQrScannerOpen, setProfileQrScannerOpen] = useState(false);
   const [profileQrCameraActive, setProfileQrCameraActive] = useState(false);
   const [profileQrError, setProfileQrError] = useState('');
@@ -2479,6 +2520,12 @@ function PortalApp() {
   const [profileNotificationSaving, setProfileNotificationSaving] = useState(false);
   const [portalSettingsOpen, setPortalSettingsOpen] = useState(false);
   const [portalNotificationTestResult, setPortalNotificationTestResult] = useState(null);
+  const [iosPwaInstallGuideOpen, setIosPwaInstallGuideOpen] = useState(false);
+  const [portalInstallPrompt, setPortalInstallPrompt] = useState(null);
+  const [portalInstallResult, setPortalInstallResult] = useState(null);
+  const [portalStandalone, setPortalStandalone] = useState(() => isPortalStandaloneDisplay());
+  const [portalPwaInstalledKnown, setPortalPwaInstalledKnown] = useState(() => localStorage.getItem(PORTAL_PWA_INSTALLED_KEY) === '1' || isPortalStandaloneDisplay());
+  const [pwaInstallPanelHidden, setPwaInstallPanelHidden] = useState(() => localStorage.getItem(PORTAL_PWA_INSTALL_PANEL_HIDDEN_KEY) === '1');
   const [profileForm, setProfileForm] = useState({ display_name: '', email: '', contact_number: '', verification_code: '', terms_accepted: false, marketing_sms_consent: false, portal_notifications_enabled: true });
   const [profileSendingCode, setProfileSendingCode] = useState(false);
   const [profileCodeCooldown, setProfileCodeCooldown] = useState(0);
@@ -2524,6 +2571,7 @@ function PortalApp() {
   const bagZeroRefreshKeyRef = useRef('');
   const expiredNoticeSentRef = useRef('');
   const portalOpenedNoticeSentRef = useRef('');
+  const pwaStandaloneOpenSentRef = useRef('');
   const paymentNotificationSentRef = useRef('');
   const paymentResultRef = useRef(null);
   const checkoutWindowRef = useRef(null);
@@ -2603,6 +2651,34 @@ function PortalApp() {
   useEffect(() => {
     paymentResultRef.current = paymentResult;
   }, [paymentResult]);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (event) => {
+      event.preventDefault();
+      setPortalInstallPrompt(event);
+      setPortalStandalone(isPortalStandaloneDisplay());
+    };
+    const handleAppInstalled = () => {
+      setPortalInstallPrompt(null);
+      setPortalStandalone(true);
+      markPortalPwaInstalled();
+      setPortalInstallResult({
+        status: 'SUCCESS',
+        message: '3J WiFi portal was added to your Home Screen. Open it there for better phone notifications.',
+      });
+      recordPortalPwaEvent('APP_INSTALLED', { source: 'browser_appinstalled' }).catch(() => null);
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    const standaloneNow = isPortalStandaloneDisplay();
+    setPortalStandalone(standaloneNow);
+    if (standaloneNow) markPortalPwaInstalled();
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
   useEffect(() => {
     const handlePageShow = (event) => {
       if (!event.persisted && !pageWasRestoredByBackForward()) return;
@@ -2697,6 +2773,13 @@ function PortalApp() {
     return Boolean(session?.portal_session_id);
   }
 
+  function applyPortalPwaInstallContext(contextData) {
+    if (!contextData) return;
+    if (contextData.manifest_url) {
+      upsertPortalManifestLink(contextData.manifest_url);
+    }
+  }
+
   function persistSession(data) {
     if (data?.portal_session_id) {
       setSessionId(data.portal_session_id);
@@ -2707,6 +2790,12 @@ function PortalApp() {
       localStorage.setItem('centralwifi_portal_device_token', data.device_token);
     }
     if (data?.profile) setProfile(data.profile);
+    if (data?.pwa_install) applyPortalPwaInstallContext(data.pwa_install);
+  }
+
+  function markPortalPwaInstalled() {
+    localStorage.setItem(PORTAL_PWA_INSTALLED_KEY, '1');
+    setPortalPwaInstalledKnown(true);
   }
 
   function payload(extra = {}) {
@@ -2716,6 +2805,50 @@ function PortalApp() {
       device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || context.device_token,
       ...extra,
     };
+  }
+
+  function portalPwaPlatformLabel() {
+    if (isIosWebKitTouchBrowser()) return 'iOS/iPadOS';
+    if (isAndroidDevice()) return 'Android';
+    return navigator.platform || 'Desktop';
+  }
+
+  function portalPwaBrowserLabel() {
+    if (isIosSafariBrowser()) return 'Safari';
+    if (isGoogleChromeBrowser()) return 'Google Chrome';
+    if (/CriOS/i.test(navigator.userAgent || '')) return 'Chrome iOS';
+    return 'Browser';
+  }
+
+  async function recordPortalPwaEvent(eventType, metadata = {}) {
+    if (!eventType) return null;
+    const normalizedEventType = String(eventType || '').toUpperCase();
+    if (normalizedEventType === 'APP_INSTALLED' || normalizedEventType === 'STANDALONE_OPEN') {
+      markPortalPwaInstalled();
+    }
+    const data = await publicApi('/portal/pwa/event', {
+      method: 'POST',
+      body: JSON.stringify(payload({
+        event_type: eventType,
+        display_mode: isPortalStandaloneDisplay() ? 'standalone' : 'browser',
+        platform: portalPwaPlatformLabel(),
+        browser: portalPwaBrowserLabel(),
+        metadata,
+      })),
+    });
+    persistSession(data);
+    if (data?.bag) setBag(data.bag);
+    if (data?.profile) setProfile(data.profile);
+    if (data?.gift?.status === 'CLAIMED') {
+      setPortalToast({
+        key: `pwa-gift-${Date.now()}`,
+        tone: 'success',
+        title: t('Gift added'),
+        message: t(data.gift.message || 'PWA install gift added to My WiFi Bag.'),
+        timeoutMs: 6000,
+      });
+    }
+    return data;
   }
 
   function portalStatusPath(statusSessionId, options = {}) {
@@ -3212,6 +3345,43 @@ function PortalApp() {
     recordPortalNotificationSent(type, notificationResult);
   }
 
+  async function registerPortalCustomerPushSubscription() {
+    if (!window.isSecureContext) return { success: false, reason: 'Open net.3jhotspot.com over HTTPS first.' };
+    if (!('Notification' in window)) return { success: false, reason: 'This browser does not support phone notifications.' };
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      return { success: false, reason: 'This browser cannot receive notifications after it is closed.' };
+    }
+    let permission = Notification.permission;
+    if (permission === 'default') {
+      const requestedPermission = await portalNotificationTimeout(Notification.requestPermission(), 4500, 'permission_timeout');
+      permission = typeof requestedPermission === 'string' ? requestedPermission : Notification.permission;
+    }
+    if (permission === 'permission_timeout') return { success: false, reason: 'Notification permission request timed out.' };
+    if (permission !== 'granted') return { success: false, reason: `Notification permission is ${permission}.` };
+    const registration = await portalNotificationTimeout(portalNotificationRegistration(), 6000, null);
+    if (!registration?.pushManager) return { success: false, reason: 'Notification service worker is not ready yet.' };
+    const keyData = await publicRequest('/portal/push-public-key');
+    const publicKey = keyData?.public_key;
+    if (!publicKey) return { success: false, reason: 'Push notification public key is not ready.' };
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+    const subscriptionJson = subscription.toJSON();
+    const saved = await publicApi('/portal/push-subscriptions', {
+      method: 'POST',
+      body: JSON.stringify(payload({
+        endpoint: subscriptionJson.endpoint,
+        expirationTime: subscriptionJson.expirationTime,
+        keys: subscriptionJson.keys || {},
+      })),
+    });
+    return { success: true, subscription: saved.subscription };
+  }
+
   async function enablePortalNotifications() {
     setPortalNotificationTestResult({ status: 'RUNNING', message: 'Testing notification delivery...' });
     const currentRemainingSeconds = Math.max(0, Number(status?.remaining_time_seconds ?? result?.remaining_time_seconds ?? timerRemaining ?? 0) || 0);
@@ -3222,6 +3392,33 @@ function PortalApp() {
       brand: title,
       ssid: context.ssid || status?.ssid || ''
     });
+    try {
+      const pushRegistration = await registerPortalCustomerPushSubscription();
+      setPortalNotificationPermission(portalNotificationPermissionStatus());
+      if (pushRegistration.success) {
+        const pushTest = await publicApi('/portal/push-test', { method: 'POST', body: JSON.stringify(payload()) });
+        const sent = Number(pushTest?.sent || 0);
+        if (sent > 0) {
+          setPortalNotificationTestResult({
+            status: 'SUCCESS',
+            message: 'Phone notifications are enabled. A server push test was sent; future alerts can appear even when Chrome is closed.',
+          });
+          recordPortalNotificationSent('PUSH_TEST', { shown: true, mode: 'web_push_server' });
+          return;
+        }
+        setPortalNotificationTestResult({
+          status: 'FALLBACK',
+          message: `Push subscription saved, but the server test did not send yet${pushTest?.status ? ` (${pushTest.status})` : ''}. Try again after reopening the portal in Chrome.`,
+        });
+        return;
+      }
+    } catch (error) {
+      setPortalNotificationPermission(portalNotificationPermissionStatus());
+      setPortalNotificationTestResult({
+        status: 'FALLBACK',
+        message: `Background notification setup failed: ${error.message || 'Request failed'}. Trying local notification now.`,
+      });
+    }
     const result = await showPortalCustomerNotification(title || '3J WiFi', message, {
       url: portalNotificationUrl(),
       icon: portalNotificationIcon(settings, {
@@ -3236,6 +3433,81 @@ function PortalApp() {
       message: result.shown
         ? 'Notification sent. Check your phone notification bar.'
         : `Native notification was not displayed${result.reason ? ` (${result.reason})` : ''}. Portal fallback alerts will still show inside this page.`,
+    });
+  }
+
+  function hideMainPwaInstallPanel() {
+    localStorage.setItem(PORTAL_PWA_INSTALL_PANEL_HIDDEN_KEY, '1');
+    setPwaInstallPanelHidden(true);
+  }
+
+  async function installPortalHomeScreenAppFromMain() {
+    hideMainPwaInstallPanel();
+    await installPortalHomeScreenApp();
+  }
+
+  async function installPortalHomeScreenApp() {
+    if (isIosWebKitTouchBrowser() && !isPortalStandaloneDisplay()) {
+      setIosPwaInstallGuideOpen(true);
+      setPortalInstallResult(null);
+      return;
+    }
+    setPortalInstallResult({ status: 'RUNNING', message: 'Checking Home Screen app support...' });
+    if (isPortalStandaloneDisplay() || portalStandalone) {
+      setPortalStandalone(true);
+      markPortalPwaInstalled();
+      recordPortalPwaEvent('STANDALONE_OPEN', { source: 'install_card_already_standalone' }).catch(() => null);
+      setPortalInstallResult({
+        status: 'SUCCESS',
+        message: '3J WiFi portal is already running as a Home Screen app.',
+      });
+      return;
+    }
+    if (portalInstallPrompt?.prompt) {
+      try {
+        await portalInstallPrompt.prompt();
+        const choice = await portalInstallPrompt.userChoice;
+        setPortalInstallPrompt(null);
+        if (choice?.outcome === 'accepted') {
+          markPortalPwaInstalled();
+          recordPortalPwaEvent('INSTALL_PROMPT_ACCEPTED', { source: 'install_button' }).catch(() => null);
+          recordPortalPwaEvent('APP_INSTALLED', { source: 'install_prompt_accepted' }).catch(() => null);
+          setPortalStandalone(true);
+          setPortalInstallResult({
+            status: 'SUCCESS',
+            message: '3J WiFi portal was added to your Home Screen. Open it there for better phone notifications.',
+          });
+          return;
+        }
+        recordPortalPwaEvent('INSTALL_PROMPT_DISMISSED', { source: 'install_button' }).catch(() => null);
+        setPortalInstallResult({
+          status: 'FALLBACK',
+          message: 'Install was cancelled. In Chrome, open the menu and choose Install app or Add to Home screen when ready.',
+        });
+        return;
+      } catch (error) {
+        setPortalInstallResult({
+          status: 'FALLBACK',
+          message: `Install prompt could not open: ${error.message || 'browser blocked it'}. Use the browser menu to add it to Home Screen.`,
+        });
+        return;
+      }
+    }
+    if (isIosWebKitTouchBrowser()) {
+      setIosPwaInstallGuideOpen(true);
+      setPortalInstallResult(null);
+      return;
+    }
+    if (isAndroidDevice()) {
+      setPortalInstallResult({
+        status: 'FALLBACK',
+        message: 'Open this portal in Chrome, then use Chrome menu > Install app or Add to Home screen if the install prompt is not shown.',
+      });
+      return;
+    }
+    setPortalInstallResult({
+      status: 'FALLBACK',
+      message: 'Use your browser menu to install or add this portal to the Home Screen.',
     });
   }
 
@@ -3267,6 +3539,7 @@ function PortalApp() {
     }
     setStatus(nextStatus);
     if (nextStatus.profile) setProfile(nextStatus.profile);
+    if (nextStatus.pwa_install) applyPortalPwaInstallContext(nextStatus.pwa_install);
     if (nextStatus.bag) setBag(nextStatus.bag);
     if (nextStatus?.blocked_device?.blocked) {
       setPaymentResult(null);
@@ -3510,6 +3783,14 @@ function PortalApp() {
   }, [profileCodeCooldown > 0]);
 
   useEffect(() => {
+    if (!monthlyLoginCooldown) return undefined;
+    const intervalId = window.setInterval(() => {
+      setMonthlyLoginCooldown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [monthlyLoginCooldown > 0]);
+
+  useEffect(() => {
     if (!deviceLinkCooldown) return undefined;
     const intervalId = window.setInterval(() => {
       setDeviceLinkCooldown((current) => Math.max(0, current - 1));
@@ -3620,10 +3901,11 @@ function PortalApp() {
     }
   }
 
-  async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false, paymentMethod = 'paymongo_checkout', confirmedBrowserReminder = false) {
+  async function startProductCheckout(item, purchaseQuantity = 1, confirmedOutside = false, paymentMethod = 'paymongo_checkout', confirmedBrowserReminder = false, confirmedCheckoutLimit = false) {
     setResult(null);
     setPaymentResult(null);
     setCheckoutErrorModal(null);
+    if (!confirmedCheckoutLimit) setCheckoutLimitWarning(null);
     if (guardPortalBlockedAction()) return;
     const safeQuantity = Math.max(1, Math.min(Number(purchaseQuantity || 1), 365));
     let currentStatus = status;
@@ -3674,18 +3956,61 @@ function PortalApp() {
       showPaymentResult({ status: 'FAILED', last_error: t('Choose a Barangay before buying this package.') }, { force: true });
       return;
     }
+    const checkoutPayload = {
+      product_item_id: item.id,
+      product_category_id: item.category_id || item.assigned_category_id || selectedProductCategory?.id || null,
+      payment_method: 'paymongo_checkout',
+      purchase_quantity: safeQuantity,
+      selected_barangay: barangayOnly ? selectedBarangay : null,
+      outside_network_purchase: outside3jNetwork,
+    };
+    if (!confirmedCheckoutLimit) {
+      try {
+        const preview = await publicApi('/portal/payments/checkout-access', {
+          method: 'POST',
+          body: JSON.stringify(payload(checkoutPayload)),
+        });
+        if (preview?.profile) setProfile(preview.profile);
+        const access = preview?.checkout_access || {};
+        if (access.status === 'BLOCKED' || access.status === 'COOLDOWN') {
+          const message = access.message || (access.status === 'COOLDOWN'
+            ? t('Please wait before starting another online payment checkout.')
+            : t('Online payment is temporarily blocked for this device/profile. You can try again tomorrow or buy in a physical store.'));
+          setCheckoutErrorModal({
+            status: 429,
+            title: access.status === 'COOLDOWN' ? t('Checkout cooling down') : t('Online payment temporarily blocked'),
+            message: t(message),
+          });
+          return;
+        }
+        if (access.warning) {
+          setCheckoutLimitWarning({
+            item,
+            quantity: safeQuantity,
+            confirmedOutside,
+            confirmedBrowserReminder,
+            paymentMethod,
+            checkoutAccess: access,
+          });
+          return;
+        }
+      } catch (err) {
+        if (err.status === 429) {
+          setCheckoutErrorModal({
+            status: 429,
+            title: t('Checkout temporarily limited'),
+            message: t(err.message || 'Please wait before starting another online payment checkout.'),
+          });
+          return;
+        }
+      }
+    }
+    setCheckoutLimitWarning(null);
     setPaymentLoading(item.id);
     try {
       const data = await publicApi('/portal/payments/checkout', {
         method: 'POST',
-        body: JSON.stringify(payload({
-          product_item_id: item.id,
-          product_category_id: item.category_id || item.assigned_category_id || selectedProductCategory?.id || null,
-          payment_method: 'paymongo_checkout',
-          purchase_quantity: safeQuantity,
-          selected_barangay: barangayOnly ? selectedBarangay : null,
-          outside_network_purchase: outside3jNetwork,
-        }))
+        body: JSON.stringify(payload(checkoutPayload))
       });
       if (!data.checkout_url) throw new Error('PayMongo did not return a checkout link.');
       setPaymentLoading('');
@@ -4164,6 +4489,74 @@ function PortalApp() {
     }
   }
 
+  function openMonthlyLogin() {
+    setMonthlyLoginForm({ contact_number: profile?.contact_number || '', verification_code: '' });
+    setMonthlyLoginMessage('');
+    setMonthlyLoginOpen(true);
+  }
+
+  async function sendMonthlyLoginCode() {
+    setMonthlyLoginMessage('');
+    const localContact = normalizePortalContactInput(monthlyLoginForm.contact_number);
+    if (!portalContactLooksValid(localContact)) {
+      setMonthlyLoginMessage(t('Enter an 11-digit mobile number starting with 09.'));
+      return;
+    }
+    setMonthlyLoginSending(true);
+    setMonthlyLoginForm((current) => ({ ...current, contact_number: localContact }));
+    try {
+      const data = await publicApi('/portal/monthly-login/send-code', {
+        method: 'POST',
+        body: JSON.stringify(payload({ contact_number: localContact }))
+      });
+      setMonthlyLoginCooldown(60);
+      setMonthlyLoginMessage(data.message || t('Verification code sent.'));
+      setPortalToast({
+        key: `monthly-code-${Date.now()}`,
+        tone: 'success',
+        title: t('Code sent'),
+        message: data.message || t('Verification code sent.'),
+        timeoutMs: portalMessageAutoHideMs,
+      });
+    } catch (err) {
+      setMonthlyLoginMessage(err.message || t('Request failed'));
+    } finally {
+      setMonthlyLoginSending(false);
+    }
+  }
+
+  async function confirmMonthlyLogin(e) {
+    e.preventDefault();
+    setMonthlyLoginMessage('');
+    const localContact = normalizePortalContactInput(monthlyLoginForm.contact_number);
+    if (!portalContactLooksValid(localContact)) {
+      setMonthlyLoginMessage(t('Enter an 11-digit mobile number starting with 09.'));
+      return;
+    }
+    setMonthlyLoginVerifying(true);
+    try {
+      const data = await publicApi('/portal/monthly-login/confirm', {
+        method: 'POST',
+        body: JSON.stringify(payload({
+          contact_number: localContact,
+          verification_code: String(monthlyLoginForm.verification_code || '').toUpperCase(),
+        }))
+      });
+      persistSession(data);
+      if (data.profile) setProfile(data.profile);
+      setStatus((current) => ({ ...(current || {}), ...data, connected: data.connected ?? current?.connected }));
+      setResult({ status: data.status || 'SUCCESS', message: data.message || t('Monthly subscriber access is active.'), unlimited: data.unlimited, remaining_time_seconds: data.remaining_time_seconds || 0 });
+      setMonthlyLoginOpen(false);
+      setPortalScreen('shop');
+      queueAvatarCustomerMessage(data.message || t('Monthly subscriber access is active.'), data.status === 'FAILED' ? 'danger' : 'success');
+      await refreshStatus(data.portal_session_id || sessionId || localStorage.getItem('centralwifi_portal_session'), { includeContext: true, quiet: true });
+    } catch (err) {
+      setMonthlyLoginMessage(err.message || t('Monthly subscriber login failed.'));
+    } finally {
+      setMonthlyLoginVerifying(false);
+    }
+  }
+
   async function saveProfile(e) {
     e.preventDefault();
     showProfileMessage('');
@@ -4391,6 +4784,32 @@ function PortalApp() {
   const giftDurationLabel = formatSeconds(settings?.profile_gift_duration_seconds || DEFAULT_PROFILE_GIFT.duration_seconds);
   const giftAvailable = profileGiftEnabled && profile?.welcome_gift_status === 'AVAILABLE';
   const avatarNotesSettingsKey = JSON.stringify(settings?.avatar_notes_json || {});
+  const runtimePortalIconUrl = customAvatarUrl || (avatarConnected ? DEFAULT_PORTAL_AVATARS.connected : DEFAULT_PORTAL_AVATARS.disconnected);
+  const pwaInstallIconUrl = settings?.pwa?.icon_url
+    ? cacheBustedUploadUrl(settings.pwa.icon_url, settings?.pwa?.icon_version || settings?.updated_at)
+    : (settings?.pwa?.install_icon_url || '/api/portal/app-icon/pwa-192.png');
+  const pwaGift = profile?.pwa_gift || settings?.pwa?.gift || {};
+  const pwaGiftEnabled = settings?.pwa?.gift?.enabled !== false && Boolean(settings?.pwa?.gift);
+  const pwaGiftDurationLabel = formatSeconds(pwaGift.duration_seconds || settings?.pwa?.gift?.duration_seconds || 3600);
+  const pwaGiftStatus = String(pwaGift.status || '').toUpperCase();
+  const pwaGiftClaimed = pwaGiftStatus === 'CLAIMED' || pwaGiftStatus === 'ALREADY_CLAIMED';
+  const pwaGiftSupported = isAndroidDevice();
+  const pwaInstalledForUi = portalStandalone || portalPwaInstalledKnown || (pwaGiftSupported && pwaGiftClaimed);
+  const showPwaGiftInstallLine = Boolean(pwaGiftSupported && pwaGiftEnabled && !pwaGiftClaimed);
+  const showMainPwaInstallPanel = Boolean(
+    settings?.pwa?.install_enabled !== false
+    && !pwaInstalledForUi
+    && !pwaInstallPanelHidden
+    && portalScreen !== 'landing'
+  );
+
+  useEffect(() => {
+    upsertPortalDocumentIcon('icon', runtimePortalIconUrl);
+  }, [runtimePortalIconUrl]);
+
+  useEffect(() => {
+    upsertPortalDocumentIcon('apple-touch-icon', pwaInstallIconUrl);
+  }, [pwaInstallIconUrl]);
 
   useEffect(() => {
     if (!sessionId || portalBooting || portalBlocked) return undefined;
@@ -4481,6 +4900,14 @@ function PortalApp() {
   }, [profile?.configured, profile?.portal_notifications_enabled, profile?.portal_notification_sent_count]);
 
   useEffect(() => {
+    if (!sessionId || portalBooting || !isPortalStandaloneDisplay() || !profile?.configured) return;
+    const sendKey = `${sessionId}:${profile?.contact_number || profile?.display_name || 'profile'}:${new Date().toISOString().slice(0, 10)}`;
+    if (pwaStandaloneOpenSentRef.current === sendKey) return;
+    pwaStandaloneOpenSentRef.current = sendKey;
+    recordPortalPwaEvent('STANDALONE_OPEN', { source: 'display_mode_standalone' }).catch(() => null);
+  }, [sessionId, portalBooting, profile?.configured]);
+
+  useEffect(() => {
     const notificationSettings = settings?.portal_notifications || {};
     if (!notificationSettings.enabled || !profileNotificationsEnabled || !sessionId || portalBooting || !status) return undefined;
     const sendKey = `${sessionId}:${settings?.id || 'portal-opened'}`;
@@ -4494,11 +4921,27 @@ function PortalApp() {
       : 'No active WiFi time yet.';
     const timer = window.setTimeout(() => {
       portalOpenedNoticeSentRef.current = sendKey;
-      emitPortalNotification(settings, 'PORTAL_OPENED', template, {
+      const values = {
         remaining_time_seconds: currentUnlimited ? 0 : currentRemainingSeconds,
         time: currentUnlimited ? 'Unlimited' : formatCountdown(currentRemainingSeconds),
         expires_at: status?.access_expires_at || result?.access_expires_at || accessExpiresAt,
-      });
+      };
+      (async () => {
+        try {
+          if (portalNotificationPermissionStatus() === 'granted' && typeof window !== 'undefined' && 'PushManager' in window) {
+            await registerPortalCustomerPushSubscription().catch(() => null);
+            const pushGreeting = await publicApi('/portal/push-greeting', { method: 'POST', body: JSON.stringify(payload()) });
+            if (Number(pushGreeting?.sent || 0) > 0) {
+              setPortalNotificationPermission(portalNotificationPermissionStatus());
+              recordPortalNotificationSent('PORTAL_OPENED', { shown: true, mode: 'web_push_server' });
+              return;
+            }
+          }
+        } catch {
+          // Fall back to same-page service worker notification below.
+        }
+        emitPortalNotification(settings, 'PORTAL_OPENED', template, values);
+      })();
     }, 800);
     return () => window.clearTimeout(timer);
   }, [settings?.id, settings?.portal_notifications?.enabled, profileNotificationsEnabled, sessionId, portalBooting, status?.remaining_time_seconds, status?.access_expires_at, status?.unlimited, status?.access_expired, status?.status]);
@@ -5454,6 +5897,51 @@ function PortalApp() {
     );
   }
 
+  function PwaInstallCard({ showClose = false, onInstall = installPortalHomeScreenApp, className = '' }) {
+    return (
+      <div
+        className={`portal-pwa-install-panel ${showClose ? 'has-close' : ''} ${className}`.trim()}
+        role="button"
+        tabIndex={0}
+        onClick={onInstall}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onInstall();
+          }
+        }}
+      >
+        {showClose && (
+          <button
+            className="portal-pwa-install-close"
+            type="button"
+            aria-label="Hide Home Screen app prompt"
+            onClick={(event) => {
+              event.stopPropagation();
+              hideMainPwaInstallPanel();
+            }}
+          >
+            <IconX size={16} />
+          </button>
+        )}
+        <div className="portal-pwa-install-art">
+          <img src={pwaInstallIconUrl} alt="" />
+        </div>
+        <div className="portal-pwa-install-copy">
+          <strong>{t('Install 3J WiFi on your Home Screen')}</strong>
+          {showPwaGiftInstallLine && (
+            <small><IconGift size={14} /> {t('Install gift')} · {pwaGiftDurationLabel}</small>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  function PwaInstallMainPanel() {
+    if (!showMainPwaInstallPanel) return null;
+    return <PwaInstallCard showClose onInstall={installPortalHomeScreenAppFromMain} />;
+  }
+
   function PurchaseSuccessModal() {
     if (!purchaseSuccessModal) return null;
     return (
@@ -6126,6 +6614,76 @@ function PortalApp() {
     );
   }
 
+  function MonthlyLoginModal() {
+    if (!monthlyLoginOpen) return null;
+    return (
+      <Modal
+        title={t('Monthly Subscriber Login')}
+        onClose={() => setMonthlyLoginOpen(false)}
+        size="md"
+        dialogClassName="portal-profile-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <form className="portal-profile-form" onSubmit={confirmMonthlyLogin}>
+          <div className="portal-profile-scroll">
+            {monthlyLoginMessage && (
+              <PortalCustomerMessage
+                message={monthlyLoginMessage}
+                tone={monthlyLoginMessage.toLowerCase().includes('failed') || monthlyLoginMessage.toLowerCase().includes('not') ? 'danger' : 'info'}
+                timeoutMs={portalMessageAutoHideMs}
+                onDismiss={() => setMonthlyLoginMessage('')}
+              />
+            )}
+            <div className="portal-profile-gift-note mb-3">
+              <span className="portal-profile-gift-badge"><IconShieldLock size={18} /></span>
+              <span>{t('Use the contact number registered to your monthly subscription. One contact number works on one device.')}</span>
+            </div>
+            <div className="mb-3">
+              <label className="form-label">{t('Contact Number')}</label>
+              <div className="input-group portal-contact-code-group">
+                <input
+                  className="form-control"
+                  inputMode="numeric"
+                  required
+                  maxLength={11}
+                  value={monthlyLoginForm.contact_number}
+                  onChange={(e) => setMonthlyLoginForm({ ...monthlyLoginForm, contact_number: normalizePortalContactInput(e.target.value) })}
+                />
+                <button
+                  className="btn btn-outline-primary"
+                  type="button"
+                  disabled={monthlyLoginSending || monthlyLoginCooldown > 0 || !monthlyLoginForm.contact_number}
+                  onClick={sendMonthlyLoginCode}
+                >
+                  <IconSend size={18} className="me-2" />{monthlyLoginSending ? t('Sending...') : monthlyLoginCooldown > 0 ? t('Send Again ({seconds}s)', { seconds: monthlyLoginCooldown }) : t('Send Code')}
+                </button>
+              </div>
+            </div>
+            <div className="mb-3">
+              <label className="form-label">{t('Verification Code')}</label>
+              <input
+                className="form-control text-uppercase text-center fs-3 fw-bold"
+                required
+                value={monthlyLoginForm.verification_code}
+                onChange={(e) => setMonthlyLoginForm({ ...monthlyLoginForm, verification_code: e.target.value.toUpperCase() })}
+                maxLength={12}
+                autoComplete="one-time-code"
+              />
+            </div>
+          </div>
+          <div className="modal-footer portal-profile-footer">
+            <button className="btn" type="button" onClick={() => setMonthlyLoginOpen(false)}>{t('Cancel')}</button>
+            <button className="btn btn-primary" type="submit" disabled={monthlyLoginVerifying}>
+              {monthlyLoginVerifying ? t('Checking...') : t('Log In')}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    );
+  }
+
   function ProfileTag() {
     const hasProfile = portalProfileConfigured();
     return (
@@ -6250,11 +6808,30 @@ function PortalApp() {
                     dismissKey={`${portalNotificationTestResult.status}-${portalNotificationTestResult.message}`}
                   />
 		            )}
-		          </div>
+			          </div>
 
-	          <div className="portal-settings-section">
-	            <div className="portal-settings-section-title">
-	              <span><IconSun size={18} /></span>
+		          {settings?.pwa?.install_enabled !== false && <div className="portal-settings-section">
+		            <div className="portal-settings-section-title">
+		              <span><IconBrandChrome size={18} /></span>
+		              <strong>{t('Home Screen App')}</strong>
+		            </div>
+		            <PwaInstallCard className="is-settings" />
+		            {portalInstallResult && (
+		              <PortalCustomerMessage
+		                message={portalInstallResult.message}
+		                tone={portalInstallResult.status === 'SUCCESS' ? 'success' : portalInstallResult.status === 'RUNNING' ? 'info' : 'warning'}
+		                className="py-2"
+		                timeoutMs={portalMessageAutoHideMs}
+		                onSuccessNote={queueAvatarCustomerMessage}
+		                onDismiss={() => setPortalInstallResult(null)}
+		                dismissKey={`${portalInstallResult.status}-${portalInstallResult.message}`}
+		              />
+		            )}
+		          </div>}
+
+		          <div className="portal-settings-section">
+		            <div className="portal-settings-section-title">
+		              <span><IconSun size={18} /></span>
 	              <strong>{t('Appearance')}</strong>
 	            </div>
 	            <div className="portal-settings-row is-stacked">
@@ -7853,6 +8430,114 @@ function PortalApp() {
     );
   }
 
+  function CheckoutLimitWarningModal() {
+    if (!checkoutLimitWarning?.item) return null;
+    const access = checkoutLimitWarning.checkoutAccess || {};
+    const attempts = Number(access.attempts_today || 0);
+    const limit = Number(access.limit || 5);
+    const remaining = Math.max(Number(access.remaining_attempts || 0), 0);
+    const lastTry = remaining <= 1;
+    const itemName = checkoutLimitWarning.item?.name || t('WiFi package');
+    const continueCheckout = () => {
+      const next = checkoutLimitWarning;
+      setCheckoutLimitWarning(null);
+      startProductCheckout(
+        next.item,
+        next.quantity || 1,
+        Boolean(next.confirmedOutside),
+        next.paymentMethod || 'paymongo_checkout',
+        Boolean(next.confirmedBrowserReminder),
+        true,
+      );
+    };
+    return (
+      <Modal
+        title={lastTry ? t('Last online payment try today') : t('Online payment tries are running low')}
+        onClose={() => setCheckoutLimitWarning(null)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className={`portal-checkout-limit-warning ${lastTry ? 'is-last-try' : ''}`}>
+          <div className="portal-checkout-limit-icon">
+            <IconAlertTriangle size={48} />
+          </div>
+          <div className="portal-checkout-limit-copy">
+            <div className="portal-checkout-limit-kicker">{itemName}</div>
+            <div className="portal-checkout-limit-count">
+              {attempts}/{limit} {t('checkout windows used today')}
+            </div>
+            <p>
+              {lastTry
+                ? t('This is your last online payment try today. If this checkout is not successfully paid, online payment will be blocked until tomorrow.')
+                : t(`You only have ${remaining} tries remaining to pay online today. Please continue only when you are ready to complete the payment.`)}
+            </p>
+          </div>
+          <div className="portal-checkout-limit-store-note">
+            <IconBuildingStore size={18} />
+            <span>{t('If online payment gets blocked, you can still buy a WiFi pass in a physical store.')}</span>
+          </div>
+        </div>
+        <div className="modal-footer portal-outside-modal-footer px-0 pb-0">
+          <button className="btn portal-outside-modal-cancel" type="button" onClick={() => setCheckoutLimitWarning(null)}>{t('Cancel')}</button>
+          <button className="btn btn-primary portal-outside-modal-primary" type="button" onClick={continueCheckout}>
+            {lastTry ? t('Use Last Try') : t('Continue to Payment')}
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
+  function IosPwaInstallGuideModal() {
+    if (!iosPwaInstallGuideOpen) return null;
+    return (
+      <Modal
+        title={t('Install 3J WiFi on iPhone/iPad')}
+        onClose={() => setIosPwaInstallGuideOpen(false)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName={`portal-profile-modal-content ${portalDark ? 'is-dark' : ''}`}
+        lockPageRefresh
+      >
+        <div className="portal-ios-pwa-guide">
+          <div className="portal-ios-pwa-guide-head">
+            <span className="portal-ios-pwa-guide-icon">
+              <BrowserBrandIcon browser="Safari" size={30} />
+            </span>
+            <div>
+              <strong>{t('Use Safari Add to Home Screen')}</strong>
+              <small>{t('Add the portal to your Home Screen for faster access.')}</small>
+            </div>
+          </div>
+          <div className="portal-ios-pwa-steps">
+            <div className="portal-ios-pwa-step">
+              <span>1</span>
+              <p>{t('Open this portal in Safari.')}</p>
+            </div>
+            <div className="portal-ios-pwa-step">
+              <span>2</span>
+              <p>{t('Tap the Safari Share button.')}</p>
+            </div>
+            <div className="portal-ios-pwa-step">
+              <span>3</span>
+              <p>{t('Choose Add to Home Screen, then tap Add.')}</p>
+            </div>
+            <div className="portal-ios-pwa-step">
+              <span>4</span>
+              <p>{t('Open the new 3J WiFi icon from your Home Screen for quick portal access.')}</p>
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer portal-outside-modal-footer px-0 pb-0">
+          <button className="btn btn-primary portal-outside-modal-primary" type="button" onClick={() => setIosPwaInstallGuideOpen(false)}>
+            {t('Got it')}
+          </button>
+        </div>
+      </Modal>
+    );
+  }
+
   function PaymentCheckoutHandoffModal() {
     if (!paymentHandoff?.checkout_url) return null;
     const captiveBrowser = isCaptivePortalPlaybackBrowser();
@@ -8157,7 +8842,7 @@ function PortalApp() {
                   <button className="btn btn-primary btn-lg" type="button" onClick={() => setPortalScreen('shop')}>
                     {t('Buy Now')} <IconChevronRight size={20} className="ms-2" />
                   </button>
-                  <button className="btn btn-outline-secondary btn-lg" type="button" disabled>{t('Log In')}</button>
+                  <button className="btn btn-outline-secondary btn-lg" type="button" onClick={openMonthlyLogin}>{t('Log In')}</button>
                 </div>
               </div>
             </div>
@@ -8315,6 +9000,7 @@ function PortalApp() {
             )}
             <GiftPanel />
             <PortalChromeReminder />
+            <PwaInstallMainPanel />
             {portalNotice && !(portalNotice.type === 'EXPIRED' && hasReadyBagItems) && (
               <PortalCustomerMessage
                 message={portalNotice.message}
@@ -8363,12 +9049,12 @@ function PortalApp() {
                             actions={paymentResult.payment_order_id && (
                               <>
                                 {paymentResult.checkout_url && (
-                                  <button className="btn btn-sm btn-primary" type="button" disabled={paymentChecking} onClick={() => openCheckoutUrl(paymentResult.checkout_url, { sameTab: !isCaptivePortalPlaybackBrowser() })}>
+                                  <button className="btn btn-sm btn-primary" type="button" onClick={() => openCheckoutUrl(paymentResult.checkout_url, { sameTab: !isCaptivePortalPlaybackBrowser() })}>
                                     <IconExternalLink size={15} className="me-1" />
                                     {t('Open checkout')}
                                   </button>
                                 )}
-                                <button className="btn btn-sm btn-outline-danger" type="button" disabled={paymentChecking} onClick={() => cancelPaymentCheckout(paymentResult)}>
+                                <button className="btn btn-sm btn-outline-danger" type="button" onClick={() => cancelPaymentCheckout(paymentResult)}>
                                   {t('Cancel')}
                                 </button>
                               </>
@@ -8403,13 +9089,13 @@ function PortalApp() {
                     <span className="portal-choice-radio" aria-hidden="true" />
                   </button>
                   <div className="portal-login-placeholder-separator" aria-hidden="true" />
-                  <div className="portal-login-placeholder-card" aria-disabled="true">
+                  <button className="portal-login-placeholder-card" type="button" onClick={openMonthlyLogin}>
                     <span className="portal-choice-icon"><IconUser size={24} /></span>
                     <span>
                       <strong>{t('Have an account?')}</strong>
-                      <small>{t('Login instead. This option is coming soon.')}</small>
+                      <small>{t('Monthly subscribers can log in for free access.')}</small>
                     </span>
-                  </div>
+                  </button>
                 </div>
               ) : (
                 <div className="portal-purchase-tab-shell">
@@ -8569,10 +9255,13 @@ function PortalApp() {
 	      {StoreRequestStatusModal()}
 	      {StoreItemMoreInfoModal()}
 	      {renderPortalSettingsModal()}
+      {IosPwaInstallGuideModal()}
       {OutsidePurchaseModal()}
       {BrowserReminderCheckoutModal()}
+      {CheckoutLimitWarningModal()}
       {PaymentCheckoutHandoffModal()}
       {CheckoutErrorModal()}
+      {MonthlyLoginModal()}
       {IptvProfileRequiredModal()}
       {IptvChromeOnlyModal()}
       {PortalCoverageModal()}
@@ -9005,9 +9694,9 @@ function Login({ onLogin, branding }) {
   );
 }
 
-function Card({ title, subtitle, children, footer }) {
+function Card({ title, subtitle, children, footer, className = '' }) {
   return (
-    <div className="card">
+    <div className={`card ${className}`.trim()}>
       <div className="card-header">
         {React.isValidElement(title) && title.type === CardHeaderContent ? title : (
           <div>
@@ -10411,6 +11100,236 @@ function LocationMapPreview({ location }) {
 
 function sitesDeploymentInitialTab() {
   return new URLSearchParams(window.location.search).get('tab') === 'configurations' ? 'Configurations' : 'Sites';
+}
+
+function MonthlySubscribersPage() {
+  const [data, setData] = useState({ settings: {}, metrics: {}, subscribers: [], logs: [] });
+  const [settings, setSettings] = useState({ integration_enabled: true, api_key: '', api_secret: '', rolling_authorization_seconds: 2592000, login_otp_ttl_seconds: 300, login_otp_cooldown_seconds: 60, source_system_label: '3J Main' });
+  const [filters, setFilters] = useState({ search: '', status: '' });
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const searchTimerRef = useRef(null);
+
+  function applyData(nextData) {
+    setData(nextData || { settings: {}, metrics: {}, subscribers: [], logs: [] });
+    const nextSettings = nextData?.settings || {};
+    setSettings({
+      integration_enabled: Boolean(nextSettings.integration_enabled),
+      api_key: nextSettings.api_key || '',
+      api_secret: '',
+      rolling_authorization_seconds: Number(nextSettings.rolling_authorization_seconds || 2592000),
+      login_otp_ttl_seconds: Number(nextSettings.login_otp_ttl_seconds || 300),
+      login_otp_cooldown_seconds: Number(nextSettings.login_otp_cooldown_seconds || 60),
+      source_system_label: nextSettings.source_system_label || '3J Main',
+    });
+  }
+
+  async function load(nextFilters = filters) {
+    setLoading(true);
+    const params = new URLSearchParams();
+    if (nextFilters.search) params.set('search', nextFilters.search);
+    if (nextFilters.status) params.set('status', nextFilters.status);
+    try {
+      const result = await request(`/monthly-subscribers?${params.toString()}`);
+      applyData(result);
+    } catch (err) {
+      setMessage(err.message || 'Request failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    return () => window.clearTimeout(searchTimerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function updateFilters(next) {
+    const merged = { ...filters, ...next };
+    setFilters(merged);
+    window.clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = window.setTimeout(() => load(merged), 250);
+  }
+
+  async function saveSettings() {
+    setBusy('settings');
+    setMessage('');
+    try {
+      const result = await request('/monthly-subscribers/settings', {
+        method: 'PUT',
+        body: JSON.stringify(settings),
+      });
+      setMessage(result.message || 'Monthly subscriber settings saved.');
+      await load();
+    } catch (err) {
+      setMessage(err.message || 'Request failed');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function revokeContact(contactId) {
+    if (!contactId) return;
+    setBusy(`revoke-${contactId}`);
+    setMessage('');
+    try {
+      const result = await request(`/monthly-subscribers/contacts/${encodeURIComponent(contactId)}/revoke-device`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setMessage(result.message || 'Device binding reset.');
+      await load();
+    } catch (err) {
+      setMessage(err.message || 'Request failed');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const metrics = data.metrics || {};
+  const subscribers = data.subscribers || [];
+
+  return (
+    <div className="row row-cards">
+      {message && <div className="col-12"><AutoDismissAlert message={message} tone={message.toLowerCase().includes('failed') || message.toLowerCase().includes('invalid') ? 'danger' : 'success'} onDismiss={() => setMessage('')} /></div>}
+      <KpiCard icon={IconUsers} label="Subscribers" value={metrics.subscribers || 0} tone="blue" />
+      <KpiCard icon={IconCircleCheck} label="Active" value={metrics.active || 0} tone="green" />
+      <KpiCard icon={IconPhone} label="Contacts" value={metrics.contacts || 0} tone="cyan" />
+      <KpiCard icon={IconShieldLock} label="Bound Devices" value={metrics.bound_contacts || 0} tone="purple" />
+
+      <div className="col-lg-4">
+        <Card title="Integration Settings" subtitle="Use the same API key and secret in 3J Main Account Admin > Hotspot Access.">
+          <div className="mb-3">
+            <label className="form-check form-switch">
+              <input className="form-check-input" type="checkbox" checked={settings.integration_enabled} onChange={(event) => setSettings({ ...settings, integration_enabled: event.target.checked })} />
+              <span className="form-check-label">Enable inbound sync and subscriber login</span>
+            </label>
+          </div>
+          <div className="mb-3">
+            <label className="form-label">API Key</label>
+            <input className="form-control" value={settings.api_key} onChange={(event) => setSettings({ ...settings, api_key: event.target.value })} />
+          </div>
+          <div className="mb-3">
+            <label className="form-label">API Secret</label>
+            <input className="form-control" type="password" placeholder={data.settings?.api_secret_set ? 'Saved. Leave blank to keep current secret.' : 'Required before 3J Main can sync'} value={settings.api_secret} onChange={(event) => setSettings({ ...settings, api_secret: event.target.value })} />
+          </div>
+          <div className="row g-2">
+            <div className="col-12">
+              <label className="form-label">Rolling Omada Authorization Seconds</label>
+              <input className="form-control" type="number" min="300" max="2592000" value={settings.rolling_authorization_seconds} onChange={(event) => setSettings({ ...settings, rolling_authorization_seconds: Number(event.target.value) })} />
+              <div className="form-hint">Monthly access is unlimited for the customer, but Omada still receives a rolling authorization window. Default is 30 days.</div>
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">OTP TTL Seconds</label>
+              <input className="form-control" type="number" min="60" max="1800" value={settings.login_otp_ttl_seconds} onChange={(event) => setSettings({ ...settings, login_otp_ttl_seconds: Number(event.target.value) })} />
+            </div>
+            <div className="col-md-6">
+              <label className="form-label">OTP Cooldown Seconds</label>
+              <input className="form-control" type="number" min="10" max="600" value={settings.login_otp_cooldown_seconds} onChange={(event) => setSettings({ ...settings, login_otp_cooldown_seconds: Number(event.target.value) })} />
+            </div>
+          </div>
+          <button className="btn btn-primary mt-3" type="button" disabled={busy === 'settings'} onClick={saveSettings}>
+            <IconDeviceFloppy size={18} className="me-2" />{busy === 'settings' ? 'Saving...' : 'Save Settings'}
+          </button>
+        </Card>
+      </div>
+
+      <div className="col-lg-8">
+        <Card title="Synced Monthly Subscribers" subtitle="Contacts marked active can log in through the captive portal.">
+          <div className="d-flex flex-wrap gap-2 mb-3">
+            <div className="input-icon flex-fill min-w-0">
+              <span className="input-icon-addon"><IconSearch size={16} /></span>
+              <input className="form-control" placeholder="Search name, account, or contact" value={filters.search} onChange={(event) => updateFilters({ search: event.target.value })} />
+            </div>
+            <select className="form-select w-auto" value={filters.status} onChange={(event) => updateFilters({ status: event.target.value })}>
+              <option value="">All status</option>
+              <option value="ACTIVE">Active</option>
+              <option value="SUSPENDED">Suspended</option>
+              <option value="INACTIVE">Inactive</option>
+              <option value="DISCONNECTED">Disconnected</option>
+            </select>
+            <button className="btn" type="button" onClick={() => load()} disabled={loading}><IconRefresh size={18} className="me-2" />Refresh</button>
+          </div>
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead>
+                <tr>
+                  <th>Subscriber</th>
+                  <th>Service</th>
+                  <th>Contacts / Devices</th>
+                  <th>Status</th>
+                  <th>Synced</th>
+                </tr>
+              </thead>
+              <tbody>
+                {loading && <tr><td colSpan="5" className="text-muted">Loading monthly subscribers...</td></tr>}
+                {!loading && subscribers.length === 0 && <tr><td colSpan="5"><div className="empty">No monthly subscribers synced yet.</div></td></tr>}
+                {!loading && subscribers.map((subscriber) => (
+                  <tr key={subscriber.id || subscriber.external_subscriber_id}>
+                    <td>
+                      <div className="fw-semibold">{subscriber.customer_name}</div>
+                      <div className="text-muted small">{subscriber.account_number || subscriber.external_subscriber_id}</div>
+                    </td>
+                    <td>
+                      <div>{subscriber.plan_name || '-'}</div>
+                      <div className="text-muted small">{subscriber.service_account_number || '-'}</div>
+                    </td>
+                    <td>
+                      <div className="d-grid gap-2">
+                        {(subscriber.contacts || []).map((contact) => (
+                          <div className="d-flex align-items-center justify-content-between gap-2" key={contact.id}>
+                            <div>
+                              <span className={`badge ${contact.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'} me-1`}>{contact.contact_number}</span>
+                              {contact.label && <span className="text-muted small">{contact.label}</span>}
+                              {contact.bound && <div className="text-muted small">Bound: {contact.bound_client_mac || contact.bound_client_ip || 'device token'}</div>}
+                            </div>
+                            {contact.bound && (
+                              <ActionBadgeButton icon={IconRefresh} label="Reset device binding" tone="orange" disabled={!!busy} onClick={() => revokeContact(contact.id)} />
+                            )}
+                          </div>
+                        ))}
+                        {!(subscriber.contacts || []).length && <span className="text-muted small">No synced contact numbers</span>}
+                      </div>
+                    </td>
+                    <td><span className={`badge bg-${subscriber.status === 'ACTIVE' ? 'green' : subscriber.status === 'SUSPENDED' ? 'yellow' : 'secondary'}-lt text-${subscriber.status === 'ACTIVE' ? 'green' : subscriber.status === 'SUSPENDED' ? 'yellow' : 'secondary'}`}>{subscriber.status}</span></td>
+                    <td className="text-muted">{formatPortalDateTime(subscriber.last_synced_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+
+        <Card title="Recent Sync Logs" className="mt-3">
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Source</th>
+                  <th>Status</th>
+                  <th>Summary</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data.logs || []).map((log) => (
+                  <tr key={log.id}>
+                    <td className="text-muted">{formatPortalDateTime(log.created_at)}</td>
+                    <td>{log.source_system || '-'}</td>
+                    <td><span className={`badge bg-${log.status === 'SUCCESS' ? 'green' : 'red'}-lt text-${log.status === 'SUCCESS' ? 'green' : 'red'}`}>{log.status}</span></td>
+                    <td>{log.message || `${log.subscriber_count || 0} subscribers, ${log.contact_count || 0} contacts`}</td>
+                  </tr>
+                ))}
+                {!(data.logs || []).length && <tr><td colSpan="4" className="text-muted">No sync logs yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
 }
 
 function SitesDeploymentsPage() {
@@ -28403,7 +29322,7 @@ function ProfilePage({ onSaved }) {
 }
 
 function SystemSettingsPage({ refresh }) {
-  const tabs = ['General', 'Access', 'Public HTTPS', 'A2P Messaging', 'API', 'System Update', 'Backup', 'Danger'];
+  const tabs = ['General', 'Access', 'PWA', 'Public HTTPS', 'A2P Messaging', 'API', 'System Update', 'Backup', 'Danger'];
   const [tab, setTab] = useState(() => {
     const requestedTab = new URLSearchParams(window.location.search).get('tab');
     if (window.location.pathname.includes('/integrations/3jtv-api')) return 'API';
@@ -28662,6 +29581,7 @@ function SystemSettingsPage({ refresh }) {
         </div>
       )}
 
+      {tab === 'PWA' && <PwaSettingsTab />}
       {tab === 'Public HTTPS' && <PublicEndpointSettingsTab />}
       {tab === 'A2P Messaging' && <A2PMessagingSettingsTab />}
       {tab === 'API' && <ThreeJtvApiPage />}
@@ -28680,6 +29600,515 @@ function SystemSettingsPage({ refresh }) {
         </Card>
       )}
     </>
+  );
+}
+
+function PwaSettingsTab() {
+  const emptySettings = {
+    name: '3J WiFi Portal',
+    short_name: '3J WiFi',
+    description: '3J WiFi customer portal for WiFi passes, time alerts, and support.',
+    theme_color: '#ff3838',
+    background_color: '#f8fafc',
+    icon_url: '',
+    display_mode: 'standalone',
+    install_enabled: true,
+    install_guide_message: 'Install the 3J WiFi portal as a Home Screen app for faster access and better phone notification support.',
+    gift: {
+      enabled: false,
+      duration_seconds: 3600,
+      title: 'PWA Install Gift',
+      available_message: 'Home Screen app gift is ready.',
+      claim_message: 'PWA install gift added to My WiFi Bag.',
+    },
+  };
+  const [payload, setPayload] = useState(null);
+  const [form, setForm] = useState(emptySettings);
+  const [iconFile, setIconFile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [clearingInstallKey, setClearingInstallKey] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [sectionTab, setSectionTab] = useState('overview');
+  const [overviewTab, setOverviewTab] = useState('android');
+
+  function hydrate(data) {
+    const next = data?.settings || {};
+    setPayload(data);
+    setForm({
+      ...emptySettings,
+      ...next,
+      gift: {
+        ...emptySettings.gift,
+        ...(next.gift || {}),
+      },
+    });
+  }
+
+  async function loadPwaSettings() {
+    setLoading(true);
+    try {
+      const data = await request('/system-settings/pwa');
+      hydrate(data);
+      setError('');
+    } catch (err) {
+      setError(err.message || 'Could not load PWA settings.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadPwaSettings(); }, []);
+
+  function updateField(key, value) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateGiftField(key, value) {
+    setForm((current) => ({ ...current, gift: { ...(current.gift || {}), [key]: value } }));
+  }
+
+  async function savePwaSettings(event) {
+    event.preventDefault();
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request('/system-settings/pwa', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          pwa_name: form.name,
+          pwa_short_name: form.short_name,
+          pwa_description: form.description,
+          pwa_theme_color: form.theme_color,
+          pwa_background_color: form.background_color,
+          pwa_display_mode: form.display_mode,
+          pwa_install_enabled: form.install_enabled,
+          pwa_install_guide_message: form.install_guide_message,
+          pwa_gift_enabled: form.gift?.enabled,
+          pwa_gift_duration_seconds: Number(form.gift?.duration_seconds || 3600),
+          pwa_gift_title: form.gift?.title,
+          pwa_gift_available_message: form.gift?.available_message,
+          pwa_gift_claim_message: form.gift?.claim_message,
+        }),
+      });
+      hydrate(data);
+      setMessage('PWA settings saved.');
+    } catch (err) {
+      setError(err.message || 'Could not save PWA settings.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function uploadPwaIcon(event) {
+    event.preventDefault();
+    if (!iconFile) {
+      setError('Choose a PWA icon first.');
+      return;
+    }
+    setUploading(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await uploadRequest('/system-settings/pwa/icon', 'pwa_icon', iconFile);
+      hydrate(data);
+      setIconFile(null);
+      setMessage('PWA icon uploaded.');
+    } catch (err) {
+      setError(err.message || 'Could not upload PWA icon.');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function clearPwaInstallRecord(row, platform) {
+    if (!row) return;
+    const profileLabel = row.display_name || row.contact_number || row.client_ip || 'this customer';
+    const confirmClear = window.confirm(`Clear ${platform === 'ios' ? 'iOS' : 'Android'} PWA install tracking and PWA gift status for ${profileLabel}?`);
+    if (!confirmClear) return;
+    const clearKey = `${platform}:${row.install_group_key || row.id}`;
+    setClearingInstallKey(clearKey);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request('/system-settings/pwa/install-records/clear', {
+        method: 'POST',
+        body: JSON.stringify({
+          platform,
+          user_id: row.user_id || null,
+          profile_id: row.profile_id || null,
+          portal_session_id: row.portal_session_id || null,
+          device_token_hash: row.device_token_hash || null,
+        }),
+      });
+      hydrate(data);
+      const result = data?.clear_result || {};
+      setMessage(`PWA install tracking cleared. ${result.deleted_events || 0} event(s), ${result.deleted_gift_claims || 0} gift claim(s) reset.`);
+    } catch (err) {
+      setError(err.message || 'Could not clear PWA install tracking.');
+    } finally {
+      setClearingInstallKey('');
+    }
+  }
+
+  if (loading) return <div className="empty">Loading PWA settings...</div>;
+
+  const overview = payload?.overview || {};
+  const recentEvents = payload?.recent_events || [];
+  const androidInstalls = payload?.android_installs || [];
+  const iosInstalls = payload?.ios_installs || [];
+  const recentClaims = payload?.recent_gift_claims || [];
+  const pwaIconPreview = form.icon_url
+    ? cacheBustedUploadUrl(form.icon_url, form.icon_version || payload?.settings?.icon_version || payload?.settings?.updated_at)
+    : '/api/portal/app-icon/pwa-192.png';
+  const displayModeGuide = {
+    standalone: {
+      title: 'Standalone is recommended',
+      detail: 'The portal opens like an installed app, without the browser address bar. This is the best default for customer phones.',
+    },
+    fullscreen: {
+      title: 'Fullscreen hides browser UI',
+      detail: 'The app tries to use the full screen. Use this only for a kiosk-like experience; unsupported browsers can fall back automatically.',
+    },
+    'minimal-ui': {
+      title: 'Minimal UI keeps small browser controls',
+      detail: 'Supported browsers may show small navigation controls. Unsupported browsers usually fall back to standalone or browser mode.',
+    },
+    browser: {
+      title: 'Browser opens like a normal tab',
+      detail: 'The Home Screen shortcut behaves closer to a normal browser page. Use this only if you do not want an app-like portal.',
+    },
+  };
+  const currentDisplayGuide = displayModeGuide[form.display_mode] || displayModeGuide.standalone;
+
+  function renderInstallTable(rows, emptyLabel, platform, dateLabel = 'Latest Installed') {
+    return (
+      <div className="table-responsive">
+        <table className="table table-vcenter card-table">
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Site Located</th>
+              <th>Device</th>
+              <th>Browser</th>
+              <th className="text-center">Times</th>
+              <th>{dateLabel}</th>
+              <th className="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((event) => {
+              const mac = event.omada_client_mac || event.mikrotik_client_mac || event.client_mac || '';
+              const siteName = event.site_name || event.omada_site_name || event.site || 'Unknown site';
+              const location = [event.barangay, event.municipality].filter(Boolean).join(', ') || event.location || event.ssid || '-';
+              const clearKey = `${platform}:${event.install_group_key || event.id}`;
+              return (
+                <tr key={event.id}>
+                  <td>
+                    <div className="fw-semibold">{event.display_name || 'No profile yet'}</div>
+                    <div className="text-muted small">{event.contact_number || 'No contact saved'}</div>
+                  </td>
+                  <td>
+                    <div>{siteName}</div>
+                    <div className="text-muted small">{location}</div>
+                  </td>
+                  <td>
+                    <div className="text-truncate" style={{ maxWidth: 180 }}>{mac || event.client_ip || '-'}</div>
+                    <div className="text-muted small">{event.ssid || event.display_mode || '-'}</div>
+                  </td>
+                  <td>
+                    <div>{event.browser || '-'}</div>
+                    <div className="text-muted small">{event.platform || '-'}</div>
+                  </td>
+                  <td className="text-center"><span className="badge bg-blue-lt text-blue">{event.install_count || 1}</span></td>
+                  <td>{formatPortalDateTime(event.created_at)}</td>
+                  <td className="text-end">
+                    <button
+                      className="btn btn-icon btn-outline-danger"
+                      type="button"
+                      title="Clear install tracking and PWA gift status"
+                      disabled={clearingInstallKey === clearKey}
+                      onClick={() => clearPwaInstallRecord(event, platform)}
+                    >
+                      <IconTrash size={17} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+            {!rows.length && <tr><td colSpan="7"><div className="empty">{emptyLabel}</div></td></tr>}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  return (
+    <div className="row row-cards pwa-settings">
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
+      {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
+
+      <div className="col-12">
+        <ul className="nav nav-tabs mb-3" role="tablist">
+          {[
+            { key: 'overview', label: 'Overview', icon: IconDashboard },
+            { key: 'settings', label: 'Settings', icon: IconSettings },
+          ].map((item) => {
+            const Icon = item.icon;
+            return (
+              <li className="nav-item" key={item.key}>
+                <button
+                  className={`nav-link ${sectionTab === item.key ? 'active' : ''}`}
+                  type="button"
+                  onClick={() => setSectionTab(item.key)}
+                >
+                  <Icon size={17} className="me-2" />{item.label}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      {sectionTab === 'overview' && (
+        <>
+          <KpiCard icon={IconBrandChrome} label="Android Installs" value={overview.android_install_count || 0} tone="green" />
+          <KpiCard icon={IconPhone} label="iOS Installs" value={overview.ios_install_count || 0} tone="blue" />
+          <KpiCard icon={IconUsers} label="Unique Profiles" value={overview.unique_profile_count || 0} tone="indigo" />
+          <KpiCard icon={IconGift} label="Gift Claims" value={overview.gift_claim_count || 0} tone="orange" />
+
+          <div className="col-12">
+            <Card title="PWA Overview" subtitle="Tracks Home Screen installs, standalone opens, and Android-only PWA gift claims.">
+              <div className="alert alert-info mb-3">
+                Android Chrome can report a real app install event. iPhone/iPad Safari does not expose that same event, so iOS installs are detected from Home Screen standalone opens.
+              </div>
+              <ul className="nav nav-tabs mb-3" role="tablist">
+                {[
+                  { key: 'android', label: 'Android Installs', count: overview.android_install_count || 0, icon: IconBrandChrome },
+                  { key: 'ios', label: 'iOS Installs', count: overview.ios_install_count || 0, icon: IconPhone },
+                  { key: 'claims', label: 'Gift Claims', count: overview.gift_claim_count || 0, icon: IconGift },
+                  { key: 'events', label: 'Recent Events', count: recentEvents.length, icon: IconHistory },
+                ].map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <li className="nav-item" key={item.key}>
+                      <button
+                        className={`nav-link ${overviewTab === item.key ? 'active' : ''}`}
+                        type="button"
+                        onClick={() => setOverviewTab(item.key)}
+                      >
+                        <Icon size={16} className="me-2" />{item.label}
+                        <span className="badge bg-secondary-lt text-secondary ms-2">{item.count}</span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {overviewTab === 'android' && renderInstallTable(androidInstalls, 'No Android PWA installs detected yet.', 'android', 'Latest Installed')}
+              {overviewTab === 'ios' && renderInstallTable(iosInstalls, 'No iOS Home Screen opens detected yet.', 'ios', 'Latest Open')}
+              {overviewTab === 'claims' && (
+                <div className="table-responsive">
+                  <table className="table table-vcenter card-table">
+                    <thead><tr><th>Customer</th><th>Gift</th><th>Status</th><th>Claimed At</th></tr></thead>
+                    <tbody>
+                      {recentClaims.map((claim) => (
+                        <tr key={claim.id}>
+                          <td>
+                            <div className="fw-semibold">{claim.display_name || 'Customer'}</div>
+                            <div className="text-muted small">{claim.contact_number || '-'}</div>
+                          </td>
+                          <td>
+                            <div>{claim.gift_title || claim.product_name}</div>
+                            <div className="text-muted small">{formatSeconds(claim.gift_duration_seconds || claim.remaining_seconds || 0)}</div>
+                          </td>
+                          <td><span className="badge bg-green-lt text-green">{claim.bag_item_status || 'CLAIMED'}</span></td>
+                          <td>{formatPortalDateTime(claim.created_at)}</td>
+                        </tr>
+                      ))}
+                      {!recentClaims.length && <tr><td colSpan="4"><div className="empty">No PWA gift claims yet.</div></td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {overviewTab === 'events' && (
+                <div className="table-responsive">
+                  <table className="table table-vcenter card-table">
+                    <thead><tr><th>Event</th><th>Customer</th><th>Device</th><th>Browser</th><th>Date</th></tr></thead>
+                    <tbody>
+                      {recentEvents.map((event) => {
+                        const mac = event.omada_client_mac || event.mikrotik_client_mac || event.client_mac || '';
+                        return (
+                          <tr key={event.id}>
+                            <td><span className="badge bg-blue-lt text-blue">{event.event_type}</span></td>
+                            <td>
+                              <div className="fw-semibold">{event.display_name || 'No profile yet'}</div>
+                              <div className="text-muted small">{event.contact_number || '-'}</div>
+                            </td>
+                            <td>
+                              <div className="text-truncate" style={{ maxWidth: 180 }}>{mac || event.client_ip || '-'}</div>
+                              <div className="text-muted small">{event.ssid || event.display_mode || '-'}</div>
+                            </td>
+                            <td>
+                              <div>{event.browser || '-'}</div>
+                              <div className="text-muted small">{event.platform || '-'}</div>
+                            </td>
+                            <td>{formatPortalDateTime(event.created_at)}</td>
+                          </tr>
+                        );
+                      })}
+                      {!recentEvents.length && <tr><td colSpan="5"><div className="empty">No PWA events yet.</div></td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+          </div>
+        </>
+      )}
+
+      {sectionTab === 'settings' && (
+        <>
+      <div className="col-12">
+        <div className="alert alert-info mb-0">
+          A PWA is still the portal website. Customers normally receive new web app changes on the next reload/open. Phones may cache the launcher icon and app name, so icon/name changes can require reinstalling the Home Screen app on some devices.
+        </div>
+      </div>
+
+      <div className="col-lg-7">
+        <Card title="PWA App Settings" subtitle="Controls the install manifest used by Android Chrome and supported browsers.">
+          <form onSubmit={savePwaSettings}>
+            <div className="row g-3">
+              <div className="col-md-7">
+                <label className="form-label">PWA Name</label>
+                <input className="form-control" value={form.name} onChange={(e) => updateField('name', e.target.value)} />
+              </div>
+              <div className="col-md-5">
+                <label className="form-label">Short Name</label>
+                <input className="form-control" maxLength={24} value={form.short_name} onChange={(e) => updateField('short_name', e.target.value)} />
+                <div className="form-hint">Shown under the Home Screen icon. Keep it short.</div>
+              </div>
+              <div className="col-12">
+                <label className="form-label">Description</label>
+                <textarea className="form-control" rows="2" value={form.description} onChange={(e) => updateField('description', e.target.value)} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Display Mode <span className="info" title={`${currentDisplayGuide.title}. ${currentDisplayGuide.detail}`}>i</span></label>
+                <select className="form-select" value={form.display_mode} onChange={(e) => updateField('display_mode', e.target.value)}>
+                  <option value="standalone">Standalone</option>
+                  <option value="fullscreen">Fullscreen</option>
+                  <option value="minimal-ui">Minimal UI</option>
+                  <option value="browser">Browser</option>
+                </select>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Theme Color</label>
+                <input className="form-control form-control-color" type="color" value={form.theme_color || '#ff3838'} onChange={(e) => updateField('theme_color', e.target.value)} />
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Background Color</label>
+                <input className="form-control form-control-color" type="color" value={form.background_color || '#f8fafc'} onChange={(e) => updateField('background_color', e.target.value)} />
+              </div>
+              <div className="col-12">
+                <label className="form-check form-switch">
+                  <input className="form-check-input" type="checkbox" checked={form.install_enabled !== false} onChange={(e) => updateField('install_enabled', e.target.checked)} />
+                  <span className="form-check-label">Show install/Home Screen app controls in the portal settings</span>
+                </label>
+              </div>
+              <div className="col-12">
+                <label className="form-label">Install Guide Message</label>
+                <textarea className="form-control" rows="2" value={form.install_guide_message || ''} onChange={(e) => updateField('install_guide_message', e.target.value)} />
+              </div>
+              <div className="col-12 text-end">
+                <button className="btn btn-primary" disabled={saving}>
+                  <IconDeviceFloppy size={18} className="me-2" />{saving ? 'Saving...' : 'Save PWA Settings'}
+                </button>
+              </div>
+            </div>
+          </form>
+        </Card>
+      </div>
+
+      <div className="col-lg-5">
+        <Card title="PWA Icon Image" subtitle="Used for new Home Screen installs. Existing installs may keep the cached old icon.">
+          <form onSubmit={uploadPwaIcon}>
+            <div className="d-flex align-items-center gap-3 flex-wrap mb-3">
+              <span className="avatar avatar-xl bg-white border">
+                <img src={pwaIconPreview} alt="PWA icon" />
+              </span>
+              <div>
+                <div className="fw-semibold">Icon format guide</div>
+                <div className="text-muted small">Use a square PNG/WebP, 512x512 recommended. Keep important content centered because Android may mask the icon into a circle or rounded square.</div>
+              </div>
+            </div>
+            <input className="form-control" type="file" accept="image/png,image/webp,image/jpeg,image/svg+xml" onChange={(e) => setIconFile(e.target.files?.[0] || null)} />
+            <div className="btn-list justify-content-end mt-3">
+              <button className="btn btn-primary" disabled={uploading}>
+                <IconCloudUpload size={18} className="me-2" />{uploading ? 'Uploading...' : 'Upload Icon'}
+              </button>
+            </div>
+          </form>
+        </Card>
+
+        <Card title="Notification Reality Check" className="mt-3">
+          <div className="d-flex gap-3">
+            <span className="avatar bg-yellow-lt text-yellow"><IconBell size={22} /></span>
+            <div className="small text-muted">
+              The system cannot force Android/iOS to open the PWA or send a WiFi-connect greeting while the app is fully closed. Browser push can notify only after the customer opens/installs the portal and grants notification permission. Tapping the notification can then open the portal.
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      <div className="col-12">
+        <Card title="PWA Install Gift" subtitle="Optional one-time WiFi Bag gift for Android installs only. A customer profile is required before claiming.">
+          <form onSubmit={savePwaSettings}>
+            <div className="row g-3 align-items-end">
+              <div className="col-12">
+                <label className="form-check form-switch">
+                  <input className="form-check-input" type="checkbox" checked={Boolean(form.gift?.enabled)} onChange={(e) => updateGiftField('enabled', e.target.checked)} />
+                  <span className="form-check-label">Enable one-time Android PWA install gift</span>
+                </label>
+              </div>
+              <div className="col-md-4">
+                <label className="form-label">Gift Name</label>
+                <input className="form-control" value={form.gift?.title || ''} onChange={(e) => updateGiftField('title', e.target.value)} />
+              </div>
+              <div className="col-md-3">
+                <label className="form-label">Free Time Minutes</label>
+                <input
+                  className="form-control"
+                  type="number"
+                  min="1"
+                  max="43200"
+                  value={Math.max(1, Math.ceil(Number(form.gift?.duration_seconds || 3600) / 60))}
+                  onChange={(e) => updateGiftField('duration_seconds', Math.max(1, Number(e.target.value || 1)) * 60)}
+                />
+                <div className="form-hint">60 = 1 hour, 1440 = 1 day.</div>
+              </div>
+              <div className="col-md-5">
+                <label className="form-label">Gift Available Message</label>
+                <input className="form-control" value={form.gift?.available_message || ''} onChange={(e) => updateGiftField('available_message', e.target.value)} />
+              </div>
+              <div className="col-md-9">
+                <label className="form-label">Gift Claim Message</label>
+                <input className="form-control" value={form.gift?.claim_message || ''} onChange={(e) => updateGiftField('claim_message', e.target.value)} />
+              </div>
+              <div className="col-md-3">
+                <button className="btn btn-primary w-100" disabled={saving}>
+                  <IconDeviceFloppy size={18} className="me-2" />Save Gift
+                </button>
+              </div>
+            </div>
+          </form>
+        </Card>
+      </div>
+
+        </>
+      )}
+    </div>
   );
 }
 
@@ -31184,7 +32613,7 @@ function PaymentAccessPage() {
     setError('');
     setMessage('');
     try {
-      const data = await request('/omada/payment-auth-free/settings', { method: 'PUT', body: JSON.stringify(paymentAccessForm || {}) });
+      const data = await request('/omada/payment-auth-free/settings', { method: 'PUT', body: JSON.stringify(paymentAccessForm || paymentAccess?.settings || {}) });
       setPaymentAccess(data);
       if (data?.settings) setPaymentAccessForm(data.settings);
       setMessage('Payment access settings saved.');
@@ -31193,6 +32622,10 @@ function PaymentAccessPage() {
     } finally {
       setBusy('');
     }
+  }
+
+  function updatePaymentAccessForm(patch) {
+    setPaymentAccessForm({ ...(paymentAccessForm || paymentAccess?.settings || {}), ...patch });
   }
 
   async function removeRemotePaymentAccess(row) {
@@ -31283,9 +32716,23 @@ function PaymentAccessPage() {
     return liveRemainingSeconds(row?.expires_at, row?.remaining_seconds, paymentAccessNowMs);
   }
 
+  function paymentAccessAttemptBadge(row) {
+    const attempts = Number(row?.attempts_today);
+    const limit = Number(row?.daily_attempt_limit || paymentAccess?.settings?.daily_attempt_limit || 5);
+    if (!Number.isFinite(attempts)) return <span className="text-muted">-</span>;
+    const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 5;
+    const remaining = Math.max(safeLimit - attempts, 0);
+    const tone = attempts >= safeLimit ? 'red' : remaining <= 1 ? 'orange' : attempts >= Math.max(1, safeLimit - 2) ? 'yellow' : 'secondary';
+    return (
+      <span className={`badge bg-${tone}-lt text-${tone}`} title={`${remaining} checkout window${remaining === 1 ? '' : 's'} remaining today`}>
+        {attempts}/{safeLimit}
+      </span>
+    );
+  }
+
   function paymentAccessTableColumnCount(tabKey = paymentAccessTableTab) {
     if (tabKey === 'ABUSE') return 5;
-    if (tabKey === 'GRANTED') return 7;
+    if (tabKey === 'GRANTED') return 8;
     return 6;
   }
 
@@ -31353,6 +32800,7 @@ function PaymentAccessPage() {
         <th>Site</th>
         <th>MAC / IP</th>
         <th>Status</th>
+        <th>Tries Today</th>
         <th>Expires</th>
         <th>Remaining</th>
         <th>Action</th>
@@ -31430,6 +32878,7 @@ function PaymentAccessPage() {
             <div className="text-muted small">{row.client_ip || '-'}</div>
           </td>
           <td><span className={`badge bg-${tone}-lt text-${tone}`}>{row.status}</span></td>
+          <td>{paymentAccessAttemptBadge(row)}</td>
           <td className="text-muted">{row.orphaned ? 'Remote only' : formatPortalDateTime(row.expires_at)}</td>
           <td>
             {remainingSeconds === null ? (
@@ -31635,7 +33084,7 @@ function PaymentAccessPage() {
                         <div className="text-muted small">Adds the checkout device MAC in Omada only during the payment window.</div>
                       </div>
                       <label className="form-check form-switch m-0">
-                        <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.enabled !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), enabled: event.target.checked })} />
+                        <input className="form-check-input" type="checkbox" checked={(paymentAccessForm || paymentAccess?.settings)?.enabled !== false} onChange={(event) => updatePaymentAccessForm({ enabled: event.target.checked })} />
                       </label>
                     </div>
                   </div>
@@ -31648,37 +33097,37 @@ function PaymentAccessPage() {
                         <div className="text-muted small">Captive popup customers must copy/open the portal in Chrome or Safari before PayMongo checkout starts.</div>
                       </div>
                       <label className="form-check form-switch m-0">
-                        <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.browser_transfer_required !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), browser_transfer_required: event.target.checked })} />
+                        <input className="form-check-input" type="checkbox" checked={(paymentAccessForm || paymentAccess?.settings)?.browser_transfer_required !== false} onChange={(event) => updatePaymentAccessForm({ browser_transfer_required: event.target.checked })} />
                       </label>
                     </div>
                   </div>
                 </div>
                 <div className="col-md-3">
                   <label className="form-label">Payment window timeout (seconds)</label>
-                  <input className="form-control" type="number" min="30" max="900" value={paymentAccessForm?.grant_timeout_seconds ?? 120} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), grant_timeout_seconds: Number(event.target.value) })} />
-                  <div className="text-muted small mt-1">Default 120 seconds. The Omada free-client entry is removed after this window.</div>
+                  <input className="form-control" type="number" min="30" max="900" value={(paymentAccessForm || paymentAccess?.settings)?.grant_timeout_seconds ?? ''} placeholder="120" onChange={(event) => updatePaymentAccessForm({ grant_timeout_seconds: Number(event.target.value) })} />
+                  <div className="text-muted small mt-1">The Omada free-client entry is removed after this saved window.</div>
                 </div>
                 <div className="col-md-3">
                   <label className="form-label">Daily checkout window limit</label>
-                  <input className="form-control" type="number" min="1" max="100" value={paymentAccessForm?.daily_attempt_limit ?? 5} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), daily_attempt_limit: Number(event.target.value) })} />
+                  <input className="form-control" type="number" min="1" max="100" value={(paymentAccessForm || paymentAccess?.settings)?.daily_attempt_limit ?? ''} placeholder="5" onChange={(event) => updatePaymentAccessForm({ daily_attempt_limit: Number(event.target.value) })} />
                 </div>
                 <div className="col-md-3">
                   <label className="form-label">Attempt cooldown (seconds)</label>
-                  <input className="form-control" type="number" min="0" max="3600" value={paymentAccessForm?.cooldown_seconds ?? 60} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), cooldown_seconds: Number(event.target.value) })} />
+                  <input className="form-control" type="number" min="0" max="3600" value={(paymentAccessForm || paymentAccess?.settings)?.cooldown_seconds ?? ''} placeholder="60" onChange={(event) => updatePaymentAccessForm({ cooldown_seconds: Number(event.target.value) })} />
                 </div>
                 <div className="col-md-3">
                   <label className="form-label">Abuse block duration (hours)</label>
-                  <input className="form-control" type="number" min="1" max="168" value={paymentAccessForm?.abuse_block_hours ?? 24} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), abuse_block_hours: Number(event.target.value) })} />
+                  <input className="form-control" type="number" min="1" max="168" value={(paymentAccessForm || paymentAccess?.settings)?.abuse_block_hours ?? ''} placeholder="24" onChange={(event) => updatePaymentAccessForm({ abuse_block_hours: Number(event.target.value) })} />
                 </div>
                 <div className="col-md-6">
                   <label className="form-check">
-                    <input className="form-check-input" type="checkbox" checked={paymentAccessForm?.block_online_payment_on_abuse !== false} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), block_online_payment_on_abuse: event.target.checked })} />
+                    <input className="form-check-input" type="checkbox" checked={(paymentAccessForm || paymentAccess?.settings)?.block_online_payment_on_abuse !== false} onChange={(event) => updatePaymentAccessForm({ block_online_payment_on_abuse: event.target.checked })} />
                     <span className="form-check-label">Block online payment after daily limit is reached</span>
                   </label>
                 </div>
                 <div className="col-12">
                   <label className="form-label">Operator notes / guide</label>
-                  <textarea className="form-control" rows={3} value={paymentAccessForm?.notes || ''} onChange={(event) => setPaymentAccessForm({ ...(paymentAccessForm || {}), notes: event.target.value })} />
+                  <textarea className="form-control" rows={3} value={(paymentAccessForm || paymentAccess?.settings)?.notes || ''} onChange={(event) => updatePaymentAccessForm({ notes: event.target.value })} />
                 </div>
                 <div className="col-12">
                   <div className="alert alert-warning mb-0">
@@ -32697,6 +34146,7 @@ const nav = [
   { page: 'Dashboard', icon: IconDashboard, tone: 'blue' },
   { page: 'AP & Client Map', icon: IconMapPin, tone: 'teal' },
   { page: 'Customer Devices', icon: IconWifi, tone: 'azure' },
+  { page: 'Monthly Subscribers', icon: IconUsers, tone: 'blue' },
   {
     page: 'APs Deployment',
     icon: IconRouter,
@@ -33435,6 +34885,7 @@ function App() {
             <div className="container-xl">
             {page === 'Dashboard' && <Dashboard data={dashboard} />}
             {page === 'Customer Devices' && <CustomerDevicesPage />}
+            {page === 'Monthly Subscribers' && <MonthlySubscribersPage />}
             {page === 'Sites' && <SitesDeploymentsPage />}
             {page === 'List of APs' && <ListOfApsPage />}
             {page === 'Location Management' && <LocationManagementPage />}

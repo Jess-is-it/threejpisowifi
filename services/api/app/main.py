@@ -715,6 +715,15 @@ class PortalProfileOtpRequest(PortalSessionRequest):
     contact_number: str = Field(min_length=6, max_length=32)
 
 
+class PortalMonthlyLoginOtpRequest(PortalSessionRequest):
+    contact_number: str = Field(min_length=6, max_length=32)
+
+
+class PortalMonthlyLoginConfirmRequest(PortalSessionRequest):
+    contact_number: str = Field(min_length=6, max_length=32)
+    verification_code: str = Field(min_length=4, max_length=12)
+
+
 class PortalProfileSaveRequest(PortalSessionRequest):
     display_name: str = Field(min_length=1, max_length=120)
     email: Optional[str] = Field(default=None, max_length=255)
@@ -735,6 +744,20 @@ class PortalProfileNotificationSentRequest(PortalSessionRequest):
     native_status: Optional[str] = Field(default=None, max_length=40)
     native_mode: Optional[str] = Field(default=None, max_length=40)
     native_reason: Optional[str] = Field(default=None, max_length=160)
+
+
+class PortalPushSubscriptionRequest(PortalSessionRequest):
+    endpoint: str = Field(min_length=20, max_length=2048)
+    expirationTime: Optional[float] = None
+    keys: dict = Field(default_factory=dict)
+
+
+class PortalPwaEventRequest(PortalSessionRequest):
+    event_type: str = Field(min_length=3, max_length=60)
+    display_mode: Optional[str] = Field(default=None, max_length=80)
+    platform: Optional[str] = Field(default=None, max_length=80)
+    browser: Optional[str] = Field(default=None, max_length=80)
+    metadata: dict = Field(default_factory=dict)
 
 
 class PortalDeviceLinkCodeRequest(PortalSessionRequest):
@@ -764,6 +787,40 @@ class PortalSupportConversationCreateRequest(PortalSessionRequest):
 
 class PortalSupportMessageRequest(PortalSessionRequest):
     message_text: str = Field(min_length=1, max_length=2000)
+
+
+class MonthlySubscriberSettingsUpdate(BaseModel):
+    integration_enabled: Optional[bool] = None
+    api_key: Optional[str] = Field(default=None, max_length=160)
+    api_secret: Optional[str] = Field(default=None, max_length=512)
+    rolling_authorization_seconds: Optional[int] = Field(default=None, ge=300, le=2_592_000)
+    login_otp_ttl_seconds: Optional[int] = Field(default=None, ge=60, le=1800)
+    login_otp_cooldown_seconds: Optional[int] = Field(default=None, ge=10, le=600)
+    source_system_label: Optional[str] = Field(default=None, max_length=120)
+
+
+class MonthlySubscriberContactSyncPayload(BaseModel):
+    contact_number: str = Field(min_length=6, max_length=32)
+    normalized_contact: Optional[str] = Field(default=None, max_length=32)
+    label: Optional[str] = Field(default=None, max_length=120)
+    enabled: bool = True
+
+
+class MonthlySubscriberSyncRow(BaseModel):
+    external_subscriber_id: str = Field(min_length=1, max_length=160)
+    account_number: Optional[str] = Field(default=None, max_length=120)
+    service_account_number: Optional[str] = Field(default=None, max_length=120)
+    customer_name: str = Field(min_length=1, max_length=180)
+    plan_name: Optional[str] = Field(default=None, max_length=180)
+    status: str = Field(default="ACTIVE", max_length=40)
+    contacts: list[MonthlySubscriberContactSyncPayload] = Field(default_factory=list)
+    source: dict = Field(default_factory=dict)
+
+
+class MonthlySubscriberUpsertPayload(BaseModel):
+    source_system: str = Field(default="3J Main", max_length=120)
+    synced_by: Optional[str] = Field(default=None, max_length=120)
+    subscribers: list[MonthlySubscriberSyncRow] = Field(default_factory=list)
 
 
 class CaptivePortalSettingsUpdate(BaseModel):
@@ -813,6 +870,31 @@ class CaptivePortalSettingsUpdate(BaseModel):
     bag_activation_overlap_seconds: Optional[int] = Field(default=None, ge=0, le=300)
     sync_omada_portal: Optional[bool] = False
     status: Optional[str] = None
+
+
+class PortalPwaSettingsUpdate(BaseModel):
+    pwa_name: Optional[str] = Field(default=None, max_length=80)
+    pwa_short_name: Optional[str] = Field(default=None, max_length=24)
+    pwa_description: Optional[str] = Field(default=None, max_length=240)
+    pwa_theme_color: Optional[str] = Field(default=None, max_length=20)
+    pwa_background_color: Optional[str] = Field(default=None, max_length=20)
+    pwa_icon_url: Optional[str] = Field(default=None, max_length=500)
+    pwa_display_mode: Optional[str] = Field(default=None, max_length=40)
+    pwa_install_enabled: Optional[bool] = None
+    pwa_gift_enabled: Optional[bool] = None
+    pwa_gift_duration_seconds: Optional[int] = Field(default=None, ge=1, le=2592000)
+    pwa_gift_title: Optional[str] = Field(default=None, max_length=160)
+    pwa_gift_available_message: Optional[str] = Field(default=None, max_length=240)
+    pwa_gift_claim_message: Optional[str] = Field(default=None, max_length=500)
+    pwa_install_guide_message: Optional[str] = Field(default=None, max_length=500)
+
+
+class PortalPwaInstallClearRequest(BaseModel):
+    platform: str = Field(min_length=2, max_length=20)
+    user_id: Optional[str] = None
+    profile_id: Optional[str] = None
+    portal_session_id: Optional[str] = None
+    device_token_hash: Optional[str] = None
 
 
 class OmadaPortalConfigureRequest(BaseModel):
@@ -6200,6 +6282,70 @@ def omada_payment_auth_free_public_grant(row: Optional[dict]) -> Optional[dict]:
     }
 
 
+def omada_payment_auth_free_attempts_today_for_row(cur, row: Optional[dict]) -> int:
+    if not row:
+        return 0
+    clauses = []
+    params = []
+    if row.get("user_id"):
+        clauses.append("g.user_id = %s")
+        params.append(row["user_id"])
+    if row.get("client_mac"):
+        clauses.append("g.client_mac = %s")
+        params.append(row["client_mac"])
+    if row.get("device_token_hash"):
+        clauses.append("g.device_token_hash = %s")
+        params.append(row["device_token_hash"])
+    if row.get("profile_contact_number"):
+        clauses.append("g.profile_contact_number = %s")
+        params.append(row["profile_contact_number"])
+    if not clauses:
+        return 0
+    cur.execute(
+        f"""
+        SELECT count(*)::int AS attempts
+        FROM omada_payment_auth_free_grants g
+        LEFT JOIN payment_orders po ON po.id = g.payment_order_id
+        WHERE g.created_at >= date_trunc('day', now())
+          AND ({" OR ".join(clauses)})
+          AND (po.id IS NULL OR NOT (po.status = 'PAID' AND po.fulfillment_status = 'FULFILLED'))
+        """,
+        tuple(params),
+    )
+    return int((cur.fetchone() or {}).get("attempts") or 0)
+
+
+def omada_payment_auth_free_public_grants_with_attempts(cur, rows: list[dict], settings: dict) -> list[dict]:
+    limit = max(1, int((settings or {}).get("daily_attempt_limit") or 5))
+    warning_threshold = max(1, limit - 2)
+    public_rows = []
+    for row in rows:
+        public = omada_payment_auth_free_public_grant(row)
+        if not public:
+            continue
+        attempts_today = omada_payment_auth_free_attempts_today_for_row(cur, row)
+        remaining_attempts = max(limit - attempts_today, 0)
+        public.update(
+            {
+                "attempts_today": attempts_today,
+                "daily_attempt_limit": limit,
+                "remaining_attempts": remaining_attempts,
+                "attempt_warning": attempts_today >= warning_threshold,
+                "attempt_warning_level": (
+                    "LIMIT_REACHED"
+                    if attempts_today >= limit
+                    else "LAST_CHANCE"
+                    if remaining_attempts <= 1
+                    else "WARNING"
+                    if attempts_today >= warning_threshold
+                    else "NONE"
+                ),
+            }
+        )
+        public_rows.append(public)
+    return public_rows
+
+
 def omada_payment_auth_free_site_rows(cur) -> list[dict]:
     cur.execute(
         """
@@ -6479,13 +6625,28 @@ def omada_payment_auth_free_abuse_is_overridden(identity: dict, overrides: Optio
     return any(omada_payment_auth_free_abuse_identity_matches(identity, override) for override in active_overrides)
 
 
-def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, profile: Optional[dict], payload: PortalSessionRequest, request: Request) -> dict:
+def omada_payment_auth_free_abuse_status(cur, session: dict, user: dict, profile: Optional[dict], payload: PortalSessionRequest, request: Request, record_limit_block: bool = False) -> dict:
     store = omada_payment_auth_free_store()
     if not store.get("enabled") or not store.get("block_online_payment_on_abuse"):
-        return {"status": "OK", "attempts_today": 0, "limit": store["daily_attempt_limit"]}
+        return {
+            "status": "OK",
+            "enabled": bool(store.get("enabled")),
+            "attempts_today": 0,
+            "limit": store["daily_attempt_limit"],
+            "remaining_attempts": store["daily_attempt_limit"],
+            "warning": False,
+        }
     identity = omada_payment_auth_free_identity(session, user, profile, payload, request)
     if omada_payment_auth_free_abuse_is_overridden(identity):
-        return {"status": "OK", "attempts_today": 0, "limit": store["daily_attempt_limit"], "admin_override": True}
+        return {
+            "status": "OK",
+            "enabled": True,
+            "attempts_today": 0,
+            "limit": store["daily_attempt_limit"],
+            "remaining_attempts": store["daily_attempt_limit"],
+            "warning": False,
+            "admin_override": True,
+        }
     clauses = []
     grant_clauses = []
     params = []
@@ -6502,7 +6663,14 @@ def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, 
         grant_clauses.append("g.device_token_hash = %s")
         params.append(identity["device_token_hash"])
     if not clauses:
-        return {"status": "OK", "attempts_today": 0, "limit": store["daily_attempt_limit"]}
+        return {
+            "status": "OK",
+            "enabled": True,
+            "attempts_today": 0,
+            "limit": store["daily_attempt_limit"],
+            "remaining_attempts": store["daily_attempt_limit"],
+            "warning": False,
+        }
     where_clause = " OR ".join(clauses)
     grant_where_clause = " OR ".join(grant_clauses)
     unpaid_grant_clause = "(po.id IS NULL OR NOT (po.status = 'PAID' AND po.fulfillment_status = 'FULFILLED'))"
@@ -6519,10 +6687,16 @@ def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, 
     )
     active_block = cur.fetchone()
     if active_block:
-        raise HTTPException(
-            status_code=429,
-            detail="Online payment access is temporarily blocked for this device/profile because too many checkout windows were started today. Try again later or ask the operator.",
-        )
+        return {
+            "status": "BLOCKED",
+            "enabled": True,
+            "attempts_today": int(active_block.get("attempts_today") or store["daily_attempt_limit"]),
+            "limit": store["daily_attempt_limit"],
+            "remaining_attempts": 0,
+            "warning": False,
+            "block_until": active_block.get("block_until"),
+            "message": "Online payment is temporarily blocked for this device/profile because too many checkout windows were started today. You can try again tomorrow or buy in a physical store.",
+        }
     if store["cooldown_seconds"] > 0:
         cur.execute(
             f"""
@@ -6540,10 +6714,16 @@ def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, 
         last_created = aware_utc((last_attempt or {}).get("created_at"))
         if last_created and (datetime.now(timezone.utc) - last_created).total_seconds() < store["cooldown_seconds"]:
             remaining = max(int(store["cooldown_seconds"] - (datetime.now(timezone.utc) - last_created).total_seconds()), 1)
-            raise HTTPException(
-                status_code=429,
-                detail=f"Please wait {remaining} seconds before starting another online payment checkout.",
-            )
+            return {
+                "status": "COOLDOWN",
+                "enabled": True,
+                "attempts_today": 0,
+                "limit": store["daily_attempt_limit"],
+                "remaining_attempts": store["daily_attempt_limit"],
+                "warning": False,
+                "cooldown_remaining_seconds": remaining,
+                "message": f"Please wait {remaining} seconds before starting another online payment checkout.",
+            }
     cur.execute(
         f"""
         SELECT count(*)::int AS attempts
@@ -6557,13 +6737,47 @@ def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, 
     )
     attempts_today = int((cur.fetchone() or {}).get("attempts") or 0)
     if attempts_today < store["daily_attempt_limit"]:
-        return {"status": "OK", "attempts_today": attempts_today, "limit": store["daily_attempt_limit"]}
+        remaining_attempts = max(store["daily_attempt_limit"] - attempts_today, 0)
+        warning_threshold = max(1, store["daily_attempt_limit"] - 2)
+        warning = attempts_today >= warning_threshold
+        return {
+            "status": "OK",
+            "enabled": True,
+            "attempts_today": attempts_today,
+            "limit": store["daily_attempt_limit"],
+            "remaining_attempts": remaining_attempts,
+            "warning": warning,
+            "warning_level": "LAST_CHANCE" if warning and remaining_attempts <= 1 else ("WARNING" if warning else "NONE"),
+            "message": None,
+        }
     block_until = datetime.now(timezone.utc) + timedelta(hours=store["abuse_block_hours"])
-    record_omada_payment_auth_free_abuse_block(identity, attempts_today, block_until)
-    raise HTTPException(
-        status_code=429,
-        detail="Online payment access is temporarily blocked for this device/profile because too many checkout windows were started today. Try again later or ask the operator.",
-    )
+    if record_limit_block:
+        record_omada_payment_auth_free_abuse_block(identity, attempts_today, block_until)
+    return {
+        "status": "BLOCKED",
+        "enabled": True,
+        "attempts_today": attempts_today,
+        "limit": store["daily_attempt_limit"],
+        "remaining_attempts": 0,
+        "warning": False,
+        "block_until": block_until,
+        "message": "Online payment is temporarily blocked for this device/profile because too many checkout windows were started today. You can try again tomorrow or buy in a physical store.",
+    }
+
+
+def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, profile: Optional[dict], payload: PortalSessionRequest, request: Request) -> dict:
+    status = omada_payment_auth_free_abuse_status(cur, session, user, profile, payload, request, record_limit_block=True)
+    if status.get("status") == "COOLDOWN":
+        raise HTTPException(
+            status_code=429,
+            detail=status.get("message") or "Please wait before starting another online payment checkout.",
+        )
+    if status.get("status") == "BLOCKED":
+        raise HTTPException(
+            status_code=429,
+            detail=status.get("message") or "Online payment access is temporarily blocked for this device/profile because too many checkout windows were started today. Try again later or ask the operator.",
+        )
+    return status
 
 
 def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: dict, profile: Optional[dict], payload: PortalPaymentCheckoutRequest, request: Request) -> Optional[dict]:
@@ -6791,7 +7005,7 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
         LIMIT 100
         """
     )
-    active_grants = [omada_payment_auth_free_public_grant(row) for row in cur.fetchall()]
+    active_grants = omada_payment_auth_free_public_grants_with_attempts(cur, cur.fetchall(), settings)
     cur.execute(
         """
         SELECT *
@@ -10929,6 +11143,392 @@ def portal_device_link_code_hash(code: str) -> str:
     return hmac.new(portal_secret_seed().encode("utf-8"), payload, sha256).hexdigest()
 
 
+def ensure_monthly_subscriber_settings(cur) -> dict:
+    cur.execute(
+        """
+        INSERT INTO monthly_subscriber_settings(id)
+        VALUES (true)
+        ON CONFLICT (id) DO NOTHING
+        RETURNING *
+        """
+    )
+    row = cur.fetchone()
+    if row:
+        return row
+    cur.execute("SELECT * FROM monthly_subscriber_settings WHERE id = true")
+    return cur.fetchone() or {}
+
+
+def public_monthly_subscriber_settings(row: Optional[dict]) -> dict:
+    row = row or {}
+    return {
+        "integration_enabled": bool(row.get("integration_enabled", True)),
+        "api_key": row.get("api_key") or "",
+        "api_secret_set": bool(row.get("api_secret") or os.getenv("MONTHLY_SUBSCRIBER_API_SECRET", "").strip()),
+        "rolling_authorization_seconds": int(row.get("rolling_authorization_seconds") or 2592000),
+        "login_otp_ttl_seconds": int(row.get("login_otp_ttl_seconds") or 300),
+        "login_otp_cooldown_seconds": int(row.get("login_otp_cooldown_seconds") or 60),
+        "source_system_label": row.get("source_system_label") or "3J Main",
+    }
+
+
+def monthly_subscriber_signature_secret(settings: dict) -> str:
+    return normalize_payment_text(settings.get("api_secret") or os.getenv("MONTHLY_SUBSCRIBER_API_SECRET"), 512)
+
+
+def monthly_subscriber_signature_key(settings: dict) -> str:
+    return normalize_payment_text(settings.get("api_key") or os.getenv("MONTHLY_SUBSCRIBER_API_KEY") or "threejmain-monthly", 160)
+
+
+def require_monthly_subscriber_integration_signature(cur, request: Request, body_bytes: bytes) -> dict:
+    settings = ensure_monthly_subscriber_settings(cur)
+    if not settings.get("integration_enabled", True):
+        raise HTTPException(status_code=403, detail="Monthly subscriber integration is disabled.")
+    expected_key = monthly_subscriber_signature_key(settings)
+    expected_secret = monthly_subscriber_signature_secret(settings)
+    if not expected_key or not expected_secret:
+        raise HTTPException(status_code=503, detail="Monthly subscriber API key/secret is not configured.")
+    provided_key = normalize_payment_text(request.headers.get("x-3j-integration-key"), 160)
+    timestamp = normalize_payment_text(request.headers.get("x-3j-timestamp"), 40)
+    provided_signature = normalize_payment_text(request.headers.get("x-3j-signature"), 160)
+    if not provided_key or not secrets.compare_digest(provided_key, expected_key):
+        raise HTTPException(status_code=401, detail="Monthly subscriber API key is invalid.")
+    if not timestamp or not provided_signature:
+        raise HTTPException(status_code=401, detail="Monthly subscriber signature headers are required.")
+    try:
+        timestamp_value = int(timestamp)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Monthly subscriber timestamp is invalid.") from exc
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    if abs(now_ts - timestamp_value) > 300:
+        raise HTTPException(status_code=401, detail="Monthly subscriber request timestamp expired.")
+    expected_signature = hmac.new(
+        expected_secret.encode("utf-8"),
+        timestamp.encode("utf-8") + b"." + (body_bytes or b""),
+        sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(provided_signature, expected_signature):
+        raise HTTPException(status_code=401, detail="Monthly subscriber signature is invalid.")
+    return settings
+
+
+def monthly_status(value: str) -> str:
+    status = normalize_payment_text(value, 40).upper()
+    if status in {"ACTIVE", "SUSPENDED", "DISCONNECTED", "INACTIVE"}:
+        return status
+    return "INACTIVE"
+
+
+def monthly_contact_status(enabled: bool) -> str:
+    return "ACTIVE" if enabled else "DISABLED"
+
+
+def public_monthly_contact(row: dict) -> dict:
+    return {
+        "id": str(row.get("id") or ""),
+        "subscriber_id": str(row.get("subscriber_id") or ""),
+        "contact_number": row.get("contact_number") or "",
+        "normalized_contact": row.get("normalized_contact") or "",
+        "label": row.get("label") or "",
+        "status": row.get("status") or "",
+        "bound": bool(row.get("bound_user_id") or row.get("bound_device_token_hash") or row.get("bound_client_mac")),
+        "bound_user_id": str(row.get("bound_user_id") or ""),
+        "bound_client_mac": normalize_mac_if_valid(row.get("bound_client_mac")) or row.get("bound_client_mac") or "",
+        "bound_client_ip": str(row.get("bound_client_ip") or ""),
+        "bound_at": row.get("bound_at").isoformat() if row.get("bound_at") else None,
+        "revoked_at": row.get("revoked_at").isoformat() if row.get("revoked_at") else None,
+        "created_at": row.get("created_at").isoformat() if row.get("created_at") else None,
+        "updated_at": row.get("updated_at").isoformat() if row.get("updated_at") else None,
+    }
+
+
+def find_monthly_contact_by_number(cur, contact_number: str) -> Optional[dict]:
+    normalized_contact, _ = normalize_portal_contact_number(contact_number)
+    cur.execute(
+        """
+        SELECT c.*, s.customer_name, s.account_number, s.service_account_number, s.plan_name, s.status AS subscriber_status
+        FROM monthly_subscriber_contacts c
+        JOIN monthly_subscribers s ON s.id = c.subscriber_id
+        WHERE c.normalized_contact = %s
+        LIMIT 1
+        """,
+        (normalized_contact,),
+    )
+    return cur.fetchone()
+
+
+def public_monthly_subscriber_access(contact: Optional[dict]) -> Optional[dict]:
+    if not contact:
+        return None
+    return {
+        "contact_id": str(contact.get("id") or ""),
+        "subscriber_id": str(contact.get("subscriber_id") or ""),
+        "customer_name": contact.get("customer_name") or "",
+        "account_number": contact.get("account_number") or "",
+        "service_account_number": contact.get("service_account_number") or "",
+        "plan_name": contact.get("plan_name") or "",
+        "contact_number": contact.get("contact_number") or "",
+        "status": contact.get("subscriber_status") or contact.get("status") or "",
+    }
+
+
+def monthly_contact_for_session(cur, session: dict) -> Optional[dict]:
+    contact_id = session.get("monthly_subscriber_contact_id")
+    if not contact_id:
+        return None
+    cur.execute(
+        """
+        SELECT c.*, s.customer_name, s.account_number, s.service_account_number, s.plan_name, s.status AS subscriber_status
+        FROM monthly_subscriber_contacts c
+        JOIN monthly_subscribers s ON s.id = c.subscriber_id
+        WHERE c.id = %s
+        LIMIT 1
+        """,
+        (contact_id,),
+    )
+    return cur.fetchone()
+
+
+def monthly_access_view_for_session(cur, session: dict) -> Optional[dict]:
+    contact = monthly_contact_for_session(cur, session)
+    if not contact:
+        return None
+    contact_active = contact.get("status") == "ACTIVE" and contact.get("subscriber_status") == "ACTIVE"
+    if not contact_active:
+        return {
+            "remaining_time_seconds": 0,
+            "valid_until": None,
+            "unlimited": False,
+            "access_expires_at": None,
+            "access_expired": True,
+            "connected": False,
+            "message": "Monthly subscriber access is not active.",
+            "monthly_subscriber": public_monthly_subscriber_access(contact),
+        }
+    gateway_authorization_status = session.get("mikrotik_authorization_status") if session.get("source") == "MIKROTIK" else session.get("omada_authorization_status")
+    gateway_authorized = gateway_authorization_status == "AUTHORIZED" or session.get("source") not in {"OMADA", "MIKROTIK"}
+    return {
+        "remaining_time_seconds": 0,
+        "valid_until": None,
+        "unlimited": True,
+        "access_expires_at": session.get("monthly_subscriber_authorized_until") or session.get("access_expires_at"),
+        "access_expired": False,
+        "connected": bool(gateway_authorized),
+        "message": "Monthly subscriber access is active.",
+        "monthly_subscriber": public_monthly_subscriber_access(contact),
+    }
+
+
+def create_portal_user_for_monthly_subscriber(cur, customer_name: str, normalized_contact: str) -> dict:
+    username_seed = re.sub(r"\D", "", normalized_contact or "")[-10:] or secrets.token_hex(4)
+    username = f"monthly-{username_seed}-{secrets.token_hex(3)}"
+    password = secrets.token_urlsafe(18)
+    cur.execute(
+        """
+        INSERT INTO users(username, password_hash, status, source, full_name, phone_number, profile_verified_at)
+        VALUES (%s, %s, 'active', 'MONTHLY_SUBSCRIBER', %s, %s, now())
+        RETURNING *
+        """,
+        (username, hash_password(password), customer_name or "Monthly Subscriber", normalized_contact),
+    )
+    return cur.fetchone()
+
+
+def ensure_monthly_profile_for_contact(cur, session: dict, contact: dict) -> tuple[dict, dict]:
+    normalized_contact = contact["normalized_contact"]
+    display_contact = portal_contact_display_number(contact.get("contact_number") or normalized_contact)
+    display_name = normalize_payment_text(contact.get("customer_name") or "Monthly Subscriber", 120)
+    cur.execute("SELECT * FROM portal_customer_profiles WHERE normalized_contact = %s", (normalized_contact,))
+    existing_profile = cur.fetchone()
+    if existing_profile:
+        cur.execute("SELECT * FROM users WHERE id = %s", (existing_profile["user_id"],))
+        user = cur.fetchone()
+        cur.execute("UPDATE portal_sessions SET user_id = %s, updated_at = now() WHERE id = %s RETURNING *", (user["id"], session["id"]))
+        session.update(cur.fetchone() or {})
+        return user, existing_profile
+    user = None
+    if contact.get("bound_user_id"):
+        cur.execute("SELECT * FROM users WHERE id = %s", (contact["bound_user_id"],))
+        user = cur.fetchone()
+    if not user:
+        user = create_portal_user_for_monthly_subscriber(cur, display_name, normalized_contact)
+    cur.execute(
+        """
+        INSERT INTO portal_customer_profiles(
+            user_id, display_name, email, contact_number, normalized_contact, contact_verified_at,
+            terms_accepted_at, marketing_sms_consent, welcome_gift_status
+        )
+        VALUES (%s, %s, NULL, %s, %s, now(), now(), false, 'NONE')
+        ON CONFLICT (user_id) DO UPDATE
+        SET display_name = EXCLUDED.display_name,
+            contact_number = EXCLUDED.contact_number,
+            normalized_contact = EXCLUDED.normalized_contact,
+            contact_verified_at = now(),
+            terms_accepted_at = now(),
+            updated_at = now()
+        RETURNING *
+        """,
+        (user["id"], display_name, display_contact, normalized_contact),
+    )
+    profile = cur.fetchone()
+    cur.execute(
+        """
+        UPDATE users
+        SET full_name = %s,
+            phone_number = %s,
+            profile_verified_at = now(),
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (display_name, normalized_contact, user["id"]),
+    )
+    cur.execute("UPDATE portal_sessions SET user_id = %s, updated_at = now() WHERE id = %s RETURNING *", (user["id"], session["id"]))
+    session.update(cur.fetchone() or {})
+    return user, profile
+
+
+def monthly_login_challenge_settings(settings: dict) -> tuple[int, int]:
+    ttl_seconds = max(60, min(1800, int(settings.get("login_otp_ttl_seconds") or 300)))
+    cooldown_seconds = max(10, min(600, int(settings.get("login_otp_cooldown_seconds") or 60)))
+    return ttl_seconds, cooldown_seconds
+
+
+def monthly_subscriber_login_code_hash(code: str, normalized_contact: str) -> str:
+    return portal_otp_hash(code, normalized_contact, "MONTHLY_SUBSCRIBER_LOGIN")
+
+
+def verify_monthly_login_code(cur, normalized_contact: str, code: str) -> dict:
+    cur.execute(
+        """
+        SELECT *
+        FROM monthly_subscriber_login_challenges
+        WHERE normalized_contact = %s AND status = 'PENDING'
+        ORDER BY created_at DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        (normalized_contact,),
+    )
+    challenge = cur.fetchone()
+    if not challenge:
+        raise HTTPException(status_code=400, detail="No active monthly subscriber verification code was found.")
+    if aware_utc(challenge["expires_at"]) <= datetime.now(timezone.utc):
+        cur.execute("UPDATE monthly_subscriber_login_challenges SET status = 'EXPIRED', updated_at = now() WHERE id = %s", (challenge["id"],))
+        raise HTTPException(status_code=400, detail="Verification code expired. Send a new code.")
+    attempts = int(challenge.get("attempts") or 0) + 1
+    if attempts > 5:
+        cur.execute("UPDATE monthly_subscriber_login_challenges SET status = 'FAILED', attempts = %s, updated_at = now() WHERE id = %s", (attempts, challenge["id"]))
+        raise HTTPException(status_code=400, detail="Too many incorrect verification attempts. Send a new code.")
+    expected = challenge["code_hash"]
+    provided = monthly_subscriber_login_code_hash(code, normalized_contact)
+    if not hmac.compare_digest(str(expected), str(provided)):
+        cur.execute("UPDATE monthly_subscriber_login_challenges SET attempts = %s, updated_at = now() WHERE id = %s", (attempts, challenge["id"]))
+        raise HTTPException(status_code=400, detail="Verification code is incorrect.")
+    cur.execute(
+        """
+        UPDATE monthly_subscriber_login_challenges
+        SET status = 'VERIFIED', attempts = %s, verified_at = now(), updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (attempts, challenge["id"]),
+    )
+    return cur.fetchone()
+
+
+def monthly_contact_matches_current_device(contact: dict, session: dict, payload: PortalSessionRequest) -> bool:
+    ctx = portal_context(payload)
+    current_hash = session.get("device_token_hash") or portal_device_token_hash(payload.device_token)
+    bound_hash = contact.get("bound_device_token_hash")
+    if bound_hash and current_hash and hmac.compare_digest(str(bound_hash), str(current_hash)):
+        return True
+    current_mac = normalize_mac_if_valid(ctx.get("client_mac") or session.get("client_mac") or session.get("omada_client_mac"))
+    bound_mac = normalize_mac_if_valid(contact.get("bound_client_mac"))
+    if bound_mac and current_mac and bound_mac == current_mac:
+        return True
+    return not (bound_hash or bound_mac)
+
+
+def bind_monthly_contact_to_session(cur, contact: dict, session: dict, payload: PortalSessionRequest, request: Request, user: dict) -> dict:
+    if not monthly_contact_matches_current_device(contact, session, payload):
+        raise HTTPException(status_code=409, detail="This monthly subscriber contact is already bound to another device. Ask the operator to reset the device binding.")
+    ctx = portal_context(payload)
+    device_token = ensure_portal_device_token(cur, session, payload.device_token)
+    cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
+    session = cur.fetchone()
+    current_hash = session.get("device_token_hash") or portal_device_token_hash(device_token)
+    client_mac = normalize_mac_if_valid(ctx.get("client_mac") or session.get("client_mac") or session.get("omada_client_mac"))
+    client_ip = ctx.get("client_ip") or session.get("client_ip")
+    cur.execute(
+        """
+        UPDATE monthly_subscriber_contacts
+        SET bound_user_id = %s,
+            bound_portal_session_id = %s,
+            bound_device_token_hash = %s,
+            bound_client_mac = %s,
+            bound_client_ip = NULLIF(%s, '')::inet,
+            bound_user_agent = %s,
+            bound_at = COALESCE(bound_at, now()),
+            revoked_at = NULL,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (user["id"], session["id"], current_hash, client_mac, str(client_ip or ""), request.headers.get("user-agent", ""), contact["id"]),
+    )
+    updated_contact = cur.fetchone()
+    updated_contact.update(
+        {
+            "customer_name": contact.get("customer_name"),
+            "account_number": contact.get("account_number"),
+            "service_account_number": contact.get("service_account_number"),
+            "plan_name": contact.get("plan_name"),
+            "subscriber_status": contact.get("subscriber_status"),
+        }
+    )
+    return {"contact": updated_contact, "device_token": device_token, "session": session}
+
+
+def authorize_monthly_subscriber_session(cur, session: dict, contact: dict, user: dict, payload: PortalSessionRequest) -> dict:
+    settings = ensure_monthly_subscriber_settings(cur)
+    duration_seconds = max(300, min(2_592_000, int(settings.get("rolling_authorization_seconds") or 2592000)))
+    access_until = datetime.now(timezone.utc) + timedelta(seconds=duration_seconds)
+    authorization = {"status": "NOT_REQUIRED"}
+    if session.get("source") == "OMADA":
+        authorization = attempt_omada_authorization(cur, session, None, user, duration_seconds, access_until, payload)
+    elif session.get("source") == "MIKROTIK":
+        authorization = {"status": "FAILED", "error": "MikroTik HotSpot authorization is removed. Use Omada captive portal for monthly subscriber login."}
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET monthly_subscriber_contact_id = %s,
+            monthly_subscriber_authorized_until = %s,
+            monthly_subscriber_status = CASE WHEN %s = 'FAILED' THEN 'FAILED' ELSE 'ACTIVE' END,
+            status = CASE WHEN %s = 'FAILED' THEN status ELSE 'ACCESS_GRANTED' END,
+            last_error = CASE WHEN %s = 'FAILED' THEN COALESCE(%s, 'Monthly subscriber authorization failed.') ELSE NULL END,
+            access_granted_at = CASE WHEN %s = 'FAILED' THEN access_granted_at ELSE COALESCE(access_granted_at, now()) END,
+            access_expires_at = CASE WHEN %s = 'FAILED' THEN access_expires_at ELSE %s END,
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (
+            contact["id"],
+            access_until,
+            authorization.get("status"),
+            authorization.get("status"),
+            authorization.get("status"),
+            authorization.get("error"),
+            authorization.get("status"),
+            authorization.get("status"),
+            access_until,
+            session["id"],
+        ),
+    )
+    session = cur.fetchone()
+    return {"authorization": authorization, "session": session, "access_until": access_until}
+
+
 def portal_device_link_qr_payload(code: str) -> str:
     base = (public_captive_portal_settings().get("current_portal_url") or "https://net.3jhotspot.com/portal").strip()
     parsed = urlparse(base)
@@ -11668,6 +12268,7 @@ def public_portal_profile(profile: Optional[dict]) -> dict:
             "portal_notification_last_sent_at": None,
             "welcome_gift_status": "NONE",
             "welcome_voucher_code": None,
+            "pwa_gift": public_portal_pwa_gift_status(None),
         }
     voucher_code = None
     if profile.get("welcome_voucher_id") and profile.get("welcome_gift_status") == "AVAILABLE":
@@ -11688,7 +12289,49 @@ def public_portal_profile(profile: Optional[dict]) -> dict:
         "welcome_voucher_code": voucher_code,
         "welcome_gift_created_at": profile.get("welcome_gift_created_at"),
         "welcome_gift_redeemed_at": profile.get("welcome_gift_redeemed_at"),
+        "pwa_gift": public_portal_pwa_gift_status(profile),
     }
+
+
+def public_portal_pwa_gift_status(profile: Optional[dict]) -> dict:
+    settings_row = ensure_captive_portal_settings()
+    pwa = public_portal_pwa_settings(settings_row)
+    gift = pwa.get("gift") or {}
+    base = {
+        "enabled": bool(gift.get("enabled")),
+        "status": "DISABLED",
+        "title": gift.get("title") or "PWA Install Gift",
+        "duration_seconds": int(gift.get("duration_seconds") or 3600),
+        "available_message": gift.get("available_message") or "Home Screen app gift is ready.",
+        "claim_message": gift.get("claim_message") or "PWA install gift added to My WiFi Bag.",
+        "claimed_at": None,
+        "bag_item_id": None,
+        "bag_item_status": None,
+    }
+    if not base["enabled"]:
+        return base
+    if not profile or not portal_profile_is_configured(profile):
+        return {**base, "status": "PROFILE_REQUIRED"}
+    claim = fetch_one(
+        """
+        SELECT c.*, i.status AS bag_item_status
+        FROM portal_pwa_gift_claims c
+        LEFT JOIN customer_bag_items i ON i.id = c.bag_item_id
+        WHERE c.user_id = %s
+        ORDER BY c.created_at DESC
+        LIMIT 1
+        """,
+        (profile["user_id"],),
+    )
+    if claim:
+        return {
+            **base,
+            "status": "CLAIMED",
+            "claimed_at": claim.get("created_at"),
+            "bag_item_id": str(claim.get("bag_item_id")) if claim.get("bag_item_id") else None,
+            "bag_item_status": claim.get("bag_item_status"),
+        }
+    return {**base, "status": "INSTALL_REQUIRED"}
 
 
 def public_portal_profile_devices(cur, user_id, current_session_id=None) -> list[dict]:
@@ -12029,6 +12672,9 @@ def latest_portal_redemption(cur, session: dict):
 
 
 def portal_session_access_state(cur, session: dict) -> dict:
+    monthly_access = monthly_access_view_for_session(cur, session)
+    if monthly_access:
+        return monthly_access
     user_identity = portal_user_identity(cur, session)
     redemption = latest_portal_redemption(cur, session)
     return portal_access_view(session, user_identity, redemption)
@@ -13948,6 +14594,244 @@ def captive_portal_ssid_config_for_omada_site(site_id: Optional[str] = None, sit
     return wifi_config, site
 
 
+def public_portal_pwa_settings(row=None) -> dict:
+    row = row or ensure_captive_portal_settings()
+    icon_version = pwa_icon_cache_version(row)
+    return {
+        "name": row.get("pwa_name") or "3J WiFi Portal",
+        "short_name": row.get("pwa_short_name") or "3J WiFi",
+        "description": row.get("pwa_description") or "3J WiFi customer portal for WiFi passes, time alerts, and support.",
+        "theme_color": row.get("pwa_theme_color") or "#ff3838",
+        "background_color": row.get("pwa_background_color") or "#f8fafc",
+        "icon_url": row.get("pwa_icon_url"),
+        "icon_version": icon_version,
+        "display_mode": row.get("pwa_display_mode") or "standalone",
+        "install_enabled": row.get("pwa_install_enabled") is not False,
+        "install_guide_message": row.get("pwa_install_guide_message") or "Install the 3J WiFi portal as a Home Screen app for faster access and better phone notification support.",
+        "gift": {
+            "enabled": bool(row.get("pwa_gift_enabled")),
+            "duration_seconds": int(row.get("pwa_gift_duration_seconds") or 3600),
+            "title": row.get("pwa_gift_title") or "PWA Install Gift",
+            "available_message": row.get("pwa_gift_available_message") or "Home Screen app gift is ready.",
+            "claim_message": row.get("pwa_gift_claim_message") or "PWA install gift added to My WiFi Bag.",
+        },
+        "manifest_url": "/api/portal/manifest.webmanifest",
+        "install_icon_url": f"/api/portal/app-icon/pwa-512.png?v={icon_version}",
+    }
+
+
+def public_portal_pwa_install_context(cur, session: Optional[dict], profile: Optional[dict] = None) -> dict:
+    base_manifest_url = "/api/portal/manifest.webmanifest"
+    base_start_url = "/portal?source=pwa"
+    if not session:
+        return {
+            "status": "NO_SESSION",
+            "manifest_url": base_manifest_url,
+            "start_url": base_start_url,
+            "message": "Open the portal first before installing the Home Screen app.",
+        }
+    profile = profile if profile is not None else portal_profile_for_user(cur, session.get("user_id"))
+    if not portal_profile_is_configured(profile):
+        return {
+            "status": "PROFILE_REQUIRED",
+            "manifest_url": base_manifest_url,
+            "start_url": base_start_url,
+            "message": "Set your customer profile first so the Home Screen install gift can be added to the right My WiFi Bag.",
+        }
+    handoff = create_portal_handoff_token(session.get("public_session_id"), ttl_seconds=24 * 60 * 60)
+    if not handoff:
+        return {
+            "status": "NO_SESSION",
+            "manifest_url": base_manifest_url,
+            "start_url": base_start_url,
+            "message": "Home Screen app install context could not be prepared.",
+        }
+    return {
+        "status": "READY",
+        "manifest_url": append_url_params(base_manifest_url, {"handoff": handoff}),
+        "start_url": append_url_params("/portal", {"source": "pwa", "handoff": handoff}),
+        "expires_in_seconds": 24 * 60 * 60,
+        "message": "Home Screen app install context is ready.",
+    }
+
+
+def pwa_icon_cache_version(row: Optional[dict]) -> str:
+    if not row:
+        return "default"
+    raw = f"{row.get('pwa_icon_url') or ''}|{row.get('updated_at') or ''}"
+    return md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def add_url_cache_version(url: Optional[str], version: Optional[str]) -> str:
+    text = normalize_payment_text(url, 1000).strip()
+    clean_version = normalize_payment_text(version, 80).strip()
+    if not text or not clean_version:
+        return text
+    parsed = urlparse(text)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["v"] = clean_version
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(query), parsed.fragment))
+
+
+def normalize_pwa_color(value: Optional[str], fallback: str) -> str:
+    text = normalize_payment_text(value, 20).strip()
+    if re.match(r"^#[0-9a-fA-F]{6}$", text):
+        return text
+    if re.match(r"^#[0-9a-fA-F]{3}$", text):
+        return text
+    return fallback
+
+
+def portal_pwa_admin_payload() -> dict:
+    settings_row = ensure_captive_portal_settings()
+    settings = public_portal_pwa_settings(settings_row)
+    overview = fetch_one(
+        """
+        SELECT
+            count(DISTINCT COALESCE(profile_id::text, user_id::text, device_token_hash, portal_session_id::text)) FILTER (
+                WHERE event_type = 'APP_INSTALLED'
+                  AND (platform ILIKE '%%android%%' OR user_agent ILIKE '%%android%%')
+            ) AS android_install_count,
+            count(DISTINCT COALESCE(profile_id::text, user_id::text, device_token_hash, portal_session_id::text)) FILTER (
+                WHERE event_type = 'STANDALONE_OPEN'
+                  AND (
+                    platform ILIKE '%%ios%%'
+                    OR platform ILIKE '%%ipad%%'
+                    OR user_agent ILIKE '%%iphone%%'
+                    OR user_agent ILIKE '%%ipad%%'
+                  )
+            ) AS ios_install_count,
+            count(*) FILTER (WHERE event_type = 'APP_INSTALLED') AS app_installed_count,
+            count(*) FILTER (WHERE event_type = 'STANDALONE_OPEN') AS standalone_open_count,
+            count(DISTINCT user_id) FILTER (WHERE user_id IS NOT NULL) AS unique_user_count,
+            count(DISTINCT profile_id) FILTER (WHERE profile_id IS NOT NULL) AS unique_profile_count,
+            (SELECT count(*) FROM portal_pwa_gift_claims) AS gift_claim_count,
+            (SELECT count(DISTINCT user_id) FROM portal_pwa_gift_claims) AS unique_gift_user_count
+        FROM portal_pwa_events
+        """
+    ) or {}
+    recent_events = fetch_all(
+        """
+        SELECT e.*,
+               p.display_name,
+               p.contact_number,
+               s.client_mac,
+               s.omada_client_mac,
+               s.mikrotik_client_mac,
+               s.client_ip,
+               s.ssid
+        FROM portal_pwa_events e
+        LEFT JOIN portal_customer_profiles p ON p.id = e.profile_id
+        LEFT JOIN portal_sessions s ON s.id = e.portal_session_id
+        ORDER BY e.created_at DESC
+        LIMIT 50
+        """
+    )
+    install_select = """
+        SELECT *
+        FROM (
+            SELECT e.*,
+                   p.display_name,
+                   p.contact_number,
+                   s.client_mac,
+                   s.omada_client_mac,
+                   s.mikrotik_client_mac,
+                   s.client_ip,
+                   s.ssid,
+                   COALESCE(sd.site_name, s.omada_site_name, s.site) AS site_name,
+                   COALESCE(sd.omada_site_id, s.omada_site_id) AS omada_site_id,
+                   sd.barangay,
+                   sd.municipality,
+                   sd.location,
+                   COALESCE(e.profile_id::text, e.user_id::text, e.device_token_hash, e.portal_session_id::text, e.id::text) AS install_group_key,
+                   count(*) OVER (
+                       PARTITION BY COALESCE(e.profile_id::text, e.user_id::text, e.device_token_hash, e.portal_session_id::text, e.id::text)
+                   ) AS install_count,
+                   row_number() OVER (
+                       PARTITION BY COALESCE(e.profile_id::text, e.user_id::text, e.device_token_hash, e.portal_session_id::text, e.id::text)
+                       ORDER BY e.created_at DESC
+                   ) AS install_rank
+            FROM portal_pwa_events e
+            LEFT JOIN portal_customer_profiles p ON p.id = e.profile_id
+            LEFT JOIN portal_sessions s ON s.id = e.portal_session_id
+            LEFT JOIN site_deployments sd
+              ON (
+                NULLIF(sd.omada_site_id, '') IS NOT NULL
+                AND NULLIF(s.omada_site_id, '') IS NOT NULL
+                AND sd.omada_site_id = s.omada_site_id
+              )
+              OR (
+                NULLIF(sd.site_name, '') IS NOT NULL
+                AND NULLIF(COALESCE(s.omada_site_name, s.site), '') IS NOT NULL
+                AND lower(sd.site_name) = lower(COALESCE(s.omada_site_name, s.site))
+              )
+    """
+    android_installs = fetch_all(
+        f"""
+        {install_select}
+        WHERE e.event_type = 'APP_INSTALLED'
+          AND (e.platform ILIKE '%%android%%' OR e.user_agent ILIKE '%%android%%')
+        ) grouped_installs
+        WHERE install_rank = 1
+        ORDER BY created_at DESC
+        LIMIT 100
+        """
+    )
+    ios_installs = fetch_all(
+        f"""
+        {install_select}
+        WHERE e.event_type = 'STANDALONE_OPEN'
+          AND (
+            e.platform ILIKE '%%ios%%'
+            OR e.platform ILIKE '%%ipad%%'
+            OR e.user_agent ILIKE '%%iphone%%'
+            OR e.user_agent ILIKE '%%ipad%%'
+          )
+        ) grouped_installs
+        WHERE install_rank = 1
+        ORDER BY created_at DESC
+        LIMIT 100
+        """
+    )
+    recent_claims = fetch_all(
+        """
+        SELECT c.*,
+               p.display_name,
+               p.contact_number,
+               i.product_name,
+               i.status AS bag_item_status,
+               i.remaining_seconds
+        FROM portal_pwa_gift_claims c
+        LEFT JOIN portal_customer_profiles p ON p.id = c.profile_id
+        LEFT JOIN customer_bag_items i ON i.id = c.bag_item_id
+        ORDER BY c.created_at DESC
+        LIMIT 50
+        """
+    )
+    return {
+        "settings": settings,
+        "overview": {
+            "android_install_count": int(overview.get("android_install_count") or 0),
+            "ios_install_count": int(overview.get("ios_install_count") or 0),
+            "app_installed_count": int(overview.get("app_installed_count") or 0),
+            "standalone_open_count": int(overview.get("standalone_open_count") or 0),
+            "unique_user_count": int(overview.get("unique_user_count") or 0),
+            "unique_profile_count": int(overview.get("unique_profile_count") or 0),
+            "gift_claim_count": int(overview.get("gift_claim_count") or 0),
+            "unique_gift_user_count": int(overview.get("unique_gift_user_count") or 0),
+        },
+        "recent_events": sanitize_summary(recent_events),
+        "android_installs": sanitize_summary(android_installs),
+        "ios_installs": sanitize_summary(ios_installs),
+        "recent_gift_claims": sanitize_summary(recent_claims),
+        "notes": [
+            "Android Chrome can fire appinstalled when the customer installs the PWA.",
+            "iPhone/iPad Safari does not expose a reliable install event, so the system records standalone Home Screen opens.",
+            "The launcher icon/name may stay cached by the phone until the app is reinstalled.",
+        ],
+    }
+
+
 def public_captive_portal_settings(row=None):
     row = row or ensure_captive_portal_settings()
     portal_ssid = captive_portal_ssid_from_ap_configuration()
@@ -13955,6 +14839,7 @@ def public_captive_portal_settings(row=None):
     welcome_sms_message = strip_sms_url_schemes(row.get("portal_welcome_sms_message") or "Welcome to 3J WiFi, <USER>! For a better experience, open net.3jhotspot.com in Google Chrome when checking your time, buying WiFi, or managing your profile.")
     store_owner_activation_sms_message = strip_sms_url_schemes(row.get("store_owner_activation_sms_message") or "Welcome to 3J Hotspot, <OWNER>! Your store <STORE> is now active. Store portal: <STORE_PORTAL_URL> Username: <USERNAME> Temporary password: <TEMP_PASSWORD>. Please change your password after login.")
     payment_handoff = omada_payment_auth_free_store()
+    pwa_settings = public_portal_pwa_settings(row)
     return {
         "id": row["id"],
         "portal_mode": row["portal_mode"],
@@ -14004,6 +14889,7 @@ def public_captive_portal_settings(row=None):
         "outside_network_purchase_success_message": row.get("outside_network_purchase_success_message") or "Package saved to your bag. Connect to a 3J WiFi AP to use it.",
         "bag_auto_activate_default": bool(row.get("bag_auto_activate_default")),
         "bag_activation_overlap_seconds": int(row.get("bag_activation_overlap_seconds") or 60),
+        "pwa": pwa_settings,
         "portal_sms_sender_id": row.get("portal_sms_sender_id"),
         "portal_sms_monthly_credit_limit": row.get("portal_sms_monthly_credit_limit"),
         "portal_sms_monthly_reset_day": int(row.get("portal_sms_monthly_reset_day") or 1),
@@ -15270,6 +16156,85 @@ def portal_capport(request: Request):
     return Response(content=json.dumps(payload), media_type="application/captive+json")
 
 
+def portal_avatar_icon_url(state: str = "disconnected") -> str:
+    portal_settings_row = ensure_captive_portal_settings()
+    branding = public_branding()
+    normalized_state = (state or "disconnected").strip().lower()
+    if normalized_state == "pwa":
+        avatar_url = add_url_cache_version(portal_settings_row.get("pwa_icon_url"), pwa_icon_cache_version(portal_settings_row))
+    elif normalized_state == "connected":
+        avatar_url = portal_settings_row.get("no_internet_avatar_connected_url")
+    else:
+        avatar_url = portal_settings_row.get("no_internet_avatar_disconnected_url")
+    fallback_avatar_url = (
+        portal_settings_row.get("no_internet_avatar_disconnected_url")
+        or portal_settings_row.get("no_internet_avatar_connected_url")
+    )
+    return (
+        avatar_url
+        or fallback_avatar_url
+        or branding.get("browser_logo_url")
+        or branding.get("company_logo_url")
+        or ""
+    )
+
+
+def portal_default_icon_svg(state: str = "disconnected") -> str:
+    connected = (state or "").strip().lower() == "connected"
+    stroke = "#16a34a" if connected else "#dc2626"
+    accent = "#15803d" if connected else "#991b1b"
+    if connected:
+        symbol = '<path d="m78 169 24 24 61-72" fill="none" stroke="{accent}" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>'
+    else:
+        symbol = '<path d="M78 171 162 69" stroke="{accent}" stroke-width="14" stroke-linecap="round"/>'
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
+  <rect width="240" height="240" rx="52" fill="#ffffff"/>
+  <path d="M68 101c30-25 74-25 104 0" fill="none" stroke="{stroke}" stroke-width="13" stroke-linecap="round"/>
+  <path d="M91 127c17-14 41-14 58 0" fill="none" stroke="{stroke}" stroke-width="13" stroke-linecap="round"/>
+  <circle cx="120" cy="155" r="10" fill="{stroke}"/>
+  {symbol.format(accent=accent)}
+</svg>"""
+
+
+@app.api_route("/api/portal/app-icon/{state}-{size}.png", methods=["GET", "HEAD"])
+def portal_app_icon(state: str, size: str):
+    icon_url = portal_avatar_icon_url(state)
+    headers = {"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+    if icon_url:
+        return Response(status_code=302, headers={**headers, "Location": icon_url})
+    return Response(content=portal_default_icon_svg(state), media_type="image/svg+xml", headers=headers)
+
+
+@app.api_route("/api/portal/manifest.webmanifest", methods=["GET", "HEAD"])
+def portal_manifest(handoff: Optional[str] = None):
+    pwa = public_portal_pwa_settings()
+    icon_version = pwa.get("icon_version") or "default"
+    start_url_params = {"source": "pwa"}
+    if handoff and parse_portal_handoff_token(handoff):
+        start_url_params["handoff"] = handoff
+    manifest = {
+        "id": "/portal",
+        "name": pwa["name"],
+        "short_name": pwa["short_name"],
+        "description": pwa["description"],
+        "start_url": append_url_params("/portal", start_url_params),
+        "scope": "/portal",
+        "display": pwa["display_mode"],
+        "background_color": pwa["background_color"],
+        "theme_color": pwa["theme_color"],
+        "orientation": "portrait",
+        "icons": [
+            {"src": f"/api/portal/app-icon/pwa-192.png?v={icon_version}", "sizes": "192x192", "purpose": "any maskable"},
+            {"src": f"/api/portal/app-icon/pwa-512.png?v={icon_version}", "sizes": "512x512", "purpose": "any maskable"},
+        ],
+    }
+    return Response(
+        content=json.dumps(manifest),
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
+
+
 @app.get("/api/portal/settings")
 def portal_settings():
     branding = public_branding()
@@ -15292,6 +16257,7 @@ def portal_settings():
         "show_powered_by": branding["portal_show_powered_by"],
         "accent_color": branding["accent_color"],
         "company_logo_url": branding["company_logo_url"],
+        "pwa": portal_settings_row.get("pwa") or public_portal_pwa_settings(),
         "portal_notifications": portal_settings_row.get("portal_notifications", {}),
         "portal_message_auto_hide_seconds": portal_settings_row.get("portal_message_auto_hide_seconds", 6),
         "no_internet_headline": portal_settings_row.get("no_internet_headline"),
@@ -15390,6 +16356,7 @@ def create_or_update_portal_session(payload: PortalSessionRequest, request: Requ
                     "device_detected": session["source"] in {"OMADA", "MIKROTIK", "UNKNOWN"},
                     "network_presence": network_presence,
                     "profile": public_portal_profile(profile),
+                    "pwa_install": public_portal_pwa_install_context(cur, session, profile),
                     "blocked_device": blocked_response,
                 }
             create_portal_event(cur, session["id"], "PORTAL_VIEW", request, "Portal viewed", raw_context=payload.model_dump())
@@ -15400,6 +16367,7 @@ def create_or_update_portal_session(payload: PortalSessionRequest, request: Requ
                 device_token = payload.device_token
             profile = portal_profile_for_user(cur, session.get("user_id"))
             network_presence = portal_network_presence(session, request, payload)
+            monthly_access = monthly_access_view_for_session(cur, session)
             raw_payload = payload.raw_query_params or {}
             local_bridge_request = str(raw_payload.get("handoff_bridge") or "").strip().lower() in {"1", "true", "yes"}
             handoff_url = portal_handoff_url(session["public_session_id"]) if (
@@ -15421,6 +16389,8 @@ def create_or_update_portal_session(payload: PortalSessionRequest, request: Requ
         "device_detected": session["source"] in {"OMADA", "MIKROTIK", "UNKNOWN"},
         "network_presence": network_presence,
         "profile": public_portal_profile(profile),
+        "monthly_subscriber": (monthly_access or {}).get("monthly_subscriber"),
+        "pwa_install": public_portal_pwa_install_context(cur, session, profile),
         "blocked_device": None,
     }
 
@@ -15467,7 +16437,145 @@ def portal_profile_send_code(payload: PortalProfileOtpRequest, request: Request)
             if cur.fetchone():
                 raise HTTPException(status_code=400, detail="This contact number is already used by another account.")
             result = create_portal_contact_verification(cur, session, payload.contact_number, "PROFILE", request)
-    return result
+            return result
+
+
+@app.post("/api/portal/monthly-login/send-code")
+def portal_monthly_login_send_code(payload: PortalMonthlyLoginOtpRequest, request: Request):
+    normalized_contact, a2p_destination = normalize_portal_contact_number(payload.contact_number)
+    display_contact = portal_contact_display_number(payload.contact_number)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            enforce_portal_device_not_blocked(cur, session, payload, request, "MONTHLY_LOGIN_SEND_CODE")
+            settings = ensure_monthly_subscriber_settings(cur)
+            if not settings.get("integration_enabled", True):
+                raise HTTPException(status_code=403, detail="Monthly subscriber login is currently disabled.")
+            contact = find_monthly_contact_by_number(cur, payload.contact_number)
+            if not contact:
+                raise HTTPException(status_code=404, detail="This contact number is not listed as a monthly subscriber.")
+            if contact.get("status") != "ACTIVE" or contact.get("subscriber_status") != "ACTIVE":
+                raise HTTPException(status_code=403, detail="This monthly subscriber account is not active.")
+            ttl_seconds, cooldown_seconds = monthly_login_challenge_settings(settings)
+            cur.execute(
+                """
+                SELECT created_at
+                FROM monthly_subscriber_login_challenges
+                WHERE normalized_contact = %s
+                  AND created_at > now() - make_interval(secs => %s)
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (normalized_contact, cooldown_seconds),
+            )
+            recent = cur.fetchone()
+            if recent:
+                elapsed = int((datetime.now(timezone.utc) - aware_utc(recent["created_at"])).total_seconds())
+                wait_seconds = max(1, cooldown_seconds - elapsed)
+                raise HTTPException(status_code=429, detail=f"Send again ({wait_seconds}s).")
+            code = generate_portal_otp()
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+            cur.execute(
+                """
+                UPDATE monthly_subscriber_login_challenges
+                SET status = 'EXPIRED', updated_at = now()
+                WHERE normalized_contact = %s AND status = 'PENDING'
+                """,
+                (normalized_contact,),
+            )
+            cur.execute(
+                """
+                INSERT INTO monthly_subscriber_login_challenges(
+                    contact_id, portal_session_id, normalized_contact, code_hash, expires_at
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (contact["id"], session["id"], normalized_contact, monthly_subscriber_login_code_hash(code, normalized_contact), expires_at),
+            )
+            challenge = cur.fetchone()
+            sms_settings = public_portal_sms_confirmation_settings()
+            sms_result = send_a2p_sms_message(
+                a2p_destination,
+                f"Your 3J WiFi monthly subscriber login code is {code}. It expires in {max(1, ttl_seconds // 60)} minutes.",
+                source=sms_settings.get("sender_id"),
+                purpose="MONTHLY_SUBSCRIBER_LOGIN",
+                request_context={"portal_session_id": str(session.get("id")), "challenge_id": str(challenge.get("id"))},
+            )
+            create_portal_event(
+                cur,
+                session["id"],
+                "MONTHLY_LOGIN_OTP_SENT",
+                request,
+                f"Monthly subscriber login code sent to {mask_a2p_destination(a2p_destination)}.",
+                raw_context={"contact_id": str(contact["id"]), "sms": sanitize_summary(sms_result)},
+            )
+    return {
+        "status": "SENT",
+        "message": f"Verification code sent to {display_contact}.",
+        "expires_at": expires_at,
+        "contact_hint": mask_a2p_destination(a2p_destination),
+    }
+
+
+@app.post("/api/portal/monthly-login/confirm")
+def portal_monthly_login_confirm(payload: PortalMonthlyLoginConfirmRequest, request: Request, response: Response):
+    normalized_contact, _ = normalize_portal_contact_number(payload.contact_number)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            enforce_portal_device_not_blocked(cur, session, payload, request, "MONTHLY_LOGIN_CONFIRM")
+            settings = ensure_monthly_subscriber_settings(cur)
+            if not settings.get("integration_enabled", True):
+                raise HTTPException(status_code=403, detail="Monthly subscriber login is currently disabled.")
+            contact = find_monthly_contact_by_number(cur, payload.contact_number)
+            if not contact:
+                raise HTTPException(status_code=404, detail="This contact number is not listed as a monthly subscriber.")
+            if contact.get("status") != "ACTIVE" or contact.get("subscriber_status") != "ACTIVE":
+                raise HTTPException(status_code=403, detail="This monthly subscriber account is not active.")
+            verify_monthly_login_code(cur, normalized_contact, payload.verification_code)
+            user, profile = ensure_monthly_profile_for_contact(cur, session, contact)
+            cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
+            session = cur.fetchone()
+            binding = bind_monthly_contact_to_session(cur, contact, session, payload, request, user)
+            contact = binding["contact"]
+            session = binding["session"]
+            authorization = authorize_monthly_subscriber_session(cur, session, contact, user, payload)
+            session = authorization["session"]
+            access_view = monthly_access_view_for_session(cur, session) or portal_session_access_state(cur, session)
+            create_portal_event(
+                cur,
+                session["id"],
+                "MONTHLY_LOGIN_SUCCESS" if authorization["authorization"].get("status") != "FAILED" else "MONTHLY_LOGIN_AUTH_FAILED",
+                request,
+                "Monthly subscriber login completed." if authorization["authorization"].get("status") != "FAILED" else "Monthly subscriber login verified but authorization failed.",
+                raw_context={
+                    "contact_id": str(contact["id"]),
+                    "subscriber_id": str(contact["subscriber_id"]),
+                    "authorization": sanitize_summary(authorization["authorization"]),
+                },
+            )
+            if authorization["authorization"].get("status") == "FAILED":
+                response_payload = {
+                    "status": "FAILED",
+                    "message": authorization["authorization"].get("error") or "Monthly subscriber login verified, but WiFi authorization failed.",
+                    "portal_session_id": session["public_session_id"],
+                    "device_token": binding["device_token"],
+                    "profile": public_portal_profile(profile),
+                    "monthly_subscriber": public_monthly_subscriber_access(contact),
+                }
+            else:
+                response_payload = {
+                    "status": "SUCCESS",
+                    "message": "Monthly subscriber access is active.",
+                    "portal_session_id": session["public_session_id"],
+                    "device_token": binding["device_token"],
+                    "profile": public_portal_profile(profile),
+                    "monthly_subscriber": public_monthly_subscriber_access(contact),
+                    **access_view,
+                }
+    set_portal_session_cookies(response, response_payload["portal_session_id"], response_payload.get("device_token"))
+    return response_payload
 
 
 @app.post("/api/portal/profile")
@@ -15585,6 +16693,7 @@ def save_portal_profile(payload: PortalProfileSaveRequest, request: Request, res
         "portal_session_id": session["public_session_id"],
         "device_token": device_token,
         "profile": public_portal_profile(profile),
+        "pwa_install": public_portal_pwa_install_context(cur, session, profile),
         "welcome_sms": sanitize_summary(welcome_sms_result or {}),
     }
 
@@ -15641,6 +16750,471 @@ def record_portal_profile_notification_sent(payload: PortalProfileNotificationSe
             )
             profile = cur.fetchone()
     return {"status": "SUCCESS", "profile": public_portal_profile(profile)}
+
+
+def send_portal_customer_push_notifications(cur, subscriptions: list[dict], notification_payload: dict) -> dict:
+    if not subscriptions:
+        return {"status": "NO_SUBSCRIPTIONS", "sent": 0, "failed": 0, "revoked": 0}
+    push_store = web_push_store()
+    sent = 0
+    failed = 0
+    revoked = 0
+    errors = []
+    for subscription in subscriptions:
+        try:
+            webpush(
+                subscription_info=subscription["subscription_json"],
+                data=json.dumps(notification_payload),
+                vapid_private_key=push_store["private_key"],
+                vapid_claims={"sub": "mailto:admin@3jhotspot.com"},
+                timeout=10,
+            )
+            sent += 1
+            cur.execute(
+                """
+                UPDATE portal_customer_push_subscriptions
+                SET last_sent_at = now(),
+                    failure_count = 0,
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (subscription["id"],),
+            )
+        except WebPushException as exc:
+            failed += 1
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            error_message = normalize_payment_text(str(exc), 500)
+            should_revoke = status_code in {404, 410}
+            if should_revoke:
+                revoked += 1
+            errors.append({"subscription_id": str(subscription["id"]), "status_code": status_code, "error": error_message})
+            cur.execute(
+                """
+                UPDATE portal_customer_push_subscriptions
+                SET status = CASE WHEN %s THEN 'REVOKED' ELSE status END,
+                    failure_count = failure_count + 1,
+                    last_error = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (should_revoke, error_message, subscription["id"]),
+            )
+        except Exception as exc:
+            failed += 1
+            error_message = normalize_payment_text(str(exc), 500)
+            errors.append({"subscription_id": str(subscription["id"]), "error": error_message})
+            cur.execute(
+                """
+                UPDATE portal_customer_push_subscriptions
+                SET failure_count = failure_count + 1,
+                    last_error = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (error_message, subscription["id"]),
+            )
+    return {
+        "status": "SUCCESS" if sent else "FAILED",
+        "sent": sent,
+        "failed": failed,
+        "revoked": revoked,
+        "errors": errors[:5],
+    }
+
+
+@app.get("/api/portal/push-public-key")
+def portal_push_public_key():
+    return {"public_key": web_push_store()["public_key"]}
+
+
+@app.post("/api/portal/push-subscriptions")
+def portal_push_subscriptions(payload: PortalPushSubscriptionRequest, request: Request):
+    endpoint = normalize_payment_text(payload.endpoint, 2048)
+    keys = payload.keys or {}
+    p256dh = normalize_payment_text(keys.get("p256dh"), 500)
+    auth = normalize_payment_text(keys.get("auth"), 500)
+    if not endpoint or not p256dh or not auth:
+        raise HTTPException(status_code=400, detail="Browser notification subscription is incomplete.")
+    subscription = {
+        "endpoint": endpoint,
+        "expirationTime": payload.expirationTime,
+        "keys": {
+            "p256dh": p256dh,
+            "auth": auth,
+        },
+    }
+    endpoint_hash = web_push_endpoint_hash(endpoint)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            profile = portal_profile_for_user(cur, user["id"])
+            device_hash = portal_device_token_hash(payload.device_token) or session.get("device_token_hash")
+            cur.execute(
+                """
+                INSERT INTO portal_customer_push_subscriptions(
+                    user_id, profile_id, portal_session_id, endpoint_hash, subscription_json,
+                    device_token_hash, user_agent, status, last_seen_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'ACTIVE', now())
+                ON CONFLICT (endpoint_hash) DO UPDATE
+                SET user_id = EXCLUDED.user_id,
+                    profile_id = EXCLUDED.profile_id,
+                    portal_session_id = EXCLUDED.portal_session_id,
+                    subscription_json = EXCLUDED.subscription_json,
+                    device_token_hash = EXCLUDED.device_token_hash,
+                    user_agent = EXCLUDED.user_agent,
+                    status = 'ACTIVE',
+                    last_seen_at = now(),
+                    updated_at = now(),
+                    last_error = NULL
+                RETURNING *
+                """,
+                (
+                    user["id"],
+                    profile.get("id") if profile else None,
+                    session.get("id"),
+                    endpoint_hash,
+                    Json(subscription),
+                    device_hash,
+                    normalize_payment_text(request.headers.get("user-agent"), 500),
+                ),
+            )
+            row = cur.fetchone()
+    return {
+        "status": "SUCCESS",
+        "subscription": {
+            "id": str(row["id"]),
+            "status": row.get("status"),
+            "last_seen_at": row.get("last_seen_at"),
+        },
+    }
+
+
+@app.post("/api/portal/push-test")
+def portal_push_test(payload: PortalSessionRequest, request: Request):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            profile = portal_profile_for_user(cur, user["id"])
+            device_hash = portal_device_token_hash(payload.device_token) or session.get("device_token_hash")
+            clauses = ["user_id = %s"]
+            params = [user["id"]]
+            if profile:
+                clauses.append("profile_id = %s")
+                params.append(profile["id"])
+            if session.get("id"):
+                clauses.append("portal_session_id = %s")
+                params.append(session["id"])
+            if device_hash:
+                clauses.append("device_token_hash = %s")
+                params.append(device_hash)
+            cur.execute(
+                f"""
+                SELECT *
+                FROM portal_customer_push_subscriptions
+                WHERE status = 'ACTIVE'
+                  AND ({' OR '.join(clauses)})
+                ORDER BY last_seen_at DESC
+                LIMIT 10
+                """,
+                tuple(params),
+            )
+            subscriptions = cur.fetchall()
+            display_name = (profile or {}).get("display_name") or "Customer"
+            notification_payload = {
+                "title": "3J WiFi time alerts",
+                "body": f"{display_name}, phone notifications are ready. Tap to open your WiFi portal.",
+                "url": current_captive_portal_url(),
+                "icon": portal_avatar_icon_url("connected"),
+                "badge": portal_avatar_icon_url("connected"),
+                "tag": "3j-portal-push-test",
+                "data": {"url": current_captive_portal_url(), "type": "PORTAL_PUSH_TEST"},
+            }
+            result = send_portal_customer_push_notifications(cur, subscriptions, notification_payload)
+            if session.get("id"):
+                create_portal_event(cur, session["id"], "PORTAL_PUSH_TEST", request, "Customer portal push notification test.", raw_context=sanitize_summary(result))
+    return result
+
+
+@app.post("/api/portal/push-greeting")
+def portal_push_greeting(payload: PortalSessionRequest, request: Request):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            profile = portal_profile_for_user(cur, user["id"])
+            if profile and profile.get("portal_notifications_enabled") is False:
+                return {"status": "DISABLED", "sent": 0, "message": "Customer phone notifications are disabled."}
+            device_hash = portal_device_token_hash(payload.device_token) or session.get("device_token_hash")
+            clauses = ["user_id = %s"]
+            params = [user["id"]]
+            if profile:
+                clauses.append("profile_id = %s")
+                params.append(profile["id"])
+            if session.get("id"):
+                clauses.append("portal_session_id = %s")
+                params.append(session["id"])
+            if device_hash:
+                clauses.append("device_token_hash = %s")
+                params.append(device_hash)
+            cur.execute(
+                f"""
+                SELECT *
+                FROM portal_customer_push_subscriptions
+                WHERE status = 'ACTIVE'
+                  AND ({' OR '.join(clauses)})
+                ORDER BY last_seen_at DESC
+                LIMIT 10
+                """,
+                tuple(params),
+            )
+            subscriptions = cur.fetchall()
+            if not subscriptions:
+                return {"status": "NO_SUBSCRIPTIONS", "sent": 0, "message": "No saved phone notification subscription yet."}
+
+            bag_refresh = refresh_customer_bag_for_session(cur, session, request)
+            session = bag_refresh["session"]
+            bag = bag_refresh["bag"]
+            user_identity = portal_user_identity(cur, session)
+            redemption = latest_portal_redemption(cur, session)
+            access_view = portal_access_view(session, user_identity, redemption)
+            internet_bag_active_items = [
+                item
+                for item in (bag.get("active_items") or [])
+                if product_kind_grants_hotspot(item.get("product_kind"))
+            ]
+            if internet_bag_active_items:
+                now_utc = datetime.now(timezone.utc)
+                latest_active_until = None
+                bag_remaining = 0
+                for active_item in internet_bag_active_items:
+                    active_until = aware_utc(active_item.get("active_until"))
+                    if active_until and active_until > now_utc:
+                        latest_active_until = max(latest_active_until, active_until) if latest_active_until else active_until
+                        bag_remaining += max(int((active_until - now_utc).total_seconds()), 0)
+                    else:
+                        bag_remaining += max(int(active_item.get("remaining_seconds") or 0), 0)
+                if bag_remaining > int(access_view.get("remaining_time_seconds") or 0):
+                    access_view = {
+                        **access_view,
+                        "remaining_time_seconds": bag_remaining,
+                        "valid_until": latest_active_until or access_view.get("valid_until"),
+                        "access_expires_at": latest_active_until or access_view.get("access_expires_at"),
+                        "access_expired": False,
+                        "connected": bag_remaining > 0,
+                        "message": "Access loaded.",
+                    }
+
+            remaining_seconds = int(access_view.get("remaining_time_seconds") or 0)
+            has_time = bool(not access_view.get("access_expired") and (access_view.get("unlimited") or remaining_seconds > 0))
+            display_name = (profile or {}).get("display_name") or "Customer"
+            time_label = "Unlimited" if access_view.get("unlimited") else format_seconds_human(remaining_seconds)
+            body = (
+                f"Hi {display_name}. You are connected. Remaining time: {time_label}."
+                if has_time
+                else f"Hi {display_name}. No active WiFi time yet. Tap to open 3J WiFi."
+            )
+            state = "connected" if has_time else "disconnected"
+            notification_payload = {
+                "title": "3J WiFi",
+                "body": body,
+                "url": current_captive_portal_url(),
+                "icon": portal_avatar_icon_url(state),
+                "badge": portal_avatar_icon_url(state),
+                "tag": f"3j-portal-greeting-{session['public_session_id']}",
+                "data": {
+                    "url": current_captive_portal_url(),
+                    "type": "PORTAL_GREETING",
+                    "remaining_time_seconds": remaining_seconds,
+                    "state": state,
+                },
+            }
+            result = send_portal_customer_push_notifications(cur, subscriptions, notification_payload)
+            create_portal_event(cur, session["id"], "PORTAL_PUSH_GREETING", request, body, raw_context=sanitize_summary(result))
+    return result
+
+
+def claim_portal_pwa_gift_if_eligible(cur, session: dict, user: dict, profile: Optional[dict], event: dict, request: Request) -> dict:
+    settings_row = ensure_captive_portal_settings()
+    pwa = public_portal_pwa_settings(settings_row)
+    gift = pwa.get("gift") or {}
+    if not gift.get("enabled"):
+        return {"status": "DISABLED", "message": "PWA install gift is disabled."}
+    if not profile or not portal_profile_is_configured(profile):
+        return {"status": "PROFILE_REQUIRED", "message": "Set up a customer profile before claiming the PWA install gift."}
+    cur.execute("SELECT * FROM portal_pwa_gift_claims WHERE user_id = %s", (user["id"],))
+    existing = cur.fetchone()
+    if existing:
+        return {"status": "ALREADY_CLAIMED", "message": "PWA install gift was already claimed for this profile."}
+    duration_seconds = int(gift.get("duration_seconds") or 3600)
+    title = normalize_payment_text(gift.get("title") or "PWA Install Gift", 160) or "PWA Install Gift"
+    voucher = create_single_voucher(
+        cur,
+        VoucherCreate(
+            voucher_type="TIME_BASED",
+            time_value_seconds=duration_seconds,
+            note=f"{title} for installed 3J WiFi Home Screen app",
+            status="UNUSED",
+            max_redemptions=1,
+            code_prefix="PWA",
+            code_length=8,
+        ),
+        None,
+    )
+    item = create_customer_bag_item_from_voucher(
+        cur,
+        voucher,
+        session,
+        user,
+        duration_seconds,
+        request,
+        source="WELCOME_GIFT",
+        product_name=title,
+        product_category_name="PWA Install Gift",
+        event_type="PWA_GIFT_ADDED_TO_BAG",
+        event_message="PWA install gift added to customer WiFi bag.",
+    )
+    cur.execute(
+        """
+        INSERT INTO portal_pwa_gift_claims(
+            user_id, profile_id, portal_session_id, event_id, voucher_id, bag_item_id,
+            device_token_hash, gift_title, gift_duration_seconds
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING *
+        """,
+        (
+            user["id"],
+            profile.get("id"),
+            session.get("id"),
+            event.get("id"),
+            voucher.get("id"),
+            item.get("id"),
+            session.get("device_token_hash"),
+            title,
+            duration_seconds,
+        ),
+    )
+    claim = cur.fetchone()
+    create_portal_event(
+        cur,
+        session["id"],
+        "PWA_GIFT_CLAIMED",
+        request,
+        gift.get("claim_message") or "PWA install gift added to My WiFi Bag.",
+        voucher.get("code"),
+        {"claim_id": str(claim["id"]), "bag_item_id": str(item["id"]), "duration_seconds": duration_seconds},
+    )
+    return {
+        "status": "CLAIMED",
+        "message": gift.get("claim_message") or "PWA install gift added to My WiFi Bag.",
+        "claim": sanitize_summary(claim),
+        "bag_item": bag_item_public(item),
+    }
+
+
+def portal_pwa_event_is_android(payload: PortalPwaEventRequest, request: Request) -> bool:
+    platform = normalize_payment_text(payload.platform, 80).lower()
+    browser = normalize_payment_text(payload.browser, 80).lower()
+    user_agent = normalize_payment_text(request.headers.get("user-agent"), 500).lower()
+    return "android" in platform or "android" in browser or "android" in user_agent
+
+
+@app.post("/api/portal/pwa/event")
+def portal_pwa_event(payload: PortalPwaEventRequest, request: Request, response: Response):
+    allowed_events = {"INSTALL_PROMPT_ACCEPTED", "INSTALL_PROMPT_DISMISSED", "APP_INSTALLED", "STANDALONE_OPEN"}
+    event_type = normalize_payment_text(payload.event_type, 60).upper()
+    if event_type not in allowed_events:
+        raise HTTPException(status_code=400, detail="Unsupported PWA event type.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            profile = portal_profile_for_user(cur, user["id"])
+            device_token = ensure_portal_device_token(cur, session, payload.device_token)
+            if device_token:
+                cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
+                session = cur.fetchone()
+            cur.execute(
+                """
+                INSERT INTO portal_pwa_events(
+                    user_id, profile_id, portal_session_id, device_token_hash, event_type,
+                    display_mode, platform, browser, user_agent, metadata_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    user["id"],
+                    profile.get("id") if profile else None,
+                    session.get("id"),
+                    portal_device_token_hash(payload.device_token) or session.get("device_token_hash"),
+                    event_type,
+                    normalize_payment_text(payload.display_mode, 80),
+                    normalize_payment_text(payload.platform, 80),
+                    normalize_payment_text(payload.browser, 80),
+                    normalize_payment_text(request.headers.get("user-agent"), 500),
+                    Json(sanitize_summary(payload.metadata or {})),
+                ),
+            )
+            event = cur.fetchone()
+            gift_result = {"status": "NOT_ELIGIBLE"}
+            if event_type in {"APP_INSTALLED", "STANDALONE_OPEN"} and portal_pwa_event_is_android(payload, request):
+                gift_result = claim_portal_pwa_gift_if_eligible(cur, session, user, profile, event, request)
+            bag = customer_bag_payload(cur, user["id"])
+            profile = portal_profile_for_user(cur, user["id"])
+    set_portal_session_cookies(response, session["public_session_id"], device_token)
+    return {
+        "status": "SUCCESS",
+        "event": sanitize_summary(event),
+        "gift": gift_result,
+        "bag": bag,
+        "profile": public_portal_profile(profile),
+        "portal_session_id": session["public_session_id"],
+        "device_token": device_token,
+    }
+
+
+@app.post("/api/portal/pwa/install-context")
+def portal_pwa_install_context(payload: PortalSessionRequest, request: Request, response: Response):
+    handoff_session_id = parse_portal_handoff_token(payload.handoff)
+    if handoff_session_id:
+        payload = payload.model_copy(update={"portal_session_id": handoff_session_id})
+    if not payload.portal_session_id and request.cookies.get(PORTAL_SESSION_COOKIE):
+        payload = payload.model_copy(update={"portal_session_id": request.cookies.get(PORTAL_SESSION_COOKIE)})
+    if not payload.device_token and request.cookies.get(PORTAL_DEVICE_TOKEN_COOKIE):
+        payload = payload.model_copy(update={"device_token": request.cookies.get(PORTAL_DEVICE_TOKEN_COOKIE)})
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            user = ensure_portal_user(cur, session)
+            profile = portal_profile_for_user(cur, user["id"])
+            device_token = ensure_portal_device_token(cur, session, payload.device_token)
+            if device_token:
+                cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
+                session = cur.fetchone()
+            install_context = public_portal_pwa_install_context(cur, session, profile)
+            if install_context.get("status") == "READY":
+                create_portal_event(
+                    cur,
+                    session["id"],
+                    "PWA_INSTALL_CONTEXT_PREPARED",
+                    request,
+                    "PWA install context prepared for this customer profile.",
+                    raw_context={"manifest_url": install_context.get("manifest_url"), "start_url": install_context.get("start_url")},
+                )
+    set_portal_session_cookies(response, session["public_session_id"], device_token)
+    return {
+        "status": install_context.get("status"),
+        "message": install_context.get("message"),
+        "pwa_install": install_context,
+        "profile": public_portal_profile(profile),
+        "portal_session_id": session["public_session_id"],
+        "device_token": device_token,
+    }
 
 
 @app.get("/api/portal/profile/devices")
@@ -16842,6 +18416,7 @@ def portal_status(portal_session_id: str, request: Request, quiet: bool = False)
                     "redirect_url": None,
                     "last_voucher_redemption": None,
                     "profile": public_portal_profile(profile),
+                    "pwa_install": public_portal_pwa_install_context(cur, session, profile),
                     "message": blocked_response["message"],
                     "blocked_device": blocked_response,
                 }
@@ -16851,7 +18426,7 @@ def portal_status(portal_session_id: str, request: Request, quiet: bool = False)
             user_identity = portal_user_identity(cur, session)
             redemption = latest_portal_redemption(cur, session)
             profile = portal_profile_for_user(cur, session.get("user_id"))
-            access_view = portal_access_view(session, user_identity, redemption)
+            access_view = monthly_access_view_for_session(cur, session) or portal_access_view(session, user_identity, redemption)
             bag_active_items = bag.get("active_items") or []
             internet_bag_active_items = [item for item in bag_active_items if product_kind_grants_hotspot(item.get("product_kind"))]
             if internet_bag_active_items:
@@ -16950,6 +18525,8 @@ def portal_status(portal_session_id: str, request: Request, quiet: bool = False)
         "redirect_url": session.get("mikrotik_link_orig") or session.get("redirect_url"),
         "last_voucher_redemption": redemption,
         "profile": public_portal_profile(profile),
+        "monthly_subscriber": access_view.get("monthly_subscriber"),
+        "pwa_install": public_portal_pwa_install_context(cur, session, profile),
         "message": session["last_error"] or access_view["message"],
         "blocked_device": None,
     }
@@ -17447,6 +19024,24 @@ def payment_checkout_method(store: dict, value: str) -> str:
     if not methods:
         raise HTTPException(status_code=400, detail="Enable at least one PayMongo checkout method before accepting online payments")
     return PAYMONGO_HOSTED_CHECKOUT_METHOD
+
+
+@app.post("/api/portal/payments/checkout-access")
+def portal_payment_checkout_access(payload: PortalPaymentCheckoutRequest, request: Request):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = ensure_portal_session(cur, payload, request)
+            enforce_portal_device_not_blocked(cur, session, payload, request, "PAYMENT_CHECKOUT_ACCESS")
+            user = ensure_portal_user(cur, session)
+            profile = portal_profile_for_user(cur, user["id"])
+            cleanup_expired_omada_payment_auth_free_grants(cur, limit=20)
+            access_status = omada_payment_auth_free_abuse_status(cur, session, user, profile, payload, request)
+    return {
+        "status": "SUCCESS",
+        "checkout_access": access_status,
+        "portal_session_id": session["public_session_id"],
+        "profile": public_portal_profile(profile),
+    }
 
 
 @app.post("/api/portal/payments/checkout")
@@ -24872,6 +26467,359 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
 @app.get("/api/customer-devices")
 def customer_devices(include_test: bool = False, admin=Depends(current_admin)):
     return connected_devices(include_test=include_test, admin=admin)
+
+
+@app.get("/api/monthly-subscribers")
+def admin_monthly_subscribers(search: str = "", status: str = "", admin=Depends(current_admin)):
+    clean_search = normalize_payment_text(search, 120).lower()
+    clean_status = normalize_payment_text(status, 40).upper()
+    subscribers = []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            settings = ensure_monthly_subscriber_settings(cur)
+            params = []
+            where = []
+            if clean_status:
+                where.append("s.status = %s")
+                params.append(clean_status)
+            if clean_search:
+                where.append(
+                    """
+                    (
+                        lower(COALESCE(s.customer_name, '')) LIKE %s
+                        OR lower(COALESCE(s.account_number, '')) LIKE %s
+                        OR lower(COALESCE(s.service_account_number, '')) LIKE %s
+                        OR EXISTS (
+                            SELECT 1 FROM monthly_subscriber_contacts c
+                            WHERE c.subscriber_id = s.id
+                              AND (
+                                  lower(COALESCE(c.contact_number, '')) LIKE %s
+                                  OR lower(COALESCE(c.normalized_contact, '')) LIKE %s
+                                  OR lower(COALESCE(c.label, '')) LIKE %s
+                              )
+                        )
+                    )
+                    """
+                )
+                like = f"%{clean_search}%"
+                params.extend([like, like, like, like, like, like])
+            where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+            cur.execute(
+                f"""
+                SELECT s.*
+                FROM monthly_subscribers s
+                {where_sql}
+                ORDER BY
+                    CASE s.status WHEN 'ACTIVE' THEN 0 WHEN 'SUSPENDED' THEN 1 ELSE 2 END,
+                    lower(s.customer_name)
+                """,
+                tuple(params),
+            )
+            subscriber_rows = cur.fetchall()
+            subscriber_ids = [row["id"] for row in subscriber_rows]
+            contacts_by_subscriber: dict[str, list[dict]] = {str(row["id"]): [] for row in subscriber_rows}
+            if subscriber_ids:
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM monthly_subscriber_contacts
+                    WHERE subscriber_id = ANY(%s)
+                    ORDER BY
+                        CASE status WHEN 'ACTIVE' THEN 0 WHEN 'DISABLED' THEN 1 ELSE 2 END,
+                        label NULLS LAST,
+                        contact_number
+                    """,
+                    (subscriber_ids,),
+                )
+                for contact in cur.fetchall():
+                    contacts_by_subscriber.setdefault(str(contact["subscriber_id"]), []).append(public_monthly_contact(contact))
+            for row in subscriber_rows:
+                subscribers.append(
+                    {
+                        "id": str(row.get("id") or ""),
+                        "external_subscriber_id": row.get("external_subscriber_id") or "",
+                        "account_number": row.get("account_number") or "",
+                        "service_account_number": row.get("service_account_number") or "",
+                        "customer_name": row.get("customer_name") or "",
+                        "plan_name": row.get("plan_name") or "",
+                        "status": row.get("status") or "",
+                        "last_synced_at": row.get("last_synced_at").isoformat() if row.get("last_synced_at") else None,
+                        "created_at": row.get("created_at").isoformat() if row.get("created_at") else None,
+                        "updated_at": row.get("updated_at").isoformat() if row.get("updated_at") else None,
+                        "contacts": contacts_by_subscriber.get(str(row["id"]), []),
+                    }
+                )
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE status = 'ACTIVE') AS active,
+                    COUNT(*) FILTER (WHERE status = 'SUSPENDED') AS suspended,
+                    COUNT(*) FILTER (WHERE status IN ('DISCONNECTED', 'INACTIVE')) AS inactive
+                FROM monthly_subscribers
+                """
+            )
+            metrics = dict(cur.fetchone() or {})
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(*) FILTER (WHERE status = 'ACTIVE') AS active,
+                    COUNT(*) FILTER (WHERE bound_user_id IS NOT NULL OR bound_device_token_hash IS NOT NULL OR bound_client_mac IS NOT NULL) AS bound
+                FROM monthly_subscriber_contacts
+                """
+            )
+            contact_metrics = dict(cur.fetchone() or {})
+            cur.execute(
+                """
+                SELECT *
+                FROM monthly_subscriber_sync_logs
+                ORDER BY created_at DESC
+                LIMIT 30
+                """
+            )
+            logs = [
+                {
+                    "id": str(row.get("id") or ""),
+                    "source_system": row.get("source_system") or "",
+                    "request_id": row.get("request_id") or "",
+                    "action": row.get("action") or "",
+                    "status": row.get("status") or "",
+                    "subscriber_count": int(row.get("subscriber_count") or 0),
+                    "contact_count": int(row.get("contact_count") or 0),
+                    "message": row.get("message") or "",
+                    "details": row.get("details") or {},
+                    "created_at": row.get("created_at").isoformat() if row.get("created_at") else None,
+                }
+                for row in cur.fetchall()
+            ]
+    return {
+        "settings": public_monthly_subscriber_settings(settings),
+        "metrics": {
+            "subscribers": int(metrics.get("total") or 0),
+            "active": int(metrics.get("active") or 0),
+            "suspended": int(metrics.get("suspended") or 0),
+            "inactive": int(metrics.get("inactive") or 0),
+            "contacts": int(contact_metrics.get("total") or 0),
+            "active_contacts": int(contact_metrics.get("active") or 0),
+            "bound_contacts": int(contact_metrics.get("bound") or 0),
+        },
+        "subscribers": subscribers,
+        "logs": logs,
+    }
+
+
+@app.put("/api/monthly-subscribers/settings")
+def update_monthly_subscriber_settings(payload: MonthlySubscriberSettingsUpdate, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            current = ensure_monthly_subscriber_settings(cur)
+            next_values = {
+                "integration_enabled": current.get("integration_enabled", True) if payload.integration_enabled is None else bool(payload.integration_enabled),
+                "api_key": normalize_payment_text(payload.api_key, 160) if payload.api_key is not None else current.get("api_key"),
+                "api_secret": normalize_payment_text(payload.api_secret, 512) if payload.api_secret else current.get("api_secret"),
+                "rolling_authorization_seconds": int(payload.rolling_authorization_seconds or current.get("rolling_authorization_seconds") or 2592000),
+                "login_otp_ttl_seconds": int(payload.login_otp_ttl_seconds or current.get("login_otp_ttl_seconds") or 300),
+                "login_otp_cooldown_seconds": int(payload.login_otp_cooldown_seconds or current.get("login_otp_cooldown_seconds") or 60),
+                "source_system_label": normalize_payment_text(payload.source_system_label, 120) if payload.source_system_label is not None else current.get("source_system_label"),
+            }
+            cur.execute(
+                """
+                UPDATE monthly_subscriber_settings
+                SET integration_enabled = %s,
+                    api_key = %s,
+                    api_secret = %s,
+                    rolling_authorization_seconds = %s,
+                    login_otp_ttl_seconds = %s,
+                    login_otp_cooldown_seconds = %s,
+                    source_system_label = %s,
+                    updated_at = now()
+                WHERE id = true
+                RETURNING *
+                """,
+                (
+                    next_values["integration_enabled"],
+                    next_values["api_key"],
+                    next_values["api_secret"],
+                    next_values["rolling_authorization_seconds"],
+                    next_values["login_otp_ttl_seconds"],
+                    next_values["login_otp_cooldown_seconds"],
+                    next_values["source_system_label"] or "3J Main",
+                ),
+            )
+            settings = cur.fetchone()
+    audit(admin["id"], "update_monthly_subscriber_settings", "monthly_subscriber_settings", "singleton", {"integration_enabled": settings.get("integration_enabled")})
+    return {"status": "SUCCESS", "message": "Monthly subscriber settings saved.", "settings": public_monthly_subscriber_settings(settings)}
+
+
+@app.post("/api/monthly-subscribers/contacts/{contact_id}/revoke-device")
+def revoke_monthly_subscriber_contact_device(contact_id: str, admin=Depends(current_admin)):
+    try:
+        clean_contact_id = str(uuid.UUID(str(contact_id)))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Contact id is invalid.") from exc
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE monthly_subscriber_contacts
+                SET bound_user_id = NULL,
+                    bound_portal_session_id = NULL,
+                    bound_device_token_hash = NULL,
+                    bound_client_mac = NULL,
+                    bound_client_ip = NULL,
+                    bound_user_agent = NULL,
+                    bound_at = NULL,
+                    revoked_at = now(),
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (clean_contact_id,),
+            )
+            contact = cur.fetchone()
+            if not contact:
+                raise HTTPException(status_code=404, detail="Monthly subscriber contact was not found.")
+    audit(admin["id"], "revoke_monthly_subscriber_device", "monthly_subscriber_contacts", clean_contact_id, {})
+    return {"status": "SUCCESS", "message": "Monthly subscriber device binding reset.", "contact": public_monthly_contact(contact)}
+
+
+@app.get("/api/integrations/monthly-subscribers/health")
+async def monthly_subscriber_integration_health(request: Request):
+    body = await request.body()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            settings = require_monthly_subscriber_integration_signature(cur, request, body)
+            cur.execute("SELECT COUNT(*) AS count FROM monthly_subscribers")
+            count = int((cur.fetchone() or {}).get("count") or 0)
+    return {
+        "ok": True,
+        "status": "ACTIVE",
+        "service": "Monthly Subscribers",
+        "source_system_label": settings.get("source_system_label") or "3J Main",
+        "subscriber_count": count,
+    }
+
+
+@app.post("/api/integrations/monthly-subscribers/upsert")
+async def monthly_subscriber_integration_upsert(payload: MonthlySubscriberUpsertPayload, request: Request):
+    body = await request.body()
+    source_system = normalize_payment_text(payload.source_system, 120) or "3J Main"
+    request_id = normalize_payment_text(request.headers.get("x-3j-idempotency-key"), 120)
+    subscriber_count = 0
+    contact_count = 0
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            require_monthly_subscriber_integration_signature(cur, request, body)
+            for subscriber in payload.subscribers:
+                status = monthly_status(subscriber.status)
+                source_payload = subscriber.model_dump()
+                cur.execute(
+                    """
+                    INSERT INTO monthly_subscribers(
+                        external_subscriber_id, account_number, service_account_number, customer_name,
+                        plan_name, status, source_payload, last_synced_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, now())
+                    ON CONFLICT (external_subscriber_id) DO UPDATE
+                    SET account_number = EXCLUDED.account_number,
+                        service_account_number = EXCLUDED.service_account_number,
+                        customer_name = EXCLUDED.customer_name,
+                        plan_name = EXCLUDED.plan_name,
+                        status = EXCLUDED.status,
+                        source_payload = EXCLUDED.source_payload,
+                        last_synced_at = now(),
+                        updated_at = now()
+                    RETURNING *
+                    """,
+                    (
+                        normalize_payment_text(subscriber.external_subscriber_id, 160),
+                        normalize_payment_text(subscriber.account_number, 120),
+                        normalize_payment_text(subscriber.service_account_number, 120),
+                        normalize_payment_text(subscriber.customer_name, 180),
+                        normalize_payment_text(subscriber.plan_name, 180),
+                        status,
+                        Json(sanitize_summary(source_payload)),
+                    ),
+                )
+                subscriber_row = cur.fetchone()
+                subscriber_count += 1
+                seen_contacts: set[str] = set()
+                for contact in subscriber.contacts or []:
+                    normalized = normalize_payment_text(contact.normalized_contact, 32)
+                    if not normalized:
+                        normalized, _ = normalize_portal_contact_number(contact.contact_number)
+                    else:
+                        normalized, _ = normalize_portal_contact_number(normalized)
+                    display_contact = portal_contact_display_number(contact.contact_number or normalized)
+                    seen_contacts.add(normalized)
+                    cur.execute(
+                        """
+                        INSERT INTO monthly_subscriber_contacts(
+                            subscriber_id, contact_number, normalized_contact, label, status
+                        )
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (normalized_contact) DO UPDATE
+                        SET subscriber_id = EXCLUDED.subscriber_id,
+                            contact_number = EXCLUDED.contact_number,
+                            label = EXCLUDED.label,
+                            status = EXCLUDED.status,
+                            updated_at = now()
+                        RETURNING *
+                        """,
+                        (
+                            subscriber_row["id"],
+                            display_contact,
+                            normalized,
+                            normalize_payment_text(contact.label, 120),
+                            monthly_contact_status(bool(contact.enabled) and status == "ACTIVE"),
+                        ),
+                    )
+                    cur.fetchone()
+                    contact_count += 1
+                if seen_contacts:
+                    cur.execute(
+                        """
+                        UPDATE monthly_subscriber_contacts
+                        SET status = 'DISABLED', updated_at = now()
+                        WHERE subscriber_id = %s
+                          AND normalized_contact <> ALL(%s)
+                        """,
+                        (subscriber_row["id"], list(seen_contacts)),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE monthly_subscriber_contacts
+                        SET status = 'DISABLED', updated_at = now()
+                        WHERE subscriber_id = %s
+                        """,
+                        (subscriber_row["id"],),
+                    )
+            cur.execute(
+                """
+                INSERT INTO monthly_subscriber_sync_logs(
+                    source_system, request_id, action, status, subscriber_count, contact_count, message, details
+                )
+                VALUES (%s, %s, 'UPSERT', 'SUCCESS', %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    source_system,
+                    request_id,
+                    subscriber_count,
+                    contact_count,
+                    f"Synced {subscriber_count} monthly subscriber(s) from {source_system}.",
+                    Json({"synced_by": payload.synced_by or "", "source_system": source_system}),
+                ),
+            )
+            log_row = cur.fetchone()
+    return {
+        "status": "SUCCESS",
+        "subscriber_count": subscriber_count,
+        "contact_count": contact_count,
+        "sync_log_id": str(log_row.get("id") or ""),
+    }
 
 
 
@@ -41155,6 +43103,183 @@ def update_system_settings(payload: SystemSettingsUpdate, admin=Depends(current_
             )
     audit(admin["id"], "update_system_settings", "system", "system", merged)
     return system_settings_payload()
+
+
+@app.get("/api/system-settings/pwa")
+def get_portal_pwa_settings(admin=Depends(current_admin)):
+    return portal_pwa_admin_payload()
+
+
+@app.patch("/api/system-settings/pwa")
+def update_portal_pwa_settings(payload: PortalPwaSettingsUpdate, admin=Depends(current_admin)):
+    current = ensure_captive_portal_settings()
+    allowed = {
+        "pwa_name",
+        "pwa_short_name",
+        "pwa_description",
+        "pwa_theme_color",
+        "pwa_background_color",
+        "pwa_icon_url",
+        "pwa_display_mode",
+        "pwa_install_enabled",
+        "pwa_gift_enabled",
+        "pwa_gift_duration_seconds",
+        "pwa_gift_title",
+        "pwa_gift_available_message",
+        "pwa_gift_claim_message",
+        "pwa_install_guide_message",
+    }
+    updates = {key: value for key, value in payload.model_dump(exclude_none=True).items() if key in allowed}
+    if "pwa_theme_color" in updates:
+        updates["pwa_theme_color"] = normalize_pwa_color(updates.get("pwa_theme_color"), current.get("pwa_theme_color") or "#ff3838")
+    if "pwa_background_color" in updates:
+        updates["pwa_background_color"] = normalize_pwa_color(updates.get("pwa_background_color"), current.get("pwa_background_color") or "#f8fafc")
+    if "pwa_display_mode" in updates:
+        mode = normalize_payment_text(updates.get("pwa_display_mode"), 40).lower()
+        if mode not in {"standalone", "fullscreen", "minimal-ui", "browser"}:
+            mode = "standalone"
+        updates["pwa_display_mode"] = mode
+    if "pwa_gift_duration_seconds" in updates:
+        updates["pwa_gift_duration_seconds"] = max(1, min(int(updates["pwa_gift_duration_seconds"] or 3600), 2592000))
+    if updates:
+        assignments = ", ".join([f"{key} = %s" for key in updates] + ["updated_at = now()"])
+        params = list(updates.values()) + [current["id"]]
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"UPDATE captive_portal_settings SET {assignments} WHERE id = %s", tuple(params))
+        audit(admin["id"], "update_portal_pwa_settings", "captive_portal_settings", str(current["id"]), sanitize_summary(updates))
+    return portal_pwa_admin_payload()
+
+
+@app.post("/api/system-settings/pwa/icon")
+def upload_portal_pwa_icon(pwa_icon: UploadFile = File(...), admin=Depends(current_admin)):
+    icon_url = save_branding_file(pwa_icon, "portal-pwa-icon")
+    current = ensure_captive_portal_settings()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE captive_portal_settings SET pwa_icon_url = %s, updated_at = now() WHERE id = %s",
+                (icon_url, current["id"]),
+            )
+    audit(admin["id"], "upload_portal_pwa_icon", "captive_portal_settings", str(current["id"]), {"url": icon_url})
+    return portal_pwa_admin_payload()
+
+
+@app.post("/api/system-settings/pwa/install-records/clear")
+def clear_portal_pwa_install_records(payload: PortalPwaInstallClearRequest, admin=Depends(current_admin)):
+    platform = normalize_payment_text(payload.platform, 20).lower()
+    if platform not in {"android", "ios"}:
+        raise HTTPException(status_code=400, detail="Platform must be android or ios.")
+
+    identity_conditions = []
+    identity_params = []
+    clean_profile_id = parse_uuid_or_400(payload.profile_id, "profile id") if payload.profile_id else None
+    clean_user_id = parse_uuid_or_400(payload.user_id, "user id") if payload.user_id else None
+    clean_session_id = parse_uuid_or_400(payload.portal_session_id, "portal session id") if payload.portal_session_id else None
+    clean_device_hash = normalize_payment_text(payload.device_token_hash, 160).strip() or None
+    if clean_profile_id:
+        identity_conditions.append("profile_id = %s")
+        identity_params.append(clean_profile_id)
+    if clean_user_id:
+        identity_conditions.append("user_id = %s")
+        identity_params.append(clean_user_id)
+    if clean_device_hash:
+        identity_conditions.append("device_token_hash = %s")
+        identity_params.append(clean_device_hash)
+    if clean_session_id:
+        identity_conditions.append("portal_session_id = %s")
+        identity_params.append(clean_session_id)
+    if not identity_conditions:
+        raise HTTPException(status_code=400, detail="A customer/profile/device identity is required.")
+
+    if platform == "android":
+        platform_filter = "event_type = 'APP_INSTALLED' AND (platform ILIKE '%%android%%' OR user_agent ILIKE '%%android%%')"
+    else:
+        platform_filter = """
+            event_type = 'STANDALONE_OPEN'
+            AND (
+                platform ILIKE '%%ios%%'
+                OR platform ILIKE '%%ipad%%'
+                OR user_agent ILIKE '%%iphone%%'
+                OR user_agent ILIKE '%%ipad%%'
+            )
+        """
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                DELETE FROM portal_pwa_events
+                WHERE {platform_filter}
+                  AND ({' OR '.join(identity_conditions)})
+                RETURNING id
+                """,
+                tuple(identity_params),
+            )
+            deleted_event_ids = [row["id"] for row in cur.fetchall()]
+
+            claim_conditions = []
+            claim_params = []
+            if clean_profile_id:
+                claim_conditions.append("profile_id = %s")
+                claim_params.append(clean_profile_id)
+            if clean_user_id:
+                claim_conditions.append("user_id = %s")
+                claim_params.append(clean_user_id)
+            if not claim_conditions:
+                claim_rows = []
+            else:
+                cur.execute(
+                    f"""
+                    SELECT *
+                    FROM portal_pwa_gift_claims
+                    WHERE {' OR '.join(claim_conditions)}
+                    """,
+                    tuple(claim_params),
+                )
+                claim_rows = cur.fetchall()
+
+            bag_item_ids = [str(row["bag_item_id"]) for row in claim_rows if row.get("bag_item_id")]
+            if bag_item_ids:
+                cur.execute(
+                    """
+                    UPDATE customer_bag_items
+                    SET status = 'CANCELLED',
+                        remaining_seconds = 0,
+                        updated_at = now()
+                    WHERE id = ANY(%s::uuid[])
+                      AND status = 'QUEUED'
+                    RETURNING id
+                    """,
+                    (bag_item_ids,),
+                )
+                cancelled_bag_ids = [row["id"] for row in cur.fetchall()]
+            else:
+                cancelled_bag_ids = []
+
+            if claim_conditions:
+                cur.execute(
+                    f"""
+                    DELETE FROM portal_pwa_gift_claims
+                    WHERE {' OR '.join(claim_conditions)}
+                    RETURNING id
+                    """,
+                    tuple(claim_params),
+                )
+                deleted_claim_ids = [row["id"] for row in cur.fetchall()]
+            else:
+                deleted_claim_ids = []
+
+    result = {
+        "status": "SUCCESS",
+        "message": "PWA install tracking and gift status cleared.",
+        "platform": platform,
+        "deleted_events": len(deleted_event_ids),
+        "deleted_gift_claims": len(deleted_claim_ids),
+        "cancelled_queued_gifts": len(cancelled_bag_ids),
+    }
+    audit(admin["id"], "clear_portal_pwa_install_records", "portal_pwa_events", platform, sanitize_summary(result))
+    return {**portal_pwa_admin_payload(), "clear_result": result}
 
 
 @app.get("/api/system-settings/public-endpoint")
