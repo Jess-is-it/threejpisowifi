@@ -1765,6 +1765,8 @@ class OmadaApiClient:
 
         normalized_mac = normalize_omada_mac(client_mac)
         clean_ip = str(client_ip or "").strip()
+        if "/" in clean_ip:
+            clean_ip = clean_ip.split("/", 1)[0].strip()
         if not normalized_mac and not clean_ip:
             raise OmadaApiError("Client MAC or IP is required for Omada Authentication-Free Client.")
 
@@ -1775,20 +1777,21 @@ class OmadaApiClient:
             current = {}
 
         policies = [item for item in list(current.get("freeAuthClientPolicies") or []) if isinstance(item, dict)]
-        existing = False
+        has_mac_policy = False
+        has_ip_policy = False
         for item in policies:
             policy_type = int(item.get("type") or 0)
             if normalized_mac and policy_type == 4 and normalize_omada_mac(item.get("clientMac")) == normalized_mac:
-                existing = True
-                break
+                has_mac_policy = True
             if clean_ip and policy_type == 3 and str(item.get("clientIp") or "").strip() == clean_ip:
-                existing = True
-                break
-        if not existing:
-            if normalized_mac:
-                policies.append({"type": 4, "clientMac": normalized_mac})
-            else:
-                policies.append({"type": 3, "clientIp": clean_ip})
+                has_ip_policy = True
+        added = 0
+        if normalized_mac and not has_mac_policy:
+            policies.append({"type": 4, "clientMac": normalized_mac})
+            added += 1
+        if clean_ip and not has_ip_policy:
+            policies.append({"type": 3, "clientIp": clean_ip})
+            added += 1
 
         payload = {
             "preAuthAccessEnable": bool(current.get("preAuthAccessEnable")),
@@ -1802,7 +1805,8 @@ class OmadaApiClient:
             "site_id": site_id,
             "client_mac": normalized_mac,
             "client_ip": clean_ip or None,
-            "created": not existing,
+            "created": bool(added),
+            "added_policy_count": added,
             "free_auth_policy_count": len(policies),
             "read_summary": read_summary,
             "response_summary": patch_summary,
@@ -1818,6 +1822,8 @@ class OmadaApiClient:
 
         normalized_mac = normalize_omada_mac(client_mac)
         clean_ip = str(client_ip or "").strip()
+        if "/" in clean_ip:
+            clean_ip = clean_ip.split("/", 1)[0].strip()
         if not normalized_mac and not clean_ip:
             raise OmadaApiError("Client MAC or IP is required to remove an Omada Authentication-Free Client.")
 

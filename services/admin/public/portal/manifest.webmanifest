@@ -1,0 +1,24 @@
+{
+  "id": "/portal",
+  "name": "3J WiFi Portal",
+  "short_name": "3J WiFi",
+  "description": "3J WiFi customer portal for WiFi passes, time alerts, and support.",
+  "start_url": "/portal?source=pwa",
+  "scope": "/portal",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#ff3838",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/api/portal/app-icon/disconnected-192.png",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/api/portal/app-icon/disconnected-512.png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ]
+}

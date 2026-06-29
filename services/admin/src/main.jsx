@@ -451,6 +451,24 @@ function itemColorFormValues(color = ITEM_COLOR_PALETTE[0]) {
   };
 }
 
+function speedLimitLabel(item = {}) {
+  if (!item?.speed_limit_enabled) return 'No speed limit';
+  const down = Number(item.speed_download_mbps || 0);
+  const up = Number(item.speed_upload_mbps || 0);
+  if (!down || !up) return 'No speed limit';
+  return `${down.toLocaleString(undefined, { maximumFractionDigits: 2 })} Mbps down / ${up.toLocaleString(undefined, { maximumFractionDigits: 2 })} Mbps up`;
+}
+
+function SpeedLimitBadge({ item = {}, compact = false }) {
+  const enabled = Boolean(item?.speed_limit_enabled);
+  return (
+    <span className={`badge ${enabled ? 'bg-azure-lt text-azure' : 'bg-secondary-lt text-secondary'}`}>
+      <IconActivity size={14} className={compact ? '' : 'me-1'} />
+      {!compact && speedLimitLabel(item)}
+    </span>
+  );
+}
+
 function ItemColorPicker({ valueKey, valueHex, usedKeys, onChange, label = 'Item Color' }) {
   const normalizedKey = normalizeItemColorKey(valueKey);
   const selected = itemColorMeta({ color_key: normalizedKey, color_hex: valueHex });
@@ -6038,6 +6056,7 @@ function PortalApp() {
       ['Bought at', bagPassBoughtAt(item) ? formatPortalDateTime(bagPassBoughtAt(item)) : 'Not recorded'],
       ['Duration', formatSeconds(item.duration_seconds || 0)],
       ['Remaining', formatSeconds(item.remaining_seconds || 0)],
+      ['Speed', item.speed_limit_enabled ? speedLimitLabel(item) : 'No speed limit'],
       ['Consumption', bagPassTimeStatusLine(item)],
       ['Category', item.product_category_name || 'None'],
       ['Access scope', item.access_scope === 'BARANGAY_ONLY' ? `Barangay only${item.allowed_barangay ? ` · ${item.allowed_barangay}` : ''}` : 'All locations'],
@@ -6293,10 +6312,12 @@ function PortalApp() {
       const iptvReady = Boolean(item.iptv_watch_ready || item.iptv_status === 'PROVISIONED');
       const iptvTone = iptvReady ? 'green' : item.iptv_status === 'FAILED' ? 'red' : item.iptv_status === 'MANUAL_REVIEW' ? 'orange' : 'yellow';
       const iptvStatusLabel = iptvReady ? 'IPTV ready' : item.iptv_status === 'FAILED' ? 'IPTV failed' : item.iptv_status === 'MANUAL_REVIEW' ? 'Manual review' : 'IPTV pending';
+      const colorMeta = itemColorMeta(item);
       return (
         <div
-          className={`portal-bag-item ${options.draggable ? 'is-draggable' : ''} ${bagDraggingItemId === item.id ? 'is-dragging' : ''} ${bagDragOverItemId === item.id && bagDraggingItemId !== item.id ? `is-drop-${bagDragDropPlacement}` : ''}`}
+          className={`portal-bag-item has-item-color ${options.draggable ? 'is-draggable' : ''} ${bagDraggingItemId === item.id ? 'is-dragging' : ''} ${bagDragOverItemId === item.id && bagDraggingItemId !== item.id ? `is-drop-${bagDragDropPlacement}` : ''}`}
           key={item.id}
+          style={itemColorStyle(item)}
           draggable={Boolean(options.draggable)}
           onDragStart={(event) => {
             if (!options.draggable) return;
@@ -6332,7 +6353,10 @@ function PortalApp() {
           {options.draggable && <span className="portal-bag-drag"><IconGripVertical size={18} /></span>}
           <div className="portal-bag-item-main">
             <div className="portal-bag-item-topline">
-              <div className="portal-bag-item-title">{item.product_name || 'WiFi package'}</div>
+              <div className="portal-bag-item-title">
+                <span className="portal-bag-item-color-chip" aria-hidden="true" title={colorMeta.label} />
+                <span>{item.product_name || 'WiFi package'}</span>
+              </div>
               <div className="portal-bag-item-actions">
                 {showStatusBadge && (
                   <span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : item.status === 'QUEUED' ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>
@@ -6345,6 +6369,12 @@ function PortalApp() {
               <span><IconClock size={14} /> {formatSeconds(item.remaining_seconds || item.duration_seconds || 0)}</span>
               <span className="portal-bag-meta-separator">|</span>
               <span>{itemIsIptvOnly ? 'IPTV entitlement' : '1 device'}</span>
+              {item.speed_limit_enabled && (
+                <>
+                  <span className="portal-bag-meta-separator">|</span>
+                  <span className="portal-bag-speed-meta"><IconActivity size={14} /> {speedLimitLabel(item)}</span>
+                </>
+              )}
             </div>
             {itemUsesIptv && (
               <div className="portal-bag-item-meta">
@@ -7913,6 +7943,7 @@ function PortalApp() {
                         <div className="portal-product-meta-tags">
                           <span className="badge portal-item-meta-badge"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
                           <span className="badge portal-item-meta-badge"><IconClock size={16} className="me-1" />{item.duration_label}</span>
+                          {item.speed_limit_enabled && <span className="badge portal-item-meta-badge"><IconActivity size={16} className="me-1" />{speedLimitLabel(item)}</span>}
                           <span className="badge portal-item-meta-badge">{item.access_scope === 'BARANGAY_ONLY' ? 'Barangay only' : 'All locations'}</span>
                         </div>
                         {item.access_scope === 'BARANGAY_ONLY' && item.allowed_barangay && <div className="small text-muted mt-2">Allowed in {item.allowed_barangay}</div>}
@@ -8044,6 +8075,7 @@ function PortalApp() {
                     {portalProductKindLabel(item)}
                   </span>
                   <span className="badge portal-item-meta-badge"><IconClock size={16} className="me-1" />{item.duration_label}</span>
+                  {item.speed_limit_enabled && <span className="badge portal-item-meta-badge"><IconActivity size={16} className="me-1" />{speedLimitLabel(item)}</span>}
                 </div>
                 <span className="btn btn-primary w-100 mt-3">
                   {t('Select')}
@@ -8204,6 +8236,7 @@ function PortalApp() {
                         </span>
                         <span className="badge portal-item-meta-badge"><IconCash size={16} className="me-1" />PHP {Number(item.price || 0).toFixed(2)}</span>
                         <span className="badge portal-item-meta-badge"><IconClock size={16} className="me-1" />{item.duration_label}</span>
+                        {item.speed_limit_enabled && <span className="badge portal-item-meta-badge"><IconActivity size={16} className="me-1" />{speedLimitLabel(item)}</span>}
                       </div>
                       {discountNudge && (
                         <div className="portal-discount-nudge">
@@ -15683,6 +15716,9 @@ function PhysicalStoresPage() {
     price: '0',
     duration_value: '1',
     duration_unit: 'hours',
+    speed_limit_enabled: false,
+    speed_download_mbps: '',
+    speed_upload_mbps: '',
     access_scope: 'ALL_LOCATIONS',
     allowed_barangay: '',
     more_info_enabled: false,
@@ -16057,6 +16093,9 @@ function PhysicalStoresPage() {
       price: Number(itemForm.price || 0),
       duration_value: Number(itemForm.duration_value || 1),
       duration_unit: itemForm.duration_unit,
+      speed_limit_enabled: Boolean(itemForm.speed_limit_enabled),
+      speed_download_mbps: itemForm.speed_limit_enabled ? Number(itemForm.speed_download_mbps || 0) : null,
+      speed_upload_mbps: itemForm.speed_limit_enabled ? Number(itemForm.speed_upload_mbps || 0) : null,
       access_scope: itemForm.access_scope,
       allowed_barangay: itemForm.access_scope === 'BARANGAY_ONLY' ? itemForm.allowed_barangay.trim() || null : null,
       more_info_enabled: Boolean(itemForm.more_info_enabled),
@@ -16080,6 +16119,9 @@ function PhysicalStoresPage() {
       price: item.price === null || item.price === undefined ? '0' : String(item.price),
       duration_value: item.duration_value === null || item.duration_value === undefined ? '1' : String(item.duration_value),
       duration_unit: item.duration_unit || 'hours',
+      speed_limit_enabled: (item.product_kind || 'WIFI') !== 'IPTV' && Boolean(item.speed_limit_enabled),
+      speed_download_mbps: item.speed_download_mbps === null || item.speed_download_mbps === undefined ? '' : String(item.speed_download_mbps),
+      speed_upload_mbps: item.speed_upload_mbps === null || item.speed_upload_mbps === undefined ? '' : String(item.speed_upload_mbps),
       access_scope: item.access_scope || 'ALL_LOCATIONS',
       allowed_barangay: item.allowed_barangay || '',
       more_info_enabled: Boolean(item.more_info_enabled),
@@ -16410,6 +16452,7 @@ function PhysicalStoresPage() {
                           <td>
                             <div className="fw-semibold">{item.price_display}</div>
                             <div className="text-muted small">{item.duration_label}</div>
+                            <div className="mt-1"><SpeedLimitBadge item={item} /></div>
                           </td>
                           <td>
                             <span className={`badge ${item.access_scope === 'BARANGAY_ONLY' ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>{item.access_scope_label}</span>
@@ -16485,6 +16528,55 @@ function PhysicalStoresPage() {
                   <option value="hours">Hours</option>
                   <option value="days">Days</option>
                 </select>
+              </div>
+              <div className="col-12">
+                <div className="card border">
+                  <div className="card-body">
+                    <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
+                      <div>
+                        <div className="fw-semibold">MikroTik Speed Limit</div>
+                        <div className="text-muted small">Applied as a RouterOS simple queue when this store item is active. Omada AP speed limits are not used.</div>
+                      </div>
+                      <label className="form-check form-switch mb-0">
+                        <input
+                          className="form-check-input"
+                          type="checkbox"
+                          checked={Boolean(itemForm.speed_limit_enabled)}
+                          onChange={(e) => setItemForm({ ...itemForm, speed_limit_enabled: e.target.checked })}
+                        />
+                        <span className="form-check-label">Enable</span>
+                      </label>
+                    </div>
+                    <div className="row g-3">
+                      <div className="col-md-6">
+                        <label className="form-label">Download Mbps</label>
+                        <input
+                          className="form-control"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={itemForm.speed_download_mbps}
+                          onChange={(e) => setItemForm({ ...itemForm, speed_download_mbps: e.target.value })}
+                          disabled={!itemForm.speed_limit_enabled}
+                          placeholder="Example: 10"
+                        />
+                      </div>
+                      <div className="col-md-6">
+                        <label className="form-label">Upload Mbps</label>
+                        <input
+                          className="form-control"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={itemForm.speed_upload_mbps}
+                          onChange={(e) => setItemForm({ ...itemForm, speed_upload_mbps: e.target.value })}
+                          disabled={!itemForm.speed_limit_enabled}
+                          placeholder="Example: 3"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
               <div className="col-md-6">
                 <label className="form-label">Access Scope</label>
@@ -19182,6 +19274,9 @@ function ProductItemsPage() {
     iptv_xui_package_id: '',
     iptv_auto_provision: false,
     iptv_notes: '',
+    speed_limit_enabled: false,
+    speed_download_mbps: '',
+    speed_upload_mbps: '',
     discounts: [],
     status: 'ACTIVE',
     sort_order: '0'
@@ -19321,6 +19416,9 @@ function ProductItemsPage() {
       iptv_xui_package_id: '',
       iptv_auto_provision: false,
       iptv_notes: item.iptv_notes || '',
+      speed_limit_enabled: (item.product_kind || 'WIFI') !== 'IPTV' && Boolean(item.speed_limit_enabled),
+      speed_download_mbps: item.speed_download_mbps === null || item.speed_download_mbps === undefined ? '' : String(item.speed_download_mbps),
+      speed_upload_mbps: item.speed_upload_mbps === null || item.speed_upload_mbps === undefined ? '' : String(item.speed_upload_mbps),
       discounts: (item.discounts || []).map((discount, index) => ({
         id: discount.id || `existing-${index}`,
         label: discount.label || '',
@@ -19372,6 +19470,9 @@ function ProductItemsPage() {
       iptv_xui_package_id: '',
       iptv_auto_provision: false,
       iptv_notes: productKindUsesIptv(form.product_kind) ? form.iptv_notes.trim() : '',
+      speed_limit_enabled: form.product_kind !== 'IPTV' && Boolean(form.speed_limit_enabled),
+      speed_download_mbps: form.product_kind !== 'IPTV' && form.speed_limit_enabled ? Number(form.speed_download_mbps || 0) : null,
+      speed_upload_mbps: form.product_kind !== 'IPTV' && form.speed_limit_enabled ? Number(form.speed_upload_mbps || 0) : null,
       discounts: normalizeProductDiscounts(form.discounts),
       status: form.status,
       sort_order: Number(form.sort_order || 0)
@@ -19770,6 +19871,7 @@ function ProductItemsPage() {
                   <th>Price</th>
                   <th>Discount</th>
                   <th>Time</th>
+                  <th>Speed</th>
                   <th>Status</th>
                   <th>Sort</th>
                   <th className="text-end">Actions</th>
@@ -19797,6 +19899,7 @@ function ProductItemsPage() {
                     <td className="fw-semibold">{item.price_display || formatPrice(item.price)}</td>
                     <td>{discountBadge(item)}</td>
                     <td><span className="badge bg-blue-lt text-blue"><IconClock size={14} className="me-1" />{durationText(item)}</span></td>
+                    <td><SpeedLimitBadge item={item} /></td>
                     <td><span className={`badge ${item.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{item.status}</span></td>
                     <td>{item.sort_order}</td>
                     <td className="text-end">
@@ -19808,7 +19911,7 @@ function ProductItemsPage() {
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={9} className="text-center text-muted py-4">No product items yet. Add reusable items first, then assign them to product categories.</td>
+                    <td colSpan={10} className="text-center text-muted py-4">No product items yet. Add reusable items first, then assign them to product categories.</td>
                   </tr>
                 )}
               </tbody>
@@ -19876,6 +19979,11 @@ function ProductItemsPage() {
                         ...form,
                         product_kind: nextKind,
                         iptv_auto_provision: false,
+                        ...(nextKind === 'IPTV' ? {
+                          speed_limit_enabled: false,
+                          speed_download_mbps: '',
+                          speed_upload_mbps: '',
+                        } : {}),
                         ...(!productKindUsesIptv(nextKind) ? {
                           iptv_package_label: '',
                           iptv_xui_package_id: '',
@@ -19944,6 +20052,63 @@ function ProductItemsPage() {
                     usedKeys={usedItemColorKeys(items, selectedItem?.id)}
                     onChange={(patch) => setForm({ ...form, ...patch })}
                   />
+                </div>
+                <div className="col-12">
+                  <div className="card border">
+                    <div className="card-body">
+                      <div className="d-flex align-items-start justify-content-between gap-3 flex-wrap">
+                        <div>
+                          <div className="fw-semibold d-flex align-items-center gap-2">
+                            <IconActivity size={18} className="text-azure" />
+                            MikroTik Speed Limit
+                          </div>
+                          <div className="text-muted small">Applied as a RouterOS simple queue when this item is active. Omada AP speed limits are not used.</div>
+                        </div>
+                        <label className="form-check form-switch mb-0">
+                          <input
+                            className="form-check-input"
+                            type="checkbox"
+                            checked={Boolean(form.speed_limit_enabled)}
+                            disabled={form.product_kind === 'IPTV'}
+                            onChange={(e) => setForm({ ...form, speed_limit_enabled: e.target.checked })}
+                          />
+                          <span className="form-check-label">Enable</span>
+                        </label>
+                      </div>
+                      {form.product_kind === 'IPTV' ? (
+                        <div className="alert alert-info py-2 mt-3 mb-0">IPTV-only items do not grant hotspot internet, so MikroTik speed queues are not created.</div>
+                      ) : (
+                        <div className="row g-3 mt-1">
+                          <div className="col-md-6">
+                            <label className="form-label">Download Mbps</label>
+                            <input
+                              className="form-control"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={form.speed_download_mbps}
+                              disabled={!form.speed_limit_enabled}
+                              onChange={(e) => setForm({ ...form, speed_download_mbps: e.target.value })}
+                              placeholder="Example: 20"
+                            />
+                          </div>
+                          <div className="col-md-6">
+                            <label className="form-label">Upload Mbps</label>
+                            <input
+                              className="form-control"
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={form.speed_upload_mbps}
+                              disabled={!form.speed_limit_enabled}
+                              onChange={(e) => setForm({ ...form, speed_upload_mbps: e.target.value })}
+                              placeholder="Example: 5"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -33053,6 +33218,7 @@ function PaymentAccessPage() {
   function paymentAccessTone(status) {
     const value = String(status || '').toUpperCase();
     if (['ACTIVE', 'REMOTE_ACTIVE'].includes(value)) return 'green';
+    if (['PAID_GRACE'].includes(value)) return 'cyan';
     if (['FAILED', 'REMOVE_FAILED', 'ABUSE_BLOCKED', 'ORPHANED_IN_OMADA'].includes(value)) return 'red';
     if (['REMOVED', 'EXPIRED', 'CANCELLED'].includes(value)) return 'secondary';
     if (['GRANT_SKIPPED'].includes(value)) return 'yellow';
@@ -33478,6 +33644,11 @@ function PaymentAccessPage() {
                   <label className="form-label">Payment window timeout (seconds)</label>
                   <input className="form-control" type="number" min="30" max="900" value={(paymentAccessForm || paymentAccess?.settings)?.grant_timeout_seconds ?? ''} placeholder="120" onChange={(event) => updatePaymentAccessForm({ grant_timeout_seconds: Number(event.target.value) })} />
                   <div className="text-muted small mt-1">The Omada free-client entry is removed after this saved window.</div>
+                </div>
+                <div className="col-md-3">
+                  <label className="form-label">Post-payment cleanup delay (seconds)</label>
+                  <input className="form-control" type="number" min="0" max="300" value={(paymentAccessForm || paymentAccess?.settings)?.post_payment_cleanup_delay_seconds ?? ''} placeholder="20" onChange={(event) => updatePaymentAccessForm({ post_payment_cleanup_delay_seconds: Number(event.target.value) })} />
+                  <div className="text-muted small mt-1">After paid checkout, keep temporary access briefly unless the customer already returned to the portal.</div>
                 </div>
                 <div className="col-md-3">
                   <label className="form-label">Daily checkout window limit</label>

@@ -332,6 +332,7 @@ class OmadaPaymentAuthFreeSettingsUpdate(BaseModel):
     enabled: Optional[bool] = None
     browser_transfer_required: Optional[bool] = None
     grant_timeout_seconds: Optional[int] = Field(default=None, ge=30, le=900)
+    post_payment_cleanup_delay_seconds: Optional[int] = Field(default=None, ge=0, le=300)
     daily_attempt_limit: Optional[int] = Field(default=None, ge=1, le=100)
     cooldown_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
     abuse_block_hours: Optional[int] = Field(default=None, ge=1, le=168)
@@ -452,6 +453,9 @@ class ProductItemPayload(BaseModel):
     iptv_xui_package_id: Optional[str] = Field(default=None, max_length=160)
     iptv_auto_provision: bool = False
     iptv_notes: Optional[str] = Field(default=None, max_length=1000)
+    speed_limit_enabled: bool = False
+    speed_download_mbps: Optional[float] = Field(default=None, ge=0, le=100_000)
+    speed_upload_mbps: Optional[float] = Field(default=None, ge=0, le=100_000)
     use_category_discounts: bool = True
     enabled_category_discount_ids: Optional[list[str]] = None
     discounts: list[ProductDiscountPayload] = Field(default_factory=list)
@@ -523,6 +527,9 @@ class PhysicalStoreItemPayload(BaseModel):
     price: float = Field(default=0, ge=0, le=1_000_000)
     duration_value: int = Field(default=1, ge=1, le=100_000)
     duration_unit: str = Field(default="hours", max_length=20)
+    speed_limit_enabled: bool = False
+    speed_download_mbps: Optional[float] = Field(default=None, ge=0, le=100_000)
+    speed_upload_mbps: Optional[float] = Field(default=None, ge=0, le=100_000)
     access_scope: str = Field(default="ALL_LOCATIONS", max_length=40)
     allowed_barangay: Optional[str] = Field(default=None, max_length=120)
     more_info_enabled: bool = False
@@ -5394,7 +5401,7 @@ def sync_paymongo_checkout_status(cur, order: dict, request: Request) -> dict:
 
     try:
         fulfillment = fulfill_paid_payment_order(cur, order, request)
-        finalize_omada_payment_auth_free_grants_for_order(cur, fulfillment.get("order") or order, final_status="REMOVED")
+        schedule_omada_payment_auth_free_paid_cleanup_for_order(cur, fulfillment.get("order") or order, reason="CHECKOUT_STATUS_PAID")
         return fulfillment.get("order") or order
     except Exception as exc:
         message = str(exc)
@@ -5420,6 +5427,7 @@ def process_paymongo_checkout_reconciliation_once(limit: int = 20) -> int:
     request_context = InternalRequestContext("3J PayMongo checkout reconciliation worker")
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cleanup_expired_omada_payment_auth_free_grants(cur, limit=50)
             cur.execute(
                 """
                 SELECT *
@@ -6189,6 +6197,7 @@ DEFAULT_OMADA_PAYMENT_AUTH_FREE_SETTINGS = {
     "enabled": True,
     "browser_transfer_required": True,
     "grant_timeout_seconds": 120,
+    "post_payment_cleanup_delay_seconds": 20,
     "daily_attempt_limit": 5,
     "cooldown_seconds": 60,
     "abuse_block_hours": 24,
@@ -6212,6 +6221,7 @@ def omada_payment_auth_free_store() -> dict:
         "enabled": bool(store.get("enabled")),
         "browser_transfer_required": bool(store.get("browser_transfer_required")),
         "grant_timeout_seconds": bounded_int(store.get("grant_timeout_seconds"), 120, 30, 900),
+        "post_payment_cleanup_delay_seconds": bounded_int(store.get("post_payment_cleanup_delay_seconds"), 20, 0, 300),
         "daily_attempt_limit": bounded_int(store.get("daily_attempt_limit"), 5, 1, 100),
         "cooldown_seconds": bounded_int(store.get("cooldown_seconds"), 60, 0, 3600),
         "abuse_block_hours": bounded_int(store.get("abuse_block_hours"), 24, 1, 168),
@@ -6225,6 +6235,7 @@ def save_omada_payment_auth_free_store(store: dict):
         "enabled": bool(store.get("enabled")),
         "browser_transfer_required": bool(store.get("browser_transfer_required")),
         "grant_timeout_seconds": bounded_int(store.get("grant_timeout_seconds"), 120, 30, 900),
+        "post_payment_cleanup_delay_seconds": bounded_int(store.get("post_payment_cleanup_delay_seconds"), 20, 0, 300),
         "daily_attempt_limit": bounded_int(store.get("daily_attempt_limit"), 5, 1, 100),
         "cooldown_seconds": bounded_int(store.get("cooldown_seconds"), 60, 0, 3600),
         "abuse_block_hours": bounded_int(store.get("abuse_block_hours"), 24, 1, 168),
@@ -6249,6 +6260,7 @@ def public_omada_payment_auth_free_settings() -> dict:
     return {
         **store,
         "grant_timeout_minutes": round(store["grant_timeout_seconds"] / 60, 2),
+        "post_payment_cleanup_delay_minutes": round(store["post_payment_cleanup_delay_seconds"] / 60, 2),
         "cooldown_minutes": round(store["cooldown_seconds"] / 60, 2),
     }
 
@@ -6506,6 +6518,173 @@ def omada_payment_auth_free_identity(session: dict, user: Optional[dict] = None,
         "profile_name": normalize_payment_text((profile or {}).get("display_name") or (user or {}).get("full_name"), 120) or None,
         "profile_contact_number": normalize_payment_text((profile or {}).get("contact_number") or (user or {}).get("phone_number"), 32) or None,
     }
+
+
+def omada_payment_auth_free_snapshot_matches_site(snapshot: Optional[dict], site_id: Optional[str], site_name: Optional[str]) -> bool:
+    if not snapshot:
+        return False
+    target_site_id = normalize_payment_text(site_id, 120)
+    target_site_name = normalize_payment_text(site_name, 160).lower()
+    snapshot_site_id = normalize_payment_text(snapshot.get("site_id"), 120)
+    snapshot_site_name = normalize_payment_text(snapshot.get("site"), 160).lower()
+    if target_site_id and snapshot_site_id:
+        return target_site_id == snapshot_site_id
+    if target_site_name and snapshot_site_name:
+        return target_site_name == snapshot_site_name
+    return not target_site_id and not target_site_name
+
+
+def omada_payment_auth_free_recent_user_macs(cur, user_id, site_id: Optional[str], site_name: Optional[str]) -> list[str]:
+    if not user_id:
+        return []
+    cur.execute(
+        """
+        SELECT omada_client_mac, mikrotik_client_mac, client_mac, previous_client_macs,
+               omada_site_id, omada_site_name, site
+        FROM portal_sessions
+        WHERE user_id = %s
+          AND updated_at > now() - interval '45 days'
+          AND (
+            omada_client_mac IS NOT NULL
+            OR mikrotik_client_mac IS NOT NULL
+            OR client_mac IS NOT NULL
+            OR previous_client_macs <> '[]'::jsonb
+          )
+        ORDER BY updated_at DESC
+        LIMIT 100
+        """,
+        (user_id,),
+    )
+    target_site_id = normalize_payment_text(site_id, 120)
+    target_site_name = normalize_payment_text(site_name, 160).lower()
+    macs = []
+    for row in cur.fetchall():
+        row_site_id = normalize_payment_text(row.get("omada_site_id"), 120)
+        row_site_name = normalize_payment_text(row.get("omada_site_name") or row.get("site"), 160).lower()
+        if target_site_id and row_site_id and target_site_id != row_site_id:
+            continue
+        if target_site_name and row_site_name and target_site_name != row_site_name:
+            continue
+        for mac in portal_device_mac_values(
+            row.get("omada_client_mac"),
+            row.get("mikrotik_client_mac"),
+            row.get("client_mac"),
+            row.get("previous_client_macs") or [],
+        ):
+            if mac not in macs:
+                macs.append(mac)
+    return macs
+
+
+def omada_payment_auth_free_live_sort_key(snapshot: dict) -> tuple:
+    age = omada_last_seen_age_seconds((snapshot or {}).get("last_seen"))
+    return (age is None, age if age is not None else 10**12)
+
+
+def resolve_omada_payment_auth_free_identity(cur, session: dict, user: dict, profile: Optional[dict], payload: PortalPaymentCheckoutRequest, request: Request, site_id: Optional[str], site_name: Optional[str], identity: dict) -> tuple[dict, dict]:
+    resolved = dict(identity or {})
+    resolution = {
+        "source": "portal_session",
+        "selected_reason": "session_identity",
+        "original_client_mac": resolved.get("client_mac"),
+        "original_client_ip": resolved.get("client_ip"),
+        "candidate_macs": [],
+    }
+    if not site_id:
+        resolution["selected_reason"] = "missing_site"
+        return resolved, resolution
+
+    candidate_macs = []
+    for mac in portal_device_mac_values(
+        resolved.get("client_mac"),
+        session.get("omada_client_mac"),
+        session.get("mikrotik_client_mac"),
+        session.get("client_mac"),
+        session.get("previous_client_macs") or [],
+    ):
+        if mac not in candidate_macs:
+            candidate_macs.append(mac)
+    for mac in omada_payment_auth_free_recent_user_macs(cur, resolved.get("user_id") or (user or {}).get("id"), site_id, site_name):
+        if mac not in candidate_macs:
+            candidate_macs.append(mac)
+    resolution["candidate_macs"] = candidate_macs[:20]
+
+    try:
+        snapshots = fetch_omada_client_snapshot_map(force=True)
+    except Exception as exc:
+        resolution["selected_reason"] = "omada_snapshot_unavailable"
+        resolution["snapshot_error"] = normalize_payment_text(str(exc), 240)
+        return resolved, resolution
+    if not snapshots:
+        resolution["selected_reason"] = "omada_snapshot_empty"
+        return resolved, resolution
+
+    def snapshot_is_usable(snapshot: Optional[dict]) -> bool:
+        return bool(
+            snapshot
+            and snapshot.get("active")
+            and omada_payment_auth_free_snapshot_matches_site(snapshot, site_id, site_name)
+        )
+
+    original_mac = normalize_mac_if_valid(resolved.get("client_mac"))
+    original_snapshot = snapshots.get(original_mac) if original_mac else None
+    selected_mac = None
+    selected_snapshot = None
+    selected_reason = None
+
+    if snapshot_is_usable(original_snapshot):
+        selected_mac = original_mac
+        selected_snapshot = original_snapshot
+        selected_reason = "session_mac_live"
+    else:
+        known_live = [
+            (mac, snapshots.get(mac))
+            for mac in candidate_macs
+            if snapshot_is_usable(snapshots.get(mac))
+        ]
+        if known_live:
+            selected_mac, selected_snapshot = sorted(known_live, key=lambda item: omada_payment_auth_free_live_sort_key(item[1]))[0]
+            selected_reason = "linked_mac_live"
+        else:
+            seed_name_keys = {
+                omada_device_name_key((snapshots.get(mac) or {}).get("device_name") or (snapshots.get(mac) or {}).get("hostname"))
+                for mac in candidate_macs
+            }
+            seed_name_keys.discard("")
+            named_live = [
+                (mac, snapshot)
+                for mac, snapshot in snapshots.items()
+                if snapshot_is_usable(snapshot)
+                and omada_device_name_key(snapshot.get("device_name") or snapshot.get("hostname")) in seed_name_keys
+            ]
+            if len(named_live) == 1:
+                selected_mac, selected_snapshot = named_live[0]
+                selected_reason = "same_omada_device_name_live"
+            elif len(named_live) > 1:
+                resolution["ambiguous_live_same_name_count"] = len(named_live)
+
+    if selected_mac and selected_snapshot:
+        resolved["client_mac"] = selected_mac
+        live_ip = host_ip(selected_snapshot.get("client_ip"))
+        if live_ip:
+            resolved["client_ip"] = live_ip
+        resolution.update({
+            "source": "omada_live_client",
+            "selected_reason": selected_reason,
+            "selected_client_mac": selected_mac,
+            "selected_client_ip": resolved.get("client_ip"),
+            "selected_device_name": selected_snapshot.get("device_name") or selected_snapshot.get("hostname"),
+            "selected_ssid": selected_snapshot.get("ssid"),
+            "selected_site_id": selected_snapshot.get("site_id"),
+            "selected_site": selected_snapshot.get("site"),
+            "selected_last_seen": selected_snapshot.get("last_seen"),
+            "original_client_active": bool((original_snapshot or {}).get("active")),
+        })
+    elif original_snapshot is not None:
+        resolution["selected_reason"] = "session_mac_not_live"
+        resolution["original_client_active"] = bool(original_snapshot.get("active"))
+
+    return resolved, resolution
 
 
 def record_omada_payment_auth_free_abuse_block(identity: dict, attempts_today: int, block_until: datetime) -> None:
@@ -6796,6 +6975,17 @@ def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: 
         normalize_payment_text(session.get("omada_site_name") or session.get("site"), 160)
         or normalize_payment_text((site_row or {}).get("site_name"), 160)
     )
+    identity, identity_resolution = resolve_omada_payment_auth_free_identity(
+        cur,
+        session,
+        user,
+        profile,
+        payload,
+        request,
+        site_id,
+        site_name,
+        identity,
+    )
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=store["grant_timeout_seconds"])
     public_grant_id = f"og_{secrets.token_urlsafe(16).replace('-', '').replace('_', '')[:24]}"
     status = "PENDING"
@@ -6803,9 +6993,9 @@ def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: 
     if not site_id:
         status = "GRANT_SKIPPED"
         last_error = "Omada site could not be detected for this checkout."
-    elif not identity.get("client_mac"):
+    elif not identity.get("client_mac") and not identity.get("client_ip"):
         status = "GRANT_SKIPPED"
-        last_error = "Client MAC could not be detected for this checkout."
+        last_error = "Client MAC or IP could not be detected for this checkout."
     cur.execute(
         """
         INSERT INTO omada_payment_auth_free_grants(
@@ -6852,7 +7042,12 @@ def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: 
             RETURNING *
             """,
             (
-                Json({"site_id": site_id, "client_mac": identity.get("client_mac"), "client_ip": identity.get("client_ip")}),
+                Json({
+                    "site_id": site_id,
+                    "client_mac": identity.get("client_mac"),
+                    "client_ip": identity.get("client_ip"),
+                    "identity_resolution": identity_resolution,
+                }),
                 Json(sanitize_summary(result)),
                 grant["id"],
             ),
@@ -6871,7 +7066,12 @@ def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: 
             """,
             (
                 normalize_payment_text(str(exc), 1000),
-                Json({"site_id": site_id, "client_mac": identity.get("client_mac"), "client_ip": identity.get("client_ip")}),
+                Json({
+                    "site_id": site_id,
+                    "client_mac": identity.get("client_mac"),
+                    "client_ip": identity.get("client_ip"),
+                    "identity_resolution": identity_resolution,
+                }),
                 grant["id"],
             ),
         )
@@ -6880,9 +7080,9 @@ def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: 
 
 
 def remove_omada_payment_auth_free_grant(cur, grant: dict, final_status: str = "REMOVED") -> dict:
-    if not grant or grant.get("status") not in {"ACTIVE", "PENDING", "FAILED", "REMOVE_FAILED"}:
+    if not grant or grant.get("status") not in {"ACTIVE", "PAID_GRACE", "PENDING", "FAILED", "REMOVE_FAILED"}:
         return grant
-    if grant.get("status") != "ACTIVE":
+    if grant.get("status") not in {"ACTIVE", "PAID_GRACE"}:
         cur.execute(
             """
             UPDATE omada_payment_auth_free_grants
@@ -6932,7 +7132,7 @@ def cleanup_expired_omada_payment_auth_free_grants(cur, limit: int = 50) -> list
         """
         SELECT *
         FROM omada_payment_auth_free_grants
-        WHERE status = 'ACTIVE'
+        WHERE status IN ('ACTIVE', 'PAID_GRACE')
           AND expires_at <= now()
         ORDER BY expires_at ASC
         LIMIT %s
@@ -6943,8 +7143,106 @@ def cleanup_expired_omada_payment_auth_free_grants(cur, limit: int = 50) -> list
     rows = cur.fetchall()
     cleaned = []
     for row in rows:
-        cleaned.append(remove_omada_payment_auth_free_grant(cur, row, final_status="EXPIRED"))
+        cleaned.append(remove_omada_payment_auth_free_grant(cur, row, final_status="REMOVED" if row.get("status") == "PAID_GRACE" else "EXPIRED"))
     return cleaned
+
+
+def schedule_omada_payment_auth_free_paid_cleanup_for_order(cur, order: dict, reason: str = "PAYMENT_FULFILLED") -> list[dict]:
+    if not order or not order.get("id"):
+        return []
+    store = omada_payment_auth_free_store()
+    delay_seconds = max(0, int(store.get("post_payment_cleanup_delay_seconds") or 0))
+    if delay_seconds <= 0:
+        return finalize_omada_payment_auth_free_grants_for_order(cur, order, final_status="REMOVED")
+    grace_until = datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+    cur.execute(
+        """
+        SELECT *
+        FROM omada_payment_auth_free_grants
+        WHERE payment_order_id = %s
+          AND status IN ('PENDING', 'ACTIVE', 'PAID_GRACE', 'FAILED', 'REMOVE_FAILED', 'GRANT_SKIPPED')
+        ORDER BY created_at DESC
+        FOR UPDATE
+        """,
+        (order["id"],),
+    )
+    rows = cur.fetchall()
+    scheduled = []
+    for row in rows:
+        if row.get("status") in {"ACTIVE", "PAID_GRACE", "REMOVE_FAILED"}:
+            cur.execute(
+                """
+                UPDATE omada_payment_auth_free_grants
+                SET status = 'PAID_GRACE',
+                    expires_at = %s,
+                    last_error = NULL,
+                    removal_response_summary = COALESCE(removal_response_summary, '{}'::jsonb) || %s::jsonb,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (
+                    grace_until,
+                    json.dumps({
+                        "paid_cleanup": {
+                            "reason": reason,
+                            "delay_seconds": delay_seconds,
+                            "grace_until": grace_until.isoformat(),
+                        }
+                    }),
+                    row["id"],
+                ),
+            )
+            scheduled.append(cur.fetchone())
+        elif row.get("status") == "GRANT_SKIPPED":
+            cur.execute(
+                """
+                UPDATE omada_payment_auth_free_grants
+                SET status = 'REMOVED',
+                    removed_at = now(),
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (row["id"],),
+            )
+            scheduled.append(cur.fetchone())
+        else:
+            scheduled.append(remove_omada_payment_auth_free_grant(cur, row, final_status="REMOVED"))
+    return scheduled
+
+
+def remove_paid_omada_payment_auth_free_grants_for_session(cur, session: Optional[dict], request: Request = None, reason: str = "PORTAL_RETURNED") -> list[dict]:
+    if not session or not session.get("id"):
+        return []
+    cur.execute(
+        """
+        SELECT g.*
+        FROM omada_payment_auth_free_grants g
+        JOIN payment_orders po ON po.id = g.payment_order_id
+        WHERE g.portal_session_id = %s
+          AND g.status IN ('ACTIVE', 'PAID_GRACE', 'REMOVE_FAILED')
+          AND po.status = 'PAID'
+          AND po.fulfillment_status = 'FULFILLED'
+        ORDER BY g.created_at DESC
+        FOR UPDATE OF g SKIP LOCKED
+        """,
+        (session["id"],),
+    )
+    rows = cur.fetchall()
+    removed = []
+    for row in rows:
+        removed.append(remove_omada_payment_auth_free_grant(cur, row, final_status="REMOVED"))
+    if removed:
+        create_portal_event(
+            cur,
+            session["id"],
+            "PAYMENT_ACCESS_GRACE_CLEARED",
+            request or InternalRequestContext("3J payment access cleanup"),
+            "Payment access grace removed because the paid customer returned to the portal.",
+            raw_context={"reason": reason, "removed": sanitize_summary(removed)},
+        )
+    return removed
 
 
 def finalize_omada_payment_auth_free_grants_for_order(cur, order: dict, final_status: str = "REMOVED") -> list[dict]:
@@ -6955,7 +7253,7 @@ def finalize_omada_payment_auth_free_grants_for_order(cur, order: dict, final_st
         SELECT *
         FROM omada_payment_auth_free_grants
         WHERE payment_order_id = %s
-          AND status IN ('PENDING', 'ACTIVE', 'FAILED', 'REMOVE_FAILED', 'GRANT_SKIPPED')
+          AND status IN ('PENDING', 'ACTIVE', 'PAID_GRACE', 'FAILED', 'REMOVE_FAILED', 'GRANT_SKIPPED')
         ORDER BY created_at DESC
         FOR UPDATE
         """,
@@ -6989,7 +7287,7 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
     cur.execute(
         """
         SELECT
-          count(*) FILTER (WHERE status = 'ACTIVE' AND expires_at > now())::int AS active_count,
+          count(*) FILTER (WHERE status IN ('ACTIVE', 'PAID_GRACE') AND expires_at > now())::int AS active_count,
           count(*) FILTER (WHERE created_at >= date_trunc('day', now()))::int AS grants_today,
           count(*) FILTER (WHERE status IN ('FAILED', 'REMOVE_FAILED'))::int AS failed_count,
           count(*) FILTER (WHERE status = 'GRANT_SKIPPED')::int AS skipped_count
@@ -7001,7 +7299,7 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
         """
         SELECT *
         FROM omada_payment_auth_free_grants
-        WHERE status = 'ACTIVE' AND expires_at > now()
+        WHERE status IN ('ACTIVE', 'PAID_GRACE') AND expires_at > now()
         ORDER BY expires_at ASC
         LIMIT 100
         """
@@ -7095,7 +7393,7 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
         "remote_errors": remote_snapshot["remote_errors"],
         "guide": {
             "summary": "When a customer starts PayMongo checkout from a real browser, the system can place that client MAC in Omada Authentication-Free Client for a short time.",
-            "cleanup": "The entry is removed when payment succeeds, payment is cancelled, or the timeout expires. The dashboard also checks Omada live state so orphaned remote entries are visible.",
+            "cleanup": "After payment succeeds, the entry stays briefly in paid grace so PayMongo/GCash can finish returning. It is removed early once the customer reaches the portal, or automatically when the grace window expires.",
             "abuse": "The daily limit prevents customers from repeatedly opening free payment windows without paying.",
         },
     }
@@ -8009,6 +8307,156 @@ def routeros_file_words(file_path: str) -> list[str]:
 
 def routeros_file_query(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, file_path: str, timeout: float = 8.0):
     return routeros_readonly_query(host, port, username, password, use_tls, routeros_file_words(file_path), timeout=timeout)
+
+
+def routeros_speed_rate_value(value) -> str:
+    try:
+        mbps = Decimal(str(value or "0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise RuntimeError("Speed limit Mbps is invalid.") from exc
+    if mbps <= 0:
+        raise RuntimeError("Speed limit Mbps must be greater than zero.")
+    if mbps == mbps.to_integral_value():
+        return f"{int(mbps)}M"
+    return f"{str(mbps).rstrip('0').rstrip('.')}M"
+
+
+def routeros_speed_queue_name(session_id) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9]+", "", str(session_id or "speed"))
+    return f"3J-SPEED-{safe[:20] or secrets.token_hex(5)}"
+
+
+def routeros_speed_queue_comment(session_id, bag_item_id=None) -> str:
+    base = f"3JCentralPisowifi speed limit portal_session={session_id}"
+    if bag_item_id:
+        base += f" bag_item={bag_item_id}"
+    return sanitize_routeros_text(base, 240)
+
+
+def routeros_upsert_simple_queue(
+    host: str,
+    port: int,
+    username: Optional[str],
+    password: Optional[str],
+    use_tls: bool,
+    *,
+    queue_name: str,
+    target_ip: str,
+    upload_mbps,
+    download_mbps,
+    comment: str,
+    timeout: float = 8.0,
+) -> dict:
+    target = f"{host_ip(target_ip)}/32"
+    max_limit = f"{routeros_speed_rate_value(upload_mbps)}/{routeros_speed_rate_value(download_mbps)}"
+    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
+    sock = raw_sock
+    try:
+        if use_tls:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            sock = context.wrap_socket(raw_sock, server_hostname=host)
+        sock.settimeout(timeout)
+        routeros_login_socket(sock, username, password)
+        rows = routeros_read_result_after_send(
+            sock,
+            [
+                "/queue/simple/print",
+                f"?name={queue_name}",
+                "=.proplist=.id,name,target,max-limit,comment,disabled",
+            ],
+        )
+        params = {
+            "name": queue_name,
+            "target": target,
+            "max-limit": max_limit,
+            "comment": comment,
+            "disabled": "no",
+        }
+        if rows:
+            item_id = rows[0].get(".id")
+            if not item_id:
+                raise RuntimeError("Existing RouterOS queue has no ID and cannot be updated safely.")
+            routeros_read_result_after_send(sock, ["/queue/simple/set", f"=.id={item_id}", *[f"={key}={value}" for key, value in params.items()]])
+            action = "UPDATED"
+        else:
+            routeros_read_result_after_send(sock, ["/queue/simple/add", *[f"={key}={value}" for key, value in params.items()]])
+            action = "CREATED"
+        verified = routeros_read_result_after_send(
+            sock,
+            [
+                "/queue/simple/print",
+                f"?name={queue_name}",
+                "=.proplist=.id,name,target,max-limit,comment,disabled",
+            ],
+        )
+        return {
+            "status": "SUCCESS",
+            "action": action,
+            "queue_name": queue_name,
+            "target": target,
+            "max_limit": max_limit,
+            "queue": sanitize_summary(verified[0] if verified else {}),
+        }
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        if sock is not raw_sock:
+            try:
+                raw_sock.close()
+            except Exception:
+                pass
+
+
+def routeros_remove_simple_queue(
+    host: str,
+    port: int,
+    username: Optional[str],
+    password: Optional[str],
+    use_tls: bool,
+    *,
+    queue_name: str,
+    timeout: float = 8.0,
+) -> dict:
+    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
+    sock = raw_sock
+    try:
+        if use_tls:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            sock = context.wrap_socket(raw_sock, server_hostname=host)
+        sock.settimeout(timeout)
+        routeros_login_socket(sock, username, password)
+        rows = routeros_read_result_after_send(
+            sock,
+            [
+                "/queue/simple/print",
+                f"?name={queue_name}",
+                "=.proplist=.id,name,target,max-limit,comment,disabled",
+            ],
+        )
+        removed = 0
+        for row in rows:
+            item_id = row.get(".id")
+            if not item_id:
+                continue
+            routeros_read_result_after_send(sock, ["/queue/simple/remove", f"=.id={item_id}"])
+            removed += 1
+        return {"status": "SUCCESS", "queue_name": queue_name, "removed_count": removed}
+    finally:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        if sock is not raw_sock:
+            try:
+                raw_sock.close()
+            except Exception:
+                pass
 
 
 def routeros_write_text_file(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, file_path: str, content: str, timeout: float = 10.0):
@@ -13188,6 +13636,13 @@ def bag_item_public(row: Optional[dict]) -> Optional[dict]:
         "iptv_xui_package_id": row.get("iptv_xui_package_id") or "",
         "iptv_account_username": row.get("iptv_account_username") or "",
         "iptv_account_expires_at": row.get("iptv_account_expires_at"),
+        **serialize_item_color(row),
+        **public_speed_limit(row),
+        "speed_limit_status": row.get("speed_limit_status") or "NOT_REQUIRED",
+        "speed_limit_queue_name": row.get("speed_limit_queue_name") or "",
+        "speed_limit_target_ip": host_ip(row.get("speed_limit_target_ip")) or None,
+        "speed_limit_applied_at": row.get("speed_limit_applied_at"),
+        "speed_limit_last_error": row.get("speed_limit_last_error") or "",
         "source": row.get("source"),
         **purchase_details,
         "status": row.get("status"),
@@ -13274,11 +13729,13 @@ def sync_gateway_access_to_active_bag(cur, session: Optional[dict], reason: str,
             (latest_until, session["id"]),
         )
         updated_session = cur.fetchone() or session
+        speed_limit = safe_reconcile_portal_speed_limit_for_session(cur, updated_session, request, f"{reason}_ACTIVE_SYNC")
         return {
             "status": "ACTIVE_SYNCED",
             "access_expires_at": latest_until.isoformat(),
             "session": updated_session,
             "active_item_count": len(active_items),
+            "speed_limit": sanitize_summary(speed_limit),
         }
 
     access_expires_at = aware_utc(session.get("access_expires_at"))
@@ -13288,6 +13745,9 @@ def sync_gateway_access_to_active_bag(cur, session: Optional[dict], reason: str,
         and (not access_expires_at or access_expires_at <= now)
     )
     if already_expired:
+        speed_limit = safe_reconcile_portal_speed_limit_for_session(cur, session, request, f"{reason}_ALREADY_EXPIRED")
+        if speed_limit.get("status") not in {"SKIPPED", "NOT_REQUIRED"}:
+            return {"status": "ALREADY_EXPIRED", "session": session, "speed_limit": sanitize_summary(speed_limit)}
         return {"status": "ALREADY_EXPIRED", "session": session}
     should_revoke = bool(
         session.get("source") == "OMADA"
@@ -13314,6 +13774,7 @@ def sync_gateway_access_to_active_bag(cur, session: Optional[dict], reason: str,
         (session["id"],),
     )
     updated_session = cur.fetchone() or session
+    speed_limit = safe_reconcile_portal_speed_limit_for_session(cur, updated_session, request, f"{reason}_REVOKED")
     if request:
         create_portal_event(
             cur,
@@ -13327,6 +13788,7 @@ def sync_gateway_access_to_active_bag(cur, session: Optional[dict], reason: str,
         "status": "REVOKED" if revoke_result else "EXPIRED",
         "session": updated_session,
         "revoke_result": sanitize_summary(revoke_result),
+        "speed_limit": sanitize_summary(speed_limit),
     }
 
 
@@ -13657,15 +14119,25 @@ def create_customer_bag_item_from_payment(cur, order: dict, session: dict, user:
             "xui_package_id": order.get("iptv_xui_package_id"),
             "provisioning": "Provisioned when activated. If the customer already has active IPTV time, the active XUI line is reused.",
         }
+    color = serialize_item_color(None)
+    if order.get("product_item_id"):
+        cur.execute(
+            "SELECT item_color_key, item_color_hex FROM product_items WHERE id = %s",
+            (order["product_item_id"],),
+        )
+        color = serialize_item_color(cur.fetchone())
     cur.execute(
         """
         INSERT INTO customer_bag_items(
             user_id, portal_session_id, payment_order_id, product_item_id, product_category_id,
             product_name, product_category_name, source, status, priority, duration_seconds, remaining_seconds,
             access_scope, allowed_barangay, purchase_quantity, amount_centavos, currency,
-            product_kind, iptv_status, iptv_package_label, iptv_xui_package_id, metadata_json
+            product_kind, iptv_status, iptv_package_label, iptv_xui_package_id,
+            item_color_key, item_color_hex,
+            speed_limit_enabled, speed_download_mbps, speed_upload_mbps, speed_limit_status,
+            metadata_json
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, 'PAYMENT', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, 'PAYMENT', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING *
         """,
         (
@@ -13688,6 +14160,12 @@ def create_customer_bag_item_from_payment(cur, order: dict, session: dict, user:
             iptv_status,
             normalize_payment_text(order.get("iptv_package_label"), 160) or None,
             normalize_payment_text(order.get("iptv_xui_package_id"), 160) or None,
+            color["item_color_key"],
+            color["item_color_hex"],
+            bool(order.get("speed_limit_enabled")),
+            order.get("speed_download_mbps"),
+            order.get("speed_upload_mbps"),
+            "PENDING" if order.get("speed_limit_enabled") and product_kind_grants_hotspot(product_kind) else "NOT_REQUIRED",
             Json(sanitize_summary(metadata)),
         ),
     )
@@ -13974,6 +14452,447 @@ def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active
     return authorization
 
 
+def speed_limit_item_candidate(row: dict) -> Optional[dict]:
+    speed = speed_limit_snapshot(row)
+    if not speed.get("speed_limit_enabled"):
+        return None
+    return {
+        "item": row,
+        "download_mbps": speed["speed_download_mbps"],
+        "upload_mbps": speed["speed_upload_mbps"],
+    }
+
+
+def active_speed_limit_items_for_session(cur, session: dict) -> list[dict]:
+    if not session or not session.get("user_id") or not session.get("id"):
+        return []
+    cur.execute(
+        """
+        SELECT *
+        FROM customer_bag_items
+        WHERE user_id = %s
+          AND portal_session_id = %s
+          AND status = 'ACTIVE'
+          AND product_kind IN ('WIFI', 'WIFI_IPTV')
+          AND active_until IS NOT NULL
+          AND active_until > now()
+        ORDER BY active_until DESC, updated_at DESC
+        FOR UPDATE
+        """,
+        (session["user_id"], session["id"]),
+    )
+    return cur.fetchall()
+
+
+def selected_speed_limit_candidate(active_items: list[dict]) -> Optional[dict]:
+    candidates = []
+    for item in active_items or []:
+        candidate = speed_limit_item_candidate(item)
+        if candidate:
+            candidates.append(candidate)
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda row: (row["download_mbps"], row["upload_mbps"]))[-1]
+
+
+def speed_limit_target_ip_for_session(session: dict, request: Optional[Request] = None) -> Optional[str]:
+    candidates = [
+        session.get("mikrotik_client_ip"),
+        session.get("client_ip"),
+        session.get("omada_client_ip"),
+        public_ip(request) if request else None,
+    ]
+    for value in candidates:
+        ip_text = host_ip(value)
+        if ip_text:
+            return ip_text
+    return None
+
+
+def station_for_speed_limit_session(session: dict, request: Optional[Request] = None) -> Optional[dict]:
+    if not session:
+        return None
+    ctx = portal_context(PortalSessionRequest(raw_query_params=dict(request.query_params))) if request else {}
+    station = station_for_mikrotik_portal_session(session, ctx)
+    if station:
+        return station
+    target_ip = speed_limit_target_ip_for_session(session, request)
+    station = station_for_client_ip(target_ip)
+    if station:
+        return station
+    recent_event = recent_portal_station_event(session.get("id")) if session.get("id") else None
+    if recent_event and recent_event.get("station"):
+        return recent_event["station"]
+    site_row = site_deployment_for_portal_context(session, None)
+    if site_row:
+        return bound_station_for_omada_site(site_row.get("omada_site_id"), site_row.get("site_name"))
+    return None
+
+
+def router_for_speed_limit_station(station: Optional[dict]) -> Optional[dict]:
+    if not station or not station.get("id"):
+        return None
+    root = station_root_router(str(station["id"]))
+    if not root:
+        return None
+    return fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (root["router_id"],))
+
+
+def mark_speed_limit_items_not_required(cur, active_items: list[dict]) -> None:
+    item_ids = [str(item["id"]) for item in active_items or [] if item.get("id")]
+    if not item_ids:
+        return
+    cur.execute(
+        """
+        UPDATE customer_bag_items
+        SET speed_limit_status = CASE WHEN speed_limit_enabled THEN 'SUPERSEDED' ELSE 'NOT_REQUIRED' END,
+            speed_limit_last_error = NULL,
+            updated_at = now()
+        WHERE id = ANY(%s::uuid[])
+        """,
+        (item_ids,),
+    )
+
+
+def remove_portal_speed_limit_queue(cur, session: dict, queue_row: Optional[dict], reason: str = "NO_ACTIVE_SPEED_LIMIT") -> dict:
+    if not queue_row:
+        return {"status": "NOT_REQUIRED"}
+    queue_name = queue_row.get("queue_name") or routeros_speed_queue_name(session.get("id"))
+    if queue_row.get("status") == "REMOVED":
+        if queue_row.get("selected_bag_item_id"):
+            cur.execute(
+                """
+                UPDATE customer_bag_items
+                SET speed_limit_status = 'REMOVED',
+                    speed_limit_last_error = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                  AND speed_limit_status <> 'REMOVED'
+                """,
+                (queue_row["selected_bag_item_id"],),
+            )
+        return {"status": "REMOVED", "queue_name": queue_name, "remote": "ALREADY_REMOVED"}
+    router = None
+    if queue_row.get("router_id"):
+        router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (queue_row["router_id"],))
+    if not router:
+        cur.execute(
+            """
+            UPDATE portal_speed_limit_queues
+            SET status = 'REMOVED',
+                removed_at = now(),
+                updated_at = now(),
+                last_error = NULL,
+                metadata_json = metadata_json || %s::jsonb
+            WHERE id = %s
+            RETURNING *
+            """,
+            (json.dumps({"reason": reason, "remote_remove": "router_not_available"}), queue_row["id"]),
+        )
+        if queue_row.get("selected_bag_item_id"):
+            cur.execute(
+                """
+                UPDATE customer_bag_items
+                SET speed_limit_status = 'REMOVED',
+                    speed_limit_last_error = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (queue_row["selected_bag_item_id"],),
+            )
+        return {"status": "REMOVED", "queue_name": queue_name, "remote": "SKIPPED"}
+    if not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        error = "Root gateway RouterOS API credentials are incomplete."
+        cur.execute(
+            """
+            UPDATE portal_speed_limit_queues
+            SET status = 'FAILED', last_error = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (error, queue_row["id"]),
+        )
+        return {"status": "FAILED", "error": error, "queue_name": queue_name}
+    try:
+        result = routeros_remove_simple_queue(
+            router["host"],
+            router["api_port"],
+            router.get("username"),
+            decrypt_secret(router.get("password_encrypted")),
+            router.get("use_tls"),
+            queue_name=queue_name,
+            timeout=8,
+        )
+        cur.execute(
+            """
+            UPDATE portal_speed_limit_queues
+            SET status = 'REMOVED',
+                removed_at = now(),
+                updated_at = now(),
+                last_error = NULL,
+                metadata_json = metadata_json || %s::jsonb
+            WHERE id = %s
+            RETURNING *
+            """,
+            (json.dumps({"reason": reason, "remove_result": sanitize_summary(result)}), queue_row["id"]),
+        )
+        if queue_row.get("selected_bag_item_id"):
+            cur.execute(
+                """
+                UPDATE customer_bag_items
+                SET speed_limit_status = 'REMOVED',
+                    speed_limit_last_error = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (queue_row["selected_bag_item_id"],),
+            )
+        return {"status": "REMOVED", "queue_name": queue_name, "result": sanitize_summary(result)}
+    except Exception as exc:
+        error = sanitize_routeros_text(str(exc), 700)
+        cur.execute(
+            """
+            UPDATE portal_speed_limit_queues
+            SET status = 'FAILED', last_error = %s, updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (error, queue_row["id"]),
+        )
+        return {"status": "FAILED", "error": error, "queue_name": queue_name}
+
+
+def reconcile_portal_speed_limit_for_session(cur, session: Optional[dict], request: Optional[Request] = None, reason: str = "SYNC") -> dict:
+    if not session or session.get("source") not in {"OMADA", "MIKROTIK"} or not session.get("id") or not session.get("user_id"):
+        return {"status": "SKIPPED"}
+    active_items = active_speed_limit_items_for_session(cur, session)
+    selected = selected_speed_limit_candidate(active_items)
+    cur.execute("SELECT * FROM portal_speed_limit_queues WHERE portal_session_id = %s FOR UPDATE", (session["id"],))
+    queue_row = cur.fetchone()
+    if not selected:
+        removal = remove_portal_speed_limit_queue(cur, session, queue_row, reason=reason)
+        mark_speed_limit_items_not_required(cur, active_items)
+        return removal
+
+    item = selected["item"]
+    target_ip = speed_limit_target_ip_for_session(session, request)
+    station = station_for_speed_limit_session(session, request)
+    router = router_for_speed_limit_station(station)
+    queue_name = routeros_speed_queue_name(session["id"])
+    comment = routeros_speed_queue_comment(session["id"], item.get("id"))
+    failure = None
+    if not target_ip:
+        failure = "Client IP was not detected; MikroTik speed queue target cannot be created."
+    elif not station:
+        failure = "MikroTik station was not detected for this client or Omada site."
+    elif not router:
+        failure = "Root gateway router was not found for this station."
+    elif not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        failure = "Root gateway RouterOS API credentials are incomplete."
+    if failure:
+        cur.execute(
+            """
+            INSERT INTO portal_speed_limit_queues(
+                portal_session_id, user_id, station_id, router_id, selected_bag_item_id,
+                queue_name, target_ip, upload_mbps, download_mbps, status, last_error, metadata_json
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, NULLIF(%s, '')::inet, %s, %s, 'FAILED', %s, %s)
+            ON CONFLICT (portal_session_id) DO UPDATE
+            SET user_id = EXCLUDED.user_id,
+                station_id = EXCLUDED.station_id,
+                router_id = EXCLUDED.router_id,
+                selected_bag_item_id = EXCLUDED.selected_bag_item_id,
+                queue_name = EXCLUDED.queue_name,
+                target_ip = EXCLUDED.target_ip,
+                upload_mbps = EXCLUDED.upload_mbps,
+                download_mbps = EXCLUDED.download_mbps,
+                status = 'FAILED',
+                last_error = EXCLUDED.last_error,
+                metadata_json = EXCLUDED.metadata_json,
+                updated_at = now()
+            RETURNING *
+            """,
+            (
+                session["id"],
+                session["user_id"],
+                station["id"] if station else None,
+                router["id"] if router else None,
+                item["id"],
+                queue_name,
+                target_ip or "",
+                selected["upload_mbps"],
+                selected["download_mbps"],
+                failure,
+                Json({"reason": reason}),
+            ),
+        )
+        cur.execute(
+            """
+            UPDATE customer_bag_items
+            SET speed_limit_status = CASE WHEN id = %s THEN 'FAILED' ELSE CASE WHEN speed_limit_enabled THEN 'SUPERSEDED' ELSE 'NOT_REQUIRED' END END,
+                speed_limit_router_id = %s,
+                speed_limit_queue_name = %s,
+                speed_limit_target_ip = NULLIF(%s, '')::inet,
+                speed_limit_last_error = CASE WHEN id = %s THEN %s ELSE NULL END,
+                updated_at = now()
+            WHERE id = ANY(%s::uuid[])
+            """,
+            (item["id"], router["id"] if router else None, queue_name, target_ip or "", item["id"], failure, [str(row["id"]) for row in active_items]),
+        )
+        return {"status": "FAILED", "error": failure, "queue_name": queue_name}
+
+    same_remote_state = bool(
+        queue_row
+        and queue_row.get("status") == "APPLIED"
+        and str(queue_row.get("router_id") or "") == str(router["id"])
+        and host_ip(queue_row.get("target_ip")) == target_ip
+        and Decimal(str(queue_row.get("upload_mbps") or 0)) == selected["upload_mbps"]
+        and Decimal(str(queue_row.get("download_mbps") or 0)) == selected["download_mbps"]
+    )
+    if same_remote_state:
+        result = {"status": "APPLIED", "queue_name": queue_row.get("queue_name") or queue_name, "skipped": True}
+    else:
+        try:
+            result = routeros_upsert_simple_queue(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                decrypt_secret(router.get("password_encrypted")),
+                router.get("use_tls"),
+                queue_name=queue_name,
+                target_ip=target_ip,
+                upload_mbps=selected["upload_mbps"],
+                download_mbps=selected["download_mbps"],
+                comment=comment,
+                timeout=8,
+            )
+        except Exception as exc:
+            error = sanitize_routeros_text(str(exc), 700)
+            cur.execute(
+                """
+                INSERT INTO portal_speed_limit_queues(
+                    portal_session_id, user_id, station_id, router_id, selected_bag_item_id,
+                    queue_name, target_ip, upload_mbps, download_mbps, status, last_error, metadata_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, NULLIF(%s, '')::inet, %s, %s, 'FAILED', %s, %s)
+                ON CONFLICT (portal_session_id) DO UPDATE
+                SET user_id = EXCLUDED.user_id,
+                    station_id = EXCLUDED.station_id,
+                    router_id = EXCLUDED.router_id,
+                    selected_bag_item_id = EXCLUDED.selected_bag_item_id,
+                    queue_name = EXCLUDED.queue_name,
+                    target_ip = EXCLUDED.target_ip,
+                    upload_mbps = EXCLUDED.upload_mbps,
+                    download_mbps = EXCLUDED.download_mbps,
+                    status = 'FAILED',
+                    last_error = EXCLUDED.last_error,
+                    metadata_json = EXCLUDED.metadata_json,
+                    updated_at = now()
+                RETURNING *
+                """,
+                (
+                    session["id"],
+                    session["user_id"],
+                    station["id"],
+                    router["id"],
+                    item["id"],
+                    queue_name,
+                    target_ip,
+                    selected["upload_mbps"],
+                    selected["download_mbps"],
+                    error,
+                    Json({"reason": reason}),
+                ),
+            )
+            cur.execute(
+                """
+                UPDATE customer_bag_items
+                SET speed_limit_status = CASE WHEN id = %s THEN 'FAILED' ELSE CASE WHEN speed_limit_enabled THEN 'SUPERSEDED' ELSE 'NOT_REQUIRED' END END,
+                    speed_limit_router_id = %s,
+                    speed_limit_queue_name = %s,
+                    speed_limit_target_ip = NULLIF(%s, '')::inet,
+                    speed_limit_last_error = CASE WHEN id = %s THEN %s ELSE NULL END,
+                    updated_at = now()
+                WHERE id = ANY(%s::uuid[])
+                """,
+                (item["id"], router["id"], queue_name, target_ip, item["id"], error, [str(row["id"]) for row in active_items]),
+            )
+            return {"status": "FAILED", "error": error, "queue_name": queue_name}
+
+    cur.execute(
+        """
+        INSERT INTO portal_speed_limit_queues(
+            portal_session_id, user_id, station_id, router_id, selected_bag_item_id,
+            queue_name, target_ip, upload_mbps, download_mbps, status, last_error, applied_at, metadata_json
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, NULLIF(%s, '')::inet, %s, %s, 'APPLIED', NULL, now(), %s)
+        ON CONFLICT (portal_session_id) DO UPDATE
+        SET user_id = EXCLUDED.user_id,
+            station_id = EXCLUDED.station_id,
+            router_id = EXCLUDED.router_id,
+            selected_bag_item_id = EXCLUDED.selected_bag_item_id,
+            queue_name = EXCLUDED.queue_name,
+            target_ip = EXCLUDED.target_ip,
+            upload_mbps = EXCLUDED.upload_mbps,
+            download_mbps = EXCLUDED.download_mbps,
+            status = 'APPLIED',
+            last_error = NULL,
+            applied_at = now(),
+            removed_at = NULL,
+            metadata_json = EXCLUDED.metadata_json,
+            updated_at = now()
+        RETURNING *
+        """,
+        (
+            session["id"],
+            session["user_id"],
+            station["id"],
+            router["id"],
+            item["id"],
+            queue_name,
+            target_ip,
+            selected["upload_mbps"],
+            selected["download_mbps"],
+            Json({"reason": reason, "router_result": sanitize_summary(result)}),
+        ),
+    )
+    active_ids = [str(row["id"]) for row in active_items]
+    cur.execute(
+        """
+        UPDATE customer_bag_items
+        SET speed_limit_status = CASE
+                WHEN id = %s THEN 'APPLIED'
+                WHEN speed_limit_enabled THEN 'SUPERSEDED'
+                ELSE 'NOT_REQUIRED'
+            END,
+            speed_limit_router_id = CASE WHEN id = %s THEN %s ELSE speed_limit_router_id END,
+            speed_limit_queue_name = CASE WHEN id = %s THEN %s ELSE NULL END,
+            speed_limit_target_ip = CASE WHEN id = %s THEN NULLIF(%s, '')::inet ELSE NULL END,
+            speed_limit_applied_at = CASE WHEN id = %s THEN now() ELSE speed_limit_applied_at END,
+            speed_limit_last_error = NULL,
+            updated_at = now()
+        WHERE id = ANY(%s::uuid[])
+        """,
+        (item["id"], item["id"], router["id"], item["id"], queue_name, item["id"], target_ip, item["id"], active_ids),
+    )
+    return {
+        "status": "APPLIED",
+        "queue_name": queue_name,
+        "target_ip": target_ip,
+        "download_mbps": float(selected["download_mbps"]),
+        "upload_mbps": float(selected["upload_mbps"]),
+        "router_name": router.get("router_name"),
+        "result": sanitize_summary(result),
+    }
+
+
+def safe_reconcile_portal_speed_limit_for_session(cur, session: Optional[dict], request: Optional[Request] = None, reason: str = "SYNC") -> dict:
+    try:
+        return reconcile_portal_speed_limit_for_session(cur, session, request, reason)
+    except Exception as exc:
+        return {"status": "FAILED", "error": sanitize_routeros_text(str(exc), 700), "reason": reason}
+
+
 def activate_customer_bag_item(cur, item: dict, session: dict, request: Request, reason: str = "MANUAL", require_current_network: bool = True) -> dict:
     if item.get("status") == "ACTIVE":
         return {"status": "SUCCESS", "message": "Bag item is already active.", "item": item, "authorization": {"status": "ALREADY_ACTIVE"}}
@@ -14136,8 +15055,9 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
         (voucher["id"], item["user_id"], next_status, omada_status, mikrotik_status, session_access_until, session["id"]),
     )
     session.update(cur.fetchone())
-    create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "ITEM_ACTIVATED", "Product item activated.", bool(settings.get("auto_activate")), overlap, {"reason": reason, "authorization": sanitize_summary(authorization), "iptv_coverage": sanitize_summary(iptv_coverage)})
-    return {"status": "SUCCESS", "message": "Product item activated.", "item": active_item, "authorization": sanitize_summary(authorization), "iptv": sanitize_summary(iptv_coverage)}
+    speed_limit = safe_reconcile_portal_speed_limit_for_session(cur, session, request, f"{reason}_ACTIVATED")
+    create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "ITEM_ACTIVATED", "Product item activated.", bool(settings.get("auto_activate")), overlap, {"reason": reason, "authorization": sanitize_summary(authorization), "iptv_coverage": sanitize_summary(iptv_coverage), "speed_limit": sanitize_summary(speed_limit)})
+    return {"status": "SUCCESS", "message": "Product item activated.", "item": active_item, "authorization": sanitize_summary(authorization), "iptv": sanitize_summary(iptv_coverage), "speed_limit": sanitize_summary(speed_limit)}
 
 
 def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> dict:
@@ -14267,13 +15187,284 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
                 activation = activate_customer_bag_item(cur, next_item, session, request, "AUTO_OVERLAP" if overlap_ready else "AUTO")
                 cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
                 session = cur.fetchone()
-    return {"session": session, "bag": customer_bag_payload(cur, session.get("user_id")), "activation": activation}
+    speed_limit = safe_reconcile_portal_speed_limit_for_session(cur, session, request, "SESSION_REFRESH")
+    return {"session": session, "bag": customer_bag_payload(cur, session.get("user_id")), "activation": activation, "speed_limit": sanitize_summary(speed_limit)}
+
+
+def format_seconds_notification(seconds: int) -> str:
+    total = max(0, int(seconds or 0))
+    days = total // 86400
+    hours = (total % 86400) // 3600
+    minutes = (total % 3600) // 60
+    remainder = total % 60
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {remainder}s" if remainder else f"{minutes}m"
+    return f"{remainder}s"
+
+
+def active_bag_item_remaining_seconds(item: dict, now: Optional[datetime] = None) -> int:
+    now = now or datetime.now(timezone.utc)
+    active_until = aware_utc(item.get("active_until"))
+    if active_until:
+        return max(int((active_until - now).total_seconds()), 0)
+    return max(int(item.get("remaining_seconds") or 0), 0)
+
+
+def portal_notification_template_message(template: str, replacements: dict) -> str:
+    message = str(template or "")
+    for key, value in (replacements or {}).items():
+        message = message.replace(f"<{key}>", str(value if value is not None else ""))
+    return message
+
+
+def send_low_remaining_notification_for_bag_item(cur, item: dict, session: Optional[dict], settings_row: Optional[dict] = None, reason: str = "LOW_REMAINING_WORKER") -> dict:
+    if not item or not item.get("user_id") or not product_kind_grants_hotspot(item.get("product_kind")):
+        return {"status": "SKIPPED"}
+    settings_row = settings_row or ensure_captive_portal_settings()
+    if not bool(settings_row.get("portal_notifications_enabled")) or not bool(settings_row.get("portal_remaining_notification_enabled")):
+        return {"status": "DISABLED"}
+    trigger = max(0, int(settings_row.get("portal_remaining_notification_trigger_seconds") or 0))
+    if not trigger:
+        return {"status": "DISABLED"}
+    remaining = active_bag_item_remaining_seconds(item)
+    if remaining <= 0 or remaining > trigger:
+        return {"status": "NOT_DUE", "remaining_seconds": remaining, "trigger_seconds": trigger}
+    cur.execute(
+        """
+        SELECT 1
+        FROM customer_bag_events
+        WHERE bag_item_id = %s
+          AND event_type IN ('LOW_REMAINING_NOTIFICATION_SENT', 'LOW_REMAINING_NOTIFICATION_SKIPPED')
+        LIMIT 1
+        """,
+        (item["id"],),
+    )
+    if cur.fetchone():
+        return {"status": "ALREADY_SENT", "remaining_seconds": remaining, "trigger_seconds": trigger}
+    profile = portal_profile_for_user(cur, item.get("user_id"))
+    if profile and profile.get("portal_notifications_enabled") is False:
+        create_customer_bag_event(
+            cur,
+            item["user_id"],
+            item["id"],
+            (session or {}).get("id") or item.get("portal_session_id"),
+            "LOW_REMAINING_NOTIFICATION_SKIPPED",
+            "Low remaining time notification skipped because customer disabled phone notifications.",
+            metadata={"reason": reason, "remaining_seconds": remaining, "trigger_seconds": trigger},
+        )
+        return {"status": "PROFILE_DISABLED"}
+
+    clauses = ["user_id = %s"]
+    params = [item["user_id"]]
+    if profile:
+        clauses.append("profile_id = %s")
+        params.append(profile["id"])
+    if session and session.get("id"):
+        clauses.append("portal_session_id = %s")
+        params.append(session["id"])
+    if session and session.get("device_token_hash"):
+        clauses.append("device_token_hash = %s")
+        params.append(session["device_token_hash"])
+    cur.execute(
+        f"""
+        SELECT *
+        FROM portal_customer_push_subscriptions
+        WHERE status = 'ACTIVE'
+          AND ({' OR '.join(clauses)})
+        ORDER BY last_seen_at DESC
+        LIMIT 10
+        """,
+        tuple(params),
+    )
+    subscriptions = cur.fetchall()
+    if not subscriptions:
+        create_customer_bag_event(
+            cur,
+            item["user_id"],
+            item["id"],
+            (session or {}).get("id") or item.get("portal_session_id"),
+            "LOW_REMAINING_NOTIFICATION_SKIPPED",
+            "Low remaining time notification skipped because no phone notification subscription was available.",
+            metadata={"reason": reason, "remaining_seconds": remaining, "trigger_seconds": trigger},
+        )
+        return {"status": "NO_SUBSCRIPTIONS", "remaining_seconds": remaining, "trigger_seconds": trigger}
+
+    time_label = format_seconds_notification(remaining)
+    display_name = (profile or {}).get("display_name") or "Customer"
+    template = settings_row.get("portal_remaining_notification_message") or "Reminder: only <TIME> remaining on your active WiFi pass."
+    body = portal_notification_template_message(
+        template,
+        {
+            "TIME": time_label,
+            "USER": display_name,
+            "PRODUCT": item.get("product_name") or "WiFi pass",
+        },
+    )
+    payload = {
+        "title": "WiFi time running low",
+        "body": body,
+        "url": current_captive_portal_url(settings_row),
+        "icon": portal_avatar_icon_url("connected"),
+        "badge": portal_avatar_icon_url("connected"),
+        "tag": f"3j-low-time-{item['id']}",
+        "data": {
+            "url": current_captive_portal_url(settings_row),
+            "type": "LOW_REMAINING_TIME",
+            "bag_item_id": str(item["id"]),
+            "portal_session_id": str((session or {}).get("id") or item.get("portal_session_id") or ""),
+            "remaining_time_seconds": remaining,
+            "trigger_seconds": trigger,
+        },
+    }
+    result = send_portal_customer_push_notifications(cur, subscriptions, payload)
+    create_customer_bag_event(
+        cur,
+        item["user_id"],
+        item["id"],
+        (session or {}).get("id") or item.get("portal_session_id"),
+        "LOW_REMAINING_NOTIFICATION_SENT",
+        body,
+        metadata={"reason": reason, "remaining_seconds": remaining, "trigger_seconds": trigger, "push": sanitize_summary(result)},
+    )
+    if profile and int(result.get("sent") or 0) > 0:
+        cur.execute(
+            """
+            UPDATE portal_customer_profiles
+            SET portal_notification_sent_count = portal_notification_sent_count + %s,
+                portal_notification_last_sent_at = now(),
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (int(result.get("sent") or 0), profile["id"]),
+        )
+    return {"status": "SENT" if int(result.get("sent") or 0) > 0 else result.get("status", "FAILED"), "remaining_seconds": remaining, "trigger_seconds": trigger, "push": sanitize_summary(result)}
+
+
+def process_low_remaining_notifications_once(cur, limit: int = 100) -> list[dict]:
+    settings_row = ensure_captive_portal_settings()
+    trigger = max(0, int(settings_row.get("portal_remaining_notification_trigger_seconds") or 0))
+    if (
+        not bool(settings_row.get("portal_notifications_enabled"))
+        or not bool(settings_row.get("portal_remaining_notification_enabled"))
+        or trigger <= 0
+    ):
+        return []
+    cur.execute(
+        """
+        SELECT i.*
+        FROM customer_bag_items i
+        WHERE i.status = 'ACTIVE'
+          AND i.product_kind IN ('WIFI', 'WIFI_IPTV')
+          AND i.active_until IS NOT NULL
+          AND i.active_until > now()
+          AND i.active_until <= now() + (%s * interval '1 second')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM customer_bag_events e
+              WHERE e.bag_item_id = i.id
+                AND e.event_type IN ('LOW_REMAINING_NOTIFICATION_SENT', 'LOW_REMAINING_NOTIFICATION_SKIPPED')
+          )
+        ORDER BY i.active_until ASC
+        LIMIT %s
+        FOR UPDATE SKIP LOCKED
+        """,
+        (trigger, limit),
+    )
+    rows = cur.fetchall()
+    results = []
+    now = datetime.now(timezone.utc)
+    for item in rows:
+        remaining = active_bag_item_remaining_seconds(item, now)
+        cur.execute("UPDATE customer_bag_items SET remaining_seconds = %s, updated_at = now() WHERE id = %s", (remaining, item["id"]))
+        item["remaining_seconds"] = remaining
+        if remaining <= 0:
+            continue
+        session = None
+        if item.get("portal_session_id"):
+            cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (item["portal_session_id"],))
+            session = cur.fetchone()
+        results.append(send_low_remaining_notification_for_bag_item(cur, item, session, settings_row, "LOW_REMAINING_WORKER"))
+    return results
+
+
+def process_expired_active_bag_items_once(cur, limit: int = 100, reason: str = "EXPIRED_ACTIVE_CLEANUP") -> list[dict]:
+    cur.execute(
+        """
+        SELECT *
+        FROM customer_bag_items
+        WHERE status = 'ACTIVE'
+          AND active_until IS NOT NULL
+          AND active_until <= now()
+        ORDER BY active_until ASC
+        LIMIT %s
+        FOR UPDATE SKIP LOCKED
+        """,
+        (limit,),
+    )
+    rows = cur.fetchall()
+    results = []
+    overlap = bag_overlap_seconds()
+    for active in rows:
+        remaining = active_bag_item_remaining_seconds(active)
+        cur.execute("UPDATE customer_bag_items SET remaining_seconds = %s, updated_at = now() WHERE id = %s", (remaining, active["id"]))
+        if remaining > 0:
+            continue
+        cur.execute(
+            """
+            UPDATE customer_bag_items
+            SET status = 'CONSUMED',
+                remaining_seconds = 0,
+                consumed_at = COALESCE(consumed_at, active_until, now()),
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (active["id"],),
+        )
+        consumed = cur.fetchone()
+        settings = ensure_customer_bag_settings(cur, consumed["user_id"]) if consumed.get("user_id") else {}
+        create_customer_bag_event(
+            cur,
+            consumed["user_id"],
+            consumed["id"],
+            consumed.get("portal_session_id"),
+            "ITEM_CONSUMED",
+            "Product item fully consumed by expiry cleanup.",
+            bool(settings.get("auto_activate")),
+            overlap,
+            metadata={"reason": reason},
+        )
+        schedule_iptv_line_deletion_for_bag_item(cur, consumed, reason)
+        sync_result = {"status": "SKIPPED"}
+        speed_result = {"status": "SKIPPED"}
+        if consumed.get("portal_session_id"):
+            cur.execute(
+                """
+                SELECT *
+                FROM portal_sessions
+                WHERE id = %s
+                  AND source IN ('OMADA', 'MIKROTIK')
+                FOR UPDATE
+                """,
+                (consumed["portal_session_id"],),
+            )
+            session = cur.fetchone()
+            if session:
+                sync_result = sync_gateway_access_to_active_bag(cur, session, reason)
+                speed_result = sync_result.get("speed_limit") or safe_reconcile_portal_speed_limit_for_session(cur, sync_result.get("session") or session, None, reason)
+        results.append({"item_id": str(consumed["id"]), "portal_session_id": str(consumed.get("portal_session_id") or ""), "sync": sanitize_summary(sync_result), "speed_limit": sanitize_summary(speed_result)})
+    return results
 
 
 def process_customer_bag_auto_activation_once():
     process_pending_iptv_line_deletions_once()
     with get_conn() as conn:
         with conn.cursor() as cur:
+            process_low_remaining_notifications_once(cur)
             overlap = bag_overlap_seconds()
             cur.execute(
                 """
@@ -14327,6 +15518,7 @@ def process_customer_bag_auto_activation_once():
                     create_customer_bag_event(cur, active["user_id"], consumed["id"], session["id"], "ITEM_CONSUMED", "Product item fully consumed by auto activation worker.", True, overlap)
                     schedule_iptv_line_deletion_for_bag_item(cur, consumed, "AUTO_WORKER_CONSUMED")
                     sync_gateway_access_to_active_bag(cur, session, "AUTO_WORKER_CONSUMED")
+                    safe_reconcile_portal_speed_limit_for_session(cur, session, None, "AUTO_WORKER_CONSUMED")
                     active = None
                 elif remaining > overlap:
                     continue
@@ -14363,7 +15555,9 @@ def process_customer_bag_auto_activation_once():
                 activation_reason = "AUTO_OVERLAP_BACKGROUND" if active else "AUTO_BACKGROUND"
                 activation = activate_customer_bag_item(cur, next_item, session, None, activation_reason, require_current_network=False)
                 if activation.get("status") == "SUCCESS":
+                    safe_reconcile_portal_speed_limit_for_session(cur, session, None, activation_reason)
                     create_customer_bag_event(cur, session["user_id"], activation["item"]["id"], session["id"], "AUTO_ITEM_ACTIVATED", "Product item auto-activated before current access ended.", True, overlap)
+            process_expired_active_bag_items_once(cur, reason="AUTO_WORKER_EXPIRED_CLEANUP")
 
 
 def start_customer_bag_auto_activation_worker():
@@ -18702,6 +19896,7 @@ def portal_status(portal_session_id: str, request: Request, quiet: bool = False)
                 return {"status": "NEW", "message": "No portal session yet."}
             if not quiet:
                 create_portal_event(cur, session["id"], "STATUS_VIEW", request, "Status viewed")
+            remove_paid_omada_payment_auth_free_grants_for_session(cur, session, request, "PORTAL_STATUS_VIEW")
             blocked_public = enforce_portal_device_not_blocked(cur, session, None, request, "PORTAL_STATUS", raise_error=False)
             if blocked_public:
                 session = blocked_public["session"]
@@ -18862,6 +20057,7 @@ def get_portal_bag(portal_session_id: str, request: Request):
             session = cur.fetchone()
             if not session:
                 return {"status": "NEW", "bag": customer_bag_payload(cur, None)}
+            remove_paid_omada_payment_auth_free_grants_for_session(cur, session, request, "PORTAL_BAG_VIEW")
             bag_refresh = refresh_customer_bag_for_session(cur, session, request)
             return {
                 "status": "SUCCESS",
@@ -19466,6 +20662,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
             amount_centavos = checkout_amount["amount_centavos"]
             duration_unit = normalize_product_duration_unit(product["duration_unit"])
             duration_seconds = product_duration_seconds(product["duration_value"], duration_unit) * checkout_amount["quantity"]
+            speed = speed_limit_snapshot(product)
             public_order_id = generate_payment_order_public_id()
             for _ in range(10):
                 cur.execute("SELECT 1 FROM payment_orders WHERE public_order_id = %s", (public_order_id,))
@@ -19481,6 +20678,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     product_description, duration_seconds, product_category_id,
                     product_category_name, product_category_access_scope, product_category_barangay,
                     product_kind, iptv_package_label, iptv_xui_package_id,
+                    speed_limit_enabled, speed_download_mbps, speed_upload_mbps,
                     client_mac, client_ip, user_agent,
                     customer_name, customer_email, customer_contact_number, outside_network_purchase
                 )
@@ -19489,6 +20687,7 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     'PENDING', 'PENDING', %s, %s, %s,
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
+                    %s, %s, %s,
                     %s, %s, %s,
                     %s, %s, %s, NULLIF(%s, '')::inet, %s,
                     %s, %s, %s, %s
@@ -19519,6 +20718,9 @@ def create_portal_payment_checkout(payload: PortalPaymentCheckoutRequest, reques
                     product_kind,
                     normalize_payment_text(product.get("iptv_package_label"), 160) or None,
                     normalize_payment_text(product.get("iptv_xui_package_id"), 160) or None,
+                    speed["speed_limit_enabled"],
+                    speed["speed_download_mbps"],
+                    speed["speed_upload_mbps"],
                     session.get("client_mac") or session.get("omada_client_mac") or session.get("mikrotik_client_mac"),
                     str(session.get("client_ip") or public_ip(request) or ""),
                     request.headers.get("user-agent"),
@@ -19647,6 +20849,9 @@ def portal_payment_status(public_order_id: str, request: Request, response: Resp
                     order["_portal_session_public_id"] = session_row["public_session_id"]
                     order["_portal_handoff_url"] = portal_handoff_url(session_row["public_session_id"])
                     set_portal_session_cookies(response, session_row["public_session_id"], device_token)
+                cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (order["portal_session_id"],))
+                paid_session = cur.fetchone()
+                remove_paid_omada_payment_auth_free_grants_for_session(cur, paid_session, request, "PAYMENT_STATUS_VIEW")
             if order:
                 cur.execute(
                     """
@@ -20026,7 +21231,8 @@ def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
                             (provider_payment_id, event_id, Json(sanitize_summary(payload)), order["id"]),
                         )
                         order = cur.fetchone()
-                        fulfill_paid_payment_order(cur, order, request)
+                        fulfillment = fulfill_paid_payment_order(cur, order, request)
+                        schedule_omada_payment_auth_free_paid_cleanup_for_order(cur, fulfillment.get("order") or order, reason="PAYMONGO_WEBHOOK_PAID")
                     processing_status = "PROCESSED"
                 elif order and paymongo_event_is_failed(event_type):
                     error_message = paymongo_failure_message(payload)
@@ -20807,6 +22013,66 @@ def product_kind_is_iptv_only(kind: Optional[str]) -> bool:
     return normalize_product_kind(kind) == "IPTV"
 
 
+def normalize_speed_limit_mbps(value, field_label: str = "speed") -> Optional[Decimal]:
+    if value in (None, ""):
+        return None
+    try:
+        amount = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{field_label} speed must be a valid number.") from exc
+    if amount < 0:
+        raise HTTPException(status_code=400, detail=f"{field_label} speed cannot be negative.")
+    if amount > Decimal("100000"):
+        raise HTTPException(status_code=400, detail=f"{field_label} speed is too high.")
+    return amount
+
+
+def speed_limit_values(payload) -> dict:
+    enabled = bool(getattr(payload, "speed_limit_enabled", False))
+    download = normalize_speed_limit_mbps(getattr(payload, "speed_download_mbps", None), "Download")
+    upload = normalize_speed_limit_mbps(getattr(payload, "speed_upload_mbps", None), "Upload")
+    if enabled and (not download or not upload):
+        raise HTTPException(status_code=400, detail="Enter both download and upload Mbps when speed limit is enabled.")
+    return {
+        "speed_limit_enabled": enabled,
+        "speed_download_mbps": download if enabled else None,
+        "speed_upload_mbps": upload if enabled else None,
+    }
+
+
+def public_speed_limit(row) -> dict:
+    enabled = bool((row or {}).get("speed_limit_enabled"))
+    download = (row or {}).get("speed_download_mbps")
+    upload = (row or {}).get("speed_upload_mbps")
+    valid = bool(enabled and download and upload and Decimal(str(download)) > 0 and Decimal(str(upload)) > 0)
+    return {
+        "speed_limit_enabled": valid,
+        "speed_download_mbps": float(download) if valid else None,
+        "speed_upload_mbps": float(upload) if valid else None,
+        "speed_limit_label": f"{float(download):g} Mbps down / {float(upload):g} Mbps up" if valid else "No speed limit",
+    }
+
+
+def speed_limit_snapshot(row) -> dict:
+    speed = public_speed_limit(row)
+    return {
+        "speed_limit_enabled": speed["speed_limit_enabled"],
+        "speed_download_mbps": Decimal(str(speed["speed_download_mbps"])) if speed["speed_download_mbps"] is not None else None,
+        "speed_upload_mbps": Decimal(str(speed["speed_upload_mbps"])) if speed["speed_upload_mbps"] is not None else None,
+    }
+
+
+def strongest_speed_limit(rows: list[dict]) -> dict:
+    candidates = []
+    for row in rows or []:
+        speed = speed_limit_snapshot(row)
+        if speed["speed_limit_enabled"]:
+            candidates.append(speed)
+    if not candidates:
+        return {"speed_limit_enabled": False, "speed_download_mbps": None, "speed_upload_mbps": None}
+    return sorted(candidates, key=lambda item: (item["speed_download_mbps"], item["speed_upload_mbps"]))[-1]
+
+
 def normalize_product_category_status(value: Optional[str]) -> str:
     status = (value or "ACTIVE").strip().upper()
     if status not in PRODUCT_CATEGORY_STATUSES:
@@ -21453,6 +22719,7 @@ def serialize_product_item(row) -> dict:
         "iptv_xui_package_id": row.get("iptv_xui_package_id") or "",
         "iptv_auto_provision": bool(row.get("iptv_auto_provision")),
         "iptv_notes": row.get("iptv_notes") or "",
+        **public_speed_limit(row),
         "use_category_discounts": bool(use_category_discounts),
         "enabled_category_discount_ids": enabled_category_discount_ids,
         "category_discounts": category_discounts,
@@ -22031,6 +23298,7 @@ def serialize_physical_store_item(row) -> dict:
         "duration_unit": duration_unit,
         "duration_seconds": product_duration_seconds(int(row.get("duration_value") or 1), duration_unit),
         "duration_label": product_duration_label(int(row.get("duration_value") or 1), duration_unit),
+        **public_speed_limit(row),
         "access_scope": access_scope,
         "access_scope_label": "Barangay only" if access_scope == "BARANGAY_ONLY" else "All Locations",
         "allowed_barangay": allowed_barangay,
@@ -22094,6 +23362,7 @@ def physical_store_item_payload_values(payload: PhysicalStoreItemPayload, curren
     if access_scope == "BARANGAY_ONLY" and not allowed_barangay:
         raise HTTPException(status_code=400, detail="Choose the Barangay where this store item is allowed.")
     color = item_color_values(payload, "physical_store_items", current)
+    speed = {"speed_limit_enabled": False, "speed_download_mbps": None, "speed_upload_mbps": None} if product_kind_is_iptv_only(product_kind) else speed_limit_values(payload)
     return {
         "name": name,
         "description": normalize_payment_text(payload.description, 500) or None,
@@ -22101,6 +23370,7 @@ def physical_store_item_payload_values(payload: PhysicalStoreItemPayload, curren
         "price": payload.price,
         "duration_value": int(payload.duration_value),
         "duration_unit": duration_unit,
+        **speed,
         "access_scope": access_scope,
         "allowed_barangay": allowed_barangay if access_scope == "BARANGAY_ONLY" else None,
         "more_info_enabled": bool(payload.more_info_enabled),
@@ -22170,6 +23440,7 @@ def store_purchase_request_items(cur, request_ids: list[str]) -> dict[str, list[
             "price_display": money_display_from_centavos(int(row.get("price_centavos") or 0)),
             "quantity": int(row.get("quantity") or 1),
             "duration_seconds": int(row.get("duration_seconds") or 0),
+            **public_speed_limit(row),
             "access_scope": normalize_product_access_scope(row.get("access_scope") or "ALL_LOCATIONS"),
             "allowed_barangay": row.get("allowed_barangay"),
             "metadata": row.get("metadata_json") or {},
@@ -22523,6 +23794,8 @@ def create_customer_bag_item_from_store_purchase(cur, purchase: dict, items: lis
     priority = int((cur.fetchone() or {}).get("next_priority") or 100)
     primary_name = items[0]["item_name"] if len(items) == 1 else f"{len(items)} store items"
     quantity = int(purchase.get("purchase_quantity") or 1)
+    speed = strongest_speed_limit(items)
+    color = serialize_item_color(items[0] if items else None)
     metadata = {
         "store_purchase_request_id": purchase.get("public_id"),
         "request_method": purchase.get("request_method"),
@@ -22536,9 +23809,12 @@ def create_customer_bag_item_from_store_purchase(cur, purchase: dict, items: lis
         INSERT INTO customer_bag_items(
             user_id, portal_session_id, product_name, product_category_name, source, status, priority,
             duration_seconds, remaining_seconds, access_scope, allowed_barangay,
-            purchase_quantity, amount_centavos, currency, metadata_json
+            purchase_quantity, amount_centavos, currency,
+            item_color_key, item_color_hex,
+            speed_limit_enabled, speed_download_mbps, speed_upload_mbps, speed_limit_status,
+            metadata_json
         )
-        VALUES (%s, %s, %s, %s, 'STORE_PURCHASE', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, 'STORE_PURCHASE', 'QUEUED', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING *
         """,
         (
@@ -22554,6 +23830,12 @@ def create_customer_bag_item_from_store_purchase(cur, purchase: dict, items: lis
             quantity,
             int(purchase.get("amount_centavos") or 0),
             purchase.get("currency") or "PHP",
+            color["item_color_key"],
+            color["item_color_hex"],
+            speed["speed_limit_enabled"],
+            speed["speed_download_mbps"],
+            speed["speed_upload_mbps"],
+            "PENDING" if speed["speed_limit_enabled"] else "NOT_REQUIRED",
             Json(metadata),
         ),
     )
@@ -24189,6 +25471,7 @@ def adjust_portal_session_time(
                 (now, session["id"]),
             )
             updated = cur.fetchone()
+    speed_limit = safe_reconcile_portal_speed_limit_for_session(cur, updated, None, "ADMIN_TIME_ADJUST")
     return {
         "status": "ok",
         "session": updated,
@@ -24197,6 +25480,7 @@ def adjust_portal_session_time(
         "affected_bag_item_ids": affected_bag_item_ids,
         "iptv_line_results": iptv_line_results,
         "omada_sync": sanitize_summary(omada_sync),
+        "speed_limit": sanitize_summary(speed_limit),
     }
 
 
@@ -24618,7 +25902,7 @@ def get_physical_store_item_catalog(admin=Depends(current_admin)):
 
 @app.post("/api/physical-store-items")
 def create_physical_store_catalog_item(payload: PhysicalStoreItemPayload, admin=Depends(current_admin)):
-    values = physical_store_item_payload_values(payload, current)
+    values = physical_store_item_payload_values(payload)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -24626,10 +25910,11 @@ def create_physical_store_catalog_item(payload: PhysicalStoreItemPayload, admin=
                 INSERT INTO physical_store_items(
                     store_id, name, description, price, duration_value, duration_unit,
                     item_color_key, item_color_hex,
+                    speed_limit_enabled, speed_download_mbps, speed_upload_mbps,
                     access_scope, allowed_barangay, more_info_enabled, more_info_text,
                     status, sort_order, created_by_admin_id
                 )
-                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -24640,6 +25925,9 @@ def create_physical_store_catalog_item(payload: PhysicalStoreItemPayload, admin=
                     values["duration_unit"],
                     values["item_color_key"],
                     values["item_color_hex"],
+                    values["speed_limit_enabled"],
+                    values["speed_download_mbps"],
+                    values["speed_upload_mbps"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -24672,6 +25960,9 @@ def update_physical_store_catalog_item(item_id: str, payload: PhysicalStoreItemP
                     duration_unit = %s,
                     item_color_key = %s,
                     item_color_hex = %s,
+                    speed_limit_enabled = %s,
+                    speed_download_mbps = %s,
+                    speed_upload_mbps = %s,
                     access_scope = %s,
                     allowed_barangay = %s,
                     more_info_enabled = %s,
@@ -24690,6 +25981,9 @@ def update_physical_store_catalog_item(item_id: str, payload: PhysicalStoreItemP
                     values["duration_unit"],
                     values["item_color_key"],
                     values["item_color_hex"],
+                    values["speed_limit_enabled"],
+                    values["speed_download_mbps"],
+                    values["speed_upload_mbps"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -24738,10 +26032,11 @@ def create_physical_store_item(store_id: str, payload: PhysicalStoreItemPayload,
                 INSERT INTO physical_store_items(
                     store_id, name, description, price, duration_value, duration_unit,
                     item_color_key, item_color_hex,
+                    speed_limit_enabled, speed_download_mbps, speed_upload_mbps,
                     access_scope, allowed_barangay, more_info_enabled, more_info_text,
                     status, sort_order, created_by_admin_id
                 )
-                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -24752,6 +26047,9 @@ def create_physical_store_item(store_id: str, payload: PhysicalStoreItemPayload,
                     values["duration_unit"],
                     values["item_color_key"],
                     values["item_color_hex"],
+                    values["speed_limit_enabled"],
+                    values["speed_download_mbps"],
+                    values["speed_upload_mbps"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -24803,6 +26101,9 @@ def update_physical_store_item(store_id: str, item_id: str, payload: PhysicalSto
                     duration_unit = %s,
                     item_color_key = %s,
                     item_color_hex = %s,
+                    speed_limit_enabled = %s,
+                    speed_download_mbps = %s,
+                    speed_upload_mbps = %s,
                     access_scope = %s,
                     allowed_barangay = %s,
                     more_info_enabled = %s,
@@ -24821,6 +26122,9 @@ def update_physical_store_item(store_id: str, item_id: str, payload: PhysicalSto
                     values["duration_unit"],
                     values["item_color_key"],
                     values["item_color_hex"],
+                    values["speed_limit_enabled"],
+                    values["speed_download_mbps"],
+                    values["speed_upload_mbps"],
                     values["access_scope"],
                     values["allowed_barangay"],
                     values["more_info_enabled"],
@@ -25066,9 +26370,10 @@ def create_portal_store_purchase_request(payload: PortalStorePurchaseCreateReque
                     """
                 INSERT INTO store_purchase_request_items(
                     request_id, store_item_id, item_name, item_description, price_centavos, quantity,
-                    duration_seconds, access_scope, allowed_barangay, metadata_json
+                    duration_seconds, speed_limit_enabled, speed_download_mbps, speed_upload_mbps,
+                    access_scope, allowed_barangay, metadata_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         purchase["id"],
@@ -25078,6 +26383,9 @@ def create_portal_store_purchase_request(payload: PortalStorePurchaseCreateReque
                         line["price_centavos"],
                         line["quantity"],
                         line["duration_seconds"],
+                        item["speed_limit_enabled"],
+                        item["speed_download_mbps"],
+                        item["speed_upload_mbps"],
                         item["access_scope"],
                         item["allowed_barangay"],
                         Json(sanitize_summary({"line_amount_centavos": line["line_amount_centavos"]})),
@@ -25886,9 +27194,10 @@ def store_portal_customer_buy_item(user_id: str, payload: StorePortalCustomerBuy
                     """
                 INSERT INTO store_purchase_request_items(
                     request_id, store_item_id, item_name, item_description, price_centavos, quantity,
-                    duration_seconds, access_scope, allowed_barangay, metadata_json
+                    duration_seconds, speed_limit_enabled, speed_download_mbps, speed_upload_mbps,
+                    access_scope, allowed_barangay, metadata_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         purchase["id"],
@@ -25898,6 +27207,9 @@ def store_portal_customer_buy_item(user_id: str, payload: StorePortalCustomerBuy
                         line["price_centavos"],
                         line["quantity"],
                         line["duration_seconds"],
+                        item["speed_limit_enabled"],
+                        item["speed_download_mbps"],
+                        item["speed_upload_mbps"],
                         item["access_scope"],
                         item["allowed_barangay"],
                         Json(sanitize_summary({"line_amount_centavos": line["line_amount_centavos"], "owner_direct_sale": True})),
@@ -26154,6 +27466,7 @@ def create_product_item(payload: ProductItemPayload, admin=Depends(current_admin
     iptv_package_label = normalize_payment_text(payload.iptv_package_label, 160) or None
     iptv_xui_package_id = normalize_payment_text(payload.iptv_xui_package_id, 160) or None
     iptv_notes = normalize_payment_text(payload.iptv_notes, 1000) or None
+    speed = {"speed_limit_enabled": False, "speed_download_mbps": None, "speed_upload_mbps": None} if product_kind_is_iptv_only(product_kind) else speed_limit_values(payload)
     if not product_kind_requires_iptv(product_kind):
         iptv_package_label = None
         iptv_xui_package_id = None
@@ -26166,10 +27479,11 @@ def create_product_item(payload: ProductItemPayload, admin=Depends(current_admin
                     category_id, name, description, price, duration_value, duration_unit,
                     item_color_key, item_color_hex,
                     product_kind, iptv_package_label, iptv_xui_package_id, iptv_auto_provision, iptv_notes,
+                    speed_limit_enabled, speed_download_mbps, speed_upload_mbps,
                     use_category_discounts, enabled_category_discount_ids, discount_enabled, discount_min_quantity,
                     discount_type, discount_value, status, sort_order, created_by_admin_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL, FALSE, NULL, NULL, 0, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, FALSE, NULL, FALSE, NULL, NULL, 0, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -26186,6 +27500,9 @@ def create_product_item(payload: ProductItemPayload, admin=Depends(current_admin
                     iptv_xui_package_id,
                     bool(payload.iptv_auto_provision and False),
                     iptv_notes,
+                    speed["speed_limit_enabled"],
+                    speed["speed_download_mbps"],
+                    speed["speed_upload_mbps"],
                     status,
                     payload.sort_order,
                     admin["id"],
@@ -26211,6 +27528,7 @@ def update_product_item(item_id: str, payload: ProductItemPayload, admin=Depends
     iptv_package_label = normalize_payment_text(payload.iptv_package_label, 160) or None
     iptv_xui_package_id = normalize_payment_text(payload.iptv_xui_package_id, 160) or None
     iptv_notes = normalize_payment_text(payload.iptv_notes, 1000) or None
+    speed = speed_limit_values(payload)
     if not product_kind_requires_iptv(product_kind):
         iptv_package_label = None
         iptv_xui_package_id = None
@@ -26233,6 +27551,9 @@ def update_product_item(item_id: str, payload: ProductItemPayload, admin=Depends
                     iptv_xui_package_id = %s,
                     iptv_auto_provision = %s,
                     iptv_notes = %s,
+                    speed_limit_enabled = %s,
+                    speed_download_mbps = %s,
+                    speed_upload_mbps = %s,
                     use_category_discounts = FALSE,
                     enabled_category_discount_ids = NULL,
                     discount_enabled = FALSE,
@@ -26258,6 +27579,9 @@ def update_product_item(item_id: str, payload: ProductItemPayload, admin=Depends
                     iptv_xui_package_id,
                     bool(payload.iptv_auto_provision and False),
                     iptv_notes,
+                    speed["speed_limit_enabled"],
+                    speed["speed_download_mbps"],
+                    speed["speed_upload_mbps"],
                     status,
                     payload.sort_order,
                     item_id,
@@ -42982,7 +44306,7 @@ def remove_remote_omada_payment_auth_free(payload: OmadaPaymentAuthFreeRemoteRem
         raise HTTPException(status_code=502, detail=f"Could not remove Omada Authentication-Free Client: {exc}")
     with get_conn() as conn:
         with conn.cursor() as cur:
-            clauses = ["site_id = %s", "status IN ('ACTIVE', 'REMOVE_FAILED')"]
+            clauses = ["site_id = %s", "status IN ('ACTIVE', 'PAID_GRACE', 'REMOVE_FAILED')"]
             params = [site_id]
             match_clauses = []
             if client_mac:
