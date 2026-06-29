@@ -11132,6 +11132,9 @@ function MonthlySubscribersPage() {
   const [data, setData] = useState({ settings: {}, metrics: {}, subscribers: [], logs: [] });
   const [settings, setSettings] = useState({ integration_enabled: true, api_key: '', api_secret: '', rolling_authorization_seconds: 2592000, login_otp_ttl_seconds: 300, login_otp_cooldown_seconds: 60, source_system_label: '3J Main' });
   const [filters, setFilters] = useState({ search: '', status: '' });
+  const [pageTab, setPageTab] = useState('Overview');
+  const [overviewTab, setOverviewTab] = useState('Subscribers');
+  const [documentationOpen, setDocumentationOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
@@ -11240,231 +11243,463 @@ function MonthlySubscribersPage() {
   const logs = data.logs || [];
   const latestSyncLog = logs.find((log) => log.action === 'UPSERT') || logs[0] || null;
   const latestImpact = monthlySyncLogImpact(latestSyncLog || {});
+  const inboundBaseUrl = typeof window !== 'undefined' ? `${window.location.origin}/api` : '/api';
+  const overviewTabs = [
+    { key: 'Subscribers', label: 'Synced Subscribers', icon: IconUsers, count: subscribers.length, tone: 'blue' },
+    { key: 'Sessions', label: 'Active Monthly Sessions', icon: IconWifi, count: monthlySessions.length, tone: 'green' },
+    { key: 'Logs', label: 'Sync Logs', icon: IconHistory, count: logs.length, tone: 'secondary' },
+  ];
+  const pageTabs = [
+    { key: 'Overview', icon: IconDashboard },
+    { key: 'Settings', icon: IconSettings },
+  ];
+
+  function renderSubscriberTable() {
+    return (
+      <>
+        <div className="d-flex flex-wrap gap-2 mb-3">
+          <div className="input-icon flex-fill min-w-0">
+            <span className="input-icon-addon"><IconSearch size={16} /></span>
+            <input className="form-control" placeholder="Search name, account, or contact" value={filters.search} onChange={(event) => updateFilters({ search: event.target.value })} />
+          </div>
+          <select className="form-select w-auto" value={filters.status} onChange={(event) => updateFilters({ status: event.target.value })}>
+            <option value="">All status</option>
+            <option value="ACTIVE">Active</option>
+            <option value="SUSPENDED">Suspended</option>
+            <option value="INACTIVE">Inactive</option>
+            <option value="DISCONNECTED">Disconnected</option>
+          </select>
+          <button className="btn" type="button" onClick={() => load()} disabled={loading}><IconRefresh size={18} className="me-2" />Refresh</button>
+        </div>
+        <div className="table-responsive">
+          <table className="table table-vcenter card-table">
+            <thead>
+              <tr>
+                <th>Subscriber</th>
+                <th>Service</th>
+                <th>Contacts / Devices</th>
+                <th>Status</th>
+                <th>Synced</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && <tr><td colSpan="5" className="text-muted">Loading monthly subscribers...</td></tr>}
+              {!loading && subscribers.length === 0 && <tr><td colSpan="5"><div className="empty">No monthly subscribers synced yet.</div></td></tr>}
+              {!loading && subscribers.map((subscriber) => (
+                <tr key={subscriber.id || subscriber.external_subscriber_id}>
+                  <td>
+                    <div className="fw-semibold">{subscriber.customer_name}</div>
+                    <div className="text-muted small">{subscriber.account_number || subscriber.external_subscriber_id}</div>
+                  </td>
+                  <td>
+                    <div>{subscriber.plan_name || '-'}</div>
+                    <div className="text-muted small">{subscriber.service_account_number || '-'}</div>
+                  </td>
+                  <td>
+                    <div className="d-grid gap-2">
+                      {(subscriber.contacts || []).map((contact) => (
+                        <div className="d-flex align-items-center justify-content-between gap-2" key={contact.id}>
+                          <div>
+                            <span className={`badge ${contact.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'} me-1`}>{contact.contact_number}</span>
+                            {contact.label && <span className="text-muted small">{contact.label}</span>}
+                            {contact.bound && <div className="text-muted small">Bound: {contact.bound_client_mac || contact.bound_client_ip || 'device token'}</div>}
+                          </div>
+                          {contact.bound && (
+                            <ActionBadgeButton icon={IconRefresh} label="Reset device binding" tone="orange" disabled={!!busy} onClick={() => revokeContact(contact.id)} />
+                          )}
+                        </div>
+                      ))}
+                      {!(subscriber.contacts || []).length && <span className="text-muted small">No synced contact numbers</span>}
+                    </div>
+                  </td>
+                  <td><span className={`badge bg-${subscriber.status === 'ACTIVE' ? 'green' : subscriber.status === 'SUSPENDED' ? 'yellow' : 'secondary'}-lt text-${subscriber.status === 'ACTIVE' ? 'green' : subscriber.status === 'SUSPENDED' ? 'yellow' : 'secondary'}`}>{subscriber.status}</span></td>
+                  <td className="text-muted">{formatPortalDateTime(subscriber.last_synced_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </>
+    );
+  }
+
+  function renderSessionsTable() {
+    return (
+      <div className="table-responsive">
+        <table className="table table-vcenter card-table">
+          <thead>
+            <tr>
+              <th>Customer</th>
+              <th>Device</th>
+              <th>Network</th>
+              <th>Access</th>
+              <th>Status</th>
+              <th className="w-1">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && <tr><td colSpan="6" className="text-muted">Loading monthly sessions...</td></tr>}
+            {!loading && monthlySessions.length === 0 && <tr><td colSpan="6"><div className="empty">No active monthly subscriber sessions yet.</div></td></tr>}
+            {!loading && monthlySessions.map((session) => (
+              <tr key={session.id || session.public_session_id}>
+                <td>
+                  <div className="fw-semibold">{session.customer_name}</div>
+                  <div className="text-muted small">{session.account_number || session.service_account_number || '-'}</div>
+                  <div className="text-muted small">{session.contact_number || '-'}</div>
+                </td>
+                <td>
+                  <div>{session.client_mac || 'MAC not detected'}</div>
+                  <div className="text-muted small">{session.client_ip || 'IP not detected'}</div>
+                  <div className="text-muted small">{session.public_session_id}</div>
+                </td>
+                <td>
+                  <div>{session.ssid || '-'}</div>
+                  <div className="text-muted small">{session.site || session.site_id || '-'}</div>
+                </td>
+                <td>
+                  <div className="fw-semibold">{session.remaining_seconds > 0 ? formatSeconds(session.remaining_seconds) : 'No active window'}</div>
+                  <div className="text-muted small">{session.authorized_until ? `Until ${formatPortalDateTime(session.authorized_until)}` : 'No authorization window'}</div>
+                </td>
+                <td>
+                  <div className="d-flex flex-wrap gap-1">
+                    <span className={`badge ${session.connected ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{session.connected ? 'Connected' : 'Not connected'}</span>
+                    <span className={`badge ${session.monthly_status === 'ACTIVE' ? 'bg-green-lt text-green' : session.monthly_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-secondary-lt text-secondary'}`}>{session.monthly_status || '-'}</span>
+                    <span className={`badge ${session.gateway_status === 'AUTHORIZED' ? 'bg-blue-lt text-blue' : session.gateway_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-secondary-lt text-secondary'}`}>{session.gateway_status || '-'}</span>
+                  </div>
+                  {(session.authorization_error || session.latest_authorization_error) && <div className="text-danger small mt-1" title={session.authorization_error || session.latest_authorization_error}>Authorization issue</div>}
+                </td>
+                <td>
+                  <ActionBadgeGroup>
+                    <ActionBadgeButton
+                      icon={IconRefresh}
+                      label="Re-authorize monthly access"
+                      tone="green"
+                      disabled={!!busy || !session.can_reauthorize}
+                      onClick={() => monthlySessionAction(session.id, 'reauthorize')}
+                    />
+                    <ActionBadgeButton
+                      icon={IconBan}
+                      label="Revoke monthly access"
+                      tone="red"
+                      disabled={!!busy || !session.can_revoke}
+                      onClick={() => monthlySessionAction(session.id, 'revoke')}
+                    />
+                    <ActionBadgeButton
+                      icon={IconX}
+                      label="Reset device binding"
+                      tone="orange"
+                      disabled={!!busy || !session.can_reset_binding}
+                      onClick={() => revokeContact(session.contact_id)}
+                    />
+                  </ActionBadgeGroup>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  function renderLogsTable() {
+    return (
+      <div className="table-responsive">
+        <table className="table table-vcenter card-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Source</th>
+              <th>Mode</th>
+              <th>Status</th>
+              <th>Impact</th>
+              <th>Summary</th>
+            </tr>
+          </thead>
+          <tbody>
+            {logs.map((log) => {
+              const impact = monthlySyncLogImpact(log);
+              return (
+                <tr key={log.id}>
+                  <td className="text-muted">{formatPortalDateTime(log.created_at)}</td>
+                  <td>{log.source_system || '-'}</td>
+                  <td>{impact.syncMode ? <span className={`badge bg-${impact.syncMode === 'FULL' ? 'blue' : 'secondary'}-lt text-${impact.syncMode === 'FULL' ? 'blue' : 'secondary'}`}>{impact.syncMode}</span> : <span className="text-muted">-</span>}</td>
+                  <td><span className={`badge bg-${log.status === 'SUCCESS' ? 'green' : 'red'}-lt text-${log.status === 'SUCCESS' ? 'green' : 'red'}`}>{log.status}</span></td>
+                  <td><MonthlySyncImpactBadges log={log} /></td>
+                  <td>{log.message || `${log.subscriber_count || 0} subscribers, ${log.contact_count || 0} contacts`}</td>
+                </tr>
+              );
+            })}
+            {!logs.length && <tr><td colSpan="6" className="text-muted">No sync logs yet.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
 
   return (
     <div className="row row-cards">
       {message && <div className="col-12"><AutoDismissAlert message={message} tone={message.toLowerCase().includes('failed') || message.toLowerCase().includes('invalid') ? 'danger' : 'success'} onDismiss={() => setMessage('')} /></div>}
-      <KpiCard icon={IconUsers} label="Subscribers" value={metrics.subscribers || 0} tone="blue" />
-      <KpiCard icon={IconCircleCheck} label="Active" value={metrics.active || 0} tone="green" />
-      <KpiCard icon={IconPhone} label="Contacts" value={metrics.contacts || 0} tone="cyan" />
-      <KpiCard icon={IconShieldLock} label="Bound Devices" value={metrics.bound_contacts || 0} tone="purple" />
-      <KpiCard icon={IconWifi} label="Monthly Sessions" value={sessionMetrics.total || 0} tone="blue" />
-      <KpiCard icon={IconActivity} label="Connected Monthly" value={sessionMetrics.connected || 0} tone="green" />
-      <KpiCard icon={IconHistory} label="Last Sync Mode" value={latestImpact.syncMode || '-'} tone={latestImpact.syncMode === 'FULL' ? 'blue' : 'secondary'} />
-      <KpiCard icon={IconBan} label="Revoked Last Sync" value={latestImpact.revokedSessionCount || 0} tone={latestImpact.revokedSessionCount ? 'red' : 'secondary'} />
-
-      <div className="col-lg-4">
-        <Card title="Integration Settings" subtitle="Use the same API key and secret in 3J Main Account Admin > Hotspot Access.">
-          <div className="mb-3">
-            <label className="form-check form-switch">
-              <input className="form-check-input" type="checkbox" checked={settings.integration_enabled} onChange={(event) => setSettings({ ...settings, integration_enabled: event.target.checked })} />
-              <span className="form-check-label">Enable inbound sync and subscriber login</span>
-            </label>
+      <div className="col-12">
+        <div className="d-flex flex-wrap align-items-center justify-content-between gap-3">
+          <div>
+            <h2 className="page-title mb-1">Monthly Subscribers</h2>
+            <div className="text-muted">Free captive portal access for monthly customers synced from 3J Main.</div>
           </div>
-          <div className="mb-3">
-            <label className="form-label">API Key</label>
-            <input className="form-control" value={settings.api_key} onChange={(event) => setSettings({ ...settings, api_key: event.target.value })} />
+          <div className="d-flex flex-wrap gap-2">
+            <button className="btn btn-outline-primary" type="button" onClick={() => load()} disabled={loading}>
+              <IconRefresh size={18} className="me-2" />Refresh
+            </button>
+            <button className="btn" type="button" onClick={() => setDocumentationOpen(true)}>
+              <IconHelp size={18} className="me-2" />API Guide
+            </button>
           </div>
-          <div className="mb-3">
-            <label className="form-label">API Secret</label>
-            <input className="form-control" type="password" placeholder={data.settings?.api_secret_set ? 'Saved. Leave blank to keep current secret.' : 'Required before 3J Main can sync'} value={settings.api_secret} onChange={(event) => setSettings({ ...settings, api_secret: event.target.value })} />
-          </div>
-          <div className="row g-2">
-            <div className="col-12">
-              <label className="form-label">Rolling Omada Authorization Seconds</label>
-              <input className="form-control" type="number" min="300" max="2592000" value={settings.rolling_authorization_seconds} onChange={(event) => setSettings({ ...settings, rolling_authorization_seconds: Number(event.target.value) })} />
-              <div className="form-hint">Monthly access is unlimited for the customer, but Omada still receives a rolling authorization window. Default is 30 days.</div>
-            </div>
-            <div className="col-md-6">
-              <label className="form-label">OTP TTL Seconds</label>
-              <input className="form-control" type="number" min="60" max="1800" value={settings.login_otp_ttl_seconds} onChange={(event) => setSettings({ ...settings, login_otp_ttl_seconds: Number(event.target.value) })} />
-            </div>
-            <div className="col-md-6">
-              <label className="form-label">OTP Cooldown Seconds</label>
-              <input className="form-control" type="number" min="10" max="600" value={settings.login_otp_cooldown_seconds} onChange={(event) => setSettings({ ...settings, login_otp_cooldown_seconds: Number(event.target.value) })} />
-            </div>
-          </div>
-          <button className="btn btn-primary mt-3" type="button" disabled={busy === 'settings'} onClick={saveSettings}>
-            <IconDeviceFloppy size={18} className="me-2" />{busy === 'settings' ? 'Saving...' : 'Save Settings'}
-          </button>
-        </Card>
+        </div>
       </div>
 
-      <div className="col-lg-8">
-        <Card title="Synced Monthly Subscribers" subtitle="Contacts marked active can log in through the captive portal.">
-          <div className="d-flex flex-wrap gap-2 mb-3">
-            <div className="input-icon flex-fill min-w-0">
-              <span className="input-icon-addon"><IconSearch size={16} /></span>
-              <input className="form-control" placeholder="Search name, account, or contact" value={filters.search} onChange={(event) => updateFilters({ search: event.target.value })} />
-            </div>
-            <select className="form-select w-auto" value={filters.status} onChange={(event) => updateFilters({ status: event.target.value })}>
-              <option value="">All status</option>
-              <option value="ACTIVE">Active</option>
-              <option value="SUSPENDED">Suspended</option>
-              <option value="INACTIVE">Inactive</option>
-              <option value="DISCONNECTED">Disconnected</option>
-            </select>
-            <button className="btn" type="button" onClick={() => load()} disabled={loading}><IconRefresh size={18} className="me-2" />Refresh</button>
-          </div>
-          <div className="table-responsive">
-            <table className="table table-vcenter card-table">
-              <thead>
-                <tr>
-                  <th>Subscriber</th>
-                  <th>Service</th>
-                  <th>Contacts / Devices</th>
-                  <th>Status</th>
-                  <th>Synced</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && <tr><td colSpan="5" className="text-muted">Loading monthly subscribers...</td></tr>}
-                {!loading && subscribers.length === 0 && <tr><td colSpan="5"><div className="empty">No monthly subscribers synced yet.</div></td></tr>}
-                {!loading && subscribers.map((subscriber) => (
-                  <tr key={subscriber.id || subscriber.external_subscriber_id}>
-                    <td>
-                      <div className="fw-semibold">{subscriber.customer_name}</div>
-                      <div className="text-muted small">{subscriber.account_number || subscriber.external_subscriber_id}</div>
-                    </td>
-                    <td>
-                      <div>{subscriber.plan_name || '-'}</div>
-                      <div className="text-muted small">{subscriber.service_account_number || '-'}</div>
-                    </td>
-                    <td>
-                      <div className="d-grid gap-2">
-                        {(subscriber.contacts || []).map((contact) => (
-                          <div className="d-flex align-items-center justify-content-between gap-2" key={contact.id}>
-                            <div>
-                              <span className={`badge ${contact.status === 'ACTIVE' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'} me-1`}>{contact.contact_number}</span>
-                              {contact.label && <span className="text-muted small">{contact.label}</span>}
-                              {contact.bound && <div className="text-muted small">Bound: {contact.bound_client_mac || contact.bound_client_ip || 'device token'}</div>}
-                            </div>
-                            {contact.bound && (
-                              <ActionBadgeButton icon={IconRefresh} label="Reset device binding" tone="orange" disabled={!!busy} onClick={() => revokeContact(contact.id)} />
-                            )}
-                          </div>
-                        ))}
-                        {!(subscriber.contacts || []).length && <span className="text-muted small">No synced contact numbers</span>}
-                      </div>
-                    </td>
-                    <td><span className={`badge bg-${subscriber.status === 'ACTIVE' ? 'green' : subscriber.status === 'SUSPENDED' ? 'yellow' : 'secondary'}-lt text-${subscriber.status === 'ACTIVE' ? 'green' : subscriber.status === 'SUSPENDED' ? 'yellow' : 'secondary'}`}>{subscriber.status}</span></td>
-                    <td className="text-muted">{formatPortalDateTime(subscriber.last_synced_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+      <div className="col-12">
+        <ul className="nav nav-tabs">
+          {pageTabs.map((item) => {
+            const Icon = item.icon;
+            return (
+              <li className="nav-item" key={item.key}>
+                <button className={`nav-link ${pageTab === item.key ? 'active' : ''}`} type="button" onClick={() => setPageTab(item.key)}>
+                  <Icon size={17} className="me-1" />{item.key}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
 
-        <Card title="Active Monthly Sessions" subtitle="Live monthly subscriber devices currently bound through captive portal login." className="mt-3">
-          <div className="table-responsive">
-            <table className="table table-vcenter card-table">
-              <thead>
-                <tr>
-                  <th>Customer</th>
-                  <th>Device</th>
-                  <th>Network</th>
-                  <th>Access</th>
-                  <th>Status</th>
-                  <th className="w-1">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {loading && <tr><td colSpan="6" className="text-muted">Loading monthly sessions...</td></tr>}
-                {!loading && monthlySessions.length === 0 && <tr><td colSpan="6"><div className="empty">No active monthly subscriber sessions yet.</div></td></tr>}
-                {!loading && monthlySessions.map((session) => (
-                  <tr key={session.id || session.public_session_id}>
-                    <td>
-                      <div className="fw-semibold">{session.customer_name}</div>
-                      <div className="text-muted small">{session.account_number || session.service_account_number || '-'}</div>
-                      <div className="text-muted small">{session.contact_number || '-'}</div>
-                    </td>
-                    <td>
-                      <div>{session.client_mac || 'MAC not detected'}</div>
-                      <div className="text-muted small">{session.client_ip || 'IP not detected'}</div>
-                      <div className="text-muted small">{session.public_session_id}</div>
-                    </td>
-                    <td>
-                      <div>{session.ssid || '-'}</div>
-                      <div className="text-muted small">{session.site || session.site_id || '-'}</div>
-                    </td>
-                    <td>
-                      <div className="fw-semibold">{session.remaining_seconds > 0 ? formatSeconds(session.remaining_seconds) : 'No active window'}</div>
-                      <div className="text-muted small">{session.authorized_until ? `Until ${formatPortalDateTime(session.authorized_until)}` : 'No authorization window'}</div>
-                    </td>
-                    <td>
-                      <div className="d-flex flex-wrap gap-1">
-                        <span className={`badge ${session.connected ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{session.connected ? 'Connected' : 'Not connected'}</span>
-                        <span className={`badge ${session.monthly_status === 'ACTIVE' ? 'bg-green-lt text-green' : session.monthly_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-secondary-lt text-secondary'}`}>{session.monthly_status || '-'}</span>
-                        <span className={`badge ${session.gateway_status === 'AUTHORIZED' ? 'bg-blue-lt text-blue' : session.gateway_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-secondary-lt text-secondary'}`}>{session.gateway_status || '-'}</span>
-                      </div>
-                      {(session.authorization_error || session.latest_authorization_error) && <div className="text-danger small mt-1" title={session.authorization_error || session.latest_authorization_error}>Authorization issue</div>}
-                    </td>
-                    <td>
-                      <ActionBadgeGroup>
-                        <ActionBadgeButton
-                          icon={IconRefresh}
-                          label="Re-authorize monthly access"
-                          tone="green"
-                          disabled={!!busy || !session.can_reauthorize}
-                          onClick={() => monthlySessionAction(session.id, 'reauthorize')}
-                        />
-                        <ActionBadgeButton
-                          icon={IconBan}
-                          label="Revoke monthly access"
-                          tone="red"
-                          disabled={!!busy || !session.can_revoke}
-                          onClick={() => monthlySessionAction(session.id, 'revoke')}
-                        />
-                        <ActionBadgeButton
-                          icon={IconX}
-                          label="Reset device binding"
-                          tone="orange"
-                          disabled={!!busy || !session.can_reset_binding}
-                          onClick={() => revokeContact(session.contact_id)}
-                        />
-                      </ActionBadgeGroup>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+      {pageTab === 'Overview' && (
+        <>
+          <KpiCard icon={IconUsers} label="Subscribers" value={metrics.subscribers || 0} tone="blue" />
+          <KpiCard icon={IconCircleCheck} label="Active" value={metrics.active || 0} tone="green" />
+          <KpiCard icon={IconPhone} label="Contacts" value={metrics.contacts || 0} tone="cyan" />
+          <KpiCard icon={IconShieldLock} label="Bound Devices" value={metrics.bound_contacts || 0} tone="purple" />
+          <KpiCard icon={IconWifi} label="Monthly Sessions" value={sessionMetrics.total || 0} tone="blue" />
+          <KpiCard icon={IconActivity} label="Connected Monthly" value={sessionMetrics.connected || 0} tone="green" />
+          <KpiCard icon={IconHistory} label="Last Sync Mode" value={latestImpact.syncMode || '-'} tone={latestImpact.syncMode === 'FULL' ? 'blue' : 'secondary'} />
+          <KpiCard icon={IconBan} label="Revoked Last Sync" value={latestImpact.revokedSessionCount || 0} tone={latestImpact.revokedSessionCount ? 'red' : 'secondary'} />
 
-        <Card title="Recent Sync Logs" className="mt-3">
-          <div className="table-responsive">
-            <table className="table table-vcenter card-table">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Source</th>
-                  <th>Mode</th>
-                  <th>Status</th>
-                  <th>Impact</th>
-                  <th>Summary</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logs.map((log) => {
-                  const impact = monthlySyncLogImpact(log);
+          <div className="col-12">
+            <Card title="Monthly Subscriber Operations" subtitle="Review synced subscribers, active monthly devices, and integration sync history.">
+              <ul className="nav nav-tabs mb-3" role="tablist">
+                {overviewTabs.map((item) => {
+                  const Icon = item.icon;
                   return (
-                  <tr key={log.id}>
-                    <td className="text-muted">{formatPortalDateTime(log.created_at)}</td>
-                    <td>{log.source_system || '-'}</td>
-                    <td>{impact.syncMode ? <span className={`badge bg-${impact.syncMode === 'FULL' ? 'blue' : 'secondary'}-lt text-${impact.syncMode === 'FULL' ? 'blue' : 'secondary'}`}>{impact.syncMode}</span> : <span className="text-muted">-</span>}</td>
-                    <td><span className={`badge bg-${log.status === 'SUCCESS' ? 'green' : 'red'}-lt text-${log.status === 'SUCCESS' ? 'green' : 'red'}`}>{log.status}</span></td>
-                    <td><MonthlySyncImpactBadges log={log} /></td>
-                    <td>{log.message || `${log.subscriber_count || 0} subscribers, ${log.contact_count || 0} contacts`}</td>
-                  </tr>
+                    <li className="nav-item" role="presentation" key={item.key}>
+                      <button className={`nav-link ${overviewTab === item.key ? 'active' : ''}`} type="button" role="tab" aria-selected={overviewTab === item.key} onClick={() => setOverviewTab(item.key)}>
+                        <Icon size={16} className="me-1" />{item.label}
+                        <span className={`badge bg-${item.tone}-lt ms-2`}>{item.count}</span>
+                      </button>
+                    </li>
                   );
                 })}
-                {!logs.length && <tr><td colSpan="6" className="text-muted">No sync logs yet.</td></tr>}
-              </tbody>
-            </table>
+              </ul>
+              {overviewTab === 'Subscribers' && renderSubscriberTable()}
+              {overviewTab === 'Sessions' && renderSessionsTable()}
+              {overviewTab === 'Logs' && renderLogsTable()}
+            </Card>
           </div>
-        </Card>
-      </div>
+        </>
+      )}
+
+      {pageTab === 'Settings' && (
+        <>
+          <div className="col-lg-8">
+            <Card title="API Management" subtitle="Enterprise-style controls for signed 3J Main to Pisowifi monthly subscriber sync.">
+              <div className="row g-3">
+                <div className="col-md-6">
+                  <div className="border rounded p-3 h-100">
+                    <div className="d-flex align-items-start justify-content-between gap-3">
+                      <div>
+                        <div className="fw-semibold d-flex align-items-center gap-2"><IconShieldLock size={18} />Integration Status</div>
+                        <div className="text-muted small mt-1">Controls inbound sync, health checks, OTP login, and monthly captive portal authorization.</div>
+                      </div>
+                      <label className="form-check form-switch m-0">
+                        <input className="form-check-input" type="checkbox" checked={settings.integration_enabled} onChange={(event) => setSettings({ ...settings, integration_enabled: event.target.checked })} />
+                      </label>
+                    </div>
+                    <div className="mt-3">
+                      <span className={`badge ${settings.integration_enabled ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>{settings.integration_enabled ? 'Enabled' : 'Disabled'}</span>
+                      <span className={`badge ms-2 ${data.settings?.api_secret_set ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{data.settings?.api_secret_set ? 'Secret saved' : 'Secret required'}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="col-md-6">
+                  <div className="border rounded p-3 h-100">
+                    <div className="fw-semibold d-flex align-items-center gap-2"><IconServer size={18} />Inbound API Endpoints</div>
+                    <div className="mt-3 d-grid gap-2">
+                      <div className="small">
+                        <span className="badge bg-blue-lt text-blue me-2">GET</span>
+                        <code>{inboundBaseUrl}/integrations/monthly-subscribers/health</code>
+                      </div>
+                      <div className="small">
+                        <span className="badge bg-green-lt text-green me-2">POST</span>
+                        <code>{inboundBaseUrl}/integrations/monthly-subscribers/upsert</code>
+                      </div>
+                    </div>
+                    <button className="btn btn-sm mt-3" type="button" onClick={() => setDocumentationOpen(true)}>
+                      <IconInfoCircle size={16} className="me-1" />Read API documentation
+                    </button>
+                  </div>
+                </div>
+
+                <div className="col-md-6">
+                  <div className="border rounded p-3 h-100">
+                    <div className="fw-semibold d-flex align-items-center gap-2 mb-3"><IconKey size={18} />Credentials</div>
+                    <div className="mb-3">
+                      <label className="form-label">API Key</label>
+                      <input className="form-control" value={settings.api_key} onChange={(event) => setSettings({ ...settings, api_key: event.target.value })} placeholder="Integration key used by 3J Main" />
+                    </div>
+                    <div>
+                      <label className="form-label">API Secret</label>
+                      <input className="form-control" type="password" placeholder={data.settings?.api_secret_set ? 'Saved. Leave blank to keep current secret.' : 'Required before 3J Main can sync'} value={settings.api_secret} onChange={(event) => setSettings({ ...settings, api_secret: event.target.value })} />
+                      <div className="form-hint">Changing the secret requires updating 3J Main Account Admin &gt; Hotspot Access with the same value.</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="col-md-6">
+                  <div className="border rounded p-3 h-100">
+                    <div className="fw-semibold d-flex align-items-center gap-2 mb-3"><IconLock size={18} />Access Rules</div>
+                    <div className="row g-2">
+                      <div className="col-12">
+                        <label className="form-label">Rolling Omada Authorization Seconds</label>
+                        <input className="form-control" type="number" min="300" max="2592000" value={settings.rolling_authorization_seconds} onChange={(event) => setSettings({ ...settings, rolling_authorization_seconds: Number(event.target.value) })} />
+                        <div className="form-hint">Monthly access is unlimited for the customer, but Omada still receives a rolling authorization window. Default is 30 days.</div>
+                      </div>
+                      <div className="col-md-6">
+                        <label className="form-label">OTP TTL Seconds</label>
+                        <input className="form-control" type="number" min="60" max="1800" value={settings.login_otp_ttl_seconds} onChange={(event) => setSettings({ ...settings, login_otp_ttl_seconds: Number(event.target.value) })} />
+                      </div>
+                      <div className="col-md-6">
+                        <label className="form-label">OTP Cooldown Seconds</label>
+                        <input className="form-control" type="number" min="10" max="600" value={settings.login_otp_cooldown_seconds} onChange={(event) => setSettings({ ...settings, login_otp_cooldown_seconds: Number(event.target.value) })} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="col-12">
+                  <div className="alert alert-info mb-0">
+                    <div className="fw-semibold mb-1">Recommended operation</div>
+                    <div>Use FULL sync only from the 3J Main Hotspot Access page when exporting all subscribers. Use single-subscriber sync for contact edits so unrelated monthly customers are not disabled.</div>
+                  </div>
+                </div>
+                <div className="col-12 d-flex flex-wrap gap-2">
+                  <button className="btn btn-primary" type="button" disabled={busy === 'settings'} onClick={saveSettings}>
+                    <IconDeviceFloppy size={18} className="me-2" />{busy === 'settings' ? 'Saving...' : 'Save API Settings'}
+                  </button>
+                  <button className="btn" type="button" onClick={() => load()} disabled={loading || !!busy}>
+                    <IconRefresh size={18} className="me-2" />Reload Current Settings
+                  </button>
+                </div>
+              </div>
+            </Card>
+          </div>
+          <div className="col-lg-4">
+            <Card title="API Flow" subtitle="How monthly subscriber access is handled.">
+              <div className="list-group list-group-flush">
+                <div className="list-group-item px-0">
+                  <div className="d-flex align-items-start gap-2">
+                    <span className="badge bg-blue-lt text-blue">1</span>
+                    <div><div className="fw-semibold">3J Main exports subscribers</div><div className="text-muted small">Account Admin sends customer, service, and allowed contact numbers.</div></div>
+                  </div>
+                </div>
+                <div className="list-group-item px-0">
+                  <div className="d-flex align-items-start gap-2">
+                    <span className="badge bg-blue-lt text-blue">2</span>
+                    <div><div className="fw-semibold">Pisowifi validates the signature</div><div className="text-muted small">API key, timestamp, and HMAC signature must match before data is accepted.</div></div>
+                  </div>
+                </div>
+                <div className="list-group-item px-0">
+                  <div className="d-flex align-items-start gap-2">
+                    <span className="badge bg-blue-lt text-blue">3</span>
+                    <div><div className="fw-semibold">Customer logs in by contact number</div><div className="text-muted small">One enabled contact number can bind to one captive portal device after SMS OTP.</div></div>
+                  </div>
+                </div>
+                <div className="list-group-item px-0">
+                  <div className="d-flex align-items-start gap-2">
+                    <span className="badge bg-blue-lt text-blue">4</span>
+                    <div><div className="fw-semibold">Omada authorizes access</div><div className="text-muted small">The device receives rolling monthly authorization and can be revoked from the Sessions tab.</div></div>
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </>
+      )}
+
+      {documentationOpen && (
+        <Modal title="Monthly Subscriber API Guide" size="xl" onClose={() => setDocumentationOpen(false)}>
+          <div className="row g-3">
+            <div className="col-md-6">
+              <div className="border rounded p-3 h-100">
+                <div className="fw-semibold mb-2 d-flex align-items-center gap-2"><IconShieldLock size={18} />Authentication</div>
+                <p className="text-muted mb-2">Every request from 3J Main must include these headers. Pisowifi rejects missing, stale, or mismatched signatures.</p>
+                <div className="d-grid gap-2 small">
+                  <code>X-3J-Integration-Key: {settings.api_key || 'your-api-key'}</code>
+                  <code>X-3J-Timestamp: unix timestamp seconds</code>
+                  <code>X-3J-Signature: HMAC-SHA256(timestamp + "." + raw JSON body)</code>
+                  <code>X-3J-Idempotency-Key: unique request id</code>
+                </div>
+              </div>
+            </div>
+            <div className="col-md-6">
+              <div className="border rounded p-3 h-100">
+                <div className="fw-semibold mb-2 d-flex align-items-center gap-2"><IconDatabase size={18} />Sync Modes</div>
+                <div className="d-grid gap-2">
+                  <div><span className="badge bg-blue-lt text-blue me-2">FULL</span>Authoritative full export. Missing subscribers or contacts are disabled and matching live monthly access is revoked.</div>
+                  <div><span className="badge bg-secondary-lt text-secondary me-2">PARTIAL</span>Single-subscriber or contact update. It updates only included rows and does not disable unrelated customers.</div>
+                </div>
+              </div>
+            </div>
+            <div className="col-12">
+              <div className="border rounded p-3">
+                <div className="fw-semibold mb-2 d-flex align-items-center gap-2"><IconSend size={18} />Payload Contract</div>
+                <pre className="mb-0"><code>{`POST ${inboundBaseUrl}/integrations/monthly-subscribers/upsert
+{
+  "source_system": "3J Main",
+  "synced_by": "admin",
+  "sync_mode": "FULL",
+  "subscribers": [
+    {
+      "external_subscriber_id": "customer-id",
+      "account_number": "68392741",
+      "service_account_number": "SA-001",
+      "customer_name": "Customer Name",
+      "plan_name": "Monthly Plan",
+      "status": "ACTIVE",
+      "contacts": [
+        {
+          "contact_number": "09000000000",
+          "normalized_contact": "+639000000000",
+          "label": "Primary",
+          "enabled": true
+        }
+      ]
+    }
+  ]
+}`}</code></pre>
+              </div>
+            </div>
+            <div className="col-md-6">
+              <div className="alert alert-warning mb-0">
+                <div className="fw-semibold">Credential rotation</div>
+                <div>Save the new secret here first, then immediately update 3J Main Account Admin &gt; Hotspot Access. During rotation, sync requests using the old secret will fail.</div>
+              </div>
+            </div>
+            <div className="col-md-6">
+              <div className="alert alert-info mb-0">
+                <div className="fw-semibold">Device binding rule</div>
+                <div>One synced contact number is allowed to bind to one device. Use reset binding or revoke session when a monthly customer changes phone.</div>
+              </div>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
