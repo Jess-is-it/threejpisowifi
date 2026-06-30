@@ -84,6 +84,9 @@ const PORTAL_PENDING_PAYMENT_STORAGE_KEY = 'centralwifi_pending_paymongo_checkou
 const PORTAL_PENDING_PAYMENT_MAX_AGE_MS = 60 * 60 * 1000;
 const PORTAL_PWA_INSTALL_PANEL_HIDDEN_KEY = 'centralwifi_pwa_install_panel_hidden';
 const PORTAL_PWA_INSTALLED_KEY = 'centralwifi_pwa_installed';
+const STORE_PWA_INSTALL_PANEL_HIDDEN_KEY = 'centralwifi_store_pwa_install_panel_hidden';
+const STORE_PWA_INSTALLED_KEY = 'centralwifi_store_pwa_installed';
+const STORE_REQUEST_ALERTS_PANEL_HIDDEN_KEY = 'centralwifi_store_request_alerts_panel_hidden';
 
 const PORTAL_TAP_TARGET_SELECTOR = [
   'button:not(:disabled)',
@@ -539,9 +542,9 @@ function speedIndicatorTier(item = {}, settings = {}) {
   return { settings: normalized, tier, speed };
 }
 
-function SpeedTakeoffIndicator({ item = {}, settings = {}, compact = false }) {
+function speedIndicatorVisualModel(item = {}, settings = {}, { compact = false, force = false } = {}) {
   const normalized = normalizeSpeedIndicatorSettings(settings);
-  if (!item?.speed_limit_enabled || normalized.enabled === false) return null;
+  if ((!force && !item?.speed_limit_enabled) || normalized.enabled === false) return null;
   const { tier, speed } = speedIndicatorTier(item, normalized);
   const label = speed > 0 ? `${speed.toLocaleString(undefined, { maximumFractionDigits: 2 })}Mbps` : speedLimitLabel(item);
   const travelSpeed = Math.max(1, Math.min(5, Math.round(Number(tier.travel_speed || 1))));
@@ -555,85 +558,204 @@ function SpeedTakeoffIndicator({ item = {}, settings = {}, compact = false }) {
   const airParticles = Array.from({ length: airParticleCount }, (_, index) => index);
   const smokeParticles = Array.from({ length: smokeParticleCount }, (_, index) => index);
   const fireJets = Array.from({ length: firePower }, (_, index) => index);
+  const style = {
+    '--portal-speed-color': tier.color,
+    '--portal-speed-glow': tier.glow,
+    '--portal-speed-flame': tier.flame,
+    '--portal-speed-smoke': tier.smoke,
+    '--portal-speed-rgb': cssHexToRgb(tier.color, '168,85,247'),
+    '--portal-speed-glow-rgb': cssHexToRgb(tier.glow, '236,72,153'),
+    '--portal-speed-loop': `${normalized.loop_seconds}s`,
+    '--portal-speed-travel': `${travelSeconds}s`,
+    '--portal-speed-air-duration': `${airSeconds}s`,
+    '--portal-speed-rocket-scale': rocketScale,
+    '--portal-speed-rocket-mid-scale': rocketScale + 0.08,
+    '--portal-speed-rocket-peak-scale': rocketScale + 0.16,
+    '--portal-speed-rocket-exit-scale': Math.max(0.64, rocketScale - 0.08),
+    '--portal-speed-air-count': airParticleCount,
+    '--portal-speed-smoke-count': smokeParticleCount,
+    '--portal-speed-fire-count': firePower,
+  };
+  return {
+    normalized,
+    tier,
+    speed,
+    label,
+    travelSpeed,
+    rocketScale,
+    airSeconds,
+    firePower,
+    airParticles,
+    smokeParticles,
+    fireJets,
+    style,
+  };
+}
+
+function SpeedAirParticles({ model }) {
+  if (!model) return null;
+  return model.airParticles.map((index) => (
+    <span
+      className={`portal-speed-air-particle particle-${(index % 6) + 1}`}
+      key={`air-${index}`}
+      style={{
+        '--portal-speed-particle-index': index,
+        '--portal-speed-particle-delay': `${-(((index * 0.23) + (model.travelSpeed * 0.09)) % model.airSeconds).toFixed(2)}s`,
+        '--portal-speed-particle-left': `${6 + ((index * 37 + model.travelSpeed * 11) % 88)}%`,
+        '--portal-speed-particle-top': `${14 + ((index * 23 + model.travelSpeed * 7) % 72)}%`,
+        '--portal-speed-particle-size': `${12 + ((index * 5 + model.travelSpeed * 3) % 24)}px`,
+        '--portal-speed-particle-drift': `${36 + ((index * 13 + model.travelSpeed * 9) % 58)}px`,
+        '--portal-speed-particle-drift-end': `-${36 + ((index * 13 + model.travelSpeed * 9) % 58)}px`,
+      }}
+    />
+  ));
+}
+
+function SpeedFireJets({ model, launch = false }) {
+  if (!model) return null;
+  return model.fireJets.map((index) => (
+    <span
+      className={`${launch ? 'portal-speed-launch-fire' : 'portal-speed-fire'} jet-${(index % 5) + 1}`}
+      key={`fire-${index}`}
+      style={{
+        '--portal-speed-fire-index': index,
+        '--portal-speed-fire-delay': `${-(index * 0.08)}s`,
+        '--portal-speed-fire-offset': `${(index - Math.floor(model.firePower / 2)) * 3}px`,
+      }}
+    />
+  ));
+}
+
+function SpeedSmokePuffs({ model, launch = false }) {
+  if (!model) return null;
+  return model.smokeParticles.map((index) => (
+    <span
+      className={`${launch ? 'portal-speed-launch-smoke' : 'portal-speed-smoke'} puff-${(index % 6) + 1}`}
+      key={`smoke-${index}`}
+      style={{
+        '--portal-speed-smoke-index': index,
+        '--portal-speed-smoke-delay': `${-(index * 0.11)}s`,
+        '--portal-speed-smoke-y': `${(index % 5 - 2) * 5}px`,
+        '--portal-speed-smoke-size': `${6 + (index % 4) * 2}px`,
+      }}
+    />
+  ));
+}
+
+function SpeedLaunchParticleField({ model }) {
+  if (!model) return null;
+  const airCount = Math.max(8, model.airParticles.length * 2);
+  const fireCount = Math.max(6, model.fireJets.length * 2);
+  const smokeCount = Math.max(8, model.smokeParticles.length * 2);
+  return (
+    <div className="portal-speed-launch-particle-field" aria-hidden="true">
+      {Array.from({ length: airCount }, (_, index) => (
+        <span
+          className={`portal-speed-launch-air-streak streak-${(index % 6) + 1}`}
+          key={`launch-air-${index}`}
+          style={{
+            '--portal-speed-launch-delay': `${-((index * 0.18) % 1.5).toFixed(2)}s`,
+            '--portal-speed-launch-left': `${9 + ((index * 31 + model.travelSpeed * 13) % 82)}%`,
+            '--portal-speed-launch-width': `${1 + (index % 2)}px`,
+            '--portal-speed-launch-height': `${34 + ((index * 11 + model.travelSpeed * 9) % 58)}px`,
+            '--portal-speed-launch-drift': `${((index % 7) - 3) * 5}px`,
+          }}
+        />
+      ))}
+      {Array.from({ length: fireCount }, (_, index) => (
+        <span
+          className={`portal-speed-launch-fire-particle ember-${(index % 5) + 1}`}
+          key={`launch-fire-${index}`}
+          style={{
+            '--portal-speed-launch-delay': `${-(index * 0.07).toFixed(2)}s`,
+            '--portal-speed-launch-left': `${43 + ((index * 11 + model.firePower * 7) % 14)}%`,
+            '--portal-speed-launch-size': `${5 + ((index + model.firePower) % 6)}px`,
+            '--portal-speed-launch-drift': `${((index % 5) - 2) * 9}px`,
+          }}
+        />
+      ))}
+      {Array.from({ length: smokeCount }, (_, index) => (
+        <span
+          className={`portal-speed-launch-smoke-trail cloud-${(index % 6) + 1}`}
+          key={`launch-smoke-${index}`}
+          style={{
+            '--portal-speed-launch-delay': `${-(index * 0.12).toFixed(2)}s`,
+            '--portal-speed-launch-left': `${39 + ((index * 13 + model.travelSpeed * 5) % 22)}%`,
+            '--portal-speed-launch-size': `${9 + ((index * 3) % 14)}px`,
+            '--portal-speed-launch-drift': `${((index % 7) - 3) * 12}px`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SpeedTakeoffIndicator({ item = {}, settings = {}, compact = false }) {
+  const model = speedIndicatorVisualModel(item, settings, { compact });
+  if (!model) return null;
   return (
     <div
-      className={`portal-speed-takeoff ${compact ? 'is-compact' : ''} is-travel-${travelSpeed}`}
-      style={{
-        '--portal-speed-color': tier.color,
-        '--portal-speed-glow': tier.glow,
-        '--portal-speed-flame': tier.flame,
-        '--portal-speed-smoke': tier.smoke,
-        '--portal-speed-rgb': cssHexToRgb(tier.color, '168,85,247'),
-        '--portal-speed-glow-rgb': cssHexToRgb(tier.glow, '236,72,153'),
-        '--portal-speed-loop': `${normalized.loop_seconds}s`,
-        '--portal-speed-travel': `${travelSeconds}s`,
-        '--portal-speed-air-duration': `${airSeconds}s`,
-        '--portal-speed-rocket-scale': rocketScale,
-        '--portal-speed-rocket-mid-scale': rocketScale + 0.08,
-        '--portal-speed-rocket-peak-scale': rocketScale + 0.16,
-        '--portal-speed-rocket-exit-scale': Math.max(0.64, rocketScale - 0.08),
-        '--portal-speed-air-count': airParticleCount,
-        '--portal-speed-smoke-count': smokeParticleCount,
-        '--portal-speed-fire-count': firePower,
-      }}
-      aria-label={`${tier.label}: ${speedLimitLabel(item)}`}
-      title={`${tier.label}: ${speedLimitLabel(item)}`}
+      className={`portal-speed-takeoff ${compact ? 'is-compact' : ''} is-travel-${model.travelSpeed}`}
+      style={model.style}
+      aria-label={`${model.tier.label}: ${speedLimitLabel(item)}`}
+      title={`${model.tier.label}: ${speedLimitLabel(item)}`}
     >
       <div className="portal-speed-stage">
         <span className="portal-speed-track">
           <span className="portal-speed-air-field" aria-hidden="true">
-            {airParticles.map((index) => (
-              <span
-                className={`portal-speed-air-particle particle-${(index % 6) + 1}`}
-                key={`air-${index}`}
-                style={{
-                  '--portal-speed-particle-index': index,
-                  '--portal-speed-particle-delay': `${-(((index * 0.23) + (travelSpeed * 0.09)) % airSeconds).toFixed(2)}s`,
-                  '--portal-speed-particle-left': `${6 + ((index * 37 + travelSpeed * 11) % 88)}%`,
-                  '--portal-speed-particle-top': `${14 + ((index * 23 + travelSpeed * 7) % 72)}%`,
-                  '--portal-speed-particle-size': `${12 + ((index * 5 + travelSpeed * 3) % 24)}px`,
-                  '--portal-speed-particle-drift': `${36 + ((index * 13 + travelSpeed * 9) % 58)}px`,
-                  '--portal-speed-particle-drift-end': `-${36 + ((index * 13 + travelSpeed * 9) % 58)}px`,
-                }}
-              />
-            ))}
+            <SpeedAirParticles model={model} />
           </span>
           <span className="portal-speed-beam" />
-            <span className="portal-speed-arrow">
+          <span className="portal-speed-arrow">
             <span className="portal-speed-body" />
             <span className="portal-speed-window" />
             <span className="portal-speed-booster top" />
             <span className="portal-speed-booster bottom" />
             <span className="portal-speed-fire-field" aria-hidden="true">
-              {fireJets.map((index) => (
-                <span
-                  className={`portal-speed-fire jet-${(index % 5) + 1}`}
-                  key={`fire-${index}`}
-                  style={{
-                    '--portal-speed-fire-index': index,
-                    '--portal-speed-fire-delay': `${-(index * 0.08)}s`,
-                    '--portal-speed-fire-offset': `${(index - Math.floor(firePower / 2)) * 3}px`,
-                  }}
-                />
-              ))}
+              <SpeedFireJets model={model} />
             </span>
             <span className="portal-speed-smoke-field" aria-hidden="true">
-              {smokeParticles.map((index) => (
-                <span
-                  className={`portal-speed-smoke puff-${(index % 6) + 1}`}
-                  key={`smoke-${index}`}
-                  style={{
-                    '--portal-speed-smoke-index': index,
-                    '--portal-speed-smoke-delay': `${-(index * 0.11)}s`,
-                    '--portal-speed-smoke-y': `${(index % 5 - 2) * 5}px`,
-                    '--portal-speed-smoke-size': `${6 + (index % 4) * 2}px`,
-                  }}
-                />
-              ))}
+              <SpeedSmokePuffs model={model} />
             </span>
           </span>
         </span>
-        <span className="portal-speed-label">{label}</span>
+        <span className="portal-speed-label">{model.label}</span>
+      </div>
+    </div>
+  );
+}
+
+function SpeedEffectBackground({ model }) {
+  if (!model) return null;
+  return (
+    <span className="portal-speed-card-effect" style={model.style} aria-hidden="true">
+      <span className="portal-speed-card-air">
+        <SpeedAirParticles model={model} />
+      </span>
+    </span>
+  );
+}
+
+function SpeedRocketLaunchOverlay({ launch }) {
+  const model = speedIndicatorVisualModel(launch?.item || {}, launch?.settings || {}, { force: true });
+  if (!launch || !model) return null;
+  return (
+    <div className="portal-speed-launch-overlay" style={model.style} aria-hidden="true">
+      <SpeedLaunchParticleField model={model} />
+      <div className="portal-speed-launch-rocket">
+        <span className="portal-speed-launch-body">
+          <span className="portal-speed-launch-body-label">{model.label}</span>
+        </span>
+        <span className="portal-speed-launch-nose" />
+        <span className="portal-speed-launch-window" />
+        <span className="portal-speed-launch-booster left" />
+        <span className="portal-speed-launch-booster right" />
+        <span className="portal-speed-launch-fire-field">
+          <SpeedFireJets model={model} launch />
+        </span>
+        <span className="portal-speed-launch-smoke-field">
+          <SpeedSmokePuffs model={model} launch />
+        </span>
       </div>
     </div>
   );
@@ -1018,7 +1140,12 @@ function storeOwnerRequest(path, options = {}) {
     }
   }).then(async (res) => {
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || 'Request failed');
+    if (!res.ok) {
+      const error = new Error(data.detail || 'Request failed');
+      error.status = res.status;
+      error.detail = data.detail;
+      throw error;
+    }
     return data;
   });
 }
@@ -2599,7 +2726,6 @@ function PortalApp() {
   const [portalBooting, setPortalBooting] = useState(true);
   const [outsideNetworkConfirmed, setOutsideNetworkConfirmed] = useState(false);
   const [bag, setBag] = useState(null);
-  const [bagTab, setBagTab] = useState('LIST');
   const [bagSaving, setBagSaving] = useState(false);
   const [iptvWatchLoading, setIptvWatchLoading] = useState('');
   const [iptvChromeOnlyModal, setIptvChromeOnlyModal] = useState(null);
@@ -2618,6 +2744,7 @@ function PortalApp() {
   const [pendingBagActivationItem, setPendingBagActivationItem] = useState(null);
   const [purchaseSuccessModal, setPurchaseSuccessModal] = useState(null);
   const [bagFlyAnimation, setBagFlyAnimation] = useState(null);
+  const [speedLaunch, setSpeedLaunch] = useState(null);
   const [bagReceiving, setBagReceiving] = useState(false);
   const bagTagRef = useRef(null);
   const purchaseSuccessKeyRef = useRef('');
@@ -2663,6 +2790,7 @@ function PortalApp() {
   const [storeRequestModal, setStoreRequestModal] = useState(null);
   const [storeRequestQrDataUrl, setStoreRequestQrDataUrl] = useState('');
   const [storeRequestFilter, setStoreRequestFilter] = useState('ALL');
+  const [storeRequestClock, setStoreRequestClock] = useState(() => Date.now());
   const [portalCoverage, setPortalCoverage] = useState(null);
   const [portalCoverageOpen, setPortalCoverageOpen] = useState(false);
   const [portalCoverageLoading, setPortalCoverageLoading] = useState(false);
@@ -2770,11 +2898,16 @@ function PortalApp() {
   const lastPortalStateSyncAtRef = useRef(0);
   const portalProductRefreshInFlightRef = useRef(false);
   const lastPortalProductRefreshAtRef = useRef(0);
+  const bagZeroRefreshAtRef = useRef(0);
   const handledStoreApprovalRef = useRef(new Set());
   const storeRequestStatusRef = useRef(new Map());
   const storePendingRequestsRef = useRef([]);
+  const storeExpiredRefreshKeyRef = useRef('');
   const localPresenceProbeInFlightRef = useRef(false);
   const lastLocalPresenceProbeAtRef = useRef(0);
+  const speedLaunchTimerRef = useRef(null);
+  const speedLaunchSeenIdsRef = useRef(new Set());
+  const speedLaunchReadyRef = useRef(false);
   const [avatarEventNoteSignal, setAvatarEventNoteSignal] = useState(0);
   const params = new URLSearchParams(window.location.search);
   const paymentOrderFromUrl = params.get('payment_order_id') || params.get('payment_order') || params.get('order');
@@ -4790,7 +4923,6 @@ function PortalApp() {
       if (data.bag) setBag(data.bag);
       setResult({ status: data.status || 'SUCCESS', message: data.message || 'Welcome gift added to My WiFi Bag.' });
       setGiftUnwrapped(false);
-      setBagTab('LIST');
       setBagClaimOpen(false);
       openBagPage();
       await refreshStatus(data.portal_session_id || sessionId);
@@ -4923,6 +5055,19 @@ function PortalApp() {
     return hour >= 18 || hour < 6;
   })();
   const portalDark = portalDarkOverride === 'auto' ? autoPortalDark : portalDarkOverride === 'dark';
+  const activeBagItems = Array.isArray(bag?.active_items) && bag.active_items.length
+    ? bag.active_items
+    : (bag?.active_item ? [bag.active_item] : []);
+  const queuedBagItems = bag?.queued_items || [];
+  const activeBagItemRemainingSeconds = (item) => {
+    if (!item) return timerRemaining;
+    if (item.active_until) {
+      const remainingMs = new Date(item.active_until).getTime() - Date.now();
+      return Math.max(0, Math.floor(remainingMs / 1000));
+    }
+    return Math.max(0, Number(item.remaining_seconds || 0));
+  };
+  const activeBagHasRemaining = activeBagItems.some((item) => activeBagItemRemainingSeconds(item) > 0);
   const unlimited = status?.unlimited ?? result?.unlimited;
   const accessExpiresAt = status?.access_expires_at ?? result?.access_expires_at;
   const blockedDevice = currentBlockedDevice();
@@ -4931,23 +5076,19 @@ function PortalApp() {
   const accessExpired = status
     ? Boolean(portalBlocked || status.access_expired || status.status === 'EXPIRED')
     : Boolean(result?.access_expired);
-  const hasRemainingAccess = Boolean(!portalBlocked && !accessExpired && (unlimited || timerRemaining > 0));
+  const hasRemainingAccess = Boolean(!portalBlocked && !accessExpired && (unlimited || (activeBagItems.length ? activeBagHasRemaining : timerRemaining > 0)));
   const connected = Boolean((status?.connected ?? result?.connected) && hasRemainingAccess);
   const remainingDisplay = unlimited ? 'Unlimited' : formatCountdown(timerRemaining);
   const avatarConnected = hasRemainingAccess && !portalBlocked;
   const networkPresence = status?.network_presence || {};
   const outsideNetwork = outsideNetworkConfirmed && portalStatusLooksOutside(status);
-  const activeBagItems = Array.isArray(bag?.active_items) && bag.active_items.length
-    ? bag.active_items
-    : (bag?.active_item ? [bag.active_item] : []);
   const pendingBagActivationSpeedLabel = pendingBagActivationItem?.speed_limit_enabled
     ? speedLimitLabel(pendingBagActivationItem)
     : 'No speed limit';
   const pendingBagActiveSpeedItems = pendingBagActivationItem
     ? activeBagItems.filter((item) => item.id !== pendingBagActivationItem.id && item.speed_limit_enabled)
     : [];
-  const queuedBagItems = bag?.queued_items || [];
-  const pendingStoreRequestCount = (storePendingRequests || []).filter((request) => request.status === 'PENDING').length;
+  const pendingStoreRequestCount = (storePendingRequests || []).filter((request) => storeRequestEffectiveStatus(request) === 'PENDING').length;
   const hasReadyBagItems = queuedBagItems.length > 0;
   const firstReadyBagItem = queuedBagItems[0] || null;
   const firstReadyBagItemKind = firstReadyBagItem?.product_kind || 'WIFI';
@@ -4959,14 +5100,24 @@ function PortalApp() {
   const readyBagItemCount = queuedBagItems.length;
   const bagItemCount = activeBagItems.length + queuedBagItems.length + pendingStoreRequestCount;
   const activeRemainingCards = activeBagItems.length ? activeBagItems : [null];
-  const activeBagItemRemainingSeconds = (item) => {
-    if (!item) return timerRemaining;
-    if (item.active_until) {
-      const remainingMs = new Date(item.active_until).getTime() - Date.now();
-      return Math.max(0, Math.floor(remainingMs / 1000));
+  useEffect(() => {
+    if (!bag) return;
+    const activeItems = activeBagItems.filter((item) => item?.id && activeBagItemRemainingSeconds(item) > 0);
+    if (!speedLaunchReadyRef.current) {
+      activeItems.forEach((item) => speedLaunchSeenIdsRef.current.add(item.id));
+      speedLaunchReadyRef.current = true;
+      return;
     }
-    return Math.max(0, Number(item.remaining_seconds || 0));
-  };
+    const newActiveItem = activeItems.find((item) => !speedLaunchSeenIdsRef.current.has(item.id));
+    activeItems.forEach((item) => speedLaunchSeenIdsRef.current.add(item.id));
+    if (newActiveItem) triggerSpeedRocketLaunch(newActiveItem);
+  }, [
+    Boolean(bag),
+    activeBagItems.map((item) => item?.id || '').join('|'),
+    activeBagItems.map((item) => item?.active_until || item?.updated_at || '').join('|'),
+    settings?.speed_indicator,
+  ]);
+
   const customAvatarUrlRaw = avatarConnected
     ? (settings?.no_internet_avatar_connected_url || settings?.company_logo_url || '')
     : (settings?.no_internet_avatar_disconnected_url || settings?.company_logo_url || '');
@@ -5020,7 +5171,7 @@ function PortalApp() {
         // Background sync should never interrupt the captive portal UI.
       }
     };
-    const intervalId = window.setInterval(() => syncState({ throttleMs: 2500 }), hasBagItems ? 5000 : 10000);
+    const intervalId = window.setInterval(() => syncState({ throttleMs: 1000 }), hasBagItems ? 2000 : 5000);
     const handleVisibility = () => {
       if (!document.hidden) syncState({ throttleMs: 1000, productThrottleMs: 0 });
     };
@@ -5047,12 +5198,16 @@ function PortalApp() {
 
   useEffect(() => {
     if (!sessionId || portalBooting || portalBlocked || portalScreen === 'landing') return;
-    if (timerRemaining !== 0) return;
+    const activeRemainingKey = activeBagItems.map((item) => `${item?.id || ''}:${activeBagItemRemainingSeconds(item)}`).join('|');
+    const activeItemsLocallyExpired = activeBagItems.length > 0 && activeBagItems.every((item) => activeBagItemRemainingSeconds(item) <= 0);
+    if (timerRemaining !== 0 && !activeItemsLocallyExpired) return;
     if (!activeBagItems.length && !queuedBagItems.length) return;
-    const refreshKey = `${sessionId}:${accessExpiresAt || 'no-expiry'}:${activeBagItems.length}:${queuedBagItems.length}`;
-    if (bagZeroRefreshKeyRef.current === refreshKey) return;
+    const refreshKey = `${sessionId}:${accessExpiresAt || 'no-expiry'}:${activeBagItems.length}:${queuedBagItems.length}:${activeRemainingKey}`;
+    const now = Date.now();
+    if (bagZeroRefreshKeyRef.current === refreshKey && now - bagZeroRefreshAtRef.current < 2500) return;
     bagZeroRefreshKeyRef.current = refreshKey;
-    refreshStatus(sessionId, { quiet: true }).catch(() => null);
+    bagZeroRefreshAtRef.current = now;
+    syncPortalState({ sessionId, throttleMs: 0, productThrottleMs: 0 }).catch(() => null);
   }, [
     sessionId,
     portalBooting,
@@ -5060,7 +5215,7 @@ function PortalApp() {
     portalScreen,
     timerRemaining,
     accessExpiresAt,
-    activeBagItems.length,
+    activeBagItems.map((item) => `${item?.id || ''}:${item?.active_until || ''}:${item?.remaining_seconds || 0}`).join('|'),
     queuedBagItems.length,
   ]);
 
@@ -5511,6 +5666,26 @@ function PortalApp() {
   }, [sessionId, storePurchaseResult?.request?.public_id, storeRequestModal?.public_id]);
 
   useEffect(() => {
+    const hasPending = (storePendingRequests || []).some((request) => String(request.status || '').toUpperCase() === 'PENDING');
+    if (!hasPending) return undefined;
+    const timer = window.setInterval(() => setStoreRequestClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [storePendingRequests]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const expiredIds = (storePendingRequests || [])
+      .filter((request) => storeRequestIsExpired(request, storeRequestClock))
+      .map((request) => request.public_id || request.id)
+      .filter(Boolean)
+      .sort();
+    const refreshKey = expiredIds.join('|');
+    if (!refreshKey || storeExpiredRefreshKeyRef.current === refreshKey) return;
+    storeExpiredRefreshKeyRef.current = refreshKey;
+    loadStorePendingRequests(sessionId, { background: true }).catch(() => null);
+  }, [sessionId, storePendingRequests, storeRequestClock]);
+
+  useEffect(() => {
     let cancelled = false;
     setStorePurchaseQrDataUrl('');
     const payloadText = storePurchaseResult?.request?.qr_payload;
@@ -5555,6 +5730,8 @@ function PortalApp() {
       setStorePendingMessage({ status: 'ERROR', message: storeRequestRejectedMessage(updated) });
     } else if (updated.status === 'APPROVED') {
       refreshAfterStoreApproval(updated).catch(() => null);
+    } else if (updated.status === 'EXPIRED') {
+      setStorePendingMessage({ status: 'ERROR', message: 'Store purchase request expired. Create a new request if the customer still wants to buy this pass.' });
     }
   }, [storePendingRequests, storePurchaseResult?.request?.public_id]);
 
@@ -5701,6 +5878,38 @@ function PortalApp() {
     return `${items.length} items`;
   }
 
+  function storeRequestExpiresAtMs(requestRow) {
+    const value = requestRow?.expires_at;
+    if (!value) return 0;
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  function storeRequestRemainingSeconds(requestRow, nowMs = storeRequestClock) {
+    if (Number.isFinite(Number(requestRow?.expires_remaining_seconds)) && String(requestRow?.status || '').toUpperCase() !== 'PENDING') {
+      return Math.max(0, Number(requestRow.expires_remaining_seconds || 0));
+    }
+    const expiresAt = storeRequestExpiresAtMs(requestRow);
+    if (!expiresAt) return Math.max(0, Number(requestRow?.expires_remaining_seconds || 0));
+    return Math.max(0, Math.ceil((expiresAt - nowMs) / 1000));
+  }
+
+  function storeRequestIsExpired(requestRow, nowMs = storeRequestClock) {
+    const status = String(requestRow?.status || 'PENDING').toUpperCase();
+    if (status === 'EXPIRED') return true;
+    return status === 'PENDING' && storeRequestExpiresAtMs(requestRow) > 0 && storeRequestRemainingSeconds(requestRow, nowMs) <= 0;
+  }
+
+  function storeRequestEffectiveStatus(requestRow, nowMs = storeRequestClock) {
+    return storeRequestIsExpired(requestRow, nowMs) ? 'EXPIRED' : String(requestRow?.status || 'PENDING').toUpperCase();
+  }
+
+  function storeRequestCountdownCopy(requestRow, nowMs = storeRequestClock) {
+    if (!requestRow?.expires_at) return t('Expiration unavailable');
+    const seconds = storeRequestRemainingSeconds(requestRow, nowMs);
+    return seconds > 0 ? `${t('Expires in')} ${formatCountdown(seconds)}` : t('Expired');
+  }
+
   function storeRequestStatusClass(status) {
     const normalized = String(status || '').toUpperCase();
     if (normalized === 'APPROVED') return 'bg-green-lt text-green';
@@ -5710,7 +5919,7 @@ function PortalApp() {
   }
 
   function storeRequestStatusCopy(requestRow) {
-    const status = String(requestRow?.status || 'PENDING').toUpperCase();
+    const status = storeRequestEffectiveStatus(requestRow);
     if (status === 'PENDING') return 'Pending approval';
     if (status === 'APPROVED') return 'Approved';
     if (status === 'REJECTED') return 'Rejected';
@@ -5729,13 +5938,14 @@ function PortalApp() {
   }
 
   function renderStoreRequestRow(requestRow, options = {}) {
-    const pending = requestRow.status === 'PENDING';
+    const effectiveStatus = storeRequestEffectiveStatus(requestRow);
+    const pending = effectiveStatus === 'PENDING';
     return (
-      <div className={`portal-store-pending-row ${requestRow.status === 'REJECTED' ? 'is-rejected' : ''}`} key={requestRow.public_id}>
+      <div className={`portal-store-pending-row ${effectiveStatus === 'REJECTED' ? 'is-rejected' : ''} ${effectiveStatus === 'EXPIRED' ? 'is-expired' : ''}`} key={requestRow.public_id}>
         <div className="portal-store-pending-content">
           <div className="portal-store-pending-title-row">
             <div className="portal-store-pending-title">{requestRow.store_name || t('Store')}</div>
-            <span className={`badge ${storeRequestStatusClass(requestRow.status)}`}>{storeRequestStatusCopy(requestRow)}</span>
+            <span className={`badge ${storeRequestStatusClass(effectiveStatus)}`}>{storeRequestStatusCopy(requestRow)}</span>
           </div>
           <div className="portal-store-pending-item-row">
             <IconShoppingBag size={14} />
@@ -5747,7 +5957,11 @@ function PortalApp() {
             <span>{requestRow.created_at ? `Requested ${formatPortalDateTime(requestRow.created_at)}` : 'Purchase date unavailable'}</span>
             <span>{storePurchaseElapsedLabel(requestRow)}</span>
           </div>
-          {requestRow.status === 'REJECTED' && requestRow.rejection_reason && (
+          <div className={`portal-store-pending-date-row portal-store-request-countdown ${pending ? '' : 'is-muted'}`}>
+            <IconClock size={14} />
+            <span>{storeRequestCountdownCopy(requestRow)}</span>
+          </div>
+          {effectiveStatus === 'REJECTED' && requestRow.rejection_reason && (
             <div className="portal-store-rejection-reason">{requestRow.rejection_reason}</div>
           )}
           <div className="portal-store-request-actions">
@@ -5835,7 +6049,7 @@ function PortalApp() {
   }
 
   function StorePendingRequestsPanel() {
-    const pendingRows = (storePendingRequests || []).filter((request) => request.status === 'PENDING');
+    const pendingRows = (storePendingRequests || []).filter((request) => storeRequestEffectiveStatus(request) === 'PENDING');
     if (!pendingRows.length) return null;
     return (
       <div className="portal-store-pending-panel">
@@ -5877,6 +6091,28 @@ function PortalApp() {
     }, 1040);
     window.setTimeout(() => setBagReceiving(false), 1820);
   }
+
+  function triggerSpeedRocketLaunch(item) {
+    if (!item?.id) return;
+    if (speedLaunchTimerRef.current) {
+      window.clearTimeout(speedLaunchTimerRef.current);
+    }
+    setSpeedLaunch({
+      id: `${item.id}-${Date.now()}`,
+      item,
+      settings: settings?.speed_indicator || {},
+    });
+    speedLaunchTimerRef.current = window.setTimeout(() => {
+      setSpeedLaunch(null);
+      speedLaunchTimerRef.current = null;
+    }, 2600);
+  }
+
+  useEffect(() => () => {
+    if (speedLaunchTimerRef.current) {
+      window.clearTimeout(speedLaunchTimerRef.current);
+    }
+  }, []);
 
   function closePurchaseSuccessModal() {
     const shouldAnimateToBag = Boolean(purchaseSuccessModal);
@@ -6284,7 +6520,7 @@ function PortalApp() {
 
   function storeRequestCountsFor(rows = []) {
     return rows.reduce((counts, request) => {
-      const status = String(request.status || 'PENDING').toUpperCase();
+      const status = storeRequestEffectiveStatus(request);
       counts.ALL += 1;
       counts[status] = (counts[status] || 0) + 1;
       return counts;
@@ -6294,7 +6530,7 @@ function PortalApp() {
   function filteredStoreRequestRows(rows = [], filter = storeRequestFilter, query = bagStoreRequestQuery) {
     const normalizedQuery = String(query || '').trim().toLowerCase();
     return rows.filter((request) => {
-      const status = String(request.status || 'PENDING').toUpperCase();
+      const status = storeRequestEffectiveStatus(request);
       if (filter !== 'ALL' && status !== filter) return false;
       if (!normalizedQuery) return true;
       const haystack = [
@@ -6351,7 +6587,6 @@ function PortalApp() {
             className="btn btn-outline-secondary btn-sm"
             type="button"
             onClick={() => {
-              setBagTab('LIST');
               setPortalScreen('bag');
             }}
           >
@@ -6408,7 +6643,6 @@ function PortalApp() {
             className="btn btn-outline-secondary btn-sm"
             type="button"
             onClick={() => {
-              setBagTab('STORES');
               setPortalScreen('bag');
             }}
           >
@@ -6457,9 +6691,7 @@ function PortalApp() {
   function BagPage() {
     const queuedItems = bag?.queued_items || [];
     const autoActivate = bag?.settings?.auto_activate !== false;
-    const storeRequestCounts = storeRequestCountsFor(storePendingRequests || []);
-    const filteredStoreRequests = filteredStoreRequestRows(storePendingRequests || [], storeRequestFilter, '');
-    const recentStoreRequests = filteredStoreRequests.slice(0, 5);
+          const pendingStoreRequests = (storePendingRequests || []).filter((request) => storeRequestEffectiveStatus(request) === 'PENDING');
     const resetBagDragState = () => {
       setBagDraggingItemId('');
       setBagDragOverItemId('');
@@ -6621,132 +6853,97 @@ function PortalApp() {
                 <div className="small text-muted">{autoActivate ? 'Saved items stay separate. Drag them to choose what activates first.' : 'Saved items stay separate until you activate one manually.'}</div>
               </div>
             </div>
-            <div className="portal-bag-tabbar">
-              <ul className="nav nav-tabs portal-bag-tabs">
-                <li className="nav-item">
-                  <button className={`nav-link ${bagTab === 'LIST' ? 'active' : ''}`} type="button" onClick={() => setBagTab('LIST')}>
-                    <IconListDetails size={16} /> List
-                  </button>
-                </li>
-                <li className="nav-item">
-                  <button className={`nav-link ${bagTab === 'STORES' ? 'active' : ''}`} type="button" onClick={() => setBagTab('STORES')}>
-                    <IconBuildingStore size={16} /> Stores
-                    {pendingStoreRequestCount > 0 && <span className="badge bg-yellow-lt text-yellow ms-1">{pendingStoreRequestCount}</span>}
-                  </button>
-                </li>
-              </ul>
-            </div>
-            {bagTab === 'LIST' ? (
-              <div className="portal-bag-tab-panel">
-                <div className="portal-bag-controls">
-                  <label className="portal-bag-auto-row portal-bag-control-card">
-                    <span>
-                      <strong>Auto activate</strong>
-                    </span>
-                    <span className="form-check form-switch m-0">
-                      <input className="form-check-input" type="checkbox" checked={autoActivate} disabled={bagSaving} onChange={(event) => saveBagAutoActivate(event.target.checked)} />
-                    </span>
-                  </label>
-                  <button className={`portal-bag-auto-row portal-bag-control-card portal-bag-voucher-button ${bagClaimOpen ? 'is-active' : ''}`} type="button" onClick={() => setBagClaimOpen(true)}>
-                    <span>
-                      <strong>Voucher</strong>
-                    </span>
-                    <span className="portal-bag-voucher-icon"><IconKey size={16} /></span>
-                  </button>
-                </div>
-                {bagClaimOpen && (
-                  <form className="portal-bag-claim" onSubmit={claimVoucherToBag}>
-                    <div className="portal-bag-claim-title">
-                      <span><IconKey size={18} /></span>
-                      <div>
-                        <strong>Voucher</strong>
-                        <small>Add free, refund, or event vouchers to your bag.</small>
-                      </div>
-                      <button
-                        className="btn btn-icon btn-sm btn-outline-secondary ms-auto"
-                        type="button"
-                        aria-label="Close voucher"
-                        onClick={() => {
-                          setBagClaimOpen(false);
-                          setBagClaimMessage(null);
-                        }}
-                      >
-                        <IconX size={16} />
-                      </button>
-                    </div>
-                    <div className="portal-bag-claim-row">
-                      <input
-                        className="form-control"
-                        value={bagVoucherCode}
-                        onChange={(event) => {
-                          setBagVoucherCode(event.target.value.toUpperCase());
-                          if (bagClaimMessage) setBagClaimMessage(null);
-                        }}
-                        placeholder="Voucher code"
-                        autoComplete="one-time-code"
-                      />
-                      <button className="btn btn-primary" type="submit" disabled={bagClaiming}>
-                        {bagClaiming ? 'Adding...' : 'Add to Bag'}
-                      </button>
-                    </div>
-                    {bagClaimMessage && (
-                      <PortalCustomerMessage
-                        message={bagClaimMessage.message}
-                        tone={bagClaimMessage.status === 'SUCCESS' ? 'success' : 'danger'}
-                        className="py-2"
-                        timeoutMs={portalMessageAutoHideMs}
-                        onSuccessNote={queueAvatarCustomerMessage}
-                        onDismiss={() => setBagClaimMessage(null)}
-                        dismissKey={`${bagClaimMessage.status}-${bagClaimMessage.message}`}
-                      />
-                    )}
-                  </form>
-                )}
-                <div className="portal-bag-section">
-                  <div className="portal-bag-section-title">Active now</div>
-                  {activeBagItems.length ? activeBagItems.map((item) => renderItem(item)) : <div className="text-muted small">No active bag item right now.</div>}
-                </div>
-                <div className="portal-bag-section">
-                  {queuedItems.length ? queuedItems.map((item) => renderItem(item, { draggable: true, canActivate: true })) : <div className="text-muted small">No saved products. Bought packages will appear here.</div>}
-                </div>
+            <div className="portal-bag-tab-panel">
+              <div className="portal-bag-controls">
+                <label className="portal-bag-auto-row portal-bag-control-card">
+                  <span>
+                    <strong>Auto activate</strong>
+                  </span>
+                  <span className="form-check form-switch m-0">
+                    <input className="form-check-input" type="checkbox" checked={autoActivate} disabled={bagSaving} onChange={(event) => saveBagAutoActivate(event.target.checked)} />
+                  </span>
+                </label>
+                <button className={`portal-bag-auto-row portal-bag-control-card portal-bag-voucher-button ${bagClaimOpen ? 'is-active' : ''}`} type="button" onClick={() => setBagClaimOpen(true)}>
+                  <span>
+                    <strong>Voucher</strong>
+                  </span>
+                  <span className="portal-bag-voucher-icon"><IconKey size={16} /></span>
+                </button>
               </div>
-            ) : bagTab === 'STORES' ? (
-              <div className="portal-bag-tab-panel">
-                <div className="portal-store-request-filter">
-                  {storeRequestFilterOptions.map((status) => (
+              {bagClaimOpen && (
+                <form className="portal-bag-claim" onSubmit={claimVoucherToBag}>
+                  <div className="portal-bag-claim-title">
+                    <span><IconKey size={18} /></span>
+                    <div>
+                      <strong>Voucher</strong>
+                      <small>Add free, refund, or event vouchers to your bag.</small>
+                    </div>
                     <button
-                      className={`btn btn-sm ${storeRequestFilter === status ? 'btn-primary' : 'btn-outline-secondary'}`}
+                      className="btn btn-icon btn-sm btn-outline-secondary ms-auto"
                       type="button"
-                      key={status}
-                      onClick={() => setStoreRequestFilter(status)}
-                    >
-                      <span>{status}</span>
-                      <span className={`badge ms-1 ${storeRequestFilter === status ? 'bg-white text-primary' : 'bg-secondary-lt text-secondary'}`}>{storeRequestCounts[status] || 0}</span>
-                    </button>
-                  ))}
-                </div>
-                <div className="portal-bag-section">
-                  <div className="portal-bag-section-title">Store requests</div>
-                  {recentStoreRequests.length ? (
-                    recentStoreRequests.map((requestRow) => renderStoreRequestRow(requestRow, { hideView: true }))
-                  ) : (
-                    <div className="text-muted small">No store requests in this filter.</div>
-                  )}
-                  {filteredStoreRequests.length > 5 && (
-                    <button
-                      className="btn btn-outline-primary w-100 mt-2"
-                      type="button"
+                      aria-label="Close voucher"
                       onClick={() => {
-                        setPortalScreen('bag-stores');
-                        loadStorePendingRequests(sessionId, { background: true }).catch(() => null);
+                        setBagClaimOpen(false);
+                        setBagClaimMessage(null);
                       }}
                     >
-                      <IconBuildingStore size={16} className="me-2" /> View all
+                      <IconX size={16} />
                     </button>
+                  </div>
+                  <div className="portal-bag-claim-row">
+                    <input
+                      className="form-control"
+                      value={bagVoucherCode}
+                      onChange={(event) => {
+                        setBagVoucherCode(event.target.value.toUpperCase());
+                        if (bagClaimMessage) setBagClaimMessage(null);
+                      }}
+                      placeholder="Voucher code"
+                      autoComplete="one-time-code"
+                    />
+                    <button className="btn btn-primary" type="submit" disabled={bagClaiming}>
+                      {bagClaiming ? 'Adding...' : 'Add to Bag'}
+                    </button>
+                  </div>
+                  {bagClaimMessage && (
+                    <PortalCustomerMessage
+                      message={bagClaimMessage.message}
+                      tone={bagClaimMessage.status === 'SUCCESS' ? 'success' : 'danger'}
+                      className="py-2"
+                      timeoutMs={portalMessageAutoHideMs}
+                      onSuccessNote={queueAvatarCustomerMessage}
+                      onDismiss={() => setBagClaimMessage(null)}
+                      dismissKey={`${bagClaimMessage.status}-${bagClaimMessage.message}`}
+                    />
                   )}
-                </div>
+                </form>
+              )}
+              <div className="portal-bag-section">
+                <div className="portal-bag-section-title">Active now</div>
+                {activeBagItems.length ? activeBagItems.map((item) => renderItem(item)) : <div className="text-muted small">No active bag item right now.</div>}
               </div>
-            ) : null}
+              <div className="portal-bag-section">
+                <div className="portal-bag-section-title">Saved passes</div>
+                {queuedItems.length ? queuedItems.map((item) => renderItem(item, { draggable: true, canActivate: true })) : <div className="text-muted small">No saved products. Bought packages will appear here.</div>}
+              </div>
+              {pendingStoreRequests.length > 0 && (
+                <div className="portal-bag-section portal-bag-pending-store-section">
+                  <div className="portal-bag-store-divider" />
+                  <div className="portal-bag-section-title">Pending store requests</div>
+                  {storePendingMessage && (
+                    <PortalCustomerMessage
+                      message={storePendingMessage.message}
+                      tone={storePendingMessage.status === 'ERROR' ? 'danger' : 'success'}
+                      timeoutMs={portalMessageAutoHideMs}
+                      onSuccessNote={queueAvatarCustomerMessage}
+                      onDismiss={() => setStorePendingMessage(null)}
+                      dismissKey={`${storePendingMessage.status}-${storePendingMessage.message}`}
+                    />
+                  )}
+                  {pendingStoreRequests.map((requestRow) => renderStoreRequestRow(requestRow, { hideView: true }))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
         {pendingBagActivationItem && (
@@ -7770,6 +7967,7 @@ function PortalApp() {
     const canSubmitRequest = portalProfileConfigured(profile);
     const selectedItems = storePurchaseOption.items || [];
     const methodLabel = request?.request_method === 'QR' ? 'QR approval' : request?.request_method === 'CODE' ? 'Store code' : 'Purchase request';
+    const requestExpired = request ? storeRequestIsExpired(request) : false;
     const closeAll = () => {
       setStorePurchaseOption(null);
       setStorePurchaseResult(null);
@@ -7852,6 +8050,12 @@ function PortalApp() {
                   <strong>{request.display_code}</strong>
                 </button>
               )}
+              <div className={`portal-store-purchase-note ${requestExpired ? 'is-danger' : ''}`}>
+                <IconClock size={16} />
+                {requestExpired
+                  ? t('This store request has expired. Create a new request if you still want to buy this pass.')
+                  : storeRequestCountdownCopy(request)}
+              </div>
               {request.auto_activate_if_no_time ? (
                 <div className="portal-store-purchase-note">
                   <IconPlayerPlay size={16} />
@@ -7942,9 +8146,10 @@ function PortalApp() {
   function StoreRequestStatusModal() {
     if (!storeRequestModal) return null;
     const request = storeRequestModal;
-    const pending = request.status === 'PENDING';
-    const rejected = request.status === 'REJECTED';
-    const approved = request.status === 'APPROVED';
+    const effectiveStatus = storeRequestEffectiveStatus(request);
+    const pending = effectiveStatus === 'PENDING';
+    const rejected = effectiveStatus === 'REJECTED';
+    const approved = effectiveStatus === 'APPROVED';
     const title = request.store_name || t('Store payment');
     return (
       <Modal
@@ -7981,8 +8186,17 @@ function PortalApp() {
               ? storeRequestRejectedMessage(request)
               : approved
                 ? 'This store purchase was approved. Check My WiFi Bag for the added pass.'
-                : 'This purchase is waiting for store owner approval.'}
+                : effectiveStatus === 'EXPIRED'
+                  ? 'This store purchase request expired. Create a new request if you still want to buy this pass.'
+                  : 'This purchase is waiting for store owner approval.'}
           </div>
+
+          {(pending || effectiveStatus === 'EXPIRED') && (
+            <div className={`portal-store-purchase-note ${effectiveStatus === 'EXPIRED' ? 'is-danger' : ''}`}>
+              <IconClock size={16} />
+              {storeRequestCountdownCopy(request)}
+            </div>
+          )}
 
           {pending && request.request_method === 'QR' && (
             <div className="portal-store-qr-box">
@@ -9046,6 +9260,7 @@ function PortalApp() {
           <IconShoppingBag size={28} />
         </div>
 	      )}
+      {speedLaunch && <SpeedRocketLaunchOverlay launch={speedLaunch} />}
 		      <div className="client-portal-shell">
 		        {!portalBlocked && portalScreen !== 'landing' && <PortalNetworkPresenceBanner />}
 	        {portalBlocked ? (
@@ -9122,15 +9337,36 @@ function PortalApp() {
               const cardTime = item ? formatCountdown(activeBagItemRemainingSeconds(item)) : remainingDisplay;
               const cardUsesIptv = Boolean(item && (item.product_kind === 'IPTV' || item.product_kind === 'WIFI_IPTV'));
               const cardIptvReady = Boolean(item?.iptv_watch_ready || item?.iptv_status === 'PROVISIONED');
+              const speedEffectModel = item?.speed_limit_enabled
+                ? speedIndicatorVisualModel(item, settings?.speed_indicator, { compact: true })
+                : null;
               return (
                 <React.Fragment key={item?.id || `remaining-${index}`}>
                   <div
-                    className={`card portal-remaining-card ${cardHasAccess ? 'is-connected' : 'is-disconnected'} is-clickable`}
+                    className={`card portal-remaining-card ${cardHasAccess ? 'is-connected' : 'is-disconnected'} ${speedEffectModel ? 'has-speed-effect' : ''} is-clickable`}
+                    style={speedEffectModel?.style || undefined}
                     role="button"
                     tabIndex={0}
                     onClick={openBagPage}
                     onKeyDown={openBagFromKeyboard}
                   >
+                    {speedEffectModel && <SpeedEffectBackground model={speedEffectModel} />}
+                    {speedEffectModel && (
+                      <button
+                        className="portal-remaining-speed-badge"
+                        type="button"
+                        title={`${speedEffectModel.tier.label}: ${speedLimitLabel(item)}`}
+                        aria-label={`${speedEffectModel.tier.label}: ${speedLimitLabel(item)}. Launch speed animation.`}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          triggerSpeedRocketLaunch(item);
+                        }}
+                      >
+                        <IconActivity size={12} />
+                        <span>{speedEffectModel.label}</span>
+                      </button>
+                    )}
                     <div className="card-body py-3">
                       <div className="portal-remaining-panel">
                         <span className="portal-remaining-icon"><IconClock size={22} /></span>
@@ -9161,9 +9397,6 @@ function PortalApp() {
                       </div>
                     </div>
                   </div>
-                  {item?.speed_limit_enabled && (
-                    <SpeedTakeoffIndicator item={item} settings={settings?.speed_indicator} />
-                  )}
                 </React.Fragment>
               );
             })}
@@ -17631,6 +17864,7 @@ function StoreOwnerPortalApp() {
   const [requestPageSize, setRequestPageSize] = useState(20);
   const [requestPagination, setRequestPagination] = useState({ page: 1, page_size: 20, total: 0, total_pages: 1 });
   const [pinNow, setPinNow] = useState(Date.now());
+  const [storeOwnerRequestClock, setStoreOwnerRequestClock] = useState(Date.now());
   const [customersTab, setCustomersTab] = useState('ACTIVE');
   const [customers, setCustomers] = useState([]);
   const [customersSummary, setCustomersSummary] = useState({});
@@ -17678,6 +17912,14 @@ function StoreOwnerPortalApp() {
   const [storeOwnerPushStatus, setStoreOwnerPushStatus] = useState('UNKNOWN');
   const [storeOwnerPushSaving, setStoreOwnerPushSaving] = useState(false);
   const [storeRequestsRefreshing, setStoreRequestsRefreshing] = useState(false);
+  const [storeSettingsOpen, setStoreSettingsOpen] = useState(false);
+  const [storeRequestAlertsPanelHidden, setStoreRequestAlertsPanelHidden] = useState(() => localStorage.getItem(STORE_REQUEST_ALERTS_PANEL_HIDDEN_KEY) === '1');
+  const [storePwaInstallPanelHidden, setStorePwaInstallPanelHidden] = useState(() => localStorage.getItem(STORE_PWA_INSTALL_PANEL_HIDDEN_KEY) === '1');
+  const [storePwaInstalledKnown, setStorePwaInstalledKnown] = useState(() => localStorage.getItem(STORE_PWA_INSTALLED_KEY) === '1' || isPortalStandaloneDisplay());
+  const [storePwaStandalone, setStorePwaStandalone] = useState(() => isPortalStandaloneDisplay());
+  const [storePwaInstallPrompt, setStorePwaInstallPrompt] = useState(null);
+  const [storePwaInstallResult, setStorePwaInstallResult] = useState(null);
+  const [storeIosPwaInstallGuideOpen, setStoreIosPwaInstallGuideOpen] = useState(false);
   const qrVideoRef = useRef(null);
   const qrStreamRef = useRef(null);
   const qrScanTimerRef = useRef(null);
@@ -17685,6 +17927,16 @@ function StoreOwnerPortalApp() {
   const storePendingCountRef = useRef(null);
   const storeKnownPendingRequestIdsRef = useRef(null);
   const storeRequestPollInFlightRef = useRef(false);
+  const storeOwnerExpiredRefreshKeyRef = useRef('');
+  const storePwaSettings = owner?.store_pwa || {};
+  const storePwaInstallEnabled = storePwaSettings.install_enabled !== false;
+  const storePwaIconUrl = storePwaSettings.install_icon_url
+    || storePwaSettings.icon_url
+    || (owner?.store?.image_url ? cacheBustedUploadUrl(owner.store.image_url, owner.updated_at) : '')
+    || '/api/portal/app-icon/store-pwa-512.png';
+  const showStorePwaInstallPanel = Boolean(owner && storePwaInstallEnabled && !storePwaInstallPanelHidden && !storePwaInstalledKnown && !storePwaStandalone);
+  const storeRequestAlertsActive = storeOwnerNotificationPermission === 'granted' && storeOwnerPushStatus === 'ACTIVE';
+  const showStoreRequestAlertsPanel = Boolean(owner && !storeRequestAlertsActive && !storeRequestAlertsPanelHidden);
 
   function recentLoginVerificationActive(nextOwner = owner) {
     const expiresAt = nextOwner?.recent_login_verification?.expires_at;
@@ -17713,6 +17965,121 @@ function StoreOwnerPortalApp() {
       return `PIN was successfully used, pin approval is paused: ${formatSeconds(remaining)}`;
     }
     return '';
+  }
+
+  function markStorePwaInstalled() {
+    localStorage.setItem(STORE_PWA_INSTALLED_KEY, '1');
+    setStorePwaInstalledKnown(true);
+  }
+
+  function hideStorePwaInstallPanel() {
+    localStorage.setItem(STORE_PWA_INSTALL_PANEL_HIDDEN_KEY, '1');
+    setStorePwaInstallPanelHidden(true);
+  }
+
+  function hideStoreRequestAlertsPanel() {
+    localStorage.setItem(STORE_REQUEST_ALERTS_PANEL_HIDDEN_KEY, '1');
+    setStoreRequestAlertsPanelHidden(true);
+  }
+
+  async function installStoreHomeScreenApp({ hideMainPanel = false } = {}) {
+    if (hideMainPanel) hideStorePwaInstallPanel();
+    if (isIosWebKitTouchBrowser() && !isPortalStandaloneDisplay()) {
+      setStoreIosPwaInstallGuideOpen(true);
+      setStorePwaInstallResult(null);
+      return;
+    }
+    setStorePwaInstallResult({ status: 'RUNNING', message: 'Checking Home Screen app support...' });
+    if (isPortalStandaloneDisplay() || storePwaStandalone) {
+      setStorePwaStandalone(true);
+      markStorePwaInstalled();
+      setStorePwaInstallResult({
+        status: 'SUCCESS',
+        message: '3J Store portal is already running as a Home Screen app.',
+      });
+      return;
+    }
+    if (storePwaInstallPrompt?.prompt) {
+      try {
+        await storePwaInstallPrompt.prompt();
+        const choice = await storePwaInstallPrompt.userChoice;
+        setStorePwaInstallPrompt(null);
+        if (choice?.outcome === 'accepted') {
+          markStorePwaInstalled();
+          setStorePwaStandalone(true);
+          setStorePwaInstallResult({
+            status: 'SUCCESS',
+            message: '3J Store portal was added to your Home Screen.',
+          });
+          return;
+        }
+        setStorePwaInstallResult({
+          status: 'FALLBACK',
+          message: 'Install was cancelled. Use the browser menu to install the store portal when ready.',
+        });
+        return;
+      } catch (installError) {
+        setStorePwaInstallResult({
+          status: 'FALLBACK',
+          message: `Install prompt could not open: ${installError.message || 'browser blocked it'}. Use the browser menu to add it to Home Screen.`,
+        });
+        return;
+      }
+    }
+    if (isAndroidDevice()) {
+      setStorePwaInstallResult({
+        status: 'FALLBACK',
+        message: 'Open the store portal in Chrome, then use Chrome menu > Install app or Add to Home screen.',
+      });
+      return;
+    }
+    setStorePwaInstallResult({
+      status: 'FALLBACK',
+      message: 'Use your browser menu to install or add the store portal to the Home Screen.',
+    });
+  }
+
+  function handleStoreOwnerSessionError(err) {
+    if (err?.status !== 401 && !String(err?.message || '').toLowerCase().includes('expired store owner session')) return false;
+    localStorage.removeItem('centralwifi_store_owner_token');
+    setOwner(null);
+    setRequests([]);
+    setSummary({});
+    setChallenge(null);
+    setStoreOwnerNotice(null);
+    setStoreOwnerToast(null);
+    setStoreOwnerPushStatus('UNKNOWN');
+    storePendingCountRef.current = null;
+    storeKnownPendingRequestIdsRef.current = null;
+    setError('Store owner session expired. Please log in again.');
+    return true;
+  }
+
+  function storeOwnerRequestExpiresAtMs(requestRow) {
+    const value = requestRow?.expires_at;
+    if (!value) return 0;
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  function storeOwnerRequestRemainingSeconds(requestRow, nowMs = storeOwnerRequestClock) {
+    const expiresAt = storeOwnerRequestExpiresAtMs(requestRow);
+    if (!expiresAt) return Math.max(0, Number(requestRow?.expires_remaining_seconds || 0));
+    return Math.max(0, Math.ceil((expiresAt - nowMs) / 1000));
+  }
+
+  function storeOwnerRequestEffectiveStatus(requestRow, nowMs = storeOwnerRequestClock) {
+    const status = String(requestRow?.status || 'PENDING').toUpperCase();
+    if (status === 'PENDING' && storeOwnerRequestExpiresAtMs(requestRow) > 0 && storeOwnerRequestRemainingSeconds(requestRow, nowMs) <= 0) {
+      return 'EXPIRED';
+    }
+    return status;
+  }
+
+  function storeOwnerRequestCountdownCopy(requestRow) {
+    if (!requestRow?.expires_at) return 'Expiration unavailable';
+    const seconds = storeOwnerRequestRemainingSeconds(requestRow);
+    return seconds > 0 ? `Expires in ${formatCountdown(seconds)}` : 'Expired';
   }
 
   function notifyStoreOwnerPendingRequest(requestRow) {
@@ -17817,7 +18184,7 @@ function StoreOwnerPortalApp() {
         page_size: String(selectedPageSize),
       });
       if (requestSearch.trim()) params.set('search', requestSearch.trim());
-      if (['APPROVED', 'REJECTED', 'ALL'].includes(String(selectedStatus || '').toUpperCase())) {
+      if (['APPROVED', 'REJECTED', 'EXPIRED', 'ALL'].includes(String(selectedStatus || '').toUpperCase())) {
         if (requestDateFrom) params.set('date_from', requestDateFrom);
         if (requestDateTo) params.set('date_to', requestDateTo);
       }
@@ -17925,10 +18292,65 @@ function StoreOwnerPortalApp() {
 	  }, [owner?.id, owner?.pin?.required_interval_minutes, owner?.pin?.reuse_enabled]);
 
   useEffect(() => {
+    upsertPortalManifestLink('/api/store/manifest.webmanifest');
+  }, []);
+
+  useEffect(() => {
+    if (!owner?.store_pwa?.manifest_url) return;
+    upsertPortalManifestLink(owner.store_pwa.manifest_url);
+  }, [owner?.store_pwa?.manifest_url]);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (event) => {
+      event.preventDefault();
+      setStorePwaInstallPrompt(event);
+      setStorePwaStandalone(isPortalStandaloneDisplay());
+    };
+    const handleAppInstalled = () => {
+      setStorePwaInstallPrompt(null);
+      setStorePwaStandalone(true);
+      markStorePwaInstalled();
+      setStorePwaInstallResult({
+        status: 'SUCCESS',
+        message: '3J Store portal was added to your Home Screen.',
+      });
+    };
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
+    const standaloneNow = isPortalStandaloneDisplay();
+    setStorePwaStandalone(standaloneNow);
+    if (standaloneNow) markStorePwaInstalled();
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
+    };
+  }, []);
+
+  useEffect(() => {
     if (!ownerPinVerifiedActive(owner)) return undefined;
     const timerId = window.setInterval(() => setPinNow(Date.now()), 1000);
     return () => window.clearInterval(timerId);
   }, [owner?.pin?.verified_until, owner?.pin?.reuse_enabled]);
+
+  useEffect(() => {
+    const hasPending = (requests || []).some((requestRow) => String(requestRow.status || '').toUpperCase() === 'PENDING');
+    if (!hasPending) return undefined;
+    const timerId = window.setInterval(() => setStoreOwnerRequestClock(Date.now()), 1000);
+    return () => window.clearInterval(timerId);
+  }, [requests]);
+
+  useEffect(() => {
+    if (!owner) return;
+    const expiredIds = (requests || [])
+      .filter((requestRow) => storeOwnerRequestEffectiveStatus(requestRow, storeOwnerRequestClock) === 'EXPIRED' && String(requestRow.status || '').toUpperCase() === 'PENDING')
+      .map((requestRow) => requestRow.public_id || requestRow.id)
+      .filter(Boolean)
+      .sort();
+    const refreshKey = expiredIds.join('|');
+    if (!refreshKey || storeOwnerExpiredRefreshKeyRef.current === refreshKey) return;
+    storeOwnerExpiredRefreshKeyRef.current = refreshKey;
+    loadStorePortal(statusFilter, { background: true, notify: false }).catch(() => null);
+  }, [owner?.id, requests, storeOwnerRequestClock, statusFilter]);
 
   useEffect(() => {
     if (!owner) return;
@@ -17941,17 +18363,18 @@ function StoreOwnerPortalApp() {
 
   useEffect(() => () => stopQrScanner(), []);
 
-  useEffect(() => {
-    if (!localStorage.getItem('centralwifi_store_owner_token')) return;
-    storeOwnerRequest('/store-portal/me')
-      .then((data) => {
-        setOwner(data.owner || null);
-        return loadStorePortal();
-      })
-      .catch(() => {
-        localStorage.removeItem('centralwifi_store_owner_token');
-      });
-  }, []);
+	  useEffect(() => {
+	    if (!localStorage.getItem('centralwifi_store_owner_token')) return;
+	    storeOwnerRequest('/store-portal/me')
+	      .then((data) => {
+	        setOwner(data.owner || null);
+	        return loadStorePortal();
+	      })
+	      .catch((err) => {
+	        localStorage.removeItem('centralwifi_store_owner_token');
+	        if (err?.status === 401) setError('Store owner session expired. Please log in again.');
+	      });
+	  }, []);
 
   useEffect(() => {
     if (!owner) {
@@ -17970,14 +18393,13 @@ function StoreOwnerPortalApp() {
           await loadStoreOwnerPendingNotificationPoll();
           if (!stopped) await loadStorePortal(statusFilter, { background: true, notify: false });
         }
-      } catch (err) {
-        if (!stopped && String(err?.message || '').toLowerCase().includes('invalid')) {
-          localStorage.removeItem('centralwifi_store_owner_token');
-          setOwner(null);
-        }
-      } finally {
-        storeRequestPollInFlightRef.current = false;
-      }
+	      } catch (err) {
+	        if (!stopped && !handleStoreOwnerSessionError(err) && String(err?.message || '').trim()) {
+	          setError(err.message);
+	        }
+	      } finally {
+	        storeRequestPollInFlightRef.current = false;
+	      }
     };
     const intervalId = window.setInterval(refreshInBackground, STORE_OWNER_REQUEST_POLL_MS);
     const handleFocus = () => refreshInBackground();
@@ -17994,15 +18416,19 @@ function StoreOwnerPortalApp() {
     };
   }, [owner?.id, statusFilter, requestSearch, requestDateFrom, requestDateTo, requestPage, requestPageSize]);
 
-  useEffect(() => {
-    if (!owner) return;
-    loadStorePortal(statusFilter, { page: requestPage, pageSize: requestPageSize }).catch((err) => setError(err.message));
-  }, [owner?.id, statusFilter, requestSearch, requestDateFrom, requestDateTo, requestPage, requestPageSize]);
+	  useEffect(() => {
+	    if (!owner) return;
+	    loadStorePortal(statusFilter, { page: requestPage, pageSize: requestPageSize }).catch((err) => {
+	      if (!handleStoreOwnerSessionError(err)) setError(err.message);
+	    });
+	  }, [owner?.id, statusFilter, requestSearch, requestDateFrom, requestDateTo, requestPage, requestPageSize]);
 
-  useEffect(() => {
-    if (!owner || storeMainTab !== 'CUSTOMERS') return;
-    loadStoreCustomers().catch((err) => setError(err.message));
-  }, [owner?.id, storeMainTab, customersTab, customersSearch, customersPage, customersPageSize]);
+	  useEffect(() => {
+	    if (!owner || storeMainTab !== 'CUSTOMERS') return;
+	    loadStoreCustomers().catch((err) => {
+	      if (!handleStoreOwnerSessionError(err)) setError(err.message);
+	    });
+	  }, [owner?.id, storeMainTab, customersTab, customersSearch, customersPage, customersPageSize]);
 
   useEffect(() => {
     if (!owner || !initialStoreCode || processedUrlCodeRef.current === initialStoreCode) return;
@@ -18557,9 +18983,10 @@ function StoreOwnerPortalApp() {
 
   function requestCard(requestRow) {
     const items = requestRow.items || [];
-    const status = String(requestRow.status || '').toUpperCase();
-    const completedAt = status === 'APPROVED' ? requestRow.approved_at : status === 'REJECTED' ? requestRow.rejected_at : null;
-    const completedLabel = completedAt ? `${status === 'APPROVED' ? 'Approved' : 'Rejected'} ${formatPortalDateTime(completedAt)}` : '';
+    const status = storeOwnerRequestEffectiveStatus(requestRow);
+    const completedAt = status === 'APPROVED' ? requestRow.approved_at : status === 'REJECTED' ? requestRow.rejected_at : status === 'EXPIRED' ? requestRow.updated_at || requestRow.expires_at : null;
+    const completedLabel = completedAt ? `${status === 'APPROVED' ? 'Approved' : status === 'REJECTED' ? 'Rejected' : 'Expired'} ${formatPortalDateTime(completedAt)}` : '';
+    const pending = status === 'PENDING';
     return (
       <div className="store-owner-request-card" key={requestRow.public_id}>
         <div className="store-owner-request-main">
@@ -18571,15 +18998,20 @@ function StoreOwnerPortalApp() {
               <span className="badge bg-green-lt text-green">{requestRow.amount_display}</span>
               <span className="badge bg-blue-lt text-blue">{formatSeconds(requestRow.total_duration_seconds || 0)}</span>
               <span className="badge bg-secondary-lt text-secondary">{requestRow.request_method}</span>
+              {(pending || status === 'EXPIRED') && (
+                <span className={`badge ${pending ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>
+                  <IconClock size={13} className="me-1" />{storeOwnerRequestCountdownCopy(requestRow)}
+                </span>
+              )}
               {completedLabel && (
-                <span className={`badge ${status === 'APPROVED' ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>
+                <span className={`badge ${status === 'APPROVED' ? 'bg-green-lt text-green' : status === 'REJECTED' ? 'bg-red-lt text-red' : 'bg-secondary-lt text-secondary'}`}>
                   <IconClock size={13} className="me-1" />{completedLabel}
                 </span>
               )}
             </div>
           </div>
         </div>
-        {status === 'PENDING' ? (
+        {pending ? (
           <div className="store-owner-request-actions">
             <button className="btn btn-success btn-sm" type="button" disabled={actionLoading === requestRow.public_id} onClick={() => approveRequest(requestRow)}>
               <IconCircleCheck size={16} className="me-1" />Approve
@@ -18589,7 +19021,7 @@ function StoreOwnerPortalApp() {
             </button>
           </div>
         ) : (
-          <span className={`badge ${status === 'APPROVED' ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>{status}</span>
+	          <span className={`badge ${status === 'APPROVED' ? 'bg-green-lt text-green' : status === 'REJECTED' ? 'bg-red-lt text-red' : 'bg-secondary-lt text-secondary'}`}>{status}</span>
         )}
       </div>
     );
@@ -18609,7 +19041,7 @@ function StoreOwnerPortalApp() {
   function storeOwnerRequestFilterCountActive() {
     let count = 0;
     if (requestSearch.trim()) count += 1;
-    if (['APPROVED', 'REJECTED', 'ALL'].includes(statusFilter)) {
+    if (['APPROVED', 'REJECTED', 'EXPIRED', 'ALL'].includes(statusFilter)) {
       if (requestDateFrom) count += 1;
       if (requestDateTo) count += 1;
     }
@@ -18642,7 +19074,7 @@ function StoreOwnerPortalApp() {
   }
 
   function renderRequestControls() {
-    const showDateFilters = ['APPROVED', 'REJECTED', 'ALL'].includes(statusFilter);
+    const showDateFilters = ['APPROVED', 'REJECTED', 'EXPIRED', 'ALL'].includes(statusFilter);
     const updateRequestDateFrom = (value) => {
       setRequestDateFrom(value);
       setRequestPage(1);
@@ -18803,9 +19235,9 @@ function StoreOwnerPortalApp() {
     );
   }
 
-  function renderCustomersPanel() {
-    return (
-      <Card
+	  function renderCustomersPanel() {
+	    return (
+	      <Card
         title={(
           <CardHeaderContent>
             <div className="store-owner-card-header">
@@ -18851,7 +19283,163 @@ function StoreOwnerPortalApp() {
           )}
         </div>
         {storeOwnerPaginationControls(customersPagination, setCustomersPage)}
-      </Card>
+	      </Card>
+	    );
+	  }
+
+  function StorePwaInstallCard({ showClose = false, className = '', onInstall = () => installStoreHomeScreenApp() }) {
+    return (
+      <div
+        className={`portal-pwa-install-panel store-pwa-install-panel ${showClose ? 'has-close' : ''} ${className}`.trim()}
+        role="button"
+        tabIndex={0}
+        onClick={onInstall}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onInstall();
+          }
+        }}
+      >
+        {showClose && (
+          <button
+            className="portal-pwa-install-close"
+            type="button"
+            aria-label="Hide store app prompt"
+            onClick={(event) => {
+              event.stopPropagation();
+              hideStorePwaInstallPanel();
+            }}
+          >
+            <IconX size={16} />
+          </button>
+        )}
+        <div className="portal-pwa-install-art">
+          <img src={storePwaIconUrl} alt="" />
+        </div>
+        <div className="portal-pwa-install-copy">
+          <strong>Install {storePwaSettings.short_name || '3J Store'} on your Home Screen</strong>
+          <span>{storePwaSettings.install_guide_message || 'Install the 3J Store portal for faster request approvals.'}</span>
+        </div>
+      </div>
+    );
+  }
+
+  function StorePwaInstallResultMessage() {
+    if (!storePwaInstallResult?.message) return null;
+    const tone = storePwaInstallResult.status === 'SUCCESS'
+      ? 'success'
+      : storePwaInstallResult.status === 'RUNNING'
+        ? 'info'
+        : 'warning';
+    return (
+      <AutoDismissAlert
+        message={storePwaInstallResult.message}
+        tone={tone}
+        onDismiss={() => setStorePwaInstallResult(null)}
+      />
+    );
+  }
+
+  function StoreSettingsModal() {
+    if (!storeSettingsOpen) return null;
+    return (
+      <Modal
+        title="3J Store Portal Settings"
+        onClose={() => setStoreSettingsOpen(false)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body portal-settings-modal-body"
+        contentClassName="portal-profile-modal-content portal-settings-modal-content"
+        lockPageRefresh
+      >
+        <div className="portal-settings-modal store-owner-settings-modal">
+          <div className="portal-settings-section">
+            <div className="portal-settings-section-title">
+              <span><IconBell size={18} /></span>
+              <strong>Store request alerts</strong>
+            </div>
+            <div className="portal-settings-row is-stacked">
+              <span>
+                <strong>{storeRequestAlertsActive ? 'Alerts enabled' : 'Enable phone/browser alerts'}</strong>
+                <small>
+                  {storeRequestAlertsActive
+                    ? 'This device can receive new purchase request notifications.'
+                    : 'Enable this on the owner phone so new purchase requests can notify immediately.'}
+                </small>
+              </span>
+              {!window.isSecureContext && <div className="alert alert-warning py-2 mb-0">Open the store portal through HTTPS to enable phone/browser alerts.</div>}
+              {storeOwnerNotificationPermission === 'denied' && <div className="alert alert-warning py-2 mb-0">Notifications are blocked in this browser. Enable them from browser site settings first.</div>}
+              <button
+                className="btn btn-outline-primary w-100"
+                type="button"
+                onClick={enableStoreOwnerRequestAlerts}
+                disabled={storeOwnerPushSaving || !window.isSecureContext || storeOwnerNotificationPermission === 'denied'}
+              >
+                <IconBell size={17} className="me-2" />{storeOwnerPushSaving ? 'Enabling...' : storeRequestAlertsActive ? 'Refresh Alert Setup' : 'Enable Store Alerts'}
+              </button>
+            </div>
+          </div>
+          {storePwaInstallEnabled && (
+            <div className="portal-settings-section">
+              <div className="portal-settings-section-title">
+                <span><IconBrandChrome size={18} /></span>
+                <strong>Home Screen App</strong>
+              </div>
+              <StorePwaInstallCard className="is-settings" />
+              <StorePwaInstallResultMessage />
+            </div>
+          )}
+        </div>
+      </Modal>
+    );
+  }
+
+  function StoreIosPwaInstallGuideModal() {
+    if (!storeIosPwaInstallGuideOpen) return null;
+    return (
+      <Modal
+        title="Install Store Portal on iPhone/iPad"
+        onClose={() => setStoreIosPwaInstallGuideOpen(false)}
+        dialogClassName="portal-profile-modal-dialog portal-captive-small-modal-dialog"
+        bodyClassName="portal-profile-modal-body"
+        contentClassName="portal-profile-modal-content"
+        lockPageRefresh
+      >
+        <div className="portal-ios-pwa-guide">
+          <div className="portal-ios-pwa-guide-head">
+            <span className="portal-ios-pwa-guide-icon">
+              <BrowserBrandIcon browser="Safari" size={30} />
+            </span>
+            <div>
+              <strong>Use Safari Add to Home Screen</strong>
+              <small>Add the store portal to your Home Screen for faster request approval.</small>
+            </div>
+          </div>
+          <div className="portal-ios-pwa-steps">
+            <div className="portal-ios-pwa-step">
+              <span>1</span>
+              <p>Open the store portal in Safari.</p>
+            </div>
+            <div className="portal-ios-pwa-step">
+              <span>2</span>
+              <p>Tap the Safari Share button.</p>
+            </div>
+            <div className="portal-ios-pwa-step">
+              <span>3</span>
+              <p>Choose Add to Home Screen, then tap Add.</p>
+            </div>
+            <div className="portal-ios-pwa-step">
+              <span>4</span>
+              <p>Open the new Store icon from your Home Screen.</p>
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer portal-outside-modal-footer px-0 pb-0">
+          <button className="btn btn-primary portal-outside-modal-primary" type="button" onClick={() => setStoreIosPwaInstallGuideOpen(false)}>
+            Got it
+          </button>
+        </div>
+      </Modal>
     );
   }
 
@@ -18884,8 +19472,37 @@ function StoreOwnerPortalApp() {
   }
 
   return (
-    <div className="store-owner-page">
+    <div className="store-owner-page has-store-header portal-tabler-page is-light">
       <StoreOwnerToast toast={storeOwnerToast} onDismiss={() => setStoreOwnerToast(null)} />
+      <header className="portal-sticky-header store-owner-sticky-header">
+        <div className="portal-sticky-header-inner">
+          <button
+            className="portal-sticky-brand"
+            type="button"
+            onClick={() => setStoreSettingsOpen(true)}
+            aria-label="3J Store Portal Settings"
+            title="3J Store Portal Settings"
+          >
+            <span className="portal-sticky-brand-mark">3J</span>
+            <span className="portal-sticky-brand-text">Store</span>
+          </button>
+          <div className="portal-top-actions">
+            <button
+              className="portal-profile-tag store-owner-profile-tag"
+              type="button"
+              onClick={() => {
+                setProfileTab('DETAILS');
+                setProfileModalOpen(true);
+              }}
+            >
+              <span className="portal-profile-tag-icon is-ready">
+                <IconUserCog size={16} />
+              </span>
+              <span className="portal-profile-tag-text">{owner.display_name || owner.username || 'Store Owner'}</span>
+            </button>
+          </div>
+        </div>
+      </header>
       <div className="store-owner-shell">
         <header className="store-owner-hero">
           {owner.store?.image_url ? (
@@ -18910,30 +19527,19 @@ function StoreOwnerPortalApp() {
             </button>
             {storeNavOpen && (
               <div className="store-owner-menu-panel">
-                <button
-                  className="store-owner-menu-item"
-                  type="button"
-                  onClick={() => {
-                    setStoreNavOpen(false);
-                    openStoreSupport();
-                  }}
-                >
-                  <IconMessageCircle size={17} />Chat Admin
-                </button>
-                <button
-                  className="store-owner-menu-item"
-                  type="button"
-                  onClick={() => {
-                    setStoreNavOpen(false);
-                    setProfileTab('DETAILS');
-                    setProfileModalOpen(true);
-                  }}
-                >
-                  <IconUserCog size={17} />Profile
-                </button>
-                <button
-                  className="store-owner-menu-item is-danger"
-                  type="button"
+	                <button
+	                  className="store-owner-menu-item"
+	                  type="button"
+	                  onClick={() => {
+	                    setStoreNavOpen(false);
+	                    openStoreSupport();
+	                  }}
+	                >
+	                  <IconMessageCircle size={17} />Chat Admin
+	                </button>
+	                <button
+	                  className="store-owner-menu-item is-danger"
+	                  type="button"
                   onClick={() => {
                     setStoreNavOpen(false);
                     logout();
@@ -18959,9 +19565,15 @@ function StoreOwnerPortalApp() {
                 </span>
               );
             })}
-          </div>
-        </header>
-        {message && <AutoDismissAlert message={message} onDismiss={() => setMessage('')} />}
+	          </div>
+	        </header>
+	        {showStorePwaInstallPanel && (
+	          <>
+	            <StorePwaInstallCard showClose onInstall={() => installStoreHomeScreenApp({ hideMainPanel: true })} />
+	            <StorePwaInstallResultMessage />
+	          </>
+	        )}
+	        {message && <AutoDismissAlert message={message} onDismiss={() => setMessage('')} />}
         {storeOwnerNotice && (
           <AutoDismissAlert
             key={storeOwnerNotice.key}
@@ -18970,25 +19582,31 @@ function StoreOwnerPortalApp() {
             onDismiss={() => setStoreOwnerNotice(null)}
           />
         )}
-        {owner && !(storeOwnerNotificationPermission === 'granted' && storeOwnerPushStatus === 'ACTIVE') && (
-          <div className="alert alert-info d-flex flex-wrap align-items-center gap-3">
-            <IconBell size={22} className="flex-shrink-0" />
-            <div className="flex-fill">
-              <div className="fw-semibold">Enable store request alerts</div>
-              <div className="small">Grant browser notifications on this device so every new purchase request can alert the store owner immediately.</div>
-              {!window.isSecureContext && <div className="small text-warning mt-1">Open the store portal through HTTPS to enable phone/browser alerts.</div>}
-              {storeOwnerNotificationPermission === 'denied' && <div className="small text-warning mt-1">Notifications are blocked in this browser. Enable them from browser site settings.</div>}
-            </div>
+	        {showStoreRequestAlertsPanel && (
+	          <div className="alert alert-info d-flex flex-wrap align-items-center gap-3 store-owner-alert-enable-panel">
+	            <IconBell size={22} className="flex-shrink-0" />
+	            <div className="flex-fill">
+	              <div className="fw-semibold">Enable store request alerts</div>
+	              <div className="small">Grant browser notifications on this device so every new purchase request can alert the store owner immediately.</div>
+	              {!window.isSecureContext && <div className="small text-warning mt-1">Open the store portal through HTTPS to enable phone/browser alerts.</div>}
+	              {storeOwnerNotificationPermission === 'denied' && <div className="small text-warning mt-1">Notifications are blocked in this browser. Enable them from browser site settings.</div>}
+	            </div>
             <button
               className="btn btn-primary"
               type="button"
               onClick={enableStoreOwnerRequestAlerts}
               disabled={storeOwnerPushSaving || !window.isSecureContext || storeOwnerNotificationPermission === 'denied'}
-            >
-              <IconBell size={17} className="me-2" />{storeOwnerPushSaving ? 'Enabling...' : 'Enable alerts'}
-            </button>
-          </div>
-        )}
+	            >
+	              <IconBell size={17} className="me-2" />{storeOwnerPushSaving ? 'Enabling...' : 'Enable alerts'}
+	            </button>
+	            <button
+	              className="btn-close store-owner-alert-enable-close"
+	              type="button"
+	              aria-label="Hide store request alerts prompt"
+	              onClick={hideStoreRequestAlertsPanel}
+	            />
+	          </div>
+	        )}
         {error && <div className="alert alert-danger">{error}</div>}
         {owner.must_change_password && (
           <div className="alert alert-warning d-flex gap-2">
@@ -19052,7 +19670,7 @@ function StoreOwnerPortalApp() {
               )}
               <div className="portal-bag-tabbar store-owner-subtabbar mb-3">
                 <ul className="nav nav-tabs portal-bag-tabs store-owner-tabs">
-                {['PENDING', 'APPROVED', 'REJECTED', 'ALL'].map((status) => (
+	                {['PENDING', 'APPROVED', 'REJECTED', 'EXPIRED', 'ALL'].map((status) => (
                   <li className="nav-item" key={status}>
                     <button
                       className={`nav-link ${statusFilter === status ? 'active' : ''}`}
@@ -19306,9 +19924,11 @@ function StoreOwnerPortalApp() {
             </button>
           </form>
         </Modal>
-      )}
-      {renderStoreOwnerFilterModal()}
-      {customerBuyTarget && (
+	      )}
+	      {renderStoreOwnerFilterModal()}
+	      <StoreSettingsModal />
+	      <StoreIosPwaInstallGuideModal />
+	      {customerBuyTarget && (
         <Modal title={`Buy for ${customerBuyTarget.name || 'Customer'}`} onClose={() => { setCustomerBuyTarget(null); setCustomerBuyPinOpen(false); setCustomerBuyPin(''); }} size="md">
           <form className="d-grid gap-3" onSubmit={submitCustomerBuy}>
             <div className="alert alert-info d-flex gap-2 mb-0">
@@ -21797,7 +22417,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     omada_site_name: '',
     routers: []
   });
-  const tabs = isMikrotikOnly ? ['MikroTik'] : ['Portal', 'Portal Design', 'Portal Notifs', 'Welcome SMS', 'Message Defaults', 'Portal Settings', 'Portal Sessions', 'Authorization Logs'];
+  const tabs = isMikrotikOnly ? ['MikroTik'] : ['Portal', 'Portal Design', 'PWA', 'Portal Notifs', 'Welcome SMS', 'Message Defaults', 'Portal Settings', 'Portal Sessions', 'Authorization Logs'];
   useEffect(() => {
     if (!message || !messageAlertRef.current) return;
     window.setTimeout(() => {
@@ -25708,7 +26328,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                 </Card>
               )}
               {portalDesignTab === 'Speed Indicator' && (
-                <Card title="Speed Indicator" subtitle="Animated speed beam shown below active remaining-time cards that have a MikroTik speed limit.">
+                <Card title="Speed Indicator" subtitle="Speed badge and rocket launch colors shown on active remaining-time cards that have a MikroTik speed limit.">
                   {portalSettings ? <form onSubmit={savePortalSettings}>
                     <div className="row g-3">
                       <div className="col-lg-4">
@@ -25723,20 +26343,8 @@ function CaptivePortalPage({ mode = 'full' }) {
                             <span className="form-check-label fw-semibold">Enable speed animation</span>
                           </label>
                           <div className="alert alert-info py-2 mb-3">
-                            This animation appears only in the captive portal main page below each active remaining-time card that has a speed limit.
+                            The captive portal shows a small speed badge on active remaining-time cards. Tapping the badge launches the rocket animation.
                           </div>
-                          <label className="form-label d-flex align-items-center gap-1">
-                            Animation loop seconds
-                            <FieldHint text="Default is 10 seconds. The beam progresses, enters takeoff, shows flame/smoke, then rests before the next loop." />
-                          </label>
-                          <input
-                            className="form-control"
-                            type="number"
-                            min="5"
-                            max="60"
-                            value={speedIndicatorConfig.loop_seconds}
-                            onChange={(event) => updateSpeedIndicatorConfig({ loop_seconds: Number(event.target.value) })}
-                          />
                           <div className="portal-speed-admin-preview mt-3">
                             <SpeedTakeoffIndicator
                               item={{ speed_limit_enabled: true, speed_download_mbps: 100, speed_upload_mbps: 100 }}
@@ -28956,7 +29564,12 @@ function CaptivePortalPage({ mode = 'full' }) {
           </div>
 	        </div>
 	      </>}
-	      {activeTab === 'Portal Notifs' && <div className="col-12">
+		      {activeTab === 'PWA' && (
+		        <div className="col-12">
+		          <PwaSettingsTab />
+		        </div>
+		      )}
+		      {activeTab === 'Portal Notifs' && <div className="col-12">
 	        <Card title={<CardHeaderContent><div className="d-flex align-items-center gap-2"><IconBell size={20} /><h3 className="card-title mb-0">Portal Notifs</h3></div></CardHeaderContent>}>
 	          {portalSettings ? <form onSubmit={savePortalSettings}>
 	            <div className="row g-3 mb-3">
@@ -30272,7 +30885,7 @@ function ProfilePage({ onSaved }) {
 }
 
 function SystemSettingsPage({ refresh }) {
-  const tabs = ['General', 'Access', 'PWA', 'Public HTTPS', 'A2P Messaging', 'API', 'System Update', 'Backup', 'Danger'];
+  const tabs = ['General', 'Access', 'Public HTTPS', 'A2P Messaging', 'API', 'System Update', 'Backup', 'Danger'];
   const [tab, setTab] = useState(() => {
     const requestedTab = new URLSearchParams(window.location.search).get('tab');
     if (window.location.pathname.includes('/integrations/3jtv-api')) return 'API';
@@ -30531,7 +31144,6 @@ function SystemSettingsPage({ refresh }) {
         </div>
       )}
 
-      {tab === 'PWA' && <PwaSettingsTab />}
       {tab === 'Public HTTPS' && <PublicEndpointSettingsTab />}
       {tab === 'A2P Messaging' && <A2PMessagingSettingsTab />}
       {tab === 'API' && <ThreeJtvApiPage />}
@@ -30572,17 +31184,32 @@ function PwaSettingsTab() {
       claim_message: 'PWA install gift added to My WiFi Bag.',
     },
   };
+  const emptyStoreSettings = {
+    name: '3J Store Portal',
+    short_name: '3J Store',
+    description: '3J hotspot store-owner portal for purchase approvals and customer support.',
+    theme_color: '#ff3838',
+    background_color: '#f8fafc',
+    icon_url: '',
+    display_mode: 'standalone',
+    install_enabled: true,
+    install_guide_message: 'Install the 3J Store portal as a Home Screen app for faster request approvals.',
+  };
   const [payload, setPayload] = useState(null);
   const [form, setForm] = useState(emptySettings);
+  const [storeForm, setStoreForm] = useState(emptyStoreSettings);
   const [iconFile, setIconFile] = useState(null);
+  const [storeIconFile, setStoreIconFile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [storeUploading, setStoreUploading] = useState(false);
   const [clearingInstallKey, setClearingInstallKey] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [sectionTab, setSectionTab] = useState('overview');
   const [overviewTab, setOverviewTab] = useState('android');
+  const [settingsScope, setSettingsScope] = useState('customers');
 
   function hydrate(data) {
     const next = data?.settings || {};
@@ -30594,6 +31221,10 @@ function PwaSettingsTab() {
         ...emptySettings.gift,
         ...(next.gift || {}),
       },
+    });
+    setStoreForm({
+      ...emptyStoreSettings,
+      ...(data?.store_settings || {}),
     });
   }
 
@@ -30618,6 +31249,10 @@ function PwaSettingsTab() {
 
   function updateGiftField(key, value) {
     setForm((current) => ({ ...current, gift: { ...(current.gift || {}), [key]: value } }));
+  }
+
+  function updateStoreField(key, value) {
+    setStoreForm((current) => ({ ...current, [key]: value }));
   }
 
   async function savePwaSettings(event) {
@@ -30674,6 +31309,57 @@ function PwaSettingsTab() {
     }
   }
 
+  async function saveStorePwaSettings(event) {
+    event.preventDefault();
+    setSaving(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await request('/system-settings/pwa', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          store_pwa: {
+            name: storeForm.name,
+            short_name: storeForm.short_name,
+            description: storeForm.description,
+            theme_color: storeForm.theme_color,
+            background_color: storeForm.background_color,
+            display_mode: storeForm.display_mode,
+            install_enabled: storeForm.install_enabled,
+            install_guide_message: storeForm.install_guide_message,
+          },
+        }),
+      });
+      hydrate(data);
+      setMessage('Store PWA settings saved.');
+    } catch (err) {
+      setError(err.message || 'Could not save store PWA settings.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function uploadStorePwaIcon(event) {
+    event.preventDefault();
+    if (!storeIconFile) {
+      setError('Choose a Store PWA icon first.');
+      return;
+    }
+    setStoreUploading(true);
+    setMessage('');
+    setError('');
+    try {
+      const data = await uploadRequest('/system-settings/pwa/store-icon', 'pwa_icon', storeIconFile);
+      hydrate(data);
+      setStoreIconFile(null);
+      setMessage('Store PWA icon uploaded.');
+    } catch (err) {
+      setError(err.message || 'Could not upload Store PWA icon.');
+    } finally {
+      setStoreUploading(false);
+    }
+  }
+
   async function clearPwaInstallRecord(row, platform) {
     if (!row) return;
     const profileLabel = row.display_name || row.contact_number || row.client_ip || 'this customer';
@@ -30714,6 +31400,9 @@ function PwaSettingsTab() {
   const pwaIconPreview = form.icon_url
     ? cacheBustedUploadUrl(form.icon_url, form.icon_version || payload?.settings?.icon_version || payload?.settings?.updated_at)
     : '/api/portal/app-icon/pwa-192.png';
+  const storePwaIconPreview = storeForm.icon_url
+    ? cacheBustedUploadUrl(storeForm.icon_url, storeForm.icon_version || payload?.store_settings?.icon_version || payload?.store_settings?.updated_at)
+    : '/api/portal/app-icon/store-pwa-192.png';
   const displayModeGuide = {
     standalone: {
       title: 'Standalone is recommended',
@@ -30733,6 +31422,7 @@ function PwaSettingsTab() {
     },
   };
   const currentDisplayGuide = displayModeGuide[form.display_mode] || displayModeGuide.standalone;
+  const storeCurrentDisplayGuide = displayModeGuide[storeForm.display_mode] || displayModeGuide.standalone;
 
   function renderInstallTable(rows, emptyLabel, platform, dateLabel = 'Latest Installed') {
     return (
@@ -30921,14 +31611,37 @@ function PwaSettingsTab() {
 
       {sectionTab === 'settings' && (
         <>
-      <div className="col-12">
-        <div className="alert alert-info mb-0">
-          A PWA is still the portal website. Customers normally receive new web app changes on the next reload/open. Phones may cache the launcher icon and app name, so icon/name changes can require reinstalling the Home Screen app on some devices.
-        </div>
-      </div>
+	      <div className="col-12">
+	        <div className="alert alert-info mb-0">
+	          A PWA is still the portal website. Customers normally receive new web app changes on the next reload/open. Phones may cache the launcher icon and app name, so icon/name changes can require reinstalling the Home Screen app on some devices.
+	        </div>
+	      </div>
 
-      <div className="col-lg-7">
-        <Card title="PWA App Settings" subtitle="Controls the install manifest used by Android Chrome and supported browsers.">
+	      <div className="col-12">
+	        <ul className="nav nav-tabs mb-3" role="tablist">
+	          {[
+	            { key: 'customers', label: 'PWA Customers', icon: IconUsers },
+	            { key: 'stores', label: 'PWA Stores', icon: IconBuildingStore },
+	          ].map((item) => {
+	            const Icon = item.icon;
+	            return (
+	              <li className="nav-item" key={item.key}>
+	                <button
+	                  className={`nav-link ${settingsScope === item.key ? 'active' : ''}`}
+	                  type="button"
+	                  onClick={() => setSettingsScope(item.key)}
+	                >
+	                  <Icon size={17} className="me-2" />{item.label}
+	                </button>
+	              </li>
+	            );
+	          })}
+	        </ul>
+	      </div>
+
+	      {settingsScope === 'customers' && <>
+	      <div className="col-lg-7">
+	        <Card title="PWA App Settings" subtitle="Controls the install manifest used by Android Chrome and supported browsers.">
           <form onSubmit={savePwaSettings}>
             <div className="row g-3">
               <div className="col-md-7">
@@ -30978,10 +31691,10 @@ function PwaSettingsTab() {
               </div>
             </div>
           </form>
-        </Card>
-      </div>
+	        </Card>
+	      </div>
 
-      <div className="col-lg-5">
+	      <div className="col-lg-5">
         <Card title="PWA Icon Image" subtitle="Used for new Home Screen installs. Existing installs may keep the cached old icon.">
           <form onSubmit={uploadPwaIcon}>
             <div className="d-flex align-items-center gap-3 flex-wrap mb-3">
@@ -31009,10 +31722,10 @@ function PwaSettingsTab() {
               The system cannot force Android/iOS to open the PWA or send a WiFi-connect greeting while the app is fully closed. Browser push can notify only after the customer opens/installs the portal and grants notification permission. Tapping the notification can then open the portal.
             </div>
           </div>
-        </Card>
-      </div>
+	        </Card>
+	      </div>
 
-      <div className="col-12">
+	      <div className="col-12">
         <Card title="PWA Install Gift" subtitle="Optional one-time WiFi Bag gift for Android installs only. A customer profile is required before claiming.">
           <form onSubmit={savePwaSettings}>
             <div className="row g-3 align-items-end">
@@ -31053,10 +31766,106 @@ function PwaSettingsTab() {
               </div>
             </div>
           </form>
-        </Card>
-      </div>
+	        </Card>
+	      </div>
+	      </>}
 
-        </>
+	      {settingsScope === 'stores' && <>
+	        <div className="col-lg-7">
+	          <Card title="Store PWA App Settings" subtitle="Controls the Home Screen app settings for store owners at /store. Store PWA installs are not tracked.">
+	            <form onSubmit={saveStorePwaSettings}>
+	              <div className="row g-3">
+	                <div className="col-md-7">
+	                  <label className="form-label">PWA Name</label>
+	                  <input className="form-control" value={storeForm.name} onChange={(e) => updateStoreField('name', e.target.value)} />
+	                </div>
+	                <div className="col-md-5">
+	                  <label className="form-label">Short Name</label>
+	                  <input className="form-control" maxLength={24} value={storeForm.short_name} onChange={(e) => updateStoreField('short_name', e.target.value)} />
+	                  <div className="form-hint">Shown under the Home Screen icon. Keep it short.</div>
+	                </div>
+	                <div className="col-12">
+	                  <label className="form-label">Description</label>
+	                  <textarea className="form-control" rows="2" value={storeForm.description} onChange={(e) => updateStoreField('description', e.target.value)} />
+	                </div>
+	                <div className="col-md-4">
+	                  <label className="form-label">Display Mode <span className="info" title={`${storeCurrentDisplayGuide.title}. ${storeCurrentDisplayGuide.detail}`}>i</span></label>
+	                  <select className="form-select" value={storeForm.display_mode} onChange={(e) => updateStoreField('display_mode', e.target.value)}>
+	                    <option value="standalone">Standalone</option>
+	                    <option value="fullscreen">Fullscreen</option>
+	                    <option value="minimal-ui">Minimal UI</option>
+	                    <option value="browser">Browser</option>
+	                  </select>
+	                </div>
+	                <div className="col-md-4">
+	                  <label className="form-label">Theme Color</label>
+	                  <input className="form-control form-control-color" type="color" value={storeForm.theme_color || '#ff3838'} onChange={(e) => updateStoreField('theme_color', e.target.value)} />
+	                </div>
+	                <div className="col-md-4">
+	                  <label className="form-label">Background Color</label>
+	                  <input className="form-control form-control-color" type="color" value={storeForm.background_color || '#f8fafc'} onChange={(e) => updateStoreField('background_color', e.target.value)} />
+	                </div>
+	                <div className="col-12">
+	                  <label className="form-check form-switch">
+	                    <input className="form-check-input" type="checkbox" checked={storeForm.install_enabled !== false} onChange={(e) => updateStoreField('install_enabled', e.target.checked)} />
+	                    <span className="form-check-label">Show install/Home Screen app controls for store owners</span>
+	                  </label>
+	                </div>
+	                <div className="col-12">
+	                  <label className="form-label">Install Guide Message</label>
+	                  <textarea className="form-control" rows="2" value={storeForm.install_guide_message || ''} onChange={(e) => updateStoreField('install_guide_message', e.target.value)} />
+	                </div>
+	                <div className="col-12 text-end">
+	                  <button className="btn btn-primary" disabled={saving}>
+	                    <IconDeviceFloppy size={18} className="me-2" />{saving ? 'Saving...' : 'Save Store PWA Settings'}
+	                  </button>
+	                </div>
+	              </div>
+	            </form>
+	          </Card>
+	        </div>
+
+	        <div className="col-lg-5">
+	          <Card title="Store PWA Icon Image" subtitle="Used for new store-owner Home Screen installs. Existing installs may keep the cached old icon.">
+	            <form onSubmit={uploadStorePwaIcon}>
+	              <div className="d-flex align-items-center gap-3 flex-wrap mb-3">
+	                <span className="avatar avatar-xl bg-white border">
+	                  <img src={storePwaIconPreview} alt="Store PWA icon" />
+	                </span>
+	                <div>
+	                  <div className="fw-semibold">Icon format guide</div>
+	                  <div className="text-muted small">Use a square PNG/WebP, 512x512 recommended. Keep important content centered because phones may mask the icon.</div>
+	                </div>
+	              </div>
+	              <input className="form-control" type="file" accept="image/png,image/webp,image/jpeg,image/svg+xml" onChange={(e) => setStoreIconFile(e.target.files?.[0] || null)} />
+	              <div className="btn-list justify-content-end mt-3">
+	                <button className="btn btn-primary" disabled={storeUploading}>
+	                  <IconCloudUpload size={18} className="me-2" />{storeUploading ? 'Uploading...' : 'Upload Store Icon'}
+	                </button>
+	              </div>
+	            </form>
+	          </Card>
+
+	          <Card title="Store PWA Scope" className="mt-3">
+	            <div className="list-group list-group-flush">
+	              <div className="list-group-item px-0 d-flex justify-content-between gap-3">
+	                <span className="text-muted">Manifest</span>
+	                <code>/api/store/manifest.webmanifest</code>
+	              </div>
+	              <div className="list-group-item px-0 d-flex justify-content-between gap-3">
+	                <span className="text-muted">Start URL</span>
+	                <code>/store?source=pwa</code>
+	              </div>
+	              <div className="list-group-item px-0 d-flex justify-content-between gap-3">
+	                <span className="text-muted">Tracking</span>
+	                <span className="badge bg-secondary-lt text-secondary">Not tracked</span>
+	              </div>
+	            </div>
+	          </Card>
+	        </div>
+	      </>}
+
+	        </>
       )}
     </div>
   );

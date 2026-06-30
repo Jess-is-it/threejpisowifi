@@ -896,6 +896,7 @@ class PortalPwaSettingsUpdate(BaseModel):
     pwa_gift_available_message: Optional[str] = Field(default=None, max_length=240)
     pwa_gift_claim_message: Optional[str] = Field(default=None, max_length=500)
     pwa_install_guide_message: Optional[str] = Field(default=None, max_length=500)
+    store_pwa: Optional[dict] = None
 
 
 class PortalPwaInstallClearRequest(BaseModel):
@@ -12509,6 +12510,7 @@ def serialize_store_owner(row: Optional[dict], include_store: bool = False) -> d
     if include_store:
         commission_type = normalize_physical_store_commission_type(row.get("commission_type"))
         commission_value = normalize_physical_store_commission_value(commission_type, row.get("commission_value"))
+        data["store_pwa"] = public_store_pwa_settings()
         data["store"] = {
             "id": str(row["store_id"]) if row.get("store_id") else None,
             "store_name": row.get("store_name") or "",
@@ -12588,9 +12590,10 @@ def current_store_owner(request: Request, credentials: HTTPAuthorizationCredenti
                 FROM store_owner_sessions sos
                 JOIN physical_store_owners so ON so.id = sos.owner_id
                 JOIN physical_stores ps ON ps.id = so.store_id
-                WHERE sos.token_hash = %s
-                  AND sos.expires_at > now()
-                  AND so.status = 'ACTIVE'
+	                WHERE sos.token_hash = %s
+	                  AND sos.expires_at > now()
+	                  AND sos.created_at > now() - interval '4 hours'
+	                  AND so.status = 'ACTIVE'
                   AND ps.status = 'ACTIVE'
                 LIMIT 1
                 """,
@@ -14364,10 +14367,13 @@ def omada_remote_authorization_covers_until(session: dict, target_until) -> dict
     site_id = str(session.get("omada_site_id") or "").strip()
     if not site_id:
         return {"checked": False, "covers": False, "reason": "missing_site_id"}
+    # This check is used to decide whether the current device can reuse an
+    # existing Omada authorization. Previous MACs are intentionally excluded:
+    # a stale authorized-client row for an old random MAC must not make us skip
+    # authorizing the phone's current WiFi MAC.
     mac_candidates = set(portal_device_mac_values(
         session.get("omada_client_mac"),
         session.get("client_mac"),
-        session.get("previous_client_macs") or [],
     ))
     if not mac_candidates:
         return {"checked": False, "covers": False, "reason": "missing_client_mac"}
@@ -14404,6 +14410,112 @@ def omada_remote_authorization_covers_until(session: dict, target_until) -> dict
     return {"checked": True, "covers": False, "reason": "remote_not_valid_or_short", "matches": matches}
 
 
+def refresh_omada_session_identity_from_live_client(cur, session: dict, user: Optional[dict] = None, profile: Optional[dict] = None, payload: Optional[PortalSessionRequest] = None, request: Optional[Request] = None, reason: str = "ACTIVE_ITEM_ACTIVATION") -> dict:
+    if not session or session.get("source") != "OMADA" or not session.get("id"):
+        return {"status": "SKIPPED", "session": session, "reason": "not_omada"}
+    site_row = site_deployment_for_portal_context(session, payload)
+    site_id = (
+        normalize_payment_text(session.get("omada_site_id"), 120)
+        or normalize_payment_text((site_row or {}).get("omada_site_id"), 120)
+    )
+    site_name = (
+        normalize_payment_text(session.get("omada_site_name") or session.get("site"), 160)
+        or normalize_payment_text((site_row or {}).get("site_name"), 160)
+    )
+    identity = omada_payment_auth_free_identity(session, user, profile, payload, request)
+    resolved, resolution = resolve_omada_payment_auth_free_identity(
+        cur,
+        session,
+        user or {},
+        profile,
+        payload,
+        request,
+        site_id,
+        site_name,
+        identity,
+    )
+    if resolution.get("source") != "omada_live_client":
+        return {"status": "SKIPPED", "session": session, "resolution": sanitize_summary(resolution)}
+    selected_mac = normalize_mac_if_valid(resolved.get("client_mac"))
+    if not selected_mac:
+        return {"status": "SKIPPED", "session": session, "resolution": sanitize_summary(resolution)}
+    current_mac = normalize_mac_if_valid(portal_effective_mac_from_session(session))
+    selected_ip = host_ip(resolved.get("client_ip"))
+    current_ip = host_ip(session.get("client_ip"))
+    selected_ssid = normalize_payment_text(resolution.get("selected_ssid"), 160) or None
+    selected_site_id = normalize_payment_text(resolution.get("selected_site_id"), 120) or None
+    selected_site_name = normalize_payment_text(resolution.get("selected_site"), 160) or None
+    if (
+        selected_mac == current_mac
+        and (not selected_ip or selected_ip == current_ip)
+        and (not selected_ssid or selected_ssid == (session.get("ssid") or ""))
+    ):
+        if session.get("mikrotik_client_mac") or session.get("mikrotik_client_ip") or session.get("mikrotik_server_name"):
+            cur.execute(
+                """
+                UPDATE portal_sessions
+                SET mikrotik_client_mac = NULL,
+                    mikrotik_client_ip = NULL,
+                    mikrotik_server_name = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (session["id"],),
+            )
+            session.update(cur.fetchone())
+        return {"status": "CURRENT", "session": session, "resolution": sanitize_summary(resolution)}
+    previous_macs = append_previous_client_macs(session.get("previous_client_macs"), current_mac, selected_mac)
+    cur.execute(
+        """
+        UPDATE portal_sessions
+        SET client_mac = %s,
+            omada_client_mac = %s,
+            client_ip = COALESCE(NULLIF(%s, '')::inet, client_ip),
+            ssid = COALESCE(%s, ssid),
+            omada_site_id = COALESCE(%s, omada_site_id),
+            omada_site_name = COALESCE(%s, omada_site_name),
+            mikrotik_client_mac = NULL,
+            mikrotik_client_ip = NULL,
+            mikrotik_server_name = NULL,
+            previous_client_macs = %s,
+            device_token_last_seen_at = now(),
+            updated_at = now()
+        WHERE id = %s
+        RETURNING *
+        """,
+        (
+            selected_mac,
+            selected_mac,
+            selected_ip or "",
+            selected_ssid,
+            selected_site_id,
+            selected_site_name,
+            Json(previous_macs),
+            session["id"],
+        ),
+    )
+    updated_session = cur.fetchone()
+    session.update(updated_session)
+    create_customer_bag_event(
+        cur,
+        session.get("user_id"),
+        None,
+        session.get("id"),
+        "OMADA_SESSION_IDENTITY_REFRESHED",
+        "Omada client identity refreshed before granting active bag access.",
+        metadata={
+            "reason": reason,
+            "old_mac": mask_mac(current_mac),
+            "new_mac": mask_mac(selected_mac),
+            "old_ip": current_ip,
+            "new_ip": selected_ip,
+            "resolution": sanitize_summary(resolution),
+        },
+    )
+    return {"status": "UPDATED", "session": session, "resolution": sanitize_summary(resolution)}
+
+
 def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active_items: list[dict], request: Request = None, reason: str = "ACTIVE_ITEM_REFRESH") -> dict:
     if not session or session.get("source") not in {"OMADA", "MIKROTIK"}:
         return {"status": "NOT_REQUIRED"}
@@ -14418,11 +14530,42 @@ def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active
     if not candidates:
         return {"status": "NO_ACTIVE_TIME"}
     target_until, target_item = max(candidates, key=lambda pair: pair[0])
+    identity_refresh = {"status": "SKIPPED"}
+    if session.get("source") == "OMADA":
+        try:
+            profile = portal_profile_for_user(cur, target_item.get("user_id"))
+            identity_payload = PortalSessionRequest(
+                portal_session_id=session.get("public_session_id"),
+                raw_query_params=dict(request.query_params) if request else {},
+            )
+            identity_refresh = refresh_omada_session_identity_from_live_client(
+                cur,
+                session,
+                {"id": target_item.get("user_id")},
+                profile,
+                identity_payload,
+                request,
+                reason,
+            )
+        except Exception as exc:
+            identity_refresh = {"status": "FAILED", "error": normalize_payment_text(str(exc), 500)}
+            create_customer_bag_event(
+                cur,
+                target_item.get("user_id"),
+                target_item.get("id"),
+                session.get("id"),
+                "OMADA_SESSION_IDENTITY_REFRESH_FAILED",
+                "Omada live client identity could not be refreshed while syncing active bag access.",
+                metadata={"reason": reason, "error": identity_refresh["error"]},
+            )
     if latest_gateway_authorization_covers_until(cur, session, target_until):
-        if session.get("source") == "OMADA" and request_has_live_gateway_context(request):
+        if session.get("source") == "OMADA" and (
+            request_has_live_gateway_context(request)
+            or identity_refresh.get("status") == "UPDATED"
+        ):
             remote_cover = omada_remote_authorization_covers_until(session, target_until)
             if remote_cover.get("covers"):
-                return {"status": "COVERED", "message": "Gateway authorization already covers the active bag time.", "remote": sanitize_summary(remote_cover)}
+                return {"status": "COVERED", "message": "Gateway authorization already covers the active bag time.", "remote": sanitize_summary(remote_cover), "identity_refresh": sanitize_summary(identity_refresh)}
             create_customer_bag_event(
                 cur,
                 target_item["user_id"],
@@ -14433,7 +14576,7 @@ def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active
                 metadata={"reason": reason, "remote": sanitize_summary(remote_cover), "target_until": target_until.isoformat()},
             )
         else:
-            return {"status": "COVERED", "message": "Gateway authorization already covers the active bag time."}
+            return {"status": "COVERED", "message": "Gateway authorization already covers the active bag time.", "identity_refresh": sanitize_summary(identity_refresh)}
 
     voucher = ensure_bag_item_voucher(cur, target_item)
     duration_seconds = max(int((target_until - now).total_seconds()), 1)
@@ -14452,9 +14595,9 @@ def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active
         session["id"],
         event_type,
         event_message,
-        metadata={"reason": reason, "authorization": sanitize_summary(authorization), "target_until": target_until.isoformat()},
+        metadata={"reason": reason, "identity_refresh": sanitize_summary(identity_refresh), "authorization": sanitize_summary(authorization), "target_until": target_until.isoformat()},
     )
-    return authorization
+    return {**authorization, "identity_refresh": sanitize_summary(identity_refresh)}
 
 
 def speed_limit_item_candidate(row: dict) -> Optional[dict]:
@@ -14497,12 +14640,26 @@ def selected_speed_limit_candidate(active_items: list[dict]) -> Optional[dict]:
 
 
 def speed_limit_target_ip_for_session(session: dict, request: Optional[Request] = None) -> Optional[str]:
-    candidates = [
-        session.get("mikrotik_client_ip"),
-        session.get("client_ip"),
-        session.get("omada_client_ip"),
-        public_ip(request) if request else None,
-    ]
+    source = str((session or {}).get("source") or "").upper()
+    if source == "MIKROTIK":
+        candidates = [
+            session.get("mikrotik_client_ip"),
+            session.get("client_ip"),
+            public_ip(request) if request else None,
+        ]
+    elif source == "OMADA":
+        candidates = [
+            session.get("client_ip"),
+            session.get("omada_client_ip"),
+            public_ip(request) if request else None,
+        ]
+    else:
+        candidates = [
+            session.get("client_ip"),
+            session.get("omada_client_ip"),
+            session.get("mikrotik_client_ip"),
+            public_ip(request) if request else None,
+        ]
     for value in candidates:
         ip_text = host_ip(value)
         if ip_text:
@@ -14959,6 +15116,35 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
     network_presence = portal_network_presence(session, request) if request else {"connected_to_3j_ap": False}
     if require_current_network and network_presence.get("connected_to_3j_ap") is not True:
         return {"status": "QUEUED", "message": "Connect to a 3J WiFi AP to activate this item.", "item": item, "authorization": {"status": "WAITING_FOR_3J_AP"}}
+    identity_refresh = {"status": "SKIPPED"}
+    if session.get("source") == "OMADA":
+        try:
+            profile = portal_profile_for_user(cur, item.get("user_id"))
+            user_for_identity = {"id": item.get("user_id")}
+            identity_payload = PortalSessionRequest(
+                portal_session_id=session.get("public_session_id"),
+                raw_query_params=dict(request.query_params) if request else {},
+            )
+            identity_refresh = refresh_omada_session_identity_from_live_client(
+                cur,
+                session,
+                user_for_identity,
+                profile,
+                identity_payload,
+                request,
+                reason,
+            )
+        except Exception as exc:
+            identity_refresh = {"status": "FAILED", "error": normalize_payment_text(str(exc), 500)}
+            create_customer_bag_event(
+                cur,
+                item.get("user_id"),
+                item.get("id"),
+                session.get("id"),
+                "OMADA_SESSION_IDENTITY_REFRESH_FAILED",
+                "Omada live client identity could not be refreshed before activation.",
+                metadata={"reason": reason, "error": identity_refresh["error"]},
+            )
     voucher = ensure_bag_item_voucher(cur, item)
     portal_payload = payment_fulfillment_payload_from_session(session, voucher["code"])
     authorization = {"status": "NOT_REQUIRED"}
@@ -15057,8 +15243,8 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
     )
     session.update(cur.fetchone())
     speed_limit = safe_reconcile_portal_speed_limit_for_session(cur, session, request, f"{reason}_ACTIVATED")
-    create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "ITEM_ACTIVATED", "Product item activated.", bool(settings.get("auto_activate")), overlap, {"reason": reason, "authorization": sanitize_summary(authorization), "iptv_coverage": sanitize_summary(iptv_coverage), "speed_limit": sanitize_summary(speed_limit)})
-    return {"status": "SUCCESS", "message": "Product item activated.", "item": active_item, "authorization": sanitize_summary(authorization), "iptv": sanitize_summary(iptv_coverage), "speed_limit": sanitize_summary(speed_limit)}
+    create_customer_bag_event(cur, item["user_id"], active_item["id"], session["id"], "ITEM_ACTIVATED", "Product item activated.", bool(settings.get("auto_activate")), overlap, {"reason": reason, "identity_refresh": sanitize_summary(identity_refresh), "authorization": sanitize_summary(authorization), "iptv_coverage": sanitize_summary(iptv_coverage), "speed_limit": sanitize_summary(speed_limit)})
+    return {"status": "SUCCESS", "message": "Product item activated.", "item": active_item, "identity_refresh": sanitize_summary(identity_refresh), "authorization": sanitize_summary(authorization), "iptv": sanitize_summary(iptv_coverage), "speed_limit": sanitize_summary(speed_limit)}
 
 
 def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> dict:
@@ -16137,6 +16323,34 @@ def public_portal_pwa_settings(row=None) -> dict:
     }
 
 
+def store_pwa_cache_version(row: Optional[dict]) -> str:
+    if not row:
+        return "default"
+    settings = row.get("store_pwa_settings_json") or {}
+    raw = f"{settings.get('icon_url') or ''}|{row.get('updated_at') or ''}"
+    return md5(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def public_store_pwa_settings(row=None) -> dict:
+    row = row or ensure_captive_portal_settings()
+    settings = row.get("store_pwa_settings_json") or {}
+    icon_version = store_pwa_cache_version(row)
+    return {
+        "name": settings.get("name") or "3J Store Portal",
+        "short_name": settings.get("short_name") or "3J Store",
+        "description": settings.get("description") or "3J hotspot store-owner portal for purchase approvals and customer support.",
+        "theme_color": settings.get("theme_color") or "#ff3838",
+        "background_color": settings.get("background_color") or "#f8fafc",
+        "icon_url": settings.get("icon_url"),
+        "icon_version": icon_version,
+        "display_mode": settings.get("display_mode") or "standalone",
+        "install_enabled": settings.get("install_enabled") is not False,
+        "install_guide_message": settings.get("install_guide_message") or "Install the 3J Store portal as a Home Screen app for faster request approvals.",
+        "manifest_url": "/api/store/manifest.webmanifest",
+        "install_icon_url": f"/api/portal/app-icon/store-pwa-512.png?v={icon_version}",
+    }
+
+
 def public_portal_pwa_install_context(cur, session: Optional[dict], profile: Optional[dict] = None) -> dict:
     base_manifest_url = "/api/portal/manifest.webmanifest"
     base_start_url = "/portal?source=pwa"
@@ -16197,6 +16411,27 @@ def normalize_pwa_color(value: Optional[str], fallback: str) -> str:
     if re.match(r"^#[0-9a-fA-F]{3}$", text):
         return text
     return fallback
+
+
+def normalize_store_pwa_settings(value: Optional[dict], current: Optional[dict] = None) -> dict:
+    current = current if isinstance(current, dict) else {}
+    source = value if isinstance(value, dict) else {}
+    mode = normalize_payment_text(source.get("display_mode"), 40).lower()
+    if mode not in {"standalone", "fullscreen", "minimal-ui", "browser"}:
+        mode = normalize_payment_text(current.get("display_mode"), 40).lower()
+    if mode not in {"standalone", "fullscreen", "minimal-ui", "browser"}:
+        mode = "standalone"
+    return {
+        "name": normalize_payment_text(source.get("name"), 80) or current.get("name") or "3J Store Portal",
+        "short_name": normalize_payment_text(source.get("short_name"), 24) or current.get("short_name") or "3J Store",
+        "description": normalize_payment_text(source.get("description"), 240) or current.get("description") or "3J hotspot store-owner portal for purchase approvals and customer support.",
+        "theme_color": normalize_pwa_color(source.get("theme_color"), current.get("theme_color") or "#ff3838"),
+        "background_color": normalize_pwa_color(source.get("background_color"), current.get("background_color") or "#f8fafc"),
+        "icon_url": normalize_payment_text(source.get("icon_url"), 500) or current.get("icon_url") or "",
+        "display_mode": mode,
+        "install_enabled": bool(source.get("install_enabled")) if "install_enabled" in source else current.get("install_enabled") is not False,
+        "install_guide_message": normalize_payment_text(source.get("install_guide_message"), 500) or current.get("install_guide_message") or "Install the 3J Store portal as a Home Screen app for faster request approvals.",
+    }
 
 
 def portal_pwa_admin_payload() -> dict:
@@ -16327,6 +16562,7 @@ def portal_pwa_admin_payload() -> dict:
     )
     return {
         "settings": settings,
+        "store_settings": public_store_pwa_settings(settings_row),
         "overview": {
             "android_install_count": int(overview.get("android_install_count") or 0),
             "ios_install_count": int(overview.get("ios_install_count") or 0),
@@ -17743,6 +17979,9 @@ def portal_avatar_icon_url(state: str = "disconnected") -> str:
     normalized_state = (state or "disconnected").strip().lower()
     if normalized_state == "pwa":
         avatar_url = add_url_cache_version(portal_settings_row.get("pwa_icon_url"), pwa_icon_cache_version(portal_settings_row))
+    elif normalized_state == "store-pwa":
+        store_pwa = public_store_pwa_settings(portal_settings_row)
+        avatar_url = add_url_cache_version(store_pwa.get("icon_url"), store_pwa.get("icon_version"))
     elif normalized_state == "connected":
         avatar_url = portal_settings_row.get("no_internet_avatar_connected_url")
     else:
@@ -17807,6 +18046,33 @@ def portal_manifest(handoff: Optional[str] = None):
         "icons": [
             {"src": f"/api/portal/app-icon/pwa-192.png?v={icon_version}", "sizes": "192x192", "purpose": "any maskable"},
             {"src": f"/api/portal/app-icon/pwa-512.png?v={icon_version}", "sizes": "512x512", "purpose": "any maskable"},
+        ],
+    }
+    return Response(
+        content=json.dumps(manifest),
+        media_type="application/manifest+json",
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
+
+
+@app.api_route("/api/store/manifest.webmanifest", methods=["GET", "HEAD"])
+def store_portal_manifest():
+    pwa = public_store_pwa_settings()
+    icon_version = pwa.get("icon_version") or "default"
+    manifest = {
+        "id": "/store",
+        "name": pwa["name"],
+        "short_name": pwa["short_name"],
+        "description": pwa["description"],
+        "start_url": "/store?source=pwa",
+        "scope": "/store",
+        "display": pwa["display_mode"],
+        "background_color": pwa["background_color"],
+        "theme_color": pwa["theme_color"],
+        "orientation": "portrait",
+        "icons": [
+            {"src": f"/api/portal/app-icon/store-pwa-192.png?v={icon_version}", "sizes": "192x192", "purpose": "any maskable"},
+            {"src": f"/api/portal/app-icon/store-pwa-512.png?v={icon_version}", "sizes": "512x512", "purpose": "any maskable"},
         ],
     }
     return Response(
@@ -23518,8 +23784,11 @@ def serialize_store_purchase_request(row: dict, items: Optional[list[dict]] = No
         return {}
     status = row.get("status") or "PENDING"
     expires_at = aware_utc(row.get("expires_at"))
-    if status == "PENDING" and expires_at and expires_at <= datetime.now(timezone.utc):
+    now = datetime.now(timezone.utc)
+    expires_remaining_seconds = max(0, int((expires_at - now).total_seconds())) if expires_at else 0
+    if status == "PENDING" and expires_at and expires_at <= now:
         status = "EXPIRED"
+        expires_remaining_seconds = 0
     return {
         "id": str(row["id"]),
         "public_id": row.get("public_id"),
@@ -23543,6 +23812,8 @@ def serialize_store_purchase_request(row: dict, items: Optional[list[dict]] = No
         "customer_device_label": row.get("customer_device_label") or "",
         "rejection_reason": row.get("rejection_reason") or "",
         "expires_at": row.get("expires_at"),
+        "expires_remaining_seconds": expires_remaining_seconds,
+        "expired": status == "EXPIRED",
         "approved_at": row.get("approved_at"),
         "rejected_at": row.get("rejected_at"),
         "cancelled_at": row.get("cancelled_at"),
@@ -26395,7 +26666,7 @@ def create_portal_store_purchase_request(payload: PortalStorePurchaseCreateReque
                 "site_name": session.get("omada_site_name") or session.get("site_name"),
                 "outside_network_purchase": outside_network_purchase,
             }
-            expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=30)
             cur.execute(
                 """
                 INSERT INTO store_purchase_requests(
@@ -26987,12 +27258,17 @@ def store_portal_purchase_lookup(payload: StorePortalPurchaseLookupRequest, owne
         raise HTTPException(status_code=400, detail="Enter a QR or purchase code.")
     with get_conn() as conn:
         with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE store_purchase_requests SET status = 'EXPIRED', updated_at = now() WHERE store_id = %s AND status = 'PENDING' AND expires_at <= now()",
+                (owner["store_id"],),
+            )
             code_hash = store_purchase_code_hash(code)
             rows = store_purchase_request_rows(
                 cur,
                 """
                 WHERE spr.store_id = %s
                   AND spr.status = 'PENDING'
+                  AND spr.expires_at > now()
                   AND (
                     spr.public_id = %s
                     OR REPLACE(spr.public_id, '-', '') = %s
@@ -27003,7 +27279,7 @@ def store_portal_purchase_lookup(payload: StorePortalPurchaseLookupRequest, owne
                 limit=1,
             )
             if not rows:
-                raise HTTPException(status_code=404, detail="Pending store purchase was not found.")
+                raise HTTPException(status_code=404, detail="Pending store purchase was not found or already expired.")
     return {"request": rows[0]}
 
 
@@ -27083,6 +27359,10 @@ def store_portal_purchase_reject(public_id: str, payload: StorePortalPurchaseAct
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
+                "UPDATE store_purchase_requests SET status = 'EXPIRED', updated_at = now() WHERE store_id = %s AND status = 'PENDING' AND expires_at <= now()",
+                (owner["store_id"],),
+            )
+            cur.execute(
                 """
                 UPDATE store_purchase_requests
                 SET status = 'REJECTED',
@@ -27092,13 +27372,14 @@ def store_portal_purchase_reject(public_id: str, payload: StorePortalPurchaseAct
                 WHERE public_id = %s
                   AND store_id = %s
                   AND status = 'PENDING'
+                  AND expires_at > now()
                 RETURNING *
                 """,
                 (normalize_payment_text(payload.reason, 500) or "Rejected by store owner.", normalize_payment_text(public_id, 80), owner["store_id"]),
             )
             row = cur.fetchone()
             if not row:
-                raise HTTPException(status_code=404, detail="Pending store purchase request not found.")
+                raise HTTPException(status_code=404, detail="Pending store purchase request not found or already expired.")
             rows = store_purchase_request_rows(cur, "WHERE spr.id = %s", (row["id"],), limit=1)
     return {"status": "REJECTED", "request": rows[0] if rows else serialize_store_purchase_request(row, [])}
 
@@ -44968,7 +45249,8 @@ def update_portal_pwa_settings(payload: PortalPwaSettingsUpdate, admin=Depends(c
         "pwa_gift_claim_message",
         "pwa_install_guide_message",
     }
-    updates = {key: value for key, value in payload.model_dump(exclude_none=True).items() if key in allowed}
+    dumped = payload.model_dump(exclude_none=True)
+    updates = {key: value for key, value in dumped.items() if key in allowed}
     if "pwa_theme_color" in updates:
         updates["pwa_theme_color"] = normalize_pwa_color(updates.get("pwa_theme_color"), current.get("pwa_theme_color") or "#ff3838")
     if "pwa_background_color" in updates:
@@ -44980,13 +45262,20 @@ def update_portal_pwa_settings(payload: PortalPwaSettingsUpdate, admin=Depends(c
         updates["pwa_display_mode"] = mode
     if "pwa_gift_duration_seconds" in updates:
         updates["pwa_gift_duration_seconds"] = max(1, min(int(updates["pwa_gift_duration_seconds"] or 3600), 2592000))
+    store_pwa_updates = None
+    if "store_pwa" in dumped:
+        store_pwa_updates = normalize_store_pwa_settings(dumped.get("store_pwa"), current.get("store_pwa_settings_json") or {})
+        updates["store_pwa_settings_json"] = Json(store_pwa_updates)
     if updates:
         assignments = ", ".join([f"{key} = %s" for key in updates] + ["updated_at = now()"])
         params = list(updates.values()) + [current["id"]]
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(f"UPDATE captive_portal_settings SET {assignments} WHERE id = %s", tuple(params))
-        audit(admin["id"], "update_portal_pwa_settings", "captive_portal_settings", str(current["id"]), sanitize_summary(updates))
+        audit_updates = dict(updates)
+        if store_pwa_updates is not None:
+            audit_updates["store_pwa_settings_json"] = store_pwa_updates
+        audit(admin["id"], "update_portal_pwa_settings", "captive_portal_settings", str(current["id"]), sanitize_summary(audit_updates))
     return portal_pwa_admin_payload()
 
 
@@ -45001,6 +45290,21 @@ def upload_portal_pwa_icon(pwa_icon: UploadFile = File(...), admin=Depends(curre
                 (icon_url, current["id"]),
             )
     audit(admin["id"], "upload_portal_pwa_icon", "captive_portal_settings", str(current["id"]), {"url": icon_url})
+    return portal_pwa_admin_payload()
+
+
+@app.post("/api/system-settings/pwa/store-icon")
+def upload_store_pwa_icon(pwa_icon: UploadFile = File(...), admin=Depends(current_admin)):
+    icon_url = save_branding_file(pwa_icon, "store-pwa-icon")
+    current = ensure_captive_portal_settings()
+    settings = normalize_store_pwa_settings({"icon_url": icon_url}, current.get("store_pwa_settings_json") or {})
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE captive_portal_settings SET store_pwa_settings_json = %s, updated_at = now() WHERE id = %s",
+                (Json(settings), current["id"]),
+            )
+    audit(admin["id"], "upload_store_pwa_icon", "captive_portal_settings", str(current["id"]), {"url": icon_url})
     return portal_pwa_admin_payload()
 
 
