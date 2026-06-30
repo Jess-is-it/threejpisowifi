@@ -17937,6 +17937,12 @@ function StoreOwnerPortalApp() {
   const showStorePwaInstallPanel = Boolean(owner && storePwaInstallEnabled && !storePwaInstallPanelHidden && !storePwaInstalledKnown && !storePwaStandalone);
   const storeRequestAlertsActive = storeOwnerNotificationPermission === 'granted' && storeOwnerPushStatus === 'ACTIVE';
   const showStoreRequestAlertsPanel = Boolean(owner && !storeRequestAlertsActive && !storeRequestAlertsPanelHidden);
+  const storeCommissionGoal = summary?.commission_goal || {};
+  const storeCommissionGoalTiers = Array.isArray(storeCommissionGoal.tiers) ? storeCommissionGoal.tiers : [];
+  const storeCommissionGoalProgress = Math.max(0, Math.min(100, Number(storeCommissionGoal.progress_percent || 0)));
+  const storeCurrentGoalTier = storeCommissionGoal.current_tier || null;
+  const storeGoalLevelCopy = `${Number(storeCommissionGoal.tier_index || 0)}/${Number(storeCommissionGoal.tier_count || storeCommissionGoalTiers.length || 5)}`;
+  const storeGoalRateCopy = storeCurrentGoalTier?.rate_display || '0%';
 
   function recentLoginVerificationActive(nextOwner = owner) {
     const expiresAt = nextOwner?.recent_login_verification?.expires_at;
@@ -19550,23 +19556,47 @@ function StoreOwnerPortalApp() {
               </div>
             )}
           </div>
-          <div className="store-owner-hero-kpis">
-            {[
-              { icon: IconCash, label: 'Daily', value: summary.sales_today_display || 'PHP 0.00' },
-              { icon: IconCalendarStats, label: 'Monthly', value: summary.sales_month_display || 'PHP 0.00' },
-              { icon: IconWallet, label: 'Commission', value: summary.commission_month_display || 'PHP 0.00' },
-            ].map((item) => {
-              const HeroIcon = item.icon;
-              return (
-                <span className="store-owner-hero-kpi" key={item.label}>
-                  <HeroIcon size={15} />
-                  <small>{item.label}</small>
-                  <strong>{item.value}</strong>
+          <div className="store-owner-goal-panel">
+            <div className="store-owner-goal-top">
+              <span className="store-owner-goal-level"><IconStar size={15} />Level {storeGoalLevelCopy}</span>
+              <span className="store-owner-goal-rate">{storeGoalRateCopy} commission</span>
+            </div>
+            <div className="store-owner-goal-copy">
+              <strong>Monthly sales sprint</strong>
+              <span>{storeCommissionGoal.headline || 'Start approving requests to unlock store commission tiers.'}</span>
+            </div>
+            <div className="store-owner-goal-track" aria-label={`Goal progress ${storeCommissionGoalProgress}%`}>
+              <span style={{ width: `${storeCommissionGoalProgress}%` }} />
+            </div>
+            <div className="store-owner-goal-milestones">
+              {storeCommissionGoalTiers.map((tier) => (
+                <span
+                  className={`store-owner-goal-milestone ${tier.reached ? 'is-reached' : ''} ${storeCommissionGoal.next_tier?.index === tier.index ? 'is-next' : ''}`}
+                  key={`${tier.index}-${tier.threshold_centavos}`}
+                >
+                  <i>{tier.rate_display}</i>
+                  <small>{tier.threshold_display || 'PHP 0.00'}</small>
                 </span>
-              );
-            })}
-	          </div>
-	        </header>
+              ))}
+            </div>
+            <div className="store-owner-goal-kpis">
+              {[
+                { icon: IconCash, label: 'Today', value: summary.sales_today_display || 'PHP 0.00' },
+                { icon: IconCalendarStats, label: 'This month', value: summary.sales_month_display || 'PHP 0.00' },
+                { icon: IconWallet, label: 'Goal commission', value: storeCommissionGoal.estimated_commission_display || summary.commission_month_display || 'PHP 0.00' },
+              ].map((item) => {
+                const HeroIcon = item.icon;
+                return (
+                  <span className="store-owner-goal-kpi" key={item.label}>
+                    <HeroIcon size={15} />
+                    <small>{item.label}</small>
+                    <strong>{item.value}</strong>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+		        </header>
 	        {showStorePwaInstallPanel && (
 	          <>
 	            <StorePwaInstallCard showClose onInstall={() => installStoreHomeScreenApp({ hideMainPanel: true })} />

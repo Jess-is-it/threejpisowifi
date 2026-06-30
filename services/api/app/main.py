@@ -22474,6 +22474,72 @@ def store_period_commission_centavos(gross_centavos: int, commission_type: Optio
     return int((Decimal(gross) * (value / Decimal("100"))).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+STORE_PROGRESSIVE_COMMISSION_TIERS = [
+    {"threshold_centavos": 100_000, "rate_percent": Decimal("10")},
+    {"threshold_centavos": 200_000, "rate_percent": Decimal("12")},
+    {"threshold_centavos": 300_000, "rate_percent": Decimal("15")},
+    {"threshold_centavos": 500_000, "rate_percent": Decimal("18")},
+    {"threshold_centavos": 1_000_000, "rate_percent": Decimal("22")},
+]
+
+
+def store_progressive_commission_goal(gross_centavos: int) -> dict:
+    gross = max(0, int(gross_centavos or 0))
+    tiers = []
+    current_tier = None
+    next_tier = None
+    for index, tier in enumerate(STORE_PROGRESSIVE_COMMISSION_TIERS, start=1):
+        threshold = int(tier["threshold_centavos"])
+        rate = Decimal(tier["rate_percent"])
+        rate_display = f"{rate:.2f}".rstrip("0").rstrip(".")
+        reached = gross >= threshold
+        mapped = {
+            "index": index,
+            "threshold_centavos": threshold,
+            "threshold_display": money_display_from_centavos(threshold),
+            "rate_percent": float(rate),
+            "rate_display": f"{rate_display}%",
+            "reached": reached,
+        }
+        tiers.append(mapped)
+        if reached:
+            current_tier = mapped
+        elif next_tier is None:
+            next_tier = mapped
+    if current_tier is None:
+        active_floor = 0
+        active_rate = Decimal("0")
+        tier_index = 0
+    else:
+        active_floor = int(current_tier["threshold_centavos"])
+        active_rate = Decimal(str(current_tier["rate_percent"]))
+        tier_index = int(current_tier["index"])
+    if next_tier:
+        next_threshold = int(next_tier["threshold_centavos"])
+        tier_span = max(1, next_threshold - active_floor)
+        progress_percent = min(100, max(0, round(((gross - active_floor) / tier_span) * 100)))
+        remaining = max(0, next_threshold - gross)
+        headline = f"{money_display_from_centavos(remaining)} more to unlock {next_tier['rate_display']} store commission."
+    else:
+        progress_percent = 100
+        remaining = 0
+        headline = "Top tier unlocked. Keep the streak strong this month."
+    estimated_commission = int((Decimal(gross) * (active_rate / Decimal("100"))).quantize(Decimal("1"), rounding=ROUND_HALF_UP)) if active_rate > 0 else 0
+    return {
+        "tiers": tiers,
+        "current_tier": current_tier,
+        "next_tier": next_tier,
+        "tier_index": tier_index,
+        "tier_count": len(tiers),
+        "progress_percent": progress_percent,
+        "remaining_to_next_centavos": remaining,
+        "remaining_to_next_display": money_display_from_centavos(remaining),
+        "estimated_commission_centavos": estimated_commission,
+        "estimated_commission_display": money_display_from_centavos(estimated_commission),
+        "headline": headline,
+    }
+
+
 def normalize_product_access_scope(value: Optional[str]) -> str:
     scope = (value or "ALL_LOCATIONS").strip().upper()
     aliases = {
@@ -27212,6 +27278,7 @@ def store_portal_purchase_requests(
     commission_today = store_period_commission_centavos(sales_today, commission_type, commission_value) if commission_type == "PERCENT_OF_SALES" else 0
     net_month = max(0, sales_month - commission_month)
     net_today = max(0, sales_today - commission_today)
+    commission_goal = store_progressive_commission_goal(sales_month)
     return {
         "owner": {
             **serialize_store_owner(owner, include_store=True),
@@ -27247,6 +27314,7 @@ def store_portal_purchase_requests(
             "commission_month_display": money_display_from_centavos(commission_month),
             "net_month_centavos": net_month,
             "net_month_display": money_display_from_centavos(net_month),
+            "commission_goal": commission_goal,
         },
     }
 

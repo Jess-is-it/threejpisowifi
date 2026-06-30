@@ -14006,7 +14006,7 @@ button.portal-bag-control-card {
 .store-owner-hero {
   border-radius: 1rem;
   box-shadow: 0 18px 46px rgba(15, 23, 42, 0.13);
-  min-height: 180px;
+  min-height: 320px;
   overflow: hidden;
   position: relative;
 }
@@ -14016,7 +14016,7 @@ button.portal-bag-control-card {
     radial-gradient(circle at 20% 18%, rgba(255, 255, 255, 0.22), transparent 30%),
     linear-gradient(135deg, rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.86), rgba(15, 23, 42, 0.9));
   display: flex;
-  height: 180px;
+  height: 320px;
   object-fit: cover;
   width: 100%;
 }
@@ -14132,41 +14132,190 @@ button.portal-bag-control-card {
   background: rgba(214, 57, 57, 0.08);
 }
 
-.store-owner-hero-kpis {
+.store-owner-goal-panel {
+  backdrop-filter: blur(14px);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.18), transparent 30%),
+    linear-gradient(135deg, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.44));
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 1rem;
   bottom: 1rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.28);
+  color: #ffffff;
+  display: grid;
+  gap: 0.62rem;
   left: 1rem;
-  max-width: calc(100% - 2rem);
+  max-width: min(760px, calc(100% - 2rem));
+  padding: 0.8rem;
   position: absolute;
+  text-shadow: 0 1px 10px rgba(15, 23, 42, 0.55);
+  width: calc(100% - 2rem);
   z-index: 3;
 }
 
-.store-owner-hero-kpi {
+.store-owner-goal-top,
+.store-owner-goal-kpis {
   align-items: center;
-  backdrop-filter: blur(10px);
-  background: rgba(15, 23, 42, 0.48);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 999px;
-  color: #ffffff;
-  display: inline-flex;
-  gap: 0.35rem;
-  min-height: 2rem;
-  padding: 0.28rem 0.58rem;
-  text-shadow: 0 1px 8px rgba(15, 23, 42, 0.6);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: space-between;
 }
 
-.store-owner-hero-kpi small {
-  color: rgba(255, 255, 255, 0.78);
+.store-owner-goal-level,
+.store-owner-goal-rate {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.76rem;
+  font-weight: 900;
+  gap: 0.35rem;
+  min-height: 1.85rem;
+  padding: 0.24rem 0.58rem;
+}
+
+.store-owner-goal-rate {
+  animation: store-goal-rate-pulse 2.8s ease-in-out infinite;
+  background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.32);
+}
+
+.store-owner-goal-copy {
+  display: grid;
+  gap: 0.16rem;
+}
+
+.store-owner-goal-copy strong {
+  font-size: 1rem;
+  font-weight: 900;
+}
+
+.store-owner-goal-copy span {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.8rem;
+}
+
+.store-owner-goal-track {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  height: 0.65rem;
+  overflow: hidden;
+  position: relative;
+}
+
+.store-owner-goal-track span {
+  animation: store-goal-progress-shine 2.4s linear infinite;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.08)),
+    linear-gradient(90deg, #31c48d, #facc15, #fb7185);
+  background-size: 160px 100%, 100% 100%;
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  min-width: 0.45rem;
+  transition: width 420ms ease;
+}
+
+.store-owner-goal-milestones {
+  display: grid;
+  gap: 0.35rem;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.store-owner-goal-milestone {
+  align-items: center;
+  color: rgba(255, 255, 255, 0.6);
+  display: grid;
+  gap: 0.1rem;
+  justify-items: center;
+  min-width: 0;
+  position: relative;
+}
+
+.store-owner-goal-milestone::before {
+  background: rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 999px;
+  content: "";
+  height: 0.58rem;
+  width: 0.58rem;
+}
+
+.store-owner-goal-milestone.is-reached::before {
+  animation: store-goal-dot-pulse 1.8s ease-in-out infinite;
+  background: #31c48d;
+  box-shadow: 0 0 0 5px rgba(49, 196, 141, 0.18);
+}
+
+.store-owner-goal-milestone.is-next::before {
+  background: #facc15;
+  box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.16);
+}
+
+.store-owner-goal-milestone i,
+.store-owner-goal-milestone small {
+  font-style: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.store-owner-goal-milestone i {
   font-size: 0.68rem;
-  font-weight: 750;
+  font-weight: 900;
+}
+
+.store-owner-goal-milestone small {
+  font-size: 0.6rem;
+  max-width: 100%;
+}
+
+.store-owner-goal-milestone.is-reached,
+.store-owner-goal-milestone.is-next {
+  color: #ffffff;
+}
+
+.store-owner-goal-kpis {
+  justify-content: flex-start;
+}
+
+.store-owner-goal-kpi {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.13);
+  border: 1px solid rgba(255, 255, 255, 0.17);
+  border-radius: 0.72rem;
+  display: inline-flex;
+  gap: 0.36rem;
+  min-height: 2rem;
+  padding: 0.35rem 0.52rem;
+}
+
+.store-owner-goal-kpi small {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.66rem;
+  font-weight: 800;
   text-transform: uppercase;
 }
 
-.store-owner-hero-kpi strong {
+.store-owner-goal-kpi strong {
   font-size: 0.8rem;
-  font-weight: 900;
+  font-weight: 950;
+}
+
+@keyframes store-goal-progress-shine {
+  from { background-position: -160px 0, 0 0; }
+  to { background-position: 160px 0, 0 0; }
+}
+
+@keyframes store-goal-dot-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+
+@keyframes store-goal-rate-pulse {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
 }
 
 .store-owner-floating-actions {
@@ -14614,11 +14763,11 @@ button.portal-bag-control-card {
   }
 
   .store-owner-hero {
-    min-height: 220px;
+    min-height: 360px;
   }
 
   .store-owner-hero-image {
-    height: 220px;
+    height: 360px;
   }
 
   .store-owner-hero-title {
@@ -14637,10 +14786,25 @@ button.portal-bag-control-card {
     top: 1rem;
   }
 
-  .store-owner-hero-kpis {
-    bottom: 4rem;
+  .store-owner-goal-panel {
+    bottom: 1rem;
     left: 1rem;
     right: 1rem;
+    width: auto;
+  }
+
+  .store-owner-goal-top,
+  .store-owner-goal-kpis {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .store-owner-goal-kpi {
+    width: 100%;
+  }
+
+  .store-owner-goal-milestone small {
+    display: none;
   }
 
   .store-owner-grid {
