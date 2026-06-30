@@ -469,6 +469,176 @@ function SpeedLimitBadge({ item = {}, compact = false }) {
   );
 }
 
+const DEFAULT_SPEED_INDICATOR_SETTINGS = {
+  enabled: true,
+  loop_seconds: 10,
+  show_on_product_cards: true,
+  show_on_bag_items: true,
+  tiers: [
+    { id: 'basic', label: 'Basic Speed', min_mbps: 0, max_mbps: 5, color: '#fb7185', glow: '#f97316', flame: '#f97316', smoke: '#94a3b8', travel_speed: 1, rocket_size: 2, air_particles: 4, smoke_particles: 4, fire_intensity: 2 },
+    { id: 'steady', label: 'Steady Speed', min_mbps: 5.01, max_mbps: 20, color: '#22c55e', glow: '#84cc16', flame: '#facc15', smoke: '#cbd5e1', travel_speed: 2, rocket_size: 4, air_particles: 7, smoke_particles: 5, fire_intensity: 3 },
+    { id: 'fast', label: 'Fast Speed', min_mbps: 20.01, max_mbps: 50, color: '#38bdf8', glow: '#06b6d4', flame: '#60a5fa', smoke: '#cbd5e1', travel_speed: 3, rocket_size: 6, air_particles: 10, smoke_particles: 7, fire_intensity: 5 },
+    { id: 'rocket', label: 'Rocket Speed', min_mbps: 50.01, max_mbps: '', color: '#a855f7', glow: '#ec4899', flame: '#fb923c', smoke: '#e2e8f0', travel_speed: 5, rocket_size: 8, air_particles: 14, smoke_particles: 10, fire_intensity: 8 },
+  ],
+};
+
+function boundedSpeedIndicatorInt(value, fallback, min, max) {
+  const numeric = Number(value);
+  const resolved = Number.isFinite(numeric) ? numeric : fallback;
+  return Math.max(min, Math.min(max, Math.round(resolved)));
+}
+
+function normalizeSpeedIndicatorSettings(value = {}) {
+  const source = value && typeof value === 'object' ? value : {};
+  const rawTiers = Array.isArray(source.tiers) && source.tiers.length ? source.tiers : DEFAULT_SPEED_INDICATOR_SETTINGS.tiers;
+  const tiers = rawTiers.map((tier, index) => {
+    const fallback = DEFAULT_SPEED_INDICATOR_SETTINGS.tiers[Math.min(index, DEFAULT_SPEED_INDICATOR_SETTINGS.tiers.length - 1)];
+    const min = Math.max(0, Number(tier?.min_mbps ?? fallback.min_mbps) || 0);
+    const rawMax = tier?.max_mbps ?? fallback.max_mbps;
+    const max = rawMax === null || rawMax === '' || rawMax === undefined ? '' : Math.max(min, Number(rawMax) || min);
+    return {
+      id: String(tier?.id || fallback.id || `tier-${index + 1}`).trim() || `tier-${index + 1}`,
+      label: String(tier?.label || fallback.label || `Tier ${index + 1}`).trim(),
+      min_mbps: min,
+      max_mbps: max,
+      color: normalizeItemColorHex(tier?.color) || fallback.color,
+      glow: normalizeItemColorHex(tier?.glow) || fallback.glow,
+      flame: normalizeItemColorHex(tier?.flame) || fallback.flame,
+      smoke: normalizeItemColorHex(tier?.smoke) || fallback.smoke,
+      travel_speed: boundedSpeedIndicatorInt(tier?.travel_speed, fallback.travel_speed, 1, 5),
+      rocket_size: boundedSpeedIndicatorInt(tier?.rocket_size, fallback.rocket_size, 1, 10),
+      air_particles: boundedSpeedIndicatorInt(tier?.air_particles, fallback.air_particles, 0, 18),
+      smoke_particles: boundedSpeedIndicatorInt(tier?.smoke_particles, fallback.smoke_particles, 0, 16),
+      fire_intensity: boundedSpeedIndicatorInt(tier?.fire_intensity, fallback.fire_intensity, 1, 8),
+    };
+  }).sort((a, b) => Number(a.min_mbps || 0) - Number(b.min_mbps || 0));
+  return {
+    enabled: source.enabled !== false,
+    loop_seconds: Math.max(5, Math.min(60, Number(source.loop_seconds ?? DEFAULT_SPEED_INDICATOR_SETTINGS.loop_seconds) || DEFAULT_SPEED_INDICATOR_SETTINGS.loop_seconds)),
+    show_on_product_cards: source.show_on_product_cards !== false,
+    show_on_bag_items: source.show_on_bag_items !== false,
+    tiers,
+  };
+}
+
+function speedIndicatorMbps(item = {}) {
+  if (!item?.speed_limit_enabled) return 0;
+  const download = Number(item.speed_download_mbps || 0);
+  const upload = Number(item.speed_upload_mbps || 0);
+  return Math.max(download, upload, 0);
+}
+
+function speedIndicatorTier(item = {}, settings = {}) {
+  const normalized = normalizeSpeedIndicatorSettings(settings);
+  const speed = speedIndicatorMbps(item);
+  const tier = normalized.tiers.find((candidate) => {
+    const min = Number(candidate.min_mbps || 0);
+    const max = candidate.max_mbps === '' || candidate.max_mbps === null || candidate.max_mbps === undefined ? Number.POSITIVE_INFINITY : Number(candidate.max_mbps);
+    return speed >= min && speed <= max;
+  }) || normalized.tiers[normalized.tiers.length - 1] || DEFAULT_SPEED_INDICATOR_SETTINGS.tiers[0];
+  return { settings: normalized, tier, speed };
+}
+
+function SpeedTakeoffIndicator({ item = {}, settings = {}, compact = false }) {
+  const normalized = normalizeSpeedIndicatorSettings(settings);
+  if (!item?.speed_limit_enabled || normalized.enabled === false) return null;
+  const { tier, speed } = speedIndicatorTier(item, normalized);
+  const label = speed > 0 ? `${speed.toLocaleString(undefined, { maximumFractionDigits: 2 })}Mbps` : speedLimitLabel(item);
+  const travelSpeed = Math.max(1, Math.min(5, Math.round(Number(tier.travel_speed || 1))));
+  const rocketSize = Math.max(1, Math.min(10, Math.round(Number(tier.rocket_size || 1))));
+  const airParticleCount = Math.max(0, Math.min(18, Math.round(Number(tier.air_particles || 0))));
+  const smokeParticleCount = Math.max(0, Math.min(16, Math.round(Number(tier.smoke_particles || 0))));
+  const firePower = Math.max(1, Math.min(8, Math.round(Number(tier.fire_intensity || 1))));
+  const travelSeconds = Math.max(1.2, Number(normalized.loop_seconds || 10) / travelSpeed);
+  const airSeconds = Math.max(0.55, travelSeconds / 2.8);
+  const rocketScale = compact ? 0.44 + (rocketSize * 0.11) : 0.34 + (rocketSize * 0.22);
+  const airParticles = Array.from({ length: airParticleCount }, (_, index) => index);
+  const smokeParticles = Array.from({ length: smokeParticleCount }, (_, index) => index);
+  const fireJets = Array.from({ length: firePower }, (_, index) => index);
+  return (
+    <div
+      className={`portal-speed-takeoff ${compact ? 'is-compact' : ''} is-travel-${travelSpeed}`}
+      style={{
+        '--portal-speed-color': tier.color,
+        '--portal-speed-glow': tier.glow,
+        '--portal-speed-flame': tier.flame,
+        '--portal-speed-smoke': tier.smoke,
+        '--portal-speed-rgb': cssHexToRgb(tier.color, '168,85,247'),
+        '--portal-speed-glow-rgb': cssHexToRgb(tier.glow, '236,72,153'),
+        '--portal-speed-loop': `${normalized.loop_seconds}s`,
+        '--portal-speed-travel': `${travelSeconds}s`,
+        '--portal-speed-air-duration': `${airSeconds}s`,
+        '--portal-speed-rocket-scale': rocketScale,
+        '--portal-speed-rocket-mid-scale': rocketScale + 0.08,
+        '--portal-speed-rocket-peak-scale': rocketScale + 0.16,
+        '--portal-speed-rocket-exit-scale': Math.max(0.64, rocketScale - 0.08),
+        '--portal-speed-air-count': airParticleCount,
+        '--portal-speed-smoke-count': smokeParticleCount,
+        '--portal-speed-fire-count': firePower,
+      }}
+      aria-label={`${tier.label}: ${speedLimitLabel(item)}`}
+      title={`${tier.label}: ${speedLimitLabel(item)}`}
+    >
+      <div className="portal-speed-stage">
+        <span className="portal-speed-track">
+          <span className="portal-speed-air-field" aria-hidden="true">
+            {airParticles.map((index) => (
+              <span
+                className={`portal-speed-air-particle particle-${(index % 6) + 1}`}
+                key={`air-${index}`}
+                style={{
+                  '--portal-speed-particle-index': index,
+                  '--portal-speed-particle-delay': `${-(((index * 0.23) + (travelSpeed * 0.09)) % airSeconds).toFixed(2)}s`,
+                  '--portal-speed-particle-left': `${6 + ((index * 37 + travelSpeed * 11) % 88)}%`,
+                  '--portal-speed-particle-top': `${14 + ((index * 23 + travelSpeed * 7) % 72)}%`,
+                  '--portal-speed-particle-size': `${12 + ((index * 5 + travelSpeed * 3) % 24)}px`,
+                  '--portal-speed-particle-drift': `${36 + ((index * 13 + travelSpeed * 9) % 58)}px`,
+                  '--portal-speed-particle-drift-end': `-${36 + ((index * 13 + travelSpeed * 9) % 58)}px`,
+                }}
+              />
+            ))}
+          </span>
+          <span className="portal-speed-beam" />
+            <span className="portal-speed-arrow">
+            <span className="portal-speed-body" />
+            <span className="portal-speed-window" />
+            <span className="portal-speed-booster top" />
+            <span className="portal-speed-booster bottom" />
+            <span className="portal-speed-fire-field" aria-hidden="true">
+              {fireJets.map((index) => (
+                <span
+                  className={`portal-speed-fire jet-${(index % 5) + 1}`}
+                  key={`fire-${index}`}
+                  style={{
+                    '--portal-speed-fire-index': index,
+                    '--portal-speed-fire-delay': `${-(index * 0.08)}s`,
+                    '--portal-speed-fire-offset': `${(index - Math.floor(firePower / 2)) * 3}px`,
+                  }}
+                />
+              ))}
+            </span>
+            <span className="portal-speed-smoke-field" aria-hidden="true">
+              {smokeParticles.map((index) => (
+                <span
+                  className={`portal-speed-smoke puff-${(index % 6) + 1}`}
+                  key={`smoke-${index}`}
+                  style={{
+                    '--portal-speed-smoke-index': index,
+                    '--portal-speed-smoke-delay': `${-(index * 0.11)}s`,
+                    '--portal-speed-smoke-y': `${(index % 5 - 2) * 5}px`,
+                    '--portal-speed-smoke-size': `${6 + (index % 4) * 2}px`,
+                  }}
+                />
+              ))}
+            </span>
+          </span>
+        </span>
+        <span className="portal-speed-label">{label}</span>
+      </div>
+    </div>
+  );
+}
+
 function ItemColorPicker({ valueKey, valueHex, usedKeys, onChange, label = 'Item Color' }) {
   const normalizedKey = normalizeItemColorKey(valueKey);
   const selected = itemColorMeta({ color_key: normalizedKey, color_hex: valueHex });
@@ -4770,6 +4940,12 @@ function PortalApp() {
   const activeBagItems = Array.isArray(bag?.active_items) && bag.active_items.length
     ? bag.active_items
     : (bag?.active_item ? [bag.active_item] : []);
+  const pendingBagActivationSpeedLabel = pendingBagActivationItem?.speed_limit_enabled
+    ? speedLimitLabel(pendingBagActivationItem)
+    : 'No speed limit';
+  const pendingBagActiveSpeedItems = pendingBagActivationItem
+    ? activeBagItems.filter((item) => item.id !== pendingBagActivationItem.id && item.speed_limit_enabled)
+    : [];
   const queuedBagItems = bag?.queued_items || [];
   const pendingStoreRequestCount = (storePendingRequests || []).filter((request) => request.status === 'PENDING').length;
   const hasReadyBagItems = queuedBagItems.length > 0;
@@ -6594,7 +6770,28 @@ function PortalApp() {
             </div>
             <div className="portal-bag-warning-target">
               <div className="fw-bold">{pendingBagActivationItem.product_name || 'WiFi package'}</div>
-              <div className="small text-muted">{formatSeconds(pendingBagActivationItem.remaining_seconds || pendingBagActivationItem.duration_seconds || 0)}</div>
+              <div className="portal-bag-warning-target-meta">
+                <span><IconClock size={14} /> {formatSeconds(pendingBagActivationItem.remaining_seconds || pendingBagActivationItem.duration_seconds || 0)}</span>
+                <span><IconActivity size={14} /> {pendingBagActivationSpeedLabel}</span>
+              </div>
+            </div>
+            <div className="portal-bag-warning-speed">
+              <div className="portal-bag-warning-speed-head">
+                <IconActivity size={18} />
+                <span>Speed after activation</span>
+              </div>
+              <strong>{pendingBagActivationSpeedLabel}</strong>
+              <p>
+                MikroTik will follow the speed of the package you activate most recently. Older active packages will keep their remaining time, but their speed limit is superseded while this newer package is active.
+              </p>
+              {pendingBagActiveSpeedItems.length > 0 && (
+                <div className="portal-bag-warning-current-speeds">
+                  <span>Current active speed:</span>
+                  {pendingBagActiveSpeedItems.slice(0, 3).map((item) => (
+                    <span className="badge bg-secondary-lt text-secondary" key={item.id}>{speedLimitLabel(item)}</span>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="d-flex justify-content-end gap-2 mt-3">
               <button className="btn" type="button" onClick={() => setPendingBagActivationItem(null)}>Cancel</button>
@@ -8926,44 +9123,48 @@ function PortalApp() {
               const cardUsesIptv = Boolean(item && (item.product_kind === 'IPTV' || item.product_kind === 'WIFI_IPTV'));
               const cardIptvReady = Boolean(item?.iptv_watch_ready || item?.iptv_status === 'PROVISIONED');
               return (
-                <div
-                  className={`card portal-remaining-card ${cardHasAccess ? 'is-connected' : 'is-disconnected'} is-clickable`}
-                  role="button"
-                  tabIndex={0}
-                  key={item?.id || `remaining-${index}`}
-                  onClick={openBagPage}
-                  onKeyDown={openBagFromKeyboard}
-                >
-                  <div className="card-body py-3">
-                    <div className="portal-remaining-panel">
-                      <span className="portal-remaining-icon"><IconClock size={22} /></span>
-                      <div className="portal-remaining-copy">
-                        <span className={`portal-remaining-time ${cardHasAccess ? 'is-connected' : 'is-disconnected'}`}>{cardTime}</span>
-                        {item?.product_name && (
-                          <div className="portal-remaining-product">
-                            {item.product_name}
-                          </div>
+                <React.Fragment key={item?.id || `remaining-${index}`}>
+                  <div
+                    className={`card portal-remaining-card ${cardHasAccess ? 'is-connected' : 'is-disconnected'} is-clickable`}
+                    role="button"
+                    tabIndex={0}
+                    onClick={openBagPage}
+                    onKeyDown={openBagFromKeyboard}
+                  >
+                    <div className="card-body py-3">
+                      <div className="portal-remaining-panel">
+                        <span className="portal-remaining-icon"><IconClock size={22} /></span>
+                        <div className="portal-remaining-copy">
+                          <span className={`portal-remaining-time ${cardHasAccess ? 'is-connected' : 'is-disconnected'}`}>{cardTime}</span>
+                          {item?.product_name && (
+                            <div className="portal-remaining-product">
+                              {item.product_name}
+                            </div>
+                          )}
+                        </div>
+                        {cardUsesIptv && (
+                          <button
+                            className="btn btn-icon btn-primary portal-remaining-watch-btn"
+                            type="button"
+                            title={cardIptvReady ? t('Watch IPTV') : t('IPTV provisioning')}
+                            aria-label={cardIptvReady ? t('Watch IPTV') : t('IPTV provisioning')}
+                            disabled={!cardIptvReady || iptvWatchLoading === item.id}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              openIptvWatch(item);
+                            }}
+                          >
+                            <IconPlayerPlay size={18} />
+                          </button>
                         )}
                       </div>
-                      {cardUsesIptv && (
-                        <button
-                          className="btn btn-icon btn-primary portal-remaining-watch-btn"
-                          type="button"
-                          title={cardIptvReady ? t('Watch IPTV') : t('IPTV provisioning')}
-                          aria-label={cardIptvReady ? t('Watch IPTV') : t('IPTV provisioning')}
-                          disabled={!cardIptvReady || iptvWatchLoading === item.id}
-                          onClick={(event) => {
-                            event.preventDefault();
-                            event.stopPropagation();
-                            openIptvWatch(item);
-                          }}
-                        >
-                          <IconPlayerPlay size={18} />
-                        </button>
-                      )}
                     </div>
                   </div>
-                </div>
+                  {item?.speed_limit_enabled && (
+                    <SpeedTakeoffIndicator item={item} settings={settings?.speed_indicator} />
+                  )}
+                </React.Fragment>
               );
             })}
           </div>
@@ -24621,6 +24822,7 @@ function CaptivePortalPage({ mode = 'full' }) {
   const reachableMikrotiks = mikrotiks.filter((router) => router.status === 'REACHABLE').length;
   const currentPortalUrl = portalSettings?.current_portal_url || portalSettings?.portal_url_production || portalSettings?.portal_url_staging || 'http://192.168.50.70/portal';
   const avatarNotesConfig = normalizePortalAvatarNotesSettings(portalSettings?.avatar_notes_json || {});
+  const speedIndicatorConfig = normalizeSpeedIndicatorSettings(portalSettings?.speed_indicator_json || portalSettings?.speed_indicator || {});
   const profileGiftDuration = profileGiftDurationParts(portalSettings?.profile_gift_duration_seconds || DEFAULT_PROFILE_GIFT.duration_seconds);
   function updateProfileGiftDuration(value, unit = profileGiftDuration.unit) {
     setPortalSettings((current) => ({
@@ -24700,6 +24902,36 @@ function CaptivePortalPage({ mode = 'full' }) {
   }
   function resetAvatarNotes() {
     setPortalSettings((current) => ({ ...current, avatar_notes_json: DEFAULT_PORTAL_AVATAR_NOTES_SETTINGS }));
+  }
+  function updateSpeedIndicatorConfig(updates) {
+    setPortalSettings((current) => {
+      const next = normalizeSpeedIndicatorSettings({
+        ...normalizeSpeedIndicatorSettings(current?.speed_indicator_json || current?.speed_indicator || {}),
+        ...updates,
+      });
+      return { ...current, speed_indicator_json: next, speed_indicator: next };
+    });
+  }
+  function updateSpeedIndicatorTier(tierId, updates) {
+    updateSpeedIndicatorConfig({
+      tiers: speedIndicatorConfig.tiers.map((tier) => tier.id === tierId ? { ...tier, ...updates } : tier),
+    });
+  }
+  function addSpeedIndicatorTier() {
+    updateSpeedIndicatorConfig({
+      tiers: [
+        ...speedIndicatorConfig.tiers,
+        { id: `tier-${Date.now()}`, label: 'Custom Speed', min_mbps: 0, max_mbps: '', color: '#38bdf8', glow: '#06b6d4', flame: '#fb923c', smoke: '#cbd5e1', travel_speed: 2, rocket_size: 4, air_particles: 7, smoke_particles: 5, fire_intensity: 3 },
+      ],
+    });
+  }
+  function removeSpeedIndicatorTier(tierId) {
+    updateSpeedIndicatorConfig({
+      tiers: speedIndicatorConfig.tiers.filter((tier) => tier.id !== tierId),
+    });
+  }
+  function resetSpeedIndicator() {
+    setPortalSettings((current) => ({ ...current, speed_indicator_json: DEFAULT_SPEED_INDICATOR_SETTINGS, speed_indicator: DEFAULT_SPEED_INDICATOR_SETTINGS }));
   }
   const setupMikrotikRow = mikrotikRows.find((router) => router.id === mikrotikPlanRouterId);
   const setupMikrotikOptions = mikrotikOptions[mikrotikPlanRouterId] || {};
@@ -25283,7 +25515,7 @@ function CaptivePortalPage({ mode = 'full' }) {
           <div className="card">
             <div className="card-body border-bottom py-2">
               <ul className="nav nav-tabs flex-nowrap overflow-auto" role="tablist">
-                {['No Internet Page', 'Welcome Gift', 'Outside Network & Bag', 'Avatar Notes', 'Customer Consent'].map((tab) => (
+                {['No Internet Page', 'Welcome Gift', 'Outside Network & Bag', 'Speed Indicator', 'Avatar Notes', 'Customer Consent'].map((tab) => (
                   <li className="nav-item" role="presentation" key={tab}>
                     <button type="button" className={`nav-link ${portalDesignTab === tab ? 'active' : ''}`} onClick={() => setPortalDesignTab(tab)}>
                       {tab}
@@ -25473,6 +25705,187 @@ function CaptivePortalPage({ mode = 'full' }) {
                       <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Outside Network & Bag</button>
                     </div>
                   </form> : <div className="empty">Loading outside network settings...</div>}
+                </Card>
+              )}
+              {portalDesignTab === 'Speed Indicator' && (
+                <Card title="Speed Indicator" subtitle="Animated speed beam shown below active remaining-time cards that have a MikroTik speed limit.">
+                  {portalSettings ? <form onSubmit={savePortalSettings}>
+                    <div className="row g-3">
+                      <div className="col-lg-4">
+                        <div className="border rounded p-3 h-100">
+                          <label className="form-check form-switch mb-3">
+                            <input
+                              className="form-check-input"
+                              type="checkbox"
+                              checked={speedIndicatorConfig.enabled !== false}
+                              onChange={(event) => updateSpeedIndicatorConfig({ enabled: event.target.checked })}
+                            />
+                            <span className="form-check-label fw-semibold">Enable speed animation</span>
+                          </label>
+                          <div className="alert alert-info py-2 mb-3">
+                            This animation appears only in the captive portal main page below each active remaining-time card that has a speed limit.
+                          </div>
+                          <label className="form-label d-flex align-items-center gap-1">
+                            Animation loop seconds
+                            <FieldHint text="Default is 10 seconds. The beam progresses, enters takeoff, shows flame/smoke, then rests before the next loop." />
+                          </label>
+                          <input
+                            className="form-control"
+                            type="number"
+                            min="5"
+                            max="60"
+                            value={speedIndicatorConfig.loop_seconds}
+                            onChange={(event) => updateSpeedIndicatorConfig({ loop_seconds: Number(event.target.value) })}
+                          />
+                          <div className="portal-speed-admin-preview mt-3">
+                            <SpeedTakeoffIndicator
+                              item={{ speed_limit_enabled: true, speed_download_mbps: 100, speed_upload_mbps: 100 }}
+                              settings={speedIndicatorConfig}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                      <div className="col-lg-8">
+                        <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+                          <div>
+                            <div className="fw-semibold">Speed color tiers</div>
+                            <div className="text-muted small">The portal uses the highest Mbps value from download/upload to choose a tier color.</div>
+                          </div>
+                          <div className="d-flex gap-2">
+                            <button className="btn btn-outline-secondary btn-sm" type="button" onClick={resetSpeedIndicator}>
+                              <IconRefresh size={16} className="me-1" />Reset
+                            </button>
+                            <button className="btn btn-outline-primary btn-sm" type="button" onClick={addSpeedIndicatorTier}>
+                              <IconPlus size={16} className="me-1" />Add tier
+                            </button>
+                          </div>
+                        </div>
+                        <div className="portal-speed-tier-editor">
+                          {speedIndicatorConfig.tiers.map((tier) => (
+                            <div className="portal-speed-tier-row" key={tier.id}>
+                              <div className="row g-2 align-items-end">
+                                <div className="col-md-4">
+                                  <label className="form-label">Label</label>
+                                  <input className="form-control" value={tier.label} onChange={(event) => updateSpeedIndicatorTier(tier.id, { label: event.target.value })} />
+                                </div>
+                                <div className="col-6 col-md-2">
+                                  <label className="form-label">Min Mbps</label>
+                                  <input className="form-control" type="number" min="0" step="0.01" value={tier.min_mbps} onChange={(event) => updateSpeedIndicatorTier(tier.id, { min_mbps: Number(event.target.value) })} />
+                                </div>
+                                <div className="col-6 col-md-2">
+                                  <label className="form-label">Max Mbps</label>
+                                  <input className="form-control" type="number" min="0" step="0.01" value={tier.max_mbps ?? ''} placeholder="No limit" onChange={(event) => updateSpeedIndicatorTier(tier.id, { max_mbps: event.target.value === '' ? '' : Number(event.target.value) })} />
+                                </div>
+                                <div className="col-6 col-md-1">
+                                  <label className="form-label">Beam</label>
+                                  <input className="form-control form-control-color w-100" type="color" value={tier.color} onChange={(event) => updateSpeedIndicatorTier(tier.id, { color: event.target.value })} />
+                                </div>
+                                <div className="col-6 col-md-1">
+                                  <label className="form-label">Glow</label>
+                                  <input className="form-control form-control-color w-100" type="color" value={tier.glow} onChange={(event) => updateSpeedIndicatorTier(tier.id, { glow: event.target.value })} />
+                                </div>
+                                <div className="col-6 col-md-1">
+                                  <label className="form-label">Fire</label>
+                                  <input className="form-control form-control-color w-100" type="color" value={tier.flame} onChange={(event) => updateSpeedIndicatorTier(tier.id, { flame: event.target.value })} />
+                                </div>
+                                <div className="col-6 col-md-1 text-end">
+                                  <button className="btn btn-outline-danger btn-icon" type="button" disabled={speedIndicatorConfig.tiers.length <= 1} onClick={() => removeSpeedIndicatorTier(tier.id)} aria-label={`Remove ${tier.label}`}>
+                                    <IconTrash size={16} />
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="row g-2 mt-2 align-items-end">
+                                <div className="col-12 col-md">
+                                  <label className="form-label d-flex align-items-center gap-1">
+                                    Travel speed
+                                    <FieldHint text="Per-tier animation timing only. 1 is slow, 5 is fastest." />
+                                  </label>
+                                  <input
+                                    className="form-range"
+                                    type="range"
+                                    min="1"
+                                    max="5"
+                                    step="1"
+                                    value={tier.travel_speed}
+                                    onChange={(event) => updateSpeedIndicatorTier(tier.id, { travel_speed: Number(event.target.value) })}
+                                  />
+                                  <div className="small text-muted">Speed {tier.travel_speed}/5</div>
+                                </div>
+                                <div className="col-6 col-md">
+                                  <label className="form-label d-flex align-items-center gap-1">
+                                    Rocket size
+                                    <FieldHint text="Per-tier rocket size only. 1 is smallest, 5 is biggest." />
+                                  </label>
+                                  <input
+                                    className="form-range"
+                                    type="range"
+                                    min="1"
+                                    max="10"
+                                    step="1"
+                                    value={tier.rocket_size}
+                                    onChange={(event) => updateSpeedIndicatorTier(tier.id, { rocket_size: Number(event.target.value) })}
+                                  />
+                                  <div className="small text-muted">Size {tier.rocket_size}/10</div>
+                                </div>
+                                <div className="col-6 col-md">
+                                  <label className="form-label d-flex align-items-center gap-1">
+                                    Air particles
+                                    <FieldHint text="Per-tier wind/air streaks. Higher speed tiers can use more particles." />
+                                  </label>
+                                  <input
+                                    className="form-control"
+                                    type="number"
+                                    min="0"
+                                    max="18"
+                                    value={tier.air_particles}
+                                    onChange={(event) => updateSpeedIndicatorTier(tier.id, { air_particles: Number(event.target.value) })}
+                                  />
+                                </div>
+                                <div className="col-6 col-md">
+                                  <label className="form-label d-flex align-items-center gap-1">
+                                    Smoke particles
+                                    <FieldHint text="Per-tier smoke puffs shown during rocket launch." />
+                                  </label>
+                                  <input
+                                    className="form-control"
+                                    type="number"
+                                    min="0"
+                                    max="16"
+                                    value={tier.smoke_particles}
+                                    onChange={(event) => updateSpeedIndicatorTier(tier.id, { smoke_particles: Number(event.target.value) })}
+                                  />
+                                </div>
+                                <div className="col-6 col-md">
+                                  <label className="form-label d-flex align-items-center gap-1">
+                                    Fire power
+                                    <FieldHint text="Per-tier flame jets. Higher values make the takeoff look stronger." />
+                                  </label>
+                                  <input
+                                    className="form-control"
+                                    type="number"
+                                    min="1"
+                                    max="8"
+                                    value={tier.fire_intensity}
+                                    onChange={(event) => updateSpeedIndicatorTier(tier.id, { fire_intensity: Number(event.target.value) })}
+                                  />
+                                </div>
+                              </div>
+                              <div className="portal-speed-tier-mini-preview">
+                                <SpeedTakeoffIndicator
+                                  item={{ speed_limit_enabled: true, speed_download_mbps: Number(tier.min_mbps || 0) || 1, speed_upload_mbps: Number(tier.min_mbps || 0) || 1 }}
+                                  settings={{ ...speedIndicatorConfig, tiers: [tier] }}
+                                  compact
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <button className="btn btn-primary"><IconDeviceFloppy size={18} className="me-2" />Save Speed Indicator</button>
+                    </div>
+                  </form> : <div className="empty">Loading speed indicator settings...</div>}
                 </Card>
               )}
               {portalDesignTab === 'Avatar Notes' && (

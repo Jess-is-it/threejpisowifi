@@ -23,7 +23,7 @@ import hmac
 import uuid
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from hashlib import md5, sha256
-from ipaddress import ip_address, ip_interface, ip_network
+from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Address, IPv6Interface, IPv6Network, ip_address, ip_interface, ip_network
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, List
@@ -876,6 +876,7 @@ class CaptivePortalSettingsUpdate(BaseModel):
     outside_network_purchase_success_message: Optional[str] = Field(default=None, max_length=500)
     bag_auto_activate_default: Optional[bool] = None
     bag_activation_overlap_seconds: Optional[int] = Field(default=None, ge=0, le=300)
+    speed_indicator_json: Optional[dict] = None
     sync_omada_portal: Optional[bool] = False
     status: Optional[str] = None
 
@@ -1585,6 +1586,10 @@ def sanitize_summary(value):
         return [sanitize_summary(item) for item in value[:20]]
     if isinstance(value, (datetime,)):
         return value.isoformat()
+    if isinstance(value, (IPv4Address, IPv6Address, IPv4Interface, IPv6Interface, IPv4Network, IPv6Network)):
+        return str(value)
+    if isinstance(value, Decimal):
+        return float(value)
     if hasattr(value, "hex") and value.__class__.__name__ == "UUID":
         return str(value)
     if isinstance(value, bytes):
@@ -14476,7 +14481,7 @@ def active_speed_limit_items_for_session(cur, session: dict) -> list[dict]:
           AND product_kind IN ('WIFI', 'WIFI_IPTV')
           AND active_until IS NOT NULL
           AND active_until > now()
-        ORDER BY active_until DESC, updated_at DESC
+        ORDER BY activated_at DESC NULLS LAST, updated_at DESC, active_until DESC
         FOR UPDATE
         """,
         (session["user_id"], session["id"]),
@@ -14485,14 +14490,10 @@ def active_speed_limit_items_for_session(cur, session: dict) -> list[dict]:
 
 
 def selected_speed_limit_candidate(active_items: list[dict]) -> Optional[dict]:
-    candidates = []
-    for item in active_items or []:
-        candidate = speed_limit_item_candidate(item)
-        if candidate:
-            candidates.append(candidate)
-    if not candidates:
+    ordered_items = list(active_items or [])
+    if not ordered_items:
         return None
-    return sorted(candidates, key=lambda row: (row["download_mbps"], row["upload_mbps"]))[-1]
+    return speed_limit_item_candidate(ordered_items[0])
 
 
 def speed_limit_target_ip_for_session(session: dict, request: Optional[Request] = None) -> Optional[str]:
@@ -16348,6 +16349,67 @@ def portal_pwa_admin_payload() -> dict:
     }
 
 
+DEFAULT_PORTAL_SPEED_INDICATOR = {
+    "enabled": True,
+    "loop_seconds": 10,
+    "show_on_product_cards": True,
+    "show_on_bag_items": True,
+    "tiers": [
+        {"id": "basic", "label": "Basic Speed", "min_mbps": 0, "max_mbps": 5, "color": "#fb7185", "glow": "#f97316", "flame": "#f97316", "smoke": "#94a3b8", "travel_speed": 1, "rocket_size": 2, "air_particles": 4, "smoke_particles": 4, "fire_intensity": 2},
+        {"id": "steady", "label": "Steady Speed", "min_mbps": 5.01, "max_mbps": 20, "color": "#22c55e", "glow": "#84cc16", "flame": "#facc15", "smoke": "#cbd5e1", "travel_speed": 2, "rocket_size": 4, "air_particles": 7, "smoke_particles": 5, "fire_intensity": 3},
+        {"id": "fast", "label": "Fast Speed", "min_mbps": 20.01, "max_mbps": 50, "color": "#38bdf8", "glow": "#06b6d4", "flame": "#60a5fa", "smoke": "#cbd5e1", "travel_speed": 3, "rocket_size": 6, "air_particles": 10, "smoke_particles": 7, "fire_intensity": 5},
+        {"id": "rocket", "label": "Rocket Speed", "min_mbps": 50.01, "max_mbps": None, "color": "#a855f7", "glow": "#ec4899", "flame": "#fb923c", "smoke": "#e2e8f0", "travel_speed": 5, "rocket_size": 8, "air_particles": 14, "smoke_particles": 10, "fire_intensity": 8},
+    ],
+}
+
+
+def normalize_portal_speed_indicator_settings(value: Optional[dict]) -> dict:
+    source = value if isinstance(value, dict) else {}
+    defaults = DEFAULT_PORTAL_SPEED_INDICATOR
+    tiers = []
+    raw_tiers = source.get("tiers") if isinstance(source.get("tiers"), list) else defaults["tiers"]
+    for index, tier in enumerate(raw_tiers[:12]):
+        if not isinstance(tier, dict):
+            continue
+        default_tier = defaults["tiers"][min(index, len(defaults["tiers"]) - 1)]
+        try:
+            min_mbps = max(0, float(tier.get("min_mbps", default_tier["min_mbps"]) or 0))
+        except (TypeError, ValueError):
+            min_mbps = float(default_tier["min_mbps"])
+        raw_max = tier.get("max_mbps", default_tier.get("max_mbps"))
+        try:
+            max_mbps = None if raw_max in (None, "") else max(min_mbps, float(raw_max))
+        except (TypeError, ValueError):
+            max_mbps = default_tier.get("max_mbps")
+        tier_id = normalize_payment_text(tier.get("id") or default_tier["id"], 60).lower().replace(" ", "-") or f"tier-{index + 1}"
+        tiers.append({
+            "id": tier_id,
+            "label": normalize_payment_text(tier.get("label") or default_tier["label"], 80),
+            "min_mbps": round(min_mbps, 2),
+            "max_mbps": round(max_mbps, 2) if max_mbps is not None else None,
+            "color": normalize_item_color_hex(tier.get("color")) or default_tier["color"],
+            "glow": normalize_item_color_hex(tier.get("glow")) or default_tier["glow"],
+            "flame": normalize_item_color_hex(tier.get("flame")) or default_tier["flame"],
+            "smoke": normalize_item_color_hex(tier.get("smoke")) or default_tier["smoke"],
+            "travel_speed": bounded_int(tier.get("travel_speed"), default_tier.get("travel_speed", 1), 1, 5),
+            "rocket_size": bounded_int(tier.get("rocket_size"), default_tier.get("rocket_size", 2), 1, 10),
+            "air_particles": bounded_int(tier.get("air_particles"), default_tier.get("air_particles", 7), 0, 18),
+            "smoke_particles": bounded_int(tier.get("smoke_particles"), default_tier.get("smoke_particles", 5), 0, 16),
+            "fire_intensity": bounded_int(tier.get("fire_intensity"), default_tier.get("fire_intensity", 3), 1, 8),
+        })
+    if not tiers:
+        tiers = [dict(tier) for tier in defaults["tiers"]]
+    tiers.sort(key=lambda item: float(item.get("min_mbps") or 0))
+    loop_seconds = bounded_int(source.get("loop_seconds"), defaults["loop_seconds"], 5, 60)
+    return {
+        "enabled": source.get("enabled") is not False,
+        "loop_seconds": loop_seconds,
+        "show_on_product_cards": source.get("show_on_product_cards") is not False,
+        "show_on_bag_items": source.get("show_on_bag_items") is not False,
+        "tiers": tiers,
+    }
+
+
 def public_captive_portal_settings(row=None):
     row = row or ensure_captive_portal_settings()
     portal_ssid = captive_portal_ssid_from_ap_configuration()
@@ -16356,6 +16418,7 @@ def public_captive_portal_settings(row=None):
     store_owner_activation_sms_message = strip_sms_url_schemes(row.get("store_owner_activation_sms_message") or "Welcome to 3J Hotspot, <OWNER>! Your store <STORE> is now active. Store portal: <STORE_PORTAL_URL> Username: <USERNAME> Temporary password: <TEMP_PASSWORD>. Please change your password after login.")
     payment_handoff = omada_payment_auth_free_store()
     pwa_settings = public_portal_pwa_settings(row)
+    speed_indicator = normalize_portal_speed_indicator_settings(row.get("speed_indicator_json") or {})
     return {
         "id": row["id"],
         "portal_mode": row["portal_mode"],
@@ -16405,6 +16468,8 @@ def public_captive_portal_settings(row=None):
         "outside_network_purchase_success_message": row.get("outside_network_purchase_success_message") or "Package saved to your bag. Connect to a 3J WiFi AP to use it.",
         "bag_auto_activate_default": bool(row.get("bag_auto_activate_default")),
         "bag_activation_overlap_seconds": int(row.get("bag_activation_overlap_seconds") or 60),
+        "speed_indicator_json": speed_indicator,
+        "speed_indicator": speed_indicator,
         "pwa": pwa_settings,
         "portal_sms_sender_id": row.get("portal_sms_sender_id"),
         "portal_sms_monthly_credit_limit": row.get("portal_sms_monthly_credit_limit"),
@@ -32387,6 +32452,7 @@ def save_captive_portal_settings(payload: CaptivePortalSettingsUpdate, admin=Dep
         "outside_network_purchase_success_message",
         "bag_auto_activate_default",
         "bag_activation_overlap_seconds",
+        "speed_indicator_json",
         "portal_sms_sender_id",
         "portal_sms_monthly_credit_limit",
         "portal_sms_monthly_reset_day",
@@ -32395,8 +32461,10 @@ def save_captive_portal_settings(payload: CaptivePortalSettingsUpdate, admin=Dep
     updates = {key: value for key, value in payload.model_dump(exclude_none=True).items() if key in allowed}
     if not updates:
         return public_captive_portal_settings(current)
+    if "speed_indicator_json" in updates:
+        updates["speed_indicator_json"] = normalize_portal_speed_indicator_settings(updates["speed_indicator_json"])
     assignments = ", ".join([f"{key} = %s" for key in updates] + ["updated_at = now()"])
-    params = [Json(value) if key in {"test_checklist_progress", "avatar_notes_json"} else value for key, value in updates.items()] + [current["id"]]
+    params = [Json(value) if key in {"test_checklist_progress", "avatar_notes_json", "speed_indicator_json"} else value for key, value in updates.items()] + [current["id"]]
     old_portal_url = current_captive_portal_url(current)
     with get_conn() as conn:
         with conn.cursor() as cur:
