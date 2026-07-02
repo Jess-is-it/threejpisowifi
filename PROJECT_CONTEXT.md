@@ -836,6 +836,33 @@ Long-term network direction:
 - Active station plans must not reuse the same station code, customer VLAN, or client subnet.
 - Saving a station validates selected router bridge/tagged ports against latest successful MikroTik preflight scan data, rejects PPPoE-related interfaces, and checks VLAN/subnet/pool conflicts before the RouterOS implementation modal is used.
 
+## Station Backup Reachability / WireGuard Model
+
+Use WireGuard for station-to-central controller reachability when a station has its own local ISP backup. Publicly exposing Omada/controller ports is a fallback only, not the preferred production design.
+
+Rules:
+- A station with `LOCAL_STATION_GATEWAY` owns its station VLAN, DHCP, NAT, queues, and AP/client path locally on the station root router. The central/root network should not be required for customer internet when the main fiber is cut.
+- WireGuard is used only for management/control-plane reachability back to central services such as Omada/controller and system APIs. It is not the default customer internet path.
+- Current direction is a dedicated WireGuard server with its own public IP/DNS, not CORE1 as the WireGuard hub. CORE1 may still be the public edge that forwards UDP 51820 from the IGATE/static public IP to the dedicated WireGuard server. Do not treat CORE1 as the tunnel hub unless the owner explicitly returns to a MikroTik-hub design.
+- Admin path is `Settings -> WireGuard`. The page has `Overview` for station status and `Settings` for the dedicated WireGuard server endpoint, key, and SSH installation credentials.
+- Do not reintroduce the CORE1 station local-ISP public endpoint / hub return gateway fields unless the owner explicitly asks to return to a MikroTik-hub design.
+- Station WireGuard interfaces are created without storing or exposing a station private key in the system. RouterOS generates the station private key locally; the system reads and stores only the station public key.
+- Station WireGuard routes should be narrow. Route central service subnets such as the Omada/system subnet, not `0.0.0.0/0`, unless the operator explicitly designs a full-tunnel backup.
+- The system hub peer should allow only the station tunnel address and station/customer management subnets that must reach central services.
+- RouterOS WireGuard apply/remove commands must follow the same station safety workflow: preflight scan, exact preview, explicit user review, then step-by-step push. Do not apply live MikroTik changes outside that reviewed workflow.
+
+Validated station pattern from `CCR1009-Centro` failover testing on 2026-07-02:
+- Dedicated WireGuard server is the hub. Current production server is `192.168.50.25` with public endpoint `wg.3jhotspot.com:51820`.
+- Public edge forwarding belongs on the router that owns the static public IP/IGATE. Current deployment uses CORE1 IGATE to dst-nat UDP `51820` to `192.168.50.25` and route WireGuard replies out the selected IGATE routing table.
+- Each station root MikroTik gets its own WireGuard interface and tunnel IP, normally derived from the station VLAN such as `10.250.<vlan>.2/32`.
+- Each station root must have a narrow `/32` route to the public WireGuard endpoint through the station local ISP gateway. For `CCR1009-Centro`, this is `122.52.255.214/32 -> 192.168.5.1`. This prevents the station from trying to reach the WireGuard endpoint through the cut mainline/core path.
+- The dedicated WireGuard server peer allowed IPs must include the station tunnel host and station client/management subnets that central services must reach. For `CCR1009-Centro`, allowed IPs are `10.250.78.2/32,10.78.0.0/24`.
+- The central office/default LAN gateway must route station tunnel/client subnets back to the dedicated WireGuard server LAN IP. In the current office this means `CCR2116-Roma/Batu/GK` needs routes like `10.250.78.2/32 -> 192.168.50.25` and `10.78.0.0/24 -> 192.168.50.25`.
+- Do not put these central return routes on CORE1 unless CORE1 is also the actual default gateway for the central services that need to reach the station. In the current network, the missing routes on `CCR2116-Roma/Batu/GK` caused the tunnel to handshake while Winbox/API/UI fallback to `10.250.78.2` timed out.
+- Validation after cutting the mainline must include: WireGuard server can ping station tunnel IP; hotspot host and API container can ping station tunnel IP; TCP `8291` Winbox and RouterOS API port, currently `1219`, are open on station tunnel IP; `Settings -> WireGuard` reports `HANDSHAKE_OK`.
+- If `Settings -> WireGuard` reports `Station interface check failed: timed out; tunnel fallback <station tunnel IP> failed: timed out`, first check central LAN return routes to the dedicated WireGuard server before changing peer keys, endpoint DNS, or station firewall rules.
+- Future WireGuard page work should manage these central return routes per station so new substations do not require manual CCR route additions.
+
 ## Station Implementation History + Remove Config
 
 Phase 2 station safety foundation:

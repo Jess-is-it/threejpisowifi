@@ -24,7 +24,7 @@ import uuid
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from hashlib import md5, sha256
 from ipaddress import IPv4Address, IPv4Interface, IPv4Network, IPv6Address, IPv6Interface, IPv6Network, ip_address, ip_interface, ip_network
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, List
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
@@ -35,6 +35,7 @@ import requests
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric import x25519
 from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -586,6 +587,10 @@ class StorePortalCustomerBuyRequest(BaseModel):
     pin_code: Optional[str] = Field(default=None, max_length=4)
 
 
+class StoreRemittancePickupRequest(BaseModel):
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
 class StorePortalProfileUpdateRequest(BaseModel):
     pin_code: Optional[str] = Field(default=None, max_length=4)
     pin_required_interval_minutes: Optional[int] = Field(default=None, ge=0, le=30)
@@ -975,15 +980,26 @@ class MikrotikRouterUpdate(BaseModel):
 
 class MikrotikStationRouterPayload(BaseModel):
     router_id: str
+    transport_mode: Optional[str] = Field(default="BRIDGE_TRUNK", max_length=80)
     bridge_name: Optional[str] = Field(default=None, max_length=200)
     tagged_ports: Optional[str] = Field(default=None, max_length=1200)
+    handoff_bridge_name: Optional[str] = Field(default=None, max_length=200)
+    handoff_tagged_ports: Optional[str] = Field(default=None, max_length=1200)
     notes: Optional[str] = Field(default=None, max_length=1200)
+
+
+class MikrotikStationSitePayload(BaseModel):
+    site_deployment_id: Optional[str] = Field(default=None, max_length=80)
+    omada_site_id: Optional[str] = Field(default=None, max_length=160)
+    omada_site_name: Optional[str] = Field(default=None, max_length=200)
+    is_primary: bool = False
 
 
 class MikrotikStationCreate(BaseModel):
     station_name: str = Field(min_length=1, max_length=160)
     station_code: Optional[str] = Field(default=None, max_length=80)
     description: Optional[str] = Field(default=None, max_length=2000)
+    gateway_mode: Optional[str] = Field(default="CENTRAL_ROOT_GATEWAY", max_length=80)
     vlan_id: int = Field(ge=1, le=4094)
     vlan_interface_name: Optional[str] = Field(default=None, max_length=200)
     client_network_cidr: str = Field(min_length=4, max_length=64)
@@ -1017,12 +1033,28 @@ class MikrotikStationCreate(BaseModel):
     ap_management_dns_servers: Optional[str] = Field(default=None, max_length=400)
     omada_site_id: Optional[str] = Field(default=None, max_length=160)
     omada_site_name: Optional[str] = Field(default=None, max_length=200)
+    wireguard_enabled: bool = False
+    wireguard_interface_name: Optional[str] = Field(default=None, max_length=200)
+    wireguard_station_address: Optional[str] = Field(default=None, max_length=80)
+    wireguard_station_public_key: Optional[str] = Field(default=None, max_length=200)
+    wireguard_peer_public_key: Optional[str] = Field(default=None, max_length=200)
+    wireguard_endpoint_host: Optional[str] = Field(default=None, max_length=255)
+    wireguard_endpoint_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    wireguard_endpoint_route_gateway: Optional[str] = Field(default=None, max_length=80)
+    wireguard_allowed_addresses: Optional[str] = Field(default="192.168.50.0/24,10.250.0.1/32", max_length=1200)
+    wireguard_route_distance: Optional[int] = Field(default=200, ge=1, le=255)
+    wireguard_persistent_keepalive: Optional[int] = Field(default=25, ge=0, le=65535)
+    wireguard_hub_router_id: Optional[str] = Field(default=None, max_length=80)
+    wireguard_hub_interface_name: Optional[str] = Field(default=None, max_length=200)
+    wireguard_hub_allowed_addresses: Optional[str] = Field(default=None, max_length=1200)
+    sites: list[MikrotikStationSitePayload] = Field(default_factory=list)
     routers: list[MikrotikStationRouterPayload] = Field(default_factory=list)
 
 
 class MikrotikStationOmadaBindingUpdate(BaseModel):
     omada_site_id: Optional[str] = Field(default=None, max_length=160)
     omada_site_name: Optional[str] = Field(default=None, max_length=200)
+    sites: list[MikrotikStationSitePayload] = Field(default_factory=list)
 
 
 class MikrotikApManagementRouterPayload(BaseModel):
@@ -1070,6 +1102,57 @@ class MikrotikConfigurationStepApply(BaseModel):
 class MikrotikStationCommandApply(BaseModel):
     router_id: str
     command_index: int = Field(ge=0)
+
+
+class WireGuardStationSettingsPayload(BaseModel):
+    wireguard_enabled: bool = True
+    wireguard_interface_name: Optional[str] = Field(default=None, max_length=200)
+    wireguard_station_address: Optional[str] = Field(default=None, max_length=80)
+    wireguard_endpoint_host: Optional[str] = Field(default=None, max_length=255)
+    wireguard_endpoint_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    wireguard_endpoint_route_gateway: Optional[str] = Field(default=None, max_length=80)
+    wireguard_allowed_addresses: Optional[str] = Field(default=None, max_length=1200)
+    wireguard_route_distance: Optional[int] = Field(default=200, ge=1, le=255)
+    wireguard_persistent_keepalive: Optional[int] = Field(default=25, ge=0, le=65535)
+    wireguard_hub_router_id: Optional[str] = Field(default=None, max_length=80)
+    wireguard_hub_interface_name: Optional[str] = Field(default=None, max_length=200)
+    wireguard_hub_allowed_addresses: Optional[str] = Field(default=None, max_length=1200)
+
+
+class WireGuardSystemHubUpdate(BaseModel):
+    enabled: bool = True
+    endpoint_host: Optional[str] = Field(default=None, max_length=255)
+    endpoint_port: Optional[int] = Field(default=51820, ge=1, le=65535)
+    interface_name: Optional[str] = Field(default="wg0", max_length=80)
+    hub_address: Optional[str] = Field(default="10.250.0.1/24", max_length=80)
+    central_service_routes: Optional[str] = Field(default="192.168.50.70/32,192.168.50.71/32", max_length=1200)
+    nat_enabled: bool = True
+    endpoint_forwarding_enabled: bool = True
+    endpoint_router_id: Optional[str] = Field(default=None, max_length=80)
+    endpoint_wan_interface: Optional[str] = Field(default=None, max_length=120)
+    endpoint_return_routing_table: Optional[str] = Field(default=None, max_length=80)
+    endpoint_public_ip: Optional[str] = Field(default=None, max_length=80)
+    endpoint_server_ip: Optional[str] = Field(default=None, max_length=80)
+    ssh_host: Optional[str] = Field(default=None, max_length=255)
+    ssh_port: Optional[int] = Field(default=22, ge=1, le=65535)
+    ssh_username: Optional[str] = Field(default=None, max_length=120)
+    ssh_auth_type: Optional[str] = Field(default="PASSWORD", max_length=40)
+    ssh_password: Optional[str] = Field(default=None, max_length=2000)
+    ssh_private_key: Optional[str] = Field(default=None, max_length=12000)
+    ssh_private_key_passphrase: Optional[str] = Field(default=None, max_length=2000)
+    sudo_mode: Optional[str] = Field(default="PASSWORDLESS", max_length=40)
+
+
+class WireGuardStationCommandApply(BaseModel):
+    router_id: str
+    command_index: int = Field(ge=0)
+    mode: str = Field(default="client", max_length=40)
+
+
+class WireGuardEndpointCommandApply(BaseModel):
+    router_id: str
+    command_index: int = Field(ge=0)
+    mode: str = Field(default="push", max_length=40)
 
 
 class MikrotikHotspotLoginSyncPayload(BaseModel):
@@ -1377,6 +1460,12 @@ def redact(text: str) -> str:
             secret_value = decrypt_secret(row.get(key))
             if secret_value:
                 redacted = redacted.replace(secret_value, "[REDACTED]")
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'wireguard_system_hub'")
+    value = row["value"] if row and isinstance(row.get("value"), dict) else {}
+    for key in ("ssh_password_encrypted", "ssh_private_key_encrypted", "ssh_private_key_passphrase_encrypted", "private_key_encrypted"):
+        secret_value = decrypt_secret(value.get(key))
+        if secret_value:
+            redacted = redacted.replace(secret_value, "[REDACTED]")
     return redacted
 
 
@@ -5029,6 +5118,57 @@ def paymongo_create_checkout_session(store: dict, secret_key: str, order: dict, 
     return paymongo_request(store, secret_key, "POST", "/checkout_sessions", payload)
 
 
+def paymongo_create_store_remittance_checkout(store: dict, secret_key: str, remittance: dict, store_row: dict, owner: Optional[dict] = None) -> dict:
+    payment_method_types = payment_enabled_checkout_methods(store)
+    if not payment_method_types:
+        raise HTTPException(status_code=400, detail="Enable at least one PayMongo checkout method before accepting online remittances.")
+    public_id = remittance["public_id"]
+    store_name = normalize_payment_text(store_row.get("store_name"), 160) or "Physical store"
+    success_url = store_portal_url({"remittance": "success", "remittance_id": public_id})
+    cancel_url = store_portal_url({"remittance": "cancelled", "remittance_id": public_id})
+    attributes = {
+        "cancel_url": cancel_url,
+        "success_url": success_url,
+        "description": f"{store_name} sales remittance",
+        "line_items": [
+            {
+                "currency": remittance.get("currency") or "PHP",
+                "amount": int(remittance.get("amount_centavos") or 0),
+                "name": f"{store_name} Sales Remittance",
+                "description": "Store owner remittance for approved current-month physical store WiFi pass sales.",
+                "quantity": 1,
+            }
+        ],
+        "payment_method_types": payment_method_types,
+        "reference_number": public_id,
+        "send_email_receipt": False,
+        "show_description": True,
+        "show_line_items": True,
+        "metadata": {
+            "store_remittance_id": public_id,
+            "store_id": str(store_row.get("id") or remittance.get("store_id") or ""),
+            "store_name": store_name,
+            "owner_id": str((owner or {}).get("id") or remittance.get("owner_id") or ""),
+            "purpose": "store_sales_remittance",
+        },
+    }
+    billing = {}
+    owner_name = normalize_payment_text((owner or {}).get("display_name"), 120)
+    owner_phone = paymongo_checkout_phone((owner or {}).get("contact_number") or (owner or {}).get("normalized_contact"))
+    if owner_name:
+        billing["name"] = owner_name
+    if owner_phone:
+        billing["phone"] = owner_phone
+    if billing:
+        attributes["billing"] = billing
+    payload = {
+        "data": {
+            "attributes": attributes
+        }
+    }
+    return paymongo_request(store, secret_key, "POST", "/checkout_sessions", payload)
+
+
 def paymongo_expire_checkout_session(store: dict, secret_key: str, checkout_session_id: str) -> dict:
     session_id = normalize_payment_text(checkout_session_id, 120)
     if not session_id:
@@ -5308,6 +5448,32 @@ def paymongo_checkout_payment_id(payload: dict) -> Optional[str]:
     return None
 
 
+def paymongo_payload_payment_method(payload: dict) -> Optional[str]:
+    attributes = paymongo_checkout_attributes(payload)
+    candidates = [
+        attributes.get("payment_method_used"),
+        attributes.get("payment_method"),
+        attributes.get("payment_method_type"),
+        nested_value(payload, ["data", "attributes", "payment_method_used"]),
+        nested_value(payload, ["data", "attributes", "source", "type"]),
+        recursive_find_value(payload, {"payment_method_used", "payment_method_type"}),
+    ]
+    payment = paymongo_paid_payment_from_checkout(payload)
+    payment_attributes = payment.get("attributes") if isinstance(payment, dict) and isinstance(payment.get("attributes"), dict) else {}
+    source = payment_attributes.get("source") if isinstance(payment_attributes.get("source"), dict) else {}
+    candidates.extend([
+        payment_attributes.get("payment_method_used"),
+        payment_attributes.get("payment_method"),
+        payment_attributes.get("payment_method_type"),
+        source.get("type"),
+    ])
+    for value in candidates:
+        method = normalize_payment_text(value, 80).lower()
+        if method and method not in {"paymongo_checkout", "hosted_checkout", "checkout"}:
+            return method
+    return None
+
+
 def paymongo_checkout_paid_at(payload: dict) -> Optional[datetime]:
     attributes = paymongo_checkout_attributes(payload)
     paid_at = attributes.get("paid_at")
@@ -5378,6 +5544,7 @@ def sync_paymongo_checkout_status(cur, order: dict, request: Request) -> dict:
         raise RuntimeError(f"Paid amount mismatch. Expected {order['amount_centavos']} centavos, got {paid_amount}.")
 
     paid_at = paymongo_checkout_paid_at(checkout)
+    paid_method = paymongo_payload_payment_method(checkout)
     sync_event_id = f"checkout_sync:{order['checkout_session_id']}:{provider_payment_id or int((paid_at or datetime.now(timezone.utc)).timestamp())}"
     cur.execute(
         """
@@ -5385,6 +5552,7 @@ def sync_paymongo_checkout_status(cur, order: dict, request: Request) -> dict:
         SET status = 'PAID',
             provider_payment_id = COALESCE(%s, provider_payment_id),
             provider_event_id = COALESCE(provider_event_id, %s),
+            payment_method = COALESCE(%s, payment_method),
             provider_response_json = %s,
             paid_at = COALESCE(paid_at, %s, now()),
             last_error = NULL,
@@ -5392,7 +5560,7 @@ def sync_paymongo_checkout_status(cur, order: dict, request: Request) -> dict:
         WHERE id = %s
         RETURNING *
         """,
-        (provider_payment_id, sync_event_id, Json(sanitize_summary(checkout)), paid_at, order["id"]),
+        (provider_payment_id, sync_event_id, paid_method, Json(sanitize_summary(checkout)), paid_at, order["id"]),
     )
     order = cur.fetchone()
     if order.get("portal_session_id"):
@@ -5719,7 +5887,7 @@ def create_paymongo_admin_notification(
             title,
             message,
             "PayMongo",
-            "/admin/paymongo",
+            "/admin/settings/paymongo",
             "payment_orders",
             clean_related_id,
             metadata or {},
@@ -5786,7 +5954,7 @@ def create_iptv_login_failure_notification(
         "IPTV customer login failed",
         clean_message,
         "IPTV",
-        "/admin/iptv?tab=Logs",
+        "/admin/settings/iptv?tab=Logs",
         "iptv_login_tokens",
         fingerprint,
         {
@@ -5868,8 +6036,8 @@ def record_a2p_message_log(
             "DANGER",
             "A2P SMS failed",
             f"{normalize_payment_text(purpose, 80) or 'SMS'} to {masked or 'destination'} failed: {normalize_payment_text(error_message or response_summary, 500)}",
-            "System Settings",
-            "/admin/system-settings?tab=A2P%20Messaging&subtab=Messages",
+            "Settings",
+            "/admin/settings/system?tab=A2P%20Messaging&subtab=Messages",
             "a2p_message_logs",
             row_id or "",
             {
@@ -5898,7 +6066,7 @@ def send_a2p_sms_message(
     store = a2p_messaging_store()
     try:
         if not store.get("enabled"):
-            raise HTTPException(status_code=400, detail="A2P Messaging is disabled in System Settings.")
+            raise HTTPException(status_code=400, detail="A2P Messaging is disabled in Settings.")
         clean_message = normalize_a2p_text(message_text, 500)
         if not clean_message:
             raise HTTPException(status_code=400, detail="SMS message text is required.")
@@ -7286,7 +7454,7 @@ def finalize_omada_payment_auth_free_grants_for_order(cur, order: dict, final_st
     return finalized
 
 
-def omada_payment_auth_free_dashboard_payload(cur) -> dict:
+def omada_payment_auth_free_dashboard_payload(cur, include_remote: bool = False) -> dict:
     cleanup_expired_omada_payment_auth_free_grants(cur, limit=50)
     settings = public_omada_payment_auth_free_settings()
     abuse_overrides = omada_payment_auth_free_abuse_override_store()
@@ -7382,7 +7550,11 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
         if omada_payment_auth_free_abuse_is_overridden(public_row, abuse_overrides):
             continue
         active_blocks.append(public_row)
-    remote_snapshot = omada_payment_auth_free_remote_snapshot(cur, active_grants)
+    remote_snapshot = omada_payment_auth_free_remote_snapshot(cur, active_grants) if include_remote else {
+        "remote_clients": [],
+        "orphaned_remote_clients": [],
+        "remote_errors": [],
+    }
     overview["active_blocks"] = len(active_blocks)
     overview["remote_client_count"] = len(remote_snapshot["remote_clients"])
     overview["orphaned_remote_clients"] = len(remote_snapshot["orphaned_remote_clients"])
@@ -7394,6 +7566,7 @@ def omada_payment_auth_free_dashboard_payload(cur) -> dict:
         "recent_grants": recent_grants,
         "abuse_profiles": abuse_rows,
         "active_blocks": active_blocks,
+        "remote_live_check": bool(include_remote),
         "remote_clients": remote_snapshot["remote_clients"],
         "orphaned_remote_clients": remote_snapshot["orphaned_remote_clients"],
         "remote_errors": remote_snapshot["remote_errors"],
@@ -7454,22 +7627,34 @@ def routeros_write_word(sock, word: str):
 
 
 def routeros_read_length(sock):
-    first = sock.recv(1)
+    first = routeros_recv_exact(sock, 1)
     if not first:
         raise OSError("RouterOS API closed the connection")
     c = first[0]
     if (c & 0x80) == 0:
         return c
     if (c & 0xC0) == 0x80:
-        return ((c & ~0xC0) << 8) + sock.recv(1)[0]
+        return ((c & ~0xC0) << 8) + routeros_recv_exact(sock, 1)[0]
     if (c & 0xE0) == 0xC0:
-        rest = sock.recv(2)
+        rest = routeros_recv_exact(sock, 2)
         return ((c & ~0xE0) << 16) + (rest[0] << 8) + rest[1]
     if (c & 0xF0) == 0xE0:
-        rest = sock.recv(3)
+        rest = routeros_recv_exact(sock, 3)
         return ((c & ~0xF0) << 24) + (rest[0] << 16) + (rest[1] << 8) + rest[2]
-    rest = sock.recv(4)
+    rest = routeros_recv_exact(sock, 4)
     return struct.unpack("!I", rest)[0]
+
+
+def routeros_recv_exact(sock, length: int) -> bytes:
+    chunks = []
+    remaining = length
+    while remaining > 0:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            raise OSError("RouterOS API closed the connection")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
 
 def routeros_read_sentence(sock):
@@ -7478,7 +7663,7 @@ def routeros_read_sentence(sock):
         length = routeros_read_length(sock)
         if length == 0:
             return words
-        words.append(sock.recv(length).decode(errors="replace"))
+        words.append(routeros_recv_exact(sock, length).decode(errors="replace"))
 
 
 def routeros_send_sentence(sock, words):
@@ -7788,12 +7973,38 @@ def routeros_execute_commands(host: str, port: int, username: Optional[str], pas
                         query_words = [print_path, f"?{unique_query[0]}={unique_query[1]}"]
                     existing = routeros_read_result_after_send(sock, query_words)
                     if existing:
+                        if command.get("replace_existing_on_mismatch"):
+                            desired_params = {
+                                key: value
+                                for key, value in params.items()
+                                if key != "place-before" and value not in (None, "")
+                            }
+                            matched = any(
+                                all(routeros_command_value_matches(row.get(key), value) for key, value in desired_params.items())
+                                for row in existing
+                            )
+                            if matched:
+                                if isinstance(unique_query, dict):
+                                    query_label = ", ".join(f"{key}={value}" for key, value in unique_query.items())
+                                else:
+                                    query_label = f"{unique_query[0]}={unique_query[1]}"
+                                results.append({"label": label, "status": "SKIPPED", "message": f"Existing MikroTik item already matches desired values for {query_label}.", "existing_count": len(existing)})
+                                continue
+                            remove_path = routeros_remove_path_for_print(print_path)
+                            removed_ids = []
+                            for item in existing:
+                                item_id = item.get(".id")
+                                if not item_id:
+                                    continue
+                                routeros_read_result_after_send(sock, [remove_path, f"=.id={item_id}"])
+                                removed_ids.append(item_id)
                         if isinstance(unique_query, dict):
                             query_label = ", ".join(f"{key}={value}" for key, value in unique_query.items())
                         else:
                             query_label = f"{unique_query[0]}={unique_query[1]}"
-                        results.append({"label": label, "status": "SKIPPED", "message": f"Existing MikroTik item was found for {query_label}.", "existing_count": len(existing)})
-                        continue
+                        if not command.get("replace_existing_on_mismatch"):
+                            results.append({"label": label, "status": "SKIPPED", "message": f"Existing MikroTik item was found for {query_label}.", "existing_count": len(existing)})
+                            continue
             words = routeros_command_words(path, params)
             replies = routeros_read_result_after_send(sock, words)
             results.append({"label": label, "status": "SUCCESS", "message": "Command accepted by RouterOS.", "reply_count": len(replies)})
@@ -8195,18 +8406,42 @@ def routeros_detect_station_apply_targets(host: str, port: int, username: Option
                 query = command["set_existing_query"]
                 print_path = query.get("print_path")
                 query_fields = query.get("query") or {}
-                existing = routeros_read_result_after_send(
-                    sock,
-                    [print_path] + [f"?{key}={value}" for key, value in query_fields.items() if value not in (None, "")],
+                if not print_path or not query_fields:
+                    items.append({
+                        "label": label,
+                        "command_index": index,
+                        "status": "UNKNOWN",
+                        "found_count": 0,
+                        "message": "No safe detection query is available for this existing-item update.",
+                    })
+                    continue
+                query_words = [print_path] + [f"?{key}={value}" for key, value in query_fields.items() if value not in (None, "")]
+                existing = routeros_read_result_after_send(sock, query_words)
+                desired_params = {
+                    key: value
+                    for key, value in params.items()
+                    if key != ".id" and value not in (None, "")
+                }
+                matched = bool(existing) and (
+                    not desired_params
+                    or any(
+                        all(routeros_command_value_matches(row.get(key), value) for key, value in desired_params.items())
+                        for row in existing
+                    )
                 )
+                found_count += 1 if matched else 0
                 items.append({
                     "label": label,
                     "command_index": index,
-                    "status": "UNKNOWN",
-                    "found_count": 0,
+                    "status": "FOUND" if matched else "NOT_FOUND",
+                    "found_count": 1 if matched else 0,
                     "query_label": ", ".join(f"{key}={value}" for key, value in query_fields.items()),
                     "existing_count": len(existing),
-                    "message": "This step updates an existing RouterOS item. Detection requires a verification rule.",
+                    "message": (
+                        "Existing RouterOS item already has the expected values."
+                        if matched
+                        else "Existing RouterOS item was not found or still needs updated values."
+                    ),
                 })
                 continue
             if (command.get("merge_bridge_vlan_tagged") or command.get("merge_bridge_vlan_members")) and print_path:
@@ -8250,15 +8485,28 @@ def routeros_detect_station_apply_targets(host: str, port: int, username: Option
                 items.append({"label": label, "command_index": index, "status": "UNKNOWN", "found_count": 0, "message": "No safe detection query is available for this command."})
                 continue
             existing = routeros_read_result_after_send(sock, query_words)
+            desired_params = {
+                key: value
+                for key, value in params.items()
+                if key != "place-before" and value not in (None, "")
+            } if command.get("replace_existing_on_mismatch") else {}
+            matched = bool(existing) and (
+                not desired_params
+                or any(
+                    all(routeros_command_value_matches(row.get(key), value) for key, value in desired_params.items())
+                    for row in existing
+                )
+            )
             count = len(existing)
-            found_count += 1 if count else 0
+            found_count += 1 if matched else 0
             items.append({
                 "label": label,
                 "command_index": index,
-                "status": "FOUND" if count else "NOT_FOUND",
-                "found_count": 1 if count else 0,
+                "status": "FOUND" if matched else "NOT_FOUND",
+                "found_count": 1 if matched else 0,
                 "query_label": query_label,
                 "existing_count": count,
+                "message": "Existing MikroTik item already has the expected values." if matched else "Managed item was not found or still needs updated values.",
             })
         return {
             "status": "SUCCESS",
@@ -9706,11 +9954,11 @@ def omada_ssh_client(settings):
 
 def run_ssh(client, command: str, sudo_mode: str = "PASSWORDLESS", sudo_password: Optional[str] = None, timeout: int = 120):
     if sudo_mode == "SUDO_PASSWORD" and sudo_password:
-        command = f"printf '%s\\n' {json.dumps(sudo_password)} | sudo -S bash -lc {json.dumps(command)}"
+        command = f"printf '%s\\n' {shlex.quote(sudo_password)} | sudo -S -p '' bash -lc {shlex.quote(command)}"
     elif sudo_mode == "PASSWORDLESS":
-        command = f"sudo -n bash -lc {json.dumps(command)}"
+        command = f"sudo -n bash -lc {shlex.quote(command)}"
     else:
-        command = f"bash -lc {json.dumps(command)}"
+        command = f"bash -lc {shlex.quote(command)}"
     stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
     exit_code = stdout.channel.recv_exit_status()
     output = stdout.read().decode(errors="replace") + stderr.read().decode(errors="replace")
@@ -12462,6 +12710,226 @@ def generate_store_purchase_public_id() -> str:
 
 def generate_store_purchase_code() -> str:
     return "".join(secrets.choice("23456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(6))
+
+
+STORE_REMITTANCE_ACTIVE_STATUSES = {
+    "REQUESTED",
+    "CHECKOUT_CREATED",
+    "CASH_PICKUP_REQUESTED",
+    "CASH_PICKUP_SCHEDULED",
+}
+
+
+def generate_store_remittance_public_id() -> str:
+    return f"SR-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{secrets.token_hex(4).upper()}"
+
+
+def store_remittance_period() -> tuple[date, date]:
+    today = datetime.now(timezone.utc).date()
+    return today.replace(day=1), today
+
+
+def store_remittance_minimum_goal_centavos() -> int:
+    return int(STORE_PROGRESSIVE_COMMISSION_TIERS[0]["threshold_centavos"])
+
+
+def serialize_store_remittance(row: Optional[dict]) -> dict:
+    if not row:
+        return {}
+    status = row.get("status") or "REQUESTED"
+    method = row.get("method") or "CASH_PICKUP"
+    return {
+        "id": str(row["id"]),
+        "public_id": row.get("public_id") or "",
+        "store_id": str(row["store_id"]) if row.get("store_id") else None,
+        "owner_id": str(row["owner_id"]) if row.get("owner_id") else None,
+        "provider": row.get("provider") or "PAYMONGO",
+        "provider_mode": row.get("provider_mode") or "",
+        "method": method,
+        "method_label": {
+            "ONLINE": "Online PayMongo",
+            "CASH_PICKUP": "Cash pickup",
+            "MANUAL_CASH_PICKUP": "Manual cash pickup",
+        }.get(method, method.replace("_", " ").title()),
+        "status": status,
+        "status_label": status.replace("_", " ").title(),
+        "gross_sales_centavos": int(row.get("gross_sales_centavos") or 0),
+        "gross_sales_display": money_display_from_centavos(row.get("gross_sales_centavos") or 0),
+        "amount_centavos": int(row.get("amount_centavos") or 0),
+        "amount_display": money_display_from_centavos(row.get("amount_centavos") or 0),
+        "currency": row.get("currency") or "PHP",
+        "sales_period_start": row.get("sales_period_start"),
+        "sales_period_end": row.get("sales_period_end"),
+        "checkout_session_id": row.get("checkout_session_id") or "",
+        "checkout_url": row.get("checkout_url") or "",
+        "pickup_requested_at": row.get("pickup_requested_at"),
+        "pickup_scheduled_at": row.get("pickup_scheduled_at"),
+        "pickup_completed_at": row.get("pickup_completed_at"),
+        "paid_at": row.get("paid_at"),
+        "last_error": row.get("last_error") or "",
+        "notes": row.get("notes") or "",
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def store_unremitted_sales_summary(cur, store_id) -> dict:
+    cur.execute(
+        """
+        SELECT
+          COUNT(*)::int AS request_count,
+          COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
+        FROM store_purchase_requests
+        WHERE store_id = %s
+          AND status = 'APPROVED'
+          AND approved_at >= date_trunc('month', now())
+          AND remittance_id IS NULL
+        """,
+        (store_id,),
+    )
+    row = cur.fetchone() or {}
+    amount = int(row.get("amount_centavos") or 0)
+    return {
+        "request_count": int(row.get("request_count") or 0),
+        "amount_centavos": amount,
+        "amount_display": money_display_from_centavos(amount),
+    }
+
+
+def store_monthly_sales_centavos(cur, store_id) -> int:
+    cur.execute(
+        """
+        SELECT COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
+        FROM store_purchase_requests
+        WHERE store_id = %s
+          AND status = 'APPROVED'
+          AND approved_at >= date_trunc('month', now())
+        """,
+        (store_id,),
+    )
+    row = cur.fetchone() or {}
+    return int(row.get("amount_centavos") or 0)
+
+
+def store_latest_active_remittance(cur, store_id) -> Optional[dict]:
+    cur.execute(
+        """
+        SELECT *
+        FROM store_remittances
+        WHERE store_id = %s
+          AND status = ANY(%s::text[])
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (store_id, list(STORE_REMITTANCE_ACTIVE_STATUSES)),
+    )
+    return cur.fetchone()
+
+
+def store_latest_remittance(cur, store_id) -> Optional[dict]:
+    cur.execute(
+        """
+        SELECT *
+        FROM store_remittances
+        WHERE store_id = %s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (store_id,),
+    )
+    return cur.fetchone()
+
+
+def store_remittance_summary(cur, store_id, sales_month_centavos: int) -> dict:
+    unremitted = store_unremitted_sales_summary(cur, store_id)
+    active = store_latest_active_remittance(cur, store_id)
+    latest = store_latest_remittance(cur, store_id)
+    minimum = store_remittance_minimum_goal_centavos()
+    return {
+        "eligible": int(sales_month_centavos or 0) >= minimum,
+        "minimum_goal_centavos": minimum,
+        "minimum_goal_display": money_display_from_centavos(minimum),
+        "unremitted_sales_centavos": unremitted["amount_centavos"],
+        "unremitted_sales_display": unremitted["amount_display"],
+        "unremitted_request_count": unremitted["request_count"],
+        "pending": serialize_store_remittance(active) if active else None,
+        "latest": serialize_store_remittance(latest) if latest else None,
+    }
+
+
+def create_store_remittance(
+    cur,
+    *,
+    store_id,
+    owner_id=None,
+    method: str,
+    status: str,
+    requested_by_owner_id=None,
+    scheduled_by_admin_id=None,
+    notes: Optional[str] = None,
+    require_goal: bool = True,
+) -> dict:
+    active = store_latest_active_remittance(cur, store_id)
+    if active:
+        raise HTTPException(status_code=400, detail=f"Store already has an active remittance request: {active.get('public_id')}.")
+    unremitted = store_unremitted_sales_summary(cur, store_id)
+    amount = int(unremitted.get("amount_centavos") or 0)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="No unremitted approved sales were found for this month.")
+    monthly_sales = store_monthly_sales_centavos(cur, store_id)
+    if require_goal and monthly_sales < store_remittance_minimum_goal_centavos():
+        raise HTTPException(status_code=400, detail=f"Remittance unlocks after the first monthly goal: {money_display_from_centavos(store_remittance_minimum_goal_centavos())}.")
+    period_start, period_end = store_remittance_period()
+    public_id = generate_store_remittance_public_id()
+    cur.execute("SELECT 1 FROM store_remittances WHERE public_id = %s", (public_id,))
+    while cur.fetchone():
+        public_id = generate_store_remittance_public_id()
+        cur.execute("SELECT 1 FROM store_remittances WHERE public_id = %s", (public_id,))
+    cur.execute(
+        """
+        INSERT INTO store_remittances(
+            public_id, store_id, owner_id, method, status,
+            gross_sales_centavos, amount_centavos, sales_period_start, sales_period_end,
+            pickup_requested_at, pickup_scheduled_at,
+            requested_by_owner_id, scheduled_by_admin_id, notes
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                CASE WHEN %s IN ('CASH_PICKUP', 'MANUAL_CASH_PICKUP') THEN now() ELSE NULL END,
+                CASE WHEN %s = 'MANUAL_CASH_PICKUP' THEN now() ELSE NULL END,
+                %s, %s, %s)
+        RETURNING *
+        """,
+        (
+            public_id,
+            store_id,
+            owner_id,
+            method,
+            status,
+            amount,
+            amount,
+            period_start,
+            period_end,
+            method,
+            method,
+            requested_by_owner_id,
+            scheduled_by_admin_id,
+            normalize_payment_text(notes, 1000),
+        ),
+    )
+    remittance = cur.fetchone()
+    cur.execute(
+        """
+        UPDATE store_purchase_requests
+        SET remittance_id = %s,
+            updated_at = now()
+        WHERE store_id = %s
+          AND status = 'APPROVED'
+          AND approved_at >= date_trunc('month', now())
+          AND remittance_id IS NULL
+        """,
+        (remittance["id"], store_id),
+    )
+    return remittance
 
 
 def store_owner_status(value: Optional[str]) -> str:
@@ -15958,6 +16426,87 @@ def notify_store_owner_purchase_request_push(cur, store: dict, purchase: dict, s
     return {"status": "SUCCESS" if sent else "FAILED", "sent": sent, "failed": failed, "revoked": revoked}
 
 
+def notify_store_owner_message_push(cur, owner_id, title: str, body: str, *, tag: str, data: Optional[dict] = None) -> dict:
+    cur.execute(
+        """
+        SELECT *
+        FROM store_owner_push_subscriptions
+        WHERE owner_id = %s
+          AND status = 'ACTIVE'
+        ORDER BY last_seen_at DESC
+        """,
+        (owner_id,),
+    )
+    subscriptions = cur.fetchall()
+    if not subscriptions:
+        return {"status": "NO_SUBSCRIPTIONS", "sent": 0, "failed": 0, "revoked": 0}
+    push_store = web_push_store()
+    notification_payload = {
+        "title": normalize_payment_text(title, 120) or "3J Store Portal",
+        "body": normalize_payment_text(body, 300) or "Open your store portal for details.",
+        "url": "/store",
+        "tag": normalize_payment_text(tag, 120) or f"3j-store-owner-{datetime.now(timezone.utc).timestamp()}",
+        "data": {
+            "url": "/store",
+            **sanitize_summary(data or {}),
+        },
+    }
+    sent = 0
+    failed = 0
+    revoked = 0
+    for subscription in subscriptions:
+        try:
+            webpush(
+                subscription_info=subscription["subscription_json"],
+                data=json.dumps(notification_payload),
+                vapid_private_key=push_store["private_key"],
+                vapid_claims={"sub": "mailto:admin@3jhotspot.com"},
+                timeout=10,
+            )
+            sent += 1
+            cur.execute(
+                """
+                UPDATE store_owner_push_subscriptions
+                SET last_sent_at = now(),
+                    failure_count = 0,
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (subscription["id"],),
+            )
+        except WebPushException as exc:
+            failed += 1
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+            should_revoke = status_code in {404, 410}
+            if should_revoke:
+                revoked += 1
+            cur.execute(
+                """
+                UPDATE store_owner_push_subscriptions
+                SET status = CASE WHEN %s THEN 'REVOKED' ELSE status END,
+                    failure_count = failure_count + 1,
+                    last_error = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (should_revoke, normalize_payment_text(str(exc), 500), subscription["id"]),
+            )
+        except Exception as exc:
+            failed += 1
+            cur.execute(
+                """
+                UPDATE store_owner_push_subscriptions
+                SET failure_count = failure_count + 1,
+                    last_error = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (normalize_payment_text(str(exc), 500), subscription["id"]),
+            )
+    return {"status": "SUCCESS" if sent else "FAILED", "sent": sent, "failed": failed, "revoked": revoked}
+
+
 def latest_omada_authorization_matches_context(latest_authorization: Optional[dict], ctx: dict) -> bool:
     if not latest_authorization:
         return False
@@ -17006,7 +17555,7 @@ def portal_profile_name_for_station(station: Optional[dict], site: Optional[dict
     return "3JCentralPisowifi External Portal"
 
 
-def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClient] = None) -> dict:
+def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClient] = None, live_check: bool = False) -> dict:
     ap_config = ensure_ap_deployment_configuration()
     portal_url = current_captive_portal_url()
     portal_url_https = str(portal_url or "").strip().lower().startswith("https://")
@@ -17025,7 +17574,7 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
     )
     site_portal_status = {}
     portal_client = client
-    if api_configured and portal_client is None:
+    if live_check and api_configured and portal_client is None:
         try:
             _, portal_client = omada_api_client_from_settings()
         except Exception:
@@ -17056,7 +17605,7 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
             status["portal_error"] = "No desired SSID names are configured for this site."
         elif not api_configured:
             status["portal_error"] = "Omada API credentials are not configured."
-        elif portal_client:
+        elif live_check and portal_client:
             try:
                 details = portal_client.external_portal_ssid_status_if_supported(site_id, desired_ssids)
                 status["details"] = sanitize_summary(details)
@@ -17086,12 +17635,17 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
                 response_summary = exc.response_summary if isinstance(exc, OmadaApiError) else {}
                 status["portal_error"] = str(exc)
                 status["details"] = sanitize_summary(response_summary)
+        elif api_configured and not live_check:
+            status["portal_error"] = None
+            status["pre_auth_error"] = None
+            status["live_check_skipped"] = True
+            status["readiness_note"] = "Live Omada portal/pre-auth verification is skipped for fast page load."
         checks = [
             {"key": "portal_url_https", "label": "Portal URL uses HTTPS", "passed": portal_url_https, "message": portal_url if portal_url_https else f"Current portal URL is not HTTPS: {portal_url or '-'}"},
             {"key": "desired_ssids", "label": "Site SSIDs configured", "passed": bool(desired_ssids), "message": ", ".join(desired_ssids) if desired_ssids else "Configure the captive SSID names for this site."},
-            {"key": "ssid_portal_binding", "label": "SSID attached to External Portal", "passed": bool(status.get("portal_enabled")), "message": status.get("portal_error") or "Desired SSID(s) are attached to Omada External Portal."},
+            {"key": "ssid_portal_binding", "label": "SSID attached to External Portal", "passed": True if status.get("live_check_skipped") else bool(status.get("portal_enabled")), "skipped": bool(status.get("live_check_skipped")), "message": status.get("readiness_note") or status.get("portal_error") or "Desired SSID(s) are attached to Omada External Portal."},
             {"key": "https_redirect_disabled", "label": "Omada HTTPS Redirect disabled", "passed": not bool(status.get("https_redirect_enabled")), "message": "Omada HTTPS Redirect is disabled to avoid TP-Link self-signed certificate warnings." if not status.get("https_redirect_enabled") else "Disable Omada HTTPS Redirect; keep the external portal URL on HTTPS instead."},
-            {"key": "pre_auth_access", "label": "Pre-auth access allows portal/payment/IPTV hosts", "passed": bool(status.get("pre_auth_ready")), "message": status.get("pre_auth_error") or "Pre-auth access includes portal, payment, and IPTV hosts."},
+            {"key": "pre_auth_access", "label": "Pre-auth access allows portal/payment/IPTV hosts", "passed": True if status.get("live_check_skipped") else bool(status.get("pre_auth_ready")), "skipped": bool(status.get("live_check_skipped")), "message": status.get("readiness_note") or status.get("pre_auth_error") or "Pre-auth access includes portal, payment, and IPTV hosts."},
         ]
         status["readiness_checks"] = checks
         failed_required = [item for item in checks if not item.get("passed")]
@@ -17112,7 +17666,10 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
             "details": {},
         }
         connected = row.get("deployment_status") == "CONNECTED"
-        portal_connected = bool(connected and site_status.get("portal_enabled"))
+        if not live_check and api_configured and site_status.get("live_check_skipped"):
+            portal_connected = bool(connected)
+        else:
+            portal_connected = bool(connected and site_status.get("portal_enabled"))
         if site_id in site_ap_counts:
             site_ap_counts[site_id]["ap_count"] += 1
             if connected:
@@ -17122,6 +17679,8 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
         reason = None
         if not connected:
             reason = f"AP status is {row.get('deployment_status') or 'unknown'}."
+        elif not live_check and api_configured and site_status.get("live_check_skipped"):
+            reason = "Local AP cache shows this AP connected. Live Omada portal verification is skipped for fast page load."
         elif not site_status.get("portal_enabled"):
             reason = site_status.get("portal_error") or "SSID is not attached to the Omada portal."
         elif not site_status.get("pre_auth_ready"):
@@ -17162,12 +17721,14 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
         "total": total,
         "connected": connected_count,
         "not_connected": total - connected_count,
+        "live_check": bool(live_check),
+        "status_source": "OMADA_LIVE" if live_check else "LOCAL_CACHE",
         "aps": aps,
         "sites": list(site_portal_status.values()),
     }
 
 
-def captive_portal_omada_status_payload() -> dict:
+def captive_portal_omada_status_payload(live_check: bool = False) -> dict:
     settings = ensure_captive_portal_settings()
     api_settings = ensure_omada_api_settings()
     bound_stations = fetch_all(
@@ -17204,7 +17765,7 @@ def captive_portal_omada_status_payload() -> dict:
     )
     api_configured = bool(api_settings.get("username") and api_settings.get("password_encrypted"))
     selected_site_ready = bool(settings.get("selected_omada_site_id") or settings.get("selected_omada_site_name"))
-    portal_coverage = omada_portal_ap_coverage(api_configured)
+    portal_coverage = omada_portal_ap_coverage(api_configured, live_check=live_check)
     portal_total = int(portal_coverage.get("total") or 0)
     portal_connected = int(portal_coverage.get("connected") or 0)
     if not api_configured:
@@ -17213,6 +17774,9 @@ def captive_portal_omada_status_payload() -> dict:
     elif not bound_stations and not selected_site_ready:
         status = "DOWN"
         message = "No MikroTik station is bound to an Omada site yet."
+    elif not live_check:
+        status = "CACHED"
+        message = f"Local AP cache shows {portal_connected}/{portal_total} AP(s) connected. Live Omada portal verification is skipped for fast page load."
     elif portal_total > 0 and portal_connected == portal_total:
         status = "UP"
         message = f"Omada portal is attached to the expected SSID(s) for {portal_connected}/{portal_total} AP(s)."
@@ -17240,6 +17804,8 @@ def captive_portal_omada_status_payload() -> dict:
         "portal_ap_connected_count": portal_connected,
         "portal_ap_not_connected_count": int(portal_coverage.get("not_connected") or 0),
         "portal_ap_ratio": f"{portal_connected}/{portal_total}",
+        "live_check": bool(live_check),
+        "status_source": portal_coverage.get("status_source") or ("OMADA_LIVE" if live_check else "LOCAL_CACHE"),
         "portal_aps": portal_coverage.get("aps") or [],
         "portal_sites": portal_coverage.get("sites") or [],
         "bound_stations": [
@@ -21497,10 +22063,76 @@ def enqueue_paymongo_webhook_processing(webhook_event_id: str, request: Request)
     threading.Thread(target=worker, daemon=True).start()
 
 
+def process_store_remittance_paymongo_webhook(cur, remittance: dict, payload: dict, event_type: str, event_id: str, provider_payment_id: Optional[str], event_amount: Optional[int]) -> tuple[str, Optional[str]]:
+    if paymongo_event_is_paid(event_type):
+        if event_amount is not None and int(event_amount) != int(remittance["amount_centavos"]):
+            raise RuntimeError(f"Store remittance paid amount mismatch. Expected {remittance['amount_centavos']} centavos, got {event_amount}.")
+        cur.execute(
+            """
+            UPDATE store_remittances
+            SET status = 'PAID',
+                provider_payment_id = COALESCE(%s, provider_payment_id),
+                provider_event_id = %s,
+                provider_webhook_json = %s,
+                paid_at = COALESCE(paid_at, now()),
+                last_error = NULL,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (provider_payment_id, event_id, Json(sanitize_summary(payload)), remittance["id"]),
+        )
+        updated = cur.fetchone() or remittance
+        create_admin_notification(
+            "STORE_CASH_COLLECTION",
+            "SUCCESS",
+            "Store remittance paid",
+            f"{updated.get('public_id')} was paid online for {money_display_from_centavos(updated.get('amount_centavos') or 0)}.",
+            "Stores",
+            "/admin/sales/stores",
+            "store_remittances",
+            updated.get("public_id") or str(updated.get("id")),
+            {"event_type": event_type, "provider_payment_id": provider_payment_id},
+        )
+        return "PROCESSED", None
+    if paymongo_event_is_failed(event_type):
+        error_message = paymongo_failure_message(payload)
+        cur.execute(
+            """
+            UPDATE store_remittances
+            SET status = 'FAILED',
+                provider_payment_id = COALESCE(%s, provider_payment_id),
+                provider_event_id = %s,
+                provider_webhook_json = %s,
+                last_error = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (provider_payment_id, event_id, Json(sanitize_summary(payload)), error_message, remittance["id"]),
+        )
+        updated = cur.fetchone() or remittance
+        cur.execute("UPDATE store_purchase_requests SET remittance_id = NULL, updated_at = now() WHERE remittance_id = %s", (remittance["id"],))
+        create_admin_notification(
+            "STORE_CASH_COLLECTION",
+            "WARNING",
+            "Store remittance failed",
+            f"{updated.get('public_id')} online remittance failed: {error_message}",
+            "Stores",
+            "/admin/sales/stores",
+            "store_remittances",
+            updated.get("public_id") or str(updated.get("id")),
+            {"event_type": event_type, "failure_code": paymongo_failure_code(payload)},
+        )
+        return "PROCESSED", error_message
+    return "IGNORED", f"Event type {event_type or 'unknown'} does not require store remittance processing."
+
+
 def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
     processing_status = "RECEIVED"
     error_message = None
     order = None
+    remittance = None
     event_type = ""
     payload = {}
     event_id = ""
@@ -21531,8 +22163,21 @@ def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
                     order = cur.fetchone()
                 if order and webhook_event.get("payment_order_id") != order.get("id"):
                     cur.execute("UPDATE payment_webhook_events SET payment_order_id = %s WHERE id = %s", (order["id"], webhook_event["id"]))
+                if not order and checkout_session_id:
+                    cur.execute("SELECT * FROM store_remittances WHERE checkout_session_id = %s FOR UPDATE", (checkout_session_id,))
+                    remittance = cur.fetchone()
 
-                if not order:
+                if not order and remittance:
+                    processing_status, error_message = process_store_remittance_paymongo_webhook(
+                        cur,
+                        remittance,
+                        payload,
+                        event_type,
+                        event_id,
+                        provider_payment_id,
+                        event_amount,
+                    )
+                elif not order:
                     processing_status = "IGNORED"
                     error_message = "No local payment order matched this webhook."
                 elif order.get("portal_session_id"):
@@ -21542,6 +22187,7 @@ def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
                     if order.get("checkout_session_id"):
                         order = sync_paymongo_checkout_status(cur, order, request)
                     else:
+                        paid_method = paymongo_payload_payment_method(payload)
                         if event_amount is None:
                             raise RuntimeError("PayMongo paid webhook did not include a parsable amount.")
                         if int(event_amount) != int(order["amount_centavos"]):
@@ -21552,6 +22198,7 @@ def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
                             SET status = 'PAID',
                                 provider_payment_id = COALESCE(%s, provider_payment_id),
                                 provider_event_id = %s,
+                                payment_method = COALESCE(%s, payment_method),
                                 provider_webhook_json = %s,
                                 paid_at = COALESCE(paid_at, now()),
                                 last_error = NULL,
@@ -21559,7 +22206,7 @@ def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
                             WHERE id = %s
                             RETURNING *
                             """,
-                            (provider_payment_id, event_id, Json(sanitize_summary(payload)), order["id"]),
+                            (provider_payment_id, event_id, paid_method, Json(sanitize_summary(payload)), order["id"]),
                         )
                         order = cur.fetchone()
                         fulfillment = fulfill_paid_payment_order(cur, order, request)
@@ -21567,6 +22214,7 @@ def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
                     processing_status = "PROCESSED"
                 elif order and paymongo_event_is_failed(event_type):
                     error_message = paymongo_failure_message(payload)
+                    failure_method = paymongo_payload_payment_method(payload)
                     cur.execute(
                         """
                         UPDATE payment_orders
@@ -21574,13 +22222,14 @@ def process_paymongo_webhook_event(webhook_event_id: str, request: Request):
                             fulfillment_status = CASE WHEN fulfillment_status = 'PENDING' THEN 'NOT_REQUIRED' ELSE fulfillment_status END,
                             provider_payment_id = COALESCE(%s, provider_payment_id),
                             provider_event_id = %s,
+                            payment_method = COALESCE(%s, payment_method),
                             provider_webhook_json = %s,
                             last_error = %s,
                             updated_at = now()
                         WHERE id = %s
                         RETURNING *
                         """,
-                        (provider_payment_id, event_id, Json(sanitize_summary(payload)), error_message, order["id"]),
+                        (provider_payment_id, event_id, failure_method, Json(sanitize_summary(payload)), error_message, order["id"]),
                     )
                     order = cur.fetchone()
                     finalize_omada_payment_auth_free_grants_for_order(cur, order, final_status="CANCELLED")
@@ -22483,7 +23132,7 @@ STORE_PROGRESSIVE_COMMISSION_TIERS = [
 ]
 
 
-def store_progressive_commission_goal(gross_centavos: int) -> dict:
+def store_progressive_commission_goal(gross_centavos: int, daily_rows: Optional[list] = None) -> dict:
     gross = max(0, int(gross_centavos or 0))
     tiers = []
     current_tier = None
@@ -22537,7 +23186,41 @@ def store_progressive_commission_goal(gross_centavos: int) -> dict:
         "estimated_commission_centavos": estimated_commission,
         "estimated_commission_display": money_display_from_centavos(estimated_commission),
         "headline": headline,
+        "history": store_progressive_commission_goal_history(daily_rows or [], int(STORE_PROGRESSIVE_COMMISSION_TIERS[-1]["threshold_centavos"])),
     }
+
+
+def store_progressive_commission_goal_history(daily_rows: list, top_goal_centavos: int) -> list:
+    top_goal = max(1, int(top_goal_centavos or 1))
+    today = datetime.now(timezone.utc).date()
+    cursor_day = today.replace(day=1)
+    amount_by_day = {}
+    for row in daily_rows or []:
+        sale_date = row.get("sale_date")
+        if hasattr(sale_date, "isoformat"):
+            key = sale_date.isoformat()
+        else:
+            key = str(sale_date or "")[:10]
+        if not key:
+            continue
+        amount_by_day[key] = amount_by_day.get(key, 0) + int(row.get("amount_centavos") or 0)
+    history = []
+    running_total = 0
+    while cursor_day <= today:
+        key = cursor_day.isoformat()
+        running_total += amount_by_day.get(key, 0)
+        goal_percent = min(100, round((running_total / top_goal) * 100, 2))
+        reached_count = len([tier for tier in STORE_PROGRESSIVE_COMMISSION_TIERS if running_total >= int(tier["threshold_centavos"])])
+        history.append({
+            "date": key,
+            "label": cursor_day.strftime("%b %-d") if os.name != "nt" else cursor_day.strftime("%b %#d"),
+            "sales_centavos": running_total,
+            "sales_display": money_display_from_centavos(running_total),
+            "goal_percent": goal_percent,
+            "goals_reached": reached_count,
+        })
+        cursor_day = cursor_day + timedelta(days=1)
+    return history
 
 
 def normalize_product_access_scope(value: Optional[str]) -> str:
@@ -24425,6 +25108,11 @@ def serialize_sales_order(row: dict) -> dict:
         "status": row["status"],
         "fulfillment_status": row["fulfillment_status"],
         "payment_method": row["payment_method"],
+        "provider": row.get("provider") or ("PAYMONGO" if not row.get("physical_store_id") else ""),
+        "provider_mode": row.get("provider_mode") or "",
+        "checkout_session_id": row.get("checkout_session_id") or "",
+        "provider_payment_id": row.get("provider_payment_id") or "",
+        "last_error": row.get("last_error") or "",
         "amount_centavos": amount_centavos,
         "amount_display": money_display_from_centavos(amount_centavos, row.get("currency") or "PHP"),
         "gross_amount_centavos": amount_centavos,
@@ -24596,7 +25284,14 @@ def build_sales_payload(range_days: int = 30) -> dict:
                 po.user_id,
                 po.status,
                 po.fulfillment_status,
-                po.payment_method,
+                COALESCE(
+                    NULLIF(po.provider_response_json #>> '{data,attributes,payment_method_used}', ''),
+                    NULLIF(po.provider_response_json #>> '{data,attributes,payments,0,attributes,source,type}', ''),
+                    NULLIF(po.provider_response_json #>> '{data,attributes,payment_intent,attributes,payments,0,attributes,source,type}', ''),
+                    NULLIF(po.provider_webhook_json #>> '{data,attributes,payment_method_used}', ''),
+                    NULLIF(po.provider_webhook_json #>> '{data,attributes,source,type}', ''),
+                    po.payment_method
+                ) AS payment_method,
                 po.amount_centavos,
                 po.currency,
                 po.product_name,
@@ -24911,6 +25606,301 @@ def build_sales_payload(range_days: int = 30) -> dict:
 @app.get("/api/sales")
 def get_sales(range_days: int = 30, admin=Depends(current_admin)):
     return build_sales_payload(range_days)
+
+
+def build_paymongo_sales_payload(
+    range_days: int = 30,
+    page: int = 1,
+    page_size: int = 20,
+    search: str = "",
+    fulfillment: str = "",
+    payment_method: str = "",
+    provider_mode: str = "",
+) -> dict:
+    days = max(1, min(int(range_days or 30), 365))
+    selected_page = max(1, int(page or 1))
+    selected_page_size = max(10, min(int(page_size or 20), 100))
+    offset = (selected_page - 1) * selected_page_size
+    filters = []
+    params: list = [days]
+    clean_search = normalize_payment_text(search, 120)
+    clean_fulfillment = normalize_payment_text(fulfillment, 40).upper()
+    clean_method = normalize_payment_text(payment_method, 80).lower()
+    clean_mode = normalize_payment_text(provider_mode, 20).upper()
+    if clean_search:
+        filters.append(
+            """
+            (
+              public_order_id ILIKE %s OR
+              product_name ILIKE %s OR
+              COALESCE(customer_name, '') ILIKE %s OR
+              COALESCE(profile_display_name, '') ILIKE %s OR
+              COALESCE(profile_contact_number, '') ILIKE %s OR
+              COALESCE(customer_contact_number, '') ILIKE %s OR
+              COALESCE(client_mac, '') ILIKE %s OR
+              COALESCE(client_ip::text, '') ILIKE %s OR
+              COALESCE(site_name, '') ILIKE %s OR
+              COALESCE(barangay, '') ILIKE %s OR
+              COALESCE(provider_payment_id, '') ILIKE %s OR
+              COALESCE(checkout_session_id, '') ILIKE %s
+            )
+            """
+        )
+        pattern = f"%{clean_search}%"
+        params.extend([pattern] * 12)
+    if clean_fulfillment in {"PENDING", "FULFILLED", "FAILED", "NOT_REQUIRED"}:
+        filters.append("fulfillment_status = %s")
+        params.append(clean_fulfillment)
+    if clean_method:
+        filters.append("lower(payment_method) = %s")
+        params.append(clean_method)
+    if clean_mode in {"TEST", "LIVE"}:
+        filters.append("provider_mode = %s")
+        params.append(clean_mode)
+    filter_sql = (" AND " + " AND ".join(filters)) if filters else ""
+    base_cte = f"""
+        WITH sales_range AS (
+            SELECT %s::int AS days
+        ),
+        online_orders AS (
+            SELECT
+                po.id,
+                po.public_order_id,
+                po.user_id,
+                po.provider,
+                po.provider_mode,
+                po.status,
+                po.fulfillment_status,
+                COALESCE(
+                    NULLIF(po.provider_response_json #>> '{{data,attributes,payment_method_used}}', ''),
+                    NULLIF(po.provider_response_json #>> '{{data,attributes,payments,0,attributes,source,type}}', ''),
+                    NULLIF(po.provider_response_json #>> '{{data,attributes,payment_intent,attributes,payments,0,attributes,source,type}}', ''),
+                    NULLIF(po.provider_webhook_json #>> '{{data,attributes,payment_method_used}}', ''),
+                    NULLIF(po.provider_webhook_json #>> '{{data,attributes,source,type}}', ''),
+                    po.payment_method
+                ) AS payment_method,
+                po.amount_centavos,
+                po.currency,
+                po.product_name,
+                po.product_category_name,
+                po.product_category_access_scope,
+                po.product_category_barangay,
+                po.duration_seconds,
+                po.client_mac,
+                po.client_ip,
+                po.user_agent,
+                po.checkout_session_id,
+                po.provider_payment_id,
+                po.last_error,
+                po.paid_at,
+                po.created_at,
+                po.updated_at,
+                COALESCE(po.paid_at, po.updated_at, po.created_at) AS sale_at,
+                COALESCE(sd.site_name, ps.omada_site_name, ps.site, 'Unknown Site') AS site_name,
+                COALESCE(sd.barangay, loc.barangay, 'Unknown Barangay') AS barangay,
+                po.customer_name,
+                po.customer_contact_number,
+                po.customer_email,
+                p.id AS customer_profile_id,
+                p.display_name AS profile_display_name,
+                p.email AS profile_email,
+                p.contact_number AS profile_contact_number,
+                NULL::uuid AS physical_store_id,
+                NULL::text AS physical_store_name,
+                NULL::text AS commission_type,
+                0::numeric AS commission_value,
+                0::bigint AS commission_centavos,
+                'ONLINE'::text AS sale_channel
+            FROM payment_orders po
+            LEFT JOIN portal_sessions ps ON ps.id = po.portal_session_id
+            LEFT JOIN portal_customer_profiles p ON p.user_id = po.user_id
+            LEFT JOIN LATERAL (
+                SELECT sd.*
+                FROM site_deployments sd
+                WHERE (
+                    COALESCE(ps.omada_site_id, '') <> ''
+                    AND COALESCE(sd.omada_site_id, '') = COALESCE(ps.omada_site_id, '')
+                ) OR (
+                    COALESCE(ps.omada_site_name, ps.site, '') <> ''
+                    AND lower(sd.site_name) = lower(COALESCE(ps.omada_site_name, ps.site, ''))
+                )
+                ORDER BY sd.updated_at DESC
+                LIMIT 1
+            ) sd ON true
+            LEFT JOIN locations loc ON loc.id = sd.location_id
+            WHERE po.provider = 'PAYMONGO'
+              AND po.physical_store_id IS NULL
+              AND po.status = 'PAID'
+              AND COALESCE(po.paid_at, po.updated_at, po.created_at) >= now() - ((SELECT days FROM sales_range) * interval '1 day')
+        ),
+        filtered_orders AS (
+            SELECT *
+            FROM online_orders
+            WHERE 1 = 1 {filter_sql}
+        )
+    """
+    kpi_row = fetch_one(
+        base_cte
+        + """
+        SELECT
+            COALESCE(SUM(amount_centavos), 0)::bigint AS gross_centavos,
+            COUNT(*)::int AS paid_orders,
+            COUNT(*) FILTER (WHERE fulfillment_status = 'FULFILLED')::int AS fulfilled_orders,
+            COUNT(*) FILTER (WHERE fulfillment_status = 'FAILED')::int AS failed_fulfillments,
+            COUNT(*) FILTER (WHERE fulfillment_status = 'PENDING')::int AS pending_fulfillments,
+            COALESCE(ROUND(AVG(amount_centavos)), 0)::bigint AS average_order_centavos,
+            COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('day', now())), 0)::bigint AS today_centavos,
+            COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('month', now())), 0)::bigint AS month_centavos,
+            COUNT(DISTINCT COALESCE(user_id::text, client_mac, public_order_id))::int AS customer_count,
+            COUNT(DISTINCT site_name)::int AS site_count,
+            COUNT(DISTINCT barangay)::int AS barangay_count
+        FROM filtered_orders
+        """,
+        tuple(params),
+    ) or {}
+    daily_rows = fetch_all(
+        base_cte
+        + """
+        SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS label,
+               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+               COUNT(*)::int AS order_count
+        FROM filtered_orders
+        GROUP BY 1
+        ORDER BY 1
+        """,
+        tuple(params),
+    )
+    method_rows = fetch_all(
+        base_cte
+        + """
+        SELECT lower(COALESCE(payment_method, 'unknown')) AS label,
+               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+               COUNT(*)::int AS order_count
+        FROM filtered_orders
+        GROUP BY 1
+        ORDER BY amount_centavos DESC, order_count DESC, label ASC
+        """,
+        tuple(params),
+    )
+    site_rows = fetch_all(
+        base_cte
+        + """
+        SELECT site_name AS label,
+               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+               COUNT(*)::int AS order_count
+        FROM filtered_orders
+        GROUP BY 1
+        ORDER BY amount_centavos DESC, order_count DESC, label ASC
+        LIMIT 20
+        """,
+        tuple(params),
+    )
+    barangay_rows = fetch_all(
+        base_cte
+        + """
+        SELECT barangay AS label,
+               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+               COUNT(*)::int AS order_count
+        FROM filtered_orders
+        GROUP BY 1
+        ORDER BY amount_centavos DESC, order_count DESC, label ASC
+        LIMIT 20
+        """,
+        tuple(params),
+    )
+    order_params = tuple(params + [selected_page_size, offset])
+    order_rows = fetch_all(
+        base_cte
+        + """
+        SELECT *, COUNT(*) OVER()::int AS total_count
+        FROM filtered_orders
+        ORDER BY sale_at DESC
+        LIMIT %s OFFSET %s
+        """,
+        order_params,
+    )
+    total_count = int(order_rows[0].get("total_count") or 0) if order_rows else int(kpi_row.get("paid_orders") or 0)
+    omada_name_by_mac = fetch_omada_client_name_map()
+    for row in order_rows:
+        mac = normalize_mac_if_valid(row.get("client_mac"))
+        row["device_name"] = omada_name_by_mac.get(mac) if mac else None
+
+    def series_rows(rows):
+        values = []
+        for row in rows:
+            amount = int(row.get("amount_centavos") or 0)
+            values.append({
+                **dict(row),
+                "amount_centavos": amount,
+                "amount_display": money_display_from_centavos(amount),
+            })
+        return values
+
+    gross = int(kpi_row.get("gross_centavos") or 0)
+    today = int(kpi_row.get("today_centavos") or 0)
+    month = int(kpi_row.get("month_centavos") or 0)
+    average = int(kpi_row.get("average_order_centavos") or 0)
+    return {
+        "range_days": days,
+        "filters": {
+            "search": clean_search,
+            "fulfillment": clean_fulfillment,
+            "payment_method": clean_method,
+            "provider_mode": clean_mode,
+        },
+        "kpis": {
+            "gross_earnings_centavos": gross,
+            "gross_earnings_display": money_display_from_centavos(gross),
+            "net_earnings_centavos": gross,
+            "net_earnings_display": money_display_from_centavos(gross),
+            "today_earnings_centavos": today,
+            "today_earnings_display": money_display_from_centavos(today),
+            "month_earnings_centavos": month,
+            "month_earnings_display": money_display_from_centavos(month),
+            "paid_orders": int(kpi_row.get("paid_orders") or 0),
+            "fulfilled_orders": int(kpi_row.get("fulfilled_orders") or 0),
+            "pending_fulfillments": int(kpi_row.get("pending_fulfillments") or 0),
+            "failed_fulfillments": int(kpi_row.get("failed_fulfillments") or 0),
+            "average_order_centavos": average,
+            "average_order_display": money_display_from_centavos(average),
+            "customer_count": int(kpi_row.get("customer_count") or 0),
+            "site_count": int(kpi_row.get("site_count") or 0),
+            "barangay_count": int(kpi_row.get("barangay_count") or 0),
+        },
+        "daily_earnings": series_rows(daily_rows),
+        "earnings_by_method": series_rows(method_rows),
+        "earnings_by_site": series_rows(site_rows),
+        "earnings_by_barangay": series_rows(barangay_rows),
+        "orders": [serialize_sales_order(row) for row in order_rows],
+        "pagination": {
+            "page": selected_page,
+            "page_size": selected_page_size,
+            "total": total_count,
+            "total_pages": max(1, math.ceil(total_count / selected_page_size)),
+        },
+    }
+
+
+@app.get("/api/sales/paymongo")
+def get_paymongo_sales(
+    range_days: int = 30,
+    page: int = 1,
+    page_size: int = 20,
+    search: str = "",
+    fulfillment: str = "",
+    payment_method: str = "",
+    provider_mode: str = "",
+    admin=Depends(current_admin),
+):
+    return build_paymongo_sales_payload(
+        range_days=range_days,
+        page=page,
+        page_size=page_size,
+        search=search,
+        fulfillment=fulfillment,
+        payment_method=payment_method,
+        provider_mode=provider_mode,
+    )
 
 
 @app.get("/api/sales/settings")
@@ -26032,6 +27022,167 @@ def get_physical_stores_map(admin=Depends(current_admin)):
     return physical_store_map_payload(stores, include_sales=True)
 
 
+@app.get("/api/cash-collection")
+def get_cash_collection(admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ps.*, loc.location_name,
+                       so.id AS owner_id,
+                       so.username AS owner_username,
+                       so.display_name AS owner_display_name,
+                       so.contact_number AS owner_contact_number,
+                       so.normalized_contact AS owner_normalized_contact,
+                       so.status AS owner_status,
+                       so.owner_notes AS owner_notes,
+                       so.must_change_password AS owner_must_change_password,
+                       so.activated_at AS owner_activated_at,
+                       so.activation_sms_sent_at AS owner_activation_sms_sent_at,
+                       so.activation_sms_status_json AS owner_activation_sms_status_json,
+                       so.last_login_at AS owner_last_login_at,
+                       COALESCE(sales.sales_month_centavos, 0)::bigint AS sales_month_centavos,
+                       COALESCE(sales.unremitted_sales_centavos, 0)::bigint AS unremitted_sales_centavos,
+                       COALESCE(sales.unremitted_request_count, 0)::int AS unremitted_request_count
+                FROM physical_stores ps
+                LEFT JOIN locations loc ON loc.id = ps.location_id
+                LEFT JOIN physical_store_owners so ON so.store_id = ps.id
+                LEFT JOIN LATERAL (
+                    SELECT
+                      COALESCE(SUM(amount_centavos), 0)::bigint AS sales_month_centavos,
+                      COALESCE(SUM(amount_centavos) FILTER (WHERE remittance_id IS NULL), 0)::bigint AS unremitted_sales_centavos,
+                      (COUNT(*) FILTER (WHERE remittance_id IS NULL))::int AS unremitted_request_count
+                    FROM store_purchase_requests spr
+                    WHERE spr.store_id = ps.id
+                      AND spr.status = 'APPROVED'
+                      AND spr.approved_at >= date_trunc('month', now())
+                ) sales ON true
+                ORDER BY COALESCE(sales.unremitted_sales_centavos, 0) DESC, ps.store_name ASC
+                """
+            )
+            rows = cur.fetchall()
+            site_map = store_site_rows([str(row["id"]) for row in rows])
+            item_map = physical_store_item_rows([str(row["id"]) for row in rows], active_only=False)
+            stores = []
+            totals = {
+                "sales_month_centavos": 0,
+                "unremitted_sales_centavos": 0,
+                "pickup_pending_count": 0,
+                "goal_reached_count": 0,
+            }
+            for row in rows:
+                store = serialize_physical_store(row, site_map, item_map)
+                sales_month = int(row.get("sales_month_centavos") or 0)
+                unremitted = int(row.get("unremitted_sales_centavos") or 0)
+                latest = store_latest_remittance(cur, row["id"])
+                active = store_latest_active_remittance(cur, row["id"])
+                goal = store_progressive_commission_goal(sales_month)
+                if int(goal.get("tier_index") or 0) > 0:
+                    totals["goal_reached_count"] += 1
+                if active:
+                    totals["pickup_pending_count"] += 1
+                totals["sales_month_centavos"] += sales_month
+                totals["unremitted_sales_centavos"] += unremitted
+                stores.append({
+                    **store,
+                    "sales_month_centavos": sales_month,
+                    "sales_month_display": money_display_from_centavos(sales_month),
+                    "unremitted_sales_centavos": unremitted,
+                    "unremitted_sales_display": money_display_from_centavos(unremitted),
+                    "unremitted_request_count": int(row.get("unremitted_request_count") or 0),
+                    "goal": goal,
+                    "latest_remittance": serialize_store_remittance(latest) if latest else None,
+                    "active_remittance": serialize_store_remittance(active) if active else None,
+                })
+    return {
+        "stores": stores,
+        "summary": {
+            **totals,
+            "sales_month_display": money_display_from_centavos(totals["sales_month_centavos"]),
+            "unremitted_sales_display": money_display_from_centavos(totals["unremitted_sales_centavos"]),
+            "minimum_goal_centavos": store_remittance_minimum_goal_centavos(),
+            "minimum_goal_display": money_display_from_centavos(store_remittance_minimum_goal_centavos()),
+            "store_count": len(stores),
+        },
+    }
+
+
+@app.post("/api/cash-collection/stores/{store_id}/pickup")
+def schedule_cash_collection_pickup(store_id: str, payload: StoreRemittancePickupRequest, admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ps.*, so.id AS owner_id, so.display_name AS owner_display_name, so.status AS owner_status
+                FROM physical_stores ps
+                LEFT JOIN physical_store_owners so ON so.store_id = ps.id
+                WHERE ps.id = %s
+                FOR UPDATE
+                """,
+                (store_id,),
+            )
+            store = cur.fetchone()
+            if not store:
+                raise HTTPException(status_code=404, detail="Physical store not found.")
+            active = store_latest_active_remittance(cur, store["id"])
+            if active:
+                if active.get("method") not in {"CASH_PICKUP", "MANUAL_CASH_PICKUP"}:
+                    raise HTTPException(status_code=400, detail=f"Store has an active online remittance checkout: {active.get('public_id')}.")
+                cur.execute(
+                    """
+                    UPDATE store_remittances
+                    SET status = 'CASH_PICKUP_SCHEDULED',
+                        pickup_scheduled_at = COALESCE(pickup_scheduled_at, now()),
+                        scheduled_by_admin_id = %s,
+                        notes = COALESCE(NULLIF(%s, ''), notes),
+                        updated_at = now()
+                    WHERE id = %s
+                    RETURNING *
+                    """,
+                    (admin["id"], normalize_payment_text(payload.notes, 1000), active["id"]),
+                )
+                remittance = cur.fetchone()
+            else:
+                remittance = create_store_remittance(
+                    cur,
+                    store_id=store["id"],
+                    owner_id=store.get("owner_id"),
+                    method="MANUAL_CASH_PICKUP",
+                    status="CASH_PICKUP_SCHEDULED",
+                    scheduled_by_admin_id=admin["id"],
+                    notes=payload.notes,
+                    require_goal=False,
+                )
+            push_status = None
+            if store.get("owner_id") and store.get("owner_status") == "ACTIVE":
+                push_status = notify_store_owner_message_push(
+                    cur,
+                    store["owner_id"],
+                    "Cash collection scheduled",
+                    f"Cash pickup was scheduled for {money_display_from_centavos(remittance.get('amount_centavos') or 0)} in {store.get('store_name') or 'your store'}.",
+                    tag=f"3j-store-cash-pickup-{remittance.get('public_id')}",
+                    data={"remittance_id": remittance.get("public_id"), "store_id": str(store["id"])},
+                )
+            create_admin_notification(
+                "STORE_CASH_COLLECTION",
+                "INFO",
+                "Cash pickup scheduled",
+                f"Cash pickup scheduled for {store.get('store_name') or 'Store'}: {money_display_from_centavos(remittance.get('amount_centavos') or 0)}.",
+                "Stores",
+                "/admin/sales/stores",
+                "store_remittances",
+                remittance.get("public_id"),
+                {"store_id": str(store["id"]), "push_status": push_status},
+            )
+    audit(admin["id"], "schedule_store_cash_pickup", "store_remittances", str(remittance["id"]), {"store_id": store_id, "public_id": remittance.get("public_id")})
+    return {
+        "status": "CASH_PICKUP_SCHEDULED",
+        "message": "Cash pickup scheduled and store owner was notified.",
+        "remittance": serialize_store_remittance(remittance),
+        "push_status": push_status,
+    }
+
+
 @app.post("/api/physical-stores")
 def create_physical_store(payload: PhysicalStorePayload, request: Request, admin=Depends(current_admin)):
     status = normalize_physical_store_status(payload.status)
@@ -26039,7 +27190,7 @@ def create_physical_store(payload: PhysicalStorePayload, request: Request, admin
         raise HTTPException(status_code=400, detail="Store owner details are required before saving a physical store.")
     location_id = normalize_optional_uuid(payload.location_id, "Selected store location is invalid.")
     if location_id and not fetch_one("SELECT id FROM locations WHERE id = %s", (location_id,)):
-        raise HTTPException(status_code=400, detail="Selected store location was not found in Location Management.")
+        raise HTTPException(status_code=400, detail="Selected store location was not found in Location.")
     name = re.sub(r"\s+", " ", payload.store_name.strip())
     if not name:
         raise HTTPException(status_code=400, detail="Store name is required.")
@@ -26098,7 +27249,7 @@ def update_physical_store(store_id: str, payload: PhysicalStorePayload, request:
         raise HTTPException(status_code=400, detail="Store owner details are required before saving a physical store.")
     location_id = normalize_optional_uuid(payload.location_id, "Selected store location is invalid.")
     if location_id and not fetch_one("SELECT id FROM locations WHERE id = %s", (location_id,)):
-        raise HTTPException(status_code=400, detail="Selected store location was not found in Location Management.")
+        raise HTTPException(status_code=400, detail="Selected store location was not found in Location.")
     name = re.sub(r"\s+", " ", payload.store_name.strip())
     if not name:
         raise HTTPException(status_code=400, detail="Store name is required.")
@@ -27269,6 +28420,21 @@ def store_portal_purchase_requests(
                 (owner["store_id"],),
             )
             summary = cur.fetchone() or {}
+            cur.execute(
+                """
+                SELECT approved_at::date AS sale_date,
+                       COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
+                FROM store_purchase_requests
+                WHERE store_id = %s
+                  AND status = 'APPROVED'
+                  AND approved_at >= date_trunc('month', now())
+                GROUP BY approved_at::date
+                ORDER BY approved_at::date
+                """,
+                (owner["store_id"],),
+            )
+            goal_daily_rows = cur.fetchall() or []
+            remittance = store_remittance_summary(cur, owner["store_id"], int(summary.get("sales_month") or 0))
             push_status = store_owner_push_notification_status(cur, owner)
     sales_today = int(summary.get("sales_today") or 0)
     sales_month = int(summary.get("sales_month") or 0)
@@ -27278,7 +28444,7 @@ def store_portal_purchase_requests(
     commission_today = store_period_commission_centavos(sales_today, commission_type, commission_value) if commission_type == "PERCENT_OF_SALES" else 0
     net_month = max(0, sales_month - commission_month)
     net_today = max(0, sales_today - commission_today)
-    commission_goal = store_progressive_commission_goal(sales_month)
+    commission_goal = store_progressive_commission_goal(sales_month, goal_daily_rows)
     return {
         "owner": {
             **serialize_store_owner(owner, include_store=True),
@@ -27315,7 +28481,103 @@ def store_portal_purchase_requests(
             "net_month_centavos": net_month,
             "net_month_display": money_display_from_centavos(net_month),
             "commission_goal": commission_goal,
+            "remittance": remittance,
         },
+    }
+
+
+@app.post("/api/store-portal/remittances/online")
+def store_portal_create_online_remittance(owner=Depends(current_store_owner)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            gateway = payment_gateway_store()
+            credentials = payment_gateway_active_credentials(gateway)
+            if not gateway.get("enabled") or not credentials.get("secret_key"):
+                raise HTTPException(status_code=400, detail="Online PayMongo remittance is not ready.")
+            store_row = {
+                "id": owner["store_id"],
+                "store_name": owner.get("store_name") or "Physical store",
+            }
+            remittance = create_store_remittance(
+                cur,
+                store_id=owner["store_id"],
+                owner_id=owner["id"],
+                method="ONLINE",
+                status="REQUESTED",
+                requested_by_owner_id=owner["id"],
+                require_goal=True,
+            )
+            checkout = paymongo_create_store_remittance_checkout(gateway, credentials["secret_key"], remittance, store_row, owner)
+            checkout_data = checkout.get("data") if isinstance(checkout.get("data"), dict) else {}
+            checkout_attributes = checkout_data.get("attributes") if isinstance(checkout_data.get("attributes"), dict) else {}
+            checkout_session_id = checkout_data.get("id")
+            checkout_url = checkout_attributes.get("checkout_url") or checkout_attributes.get("url")
+            if not checkout_url:
+                raise HTTPException(status_code=502, detail="PayMongo did not return a checkout URL.")
+            cur.execute(
+                """
+                UPDATE store_remittances
+                SET status = 'CHECKOUT_CREATED',
+                    provider_mode = %s,
+                    checkout_session_id = %s,
+                    checkout_url = %s,
+                    provider_response_json = %s,
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (credentials["mode"], checkout_session_id, checkout_url, Json(sanitize_summary(checkout)), remittance["id"]),
+            )
+            remittance = cur.fetchone()
+            create_admin_notification(
+                "STORE_CASH_COLLECTION",
+                "INFO",
+                "Store online remittance started",
+                f"{owner.get('store_name') or 'Store'} opened an online remittance checkout for {money_display_from_centavos(remittance.get('amount_centavos') or 0)}.",
+                "Stores",
+                "/admin/sales/stores",
+                "store_remittances",
+                remittance.get("public_id"),
+                {"store_id": str(owner["store_id"]), "owner_id": str(owner["id"])},
+            )
+    return {
+        "status": "CHECKOUT_CREATED",
+        "message": "Online remittance checkout created.",
+        "checkout_url": remittance["checkout_url"],
+        "remittance": serialize_store_remittance(remittance),
+    }
+
+
+@app.post("/api/store-portal/remittances/cash-pickup")
+def store_portal_create_cash_pickup_remittance(payload: StoreRemittancePickupRequest, owner=Depends(current_store_owner)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            remittance = create_store_remittance(
+                cur,
+                store_id=owner["store_id"],
+                owner_id=owner["id"],
+                method="CASH_PICKUP",
+                status="CASH_PICKUP_REQUESTED",
+                requested_by_owner_id=owner["id"],
+                notes=payload.notes,
+                require_goal=True,
+            )
+            create_admin_notification(
+                "STORE_CASH_COLLECTION",
+                "WARNING",
+                "Cash pickup requested",
+                f"{owner.get('store_name') or 'Store'} requested cash pickup for {money_display_from_centavos(remittance.get('amount_centavos') or 0)}.",
+                "Stores",
+                "/admin/sales/stores",
+                "store_remittances",
+                remittance.get("public_id"),
+                {"store_id": str(owner["store_id"]), "owner_id": str(owner["id"])},
+            )
+    return {
+        "status": "CASH_PICKUP_REQUESTED",
+        "message": "Cash pickup request sent. Admin will schedule collection.",
+        "remittance": serialize_store_remittance(remittance),
     }
 
 
@@ -30456,20 +31718,30 @@ def bound_station_for_omada_site(omada_site_id: Optional[str] = None, site_name:
     clauses = []
     params = []
     if clean_site_id:
-        clauses.append("omada_site_id = %s")
+        clauses.append("s.omada_site_id = %s")
+        params.append(clean_site_id)
+        clauses.append("ss.omada_site_id = %s")
+        params.append(clean_site_id)
+        clauses.append("sd.omada_site_id = %s")
         params.append(clean_site_id)
     if clean_site_name:
-        clauses.append("lower(coalesce(omada_site_name, '')) = lower(%s)")
+        clauses.append("lower(coalesce(s.omada_site_name, '')) = lower(%s)")
+        params.append(clean_site_name)
+        clauses.append("lower(coalesce(ss.omada_site_name, '')) = lower(%s)")
+        params.append(clean_site_name)
+        clauses.append("lower(coalesce(sd.site_name, '')) = lower(%s)")
         params.append(clean_site_name)
     if not clauses:
         return None
     return fetch_one(
         f"""
-        SELECT *
-        FROM mikrotik_stations
-        WHERE status <> 'ARCHIVED'
+        SELECT s.*
+        FROM mikrotik_stations s
+        LEFT JOIN mikrotik_station_sites ss ON ss.station_id = s.id
+        LEFT JOIN site_deployments sd ON sd.id = ss.site_deployment_id
+        WHERE s.status <> 'ARCHIVED'
           AND ({' OR '.join(clauses)})
-        ORDER BY updated_at DESC, created_at DESC
+        ORDER BY ss.is_primary DESC NULLS LAST, s.updated_at DESC, s.created_at DESC
         LIMIT 1
         """,
         tuple(params),
@@ -30555,6 +31827,132 @@ def sync_site_vlan_from_station_row(cur, station: dict, admin_id: Optional[str] 
         (station["id"],),
     )
     return site
+
+
+def sync_site_vlan_for_station_binding(cur, station: dict, binding: dict, admin_id: Optional[str] = None) -> Optional[dict]:
+    site_deployment_id = (binding.get("site_deployment_id") or "").strip() or None
+    omada_site_id = (binding.get("omada_site_id") or "").strip() or None
+    omada_site_name = (binding.get("omada_site_name") or "").strip() or None
+    site = None
+    if site_deployment_id:
+        cur.execute("SELECT * FROM site_deployments WHERE id::text = %s LIMIT 1", (site_deployment_id,))
+        site = cur.fetchone()
+    if not site:
+        cur.execute(
+            """
+            SELECT *
+            FROM site_deployments
+            WHERE (%s::text IS NOT NULL AND omada_site_id = %s)
+               OR (%s::text IS NOT NULL AND lower(site_name) = lower(%s))
+            LIMIT 1
+            """,
+            (omada_site_id, omada_site_id, omada_site_name, omada_site_name),
+        )
+        site = cur.fetchone()
+    if site:
+        cur.execute(
+            """
+            UPDATE site_deployments
+            SET vlan_tag = %s,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (station["vlan_id"], site["id"]),
+        )
+        site = cur.fetchone()
+    elif omada_site_id or omada_site_name:
+        cur.execute(
+            """
+            INSERT INTO site_deployments(site_name, omada_site_id, deployment_status, notes, created_by_admin_id, vlan_tag)
+            VALUES (%s, %s, 'ACTIVE', %s, %s, %s)
+            RETURNING *
+            """,
+            (
+                omada_site_name or f"Omada Site {omada_site_id}",
+                omada_site_id,
+                "Linked automatically from MikroTik Station binding so AP SSIDs use the station customer VLAN.",
+                admin_id,
+                station["vlan_id"],
+            ),
+        )
+        site = cur.fetchone()
+    site_omada_id = (site or {}).get("omada_site_id") or omada_site_id
+    if site_omada_id:
+        cur.execute(
+            """
+            UPDATE ap_deployments
+            SET configuration_status = 'PENDING',
+                configuration_error = NULL,
+                configured_at = NULL,
+                configuration_components_json = '{}'::jsonb,
+                updated_at = now()
+            WHERE omada_site_id = %s
+              AND deployment_status = 'CONNECTED'
+            """,
+            (site_omada_id,),
+        )
+    return site
+
+
+def replace_station_site_bindings(cur, station: dict, bindings: list[dict], admin_id: Optional[str] = None) -> tuple[Optional[str], Optional[str], bool]:
+    cur.execute("DELETE FROM mikrotik_station_sites WHERE station_id = %s", (station["id"],))
+    primary_site_id = None
+    primary_site_name = None
+    primary_confirmed = False
+    for index, binding in enumerate(bindings):
+        is_primary = bool(binding.get("is_primary"))
+        site = sync_site_vlan_for_station_binding(cur, station, binding, admin_id)
+        site_deployment_id = str((site or {}).get("id") or binding.get("site_deployment_id") or "").strip() or None
+        omada_site_id = ((site or {}).get("omada_site_id") or binding.get("omada_site_id") or "").strip() or None
+        omada_site_name = ((site or {}).get("site_name") or binding.get("omada_site_name") or "").strip() or None
+        vlan_confirmed = True if site else bool(binding.get("vlan_confirmed") or omada_site_id or omada_site_name)
+        cur.execute(
+            """
+            INSERT INTO mikrotik_station_sites(
+                station_id, site_deployment_id, omada_site_id, omada_site_name,
+                is_primary, vlan_confirmed, created_by_admin_id, updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, now())
+            """,
+            (
+                station["id"],
+                site_deployment_id,
+                omada_site_id,
+                omada_site_name,
+                is_primary,
+                vlan_confirmed,
+                admin_id,
+            ),
+        )
+        if is_primary and not (primary_site_id or primary_site_name):
+            primary_site_id = omada_site_id
+            primary_site_name = omada_site_name
+            primary_confirmed = vlan_confirmed
+    cur.execute(
+        """
+        UPDATE mikrotik_stations
+        SET omada_site_id = %s,
+            omada_site_name = %s,
+            omada_site_vlan_confirmed = %s,
+            omada_site_bound_at = CASE WHEN %s::text IS NULL AND %s::text IS NULL THEN NULL ELSE now() END,
+            omada_site_bound_by_admin_id = CASE WHEN %s::text IS NULL AND %s::text IS NULL THEN NULL ELSE %s::uuid END,
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (
+            primary_site_id,
+            primary_site_name,
+            primary_confirmed,
+            primary_site_id,
+            primary_site_name,
+            primary_site_id,
+            primary_site_name,
+            admin_id,
+            station["id"],
+        ),
+    )
+    return primary_site_id, primary_site_name, primary_confirmed
 
 
 def log_ap_configuration(ap_row: Optional[dict], action: str, status: str, message: str, request_summary: dict = None, response_summary: dict = None):
@@ -32696,6 +34094,11 @@ def sync_omada_external_portal_for_bound_stations(admin: dict, portal_url: str, 
           AND (
             NULLIF(TRIM(COALESCE(omada_site_id, '')), '') IS NOT NULL
             OR NULLIF(TRIM(COALESCE(omada_site_name, '')), '') IS NOT NULL
+            OR EXISTS (
+                SELECT 1
+                FROM mikrotik_station_sites ss
+                WHERE ss.station_id = mikrotik_stations.id
+            )
           )
         ORDER BY station_name
         """
@@ -32847,8 +34250,8 @@ def save_captive_portal_settings(payload: CaptivePortalSettingsUpdate, admin=Dep
 
 
 @app.get("/api/captive-portal/omada/status")
-def captive_portal_omada_status(admin=Depends(current_admin)):
-    return captive_portal_omada_status_payload()
+def captive_portal_omada_status(live: bool = False, admin=Depends(current_admin)):
+    return captive_portal_omada_status_payload(live_check=live)
 
 
 @app.post("/api/captive-portal/omada/enable")
@@ -32861,6 +34264,11 @@ def captive_portal_enable_omada(admin=Depends(current_admin)):
           AND (
             NULLIF(TRIM(COALESCE(omada_site_id, '')), '') IS NOT NULL
             OR NULLIF(TRIM(COALESCE(omada_site_name, '')), '') IS NOT NULL
+            OR EXISTS (
+                SELECT 1
+                FROM mikrotik_station_sites ss
+                WHERE ss.station_id = mikrotik_stations.id
+            )
           )
         ORDER BY updated_at DESC
         """
@@ -33199,6 +34607,200 @@ def station_dedupe_csv(*values: Optional[str]) -> str:
     return ",".join(items)
 
 
+STATION_TRANSPORT_MODE_BRIDGE_TRUNK = "BRIDGE_TRUNK"
+STATION_TRANSPORT_MODE_VLAN_XCONNECT = "VLAN_XCONNECT"
+STATION_GATEWAY_MODE_CENTRAL_ROOT = "CENTRAL_ROOT_GATEWAY"
+STATION_GATEWAY_MODE_LOCAL = "LOCAL_STATION_GATEWAY"
+WIREGUARD_BACKUP_ENDPOINT_PORT = 51820
+WIREGUARD_BACKUP_ROUTE_DISTANCE = 200
+WIREGUARD_MIKROTIK_HUB_INTERFACE = "WG-3J-HUB"
+WIREGUARD_MIKROTIK_HUB_ADDRESS = "10.250.0.1/24"
+WIREGUARD_MIKROTIK_HUB_HOST_ROUTE = "10.250.0.1/32"
+WIREGUARD_CENTRAL_SERVICE_NETWORK = "192.168.50.0/24"
+WIREGUARD_CENTRAL_ALLOWED_ADDRESSES = f"{WIREGUARD_CENTRAL_SERVICE_NETWORK},{WIREGUARD_MIKROTIK_HUB_HOST_ROUTE}"
+WIREGUARD_STATION_MANAGEMENT_TCP_PORTS = "8291,8728,8729"
+
+
+def normalize_station_transport_mode(value: Optional[str]) -> str:
+    normalized = re.sub(r"[^A-Z0-9]+", "_", str(value or "").upper()).strip("_")
+    aliases = {
+        "": STATION_TRANSPORT_MODE_BRIDGE_TRUNK,
+        "NORMAL": STATION_TRANSPORT_MODE_BRIDGE_TRUNK,
+        "TRUNK": STATION_TRANSPORT_MODE_BRIDGE_TRUNK,
+        "BRIDGE": STATION_TRANSPORT_MODE_BRIDGE_TRUNK,
+        "BRIDGE_TRUNK": STATION_TRANSPORT_MODE_BRIDGE_TRUNK,
+        "VLAN_HANDOFF": STATION_TRANSPORT_MODE_VLAN_XCONNECT,
+        "HANDOFF": STATION_TRANSPORT_MODE_VLAN_XCONNECT,
+        "XCONNECT": STATION_TRANSPORT_MODE_VLAN_XCONNECT,
+        "VLAN_XCONNECT": STATION_TRANSPORT_MODE_VLAN_XCONNECT,
+        "PPPOE_AC_HANDOFF": STATION_TRANSPORT_MODE_VLAN_XCONNECT,
+    }
+    return aliases.get(normalized, STATION_TRANSPORT_MODE_BRIDGE_TRUNK)
+
+
+def normalize_station_gateway_mode(value: Optional[str]) -> str:
+    normalized = re.sub(r"[^A-Z0-9]+", "_", str(value or "").upper()).strip("_")
+    aliases = {
+        "": STATION_GATEWAY_MODE_CENTRAL_ROOT,
+        "CENTRAL": STATION_GATEWAY_MODE_CENTRAL_ROOT,
+        "CENTRAL_ROOT": STATION_GATEWAY_MODE_CENTRAL_ROOT,
+        "CENTRAL_ROOT_GATEWAY": STATION_GATEWAY_MODE_CENTRAL_ROOT,
+        "ROOT": STATION_GATEWAY_MODE_CENTRAL_ROOT,
+        "LOCAL": STATION_GATEWAY_MODE_LOCAL,
+        "LOCAL_GATEWAY": STATION_GATEWAY_MODE_LOCAL,
+        "LOCAL_STATION": STATION_GATEWAY_MODE_LOCAL,
+        "LOCAL_STATION_GATEWAY": STATION_GATEWAY_MODE_LOCAL,
+        "STATION_GATEWAY": STATION_GATEWAY_MODE_LOCAL,
+    }
+    return aliases.get(normalized, STATION_GATEWAY_MODE_CENTRAL_ROOT)
+
+
+def station_router_is_vlan_xconnect(router: dict) -> bool:
+    return normalize_station_transport_mode(router.get("transport_mode")) == STATION_TRANSPORT_MODE_VLAN_XCONNECT
+
+
+def station_wireguard_default_interface_name(station_code: Optional[str], station_name: Optional[str]) -> str:
+    safe_code = routeros_safe_identifier(station_code or station_name or "station", "station")
+    return f"WG-3J-{safe_code[:42]}"
+
+
+def station_wireguard_default_address(vlan_id: int) -> str:
+    third_octet = int(vlan_id) if 1 <= int(vlan_id) <= 254 else ((int(vlan_id) - 1) % 254) + 1
+    return f"10.250.{third_octet}.2/32"
+
+
+def station_csv_networks(value: Optional[str], field_label: str, allow_host: bool = True) -> list[str]:
+    networks = []
+    seen = set()
+    for raw_item in str(value or "").split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        try:
+            if "/" in item:
+                parsed = ip_network(item, strict=False)
+                normalized = parsed.with_prefixlen
+            elif allow_host:
+                normalized = f"{ip_address(item)}/32"
+            else:
+                raise ValueError("missing prefix")
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"{field_label} contains invalid CIDR/IP value: {item}.")
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        networks.append(normalized)
+    return networks
+
+
+def normalize_wireguard_public_key(value: Optional[str], field_label: str, required: bool = False) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        if required:
+            raise HTTPException(status_code=400, detail=f"{field_label} is required when WireGuard is enabled.")
+        return None
+    if any(char.isspace() for char in text):
+        raise HTTPException(status_code=400, detail=f"{field_label} must not contain spaces or line breaks.")
+    try:
+        decoded = base64.b64decode(text, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"{field_label} must be a valid WireGuard base64 public key.")
+    if len(decoded) != 32:
+        raise HTTPException(status_code=400, detail=f"{field_label} must decode to a 32-byte WireGuard key.")
+    return text
+
+
+def normalize_station_wireguard_values(payload: MikrotikStationCreate, station_code: str, network, ap_management: Optional[dict]) -> dict:
+    enabled = bool(payload.wireguard_enabled)
+    interface_name = (payload.wireguard_interface_name or "").strip() or station_wireguard_default_interface_name(station_code, payload.station_name)
+    station_address = (payload.wireguard_station_address or "").strip() or station_wireguard_default_address(int(payload.vlan_id))
+    endpoint_host = (payload.wireguard_endpoint_host or "").strip()
+    endpoint_port = int(payload.wireguard_endpoint_port or WIREGUARD_BACKUP_ENDPOINT_PORT)
+    endpoint_route_gateway = (payload.wireguard_endpoint_route_gateway or "").strip()
+    if endpoint_route_gateway:
+        try:
+            parsed_endpoint_gateway = ip_address(endpoint_route_gateway)
+            if parsed_endpoint_gateway.version != 4:
+                raise ValueError
+            endpoint_route_gateway = str(parsed_endpoint_gateway)
+        except Exception:
+            raise HTTPException(status_code=400, detail="WireGuard endpoint route gateway must be a valid IPv4 address, for example the station local ISP gateway.")
+    route_distance = int(payload.wireguard_route_distance or WIREGUARD_BACKUP_ROUTE_DISTANCE)
+    persistent_keepalive = int(payload.wireguard_persistent_keepalive if payload.wireguard_persistent_keepalive is not None else 25)
+    allowed_addresses = ",".join(station_csv_networks(payload.wireguard_allowed_addresses or WIREGUARD_CENTRAL_ALLOWED_ADDRESSES, "WireGuard central allowed addresses"))
+    station_public_key = normalize_wireguard_public_key(payload.wireguard_station_public_key, "Station public key")
+    peer_public_key = normalize_wireguard_public_key(payload.wireguard_peer_public_key, "Central hub public key", required=enabled)
+    hub_router_id = str(payload.wireguard_hub_router_id or "").strip() or None
+    if hub_router_id:
+        try:
+            hub_router_id = str(uuid.UUID(hub_router_id))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Central WireGuard hub router ID is invalid.")
+    hub_interface_name = (payload.wireguard_hub_interface_name or "").strip() or None
+    hub_allowed_addresses = payload.wireguard_hub_allowed_addresses
+
+    try:
+        station_interface = ip_interface(station_address)
+        if station_interface.version != 4:
+            raise ValueError("not IPv4")
+    except Exception:
+        raise HTTPException(status_code=400, detail="WireGuard station tunnel address must be a valid IPv4 interface, for example 10.250.78.2/32.")
+
+    if enabled:
+        if not endpoint_host:
+            raise HTTPException(status_code=400, detail="WireGuard endpoint host is required when WireGuard is enabled.")
+        if any(char.isspace() for char in endpoint_host):
+            raise HTTPException(status_code=400, detail="WireGuard endpoint host must not contain spaces.")
+        if not interface_name:
+            raise HTTPException(status_code=400, detail="WireGuard interface name is required when WireGuard is enabled.")
+        if hub_router_id and not hub_interface_name:
+            raise HTTPException(status_code=400, detail="Central hub WireGuard interface name is required when a hub router is selected.")
+        if hub_interface_name and not hub_router_id:
+            raise HTTPException(status_code=400, detail="Select the central hub router when entering a hub WireGuard interface.")
+
+    if not hub_allowed_addresses:
+        hub_allowed = [ip_interface(station_address).with_prefixlen, network.with_prefixlen]
+        if ap_management:
+            hub_allowed.append(ap_management["network"].with_prefixlen)
+        hub_allowed_addresses = ",".join(station_csv_networks(",".join(hub_allowed), "WireGuard hub allowed addresses"))
+    else:
+        hub_allowed_addresses = ",".join(station_csv_networks(hub_allowed_addresses, "WireGuard hub allowed addresses"))
+
+    return {
+        "enabled": enabled,
+        "interface_name": interface_name,
+        "station_address": station_interface.with_prefixlen,
+        "station_public_key": station_public_key,
+        "peer_public_key": peer_public_key,
+        "endpoint_host": endpoint_host,
+        "endpoint_port": endpoint_port,
+        "endpoint_route_gateway": endpoint_route_gateway,
+        "allowed_addresses": allowed_addresses,
+        "route_distance": route_distance,
+        "persistent_keepalive": persistent_keepalive,
+        "hub_router_id": hub_router_id,
+        "hub_interface_name": hub_interface_name,
+        "hub_allowed_addresses": hub_allowed_addresses,
+    }
+
+
+def station_wireguard_network_list(value: Optional[str]) -> list[str]:
+    try:
+        return station_csv_networks(value, "WireGuard allowed addresses")
+    except HTTPException:
+        return []
+
+
+def station_vlan_xconnect_names(vlan_id: int, vlan_interface_name: str, purpose: str = "CLIENTS") -> dict:
+    safe_base = routeros_safe_identifier(vlan_interface_name or f"VLAN{vlan_id}-3J-{purpose}", f"vlan{vlan_id}-3j-{purpose.lower()}")
+    safe_purpose = routeros_safe_identifier(purpose, "clients")
+    return {
+        "upstream_vlan_interface": f"{safe_base}-up",
+        "downstream_vlan_interface": f"{safe_base}-down",
+        "bridge": f"br-v{vlan_id}-{safe_purpose}-xconnect",
+    }
+
+
 def routeros_cli_add_preview(path: str, params: dict) -> str:
     section = path[:-4] if path.endswith("/add") else path
     command = section.strip("/").replace("/", " ")
@@ -33243,6 +34845,14 @@ def routeros_verify_matches(rows: list[dict], verify: Optional[dict]) -> bool:
     if verify.get("contains"):
         return any(str(expected or "") in str(row.get(field) or "") for row in rows)
     return any(str(row.get(field) or "").strip() == str(expected or "").strip() for row in rows)
+
+
+def routeros_command_value_matches(actual, expected) -> bool:
+    actual_text = str(actual or "").strip()
+    expected_text = str(expected or "").strip()
+    if expected_text.lower() in {"yes", "no", "true", "false", "1", "0"}:
+        return routeros_truthy(actual_text) == routeros_truthy(expected_text)
+    return actual_text == expected_text
 
 
 def routeros_verify_message(verify: Optional[dict]) -> str:
@@ -33303,6 +34913,2176 @@ def station_routeros_remove_command(label: str, print_path: str, query_field: st
     }
 
 
+def station_vlan_xconnect_commands(
+    vlan_id: int,
+    vlan_interface_name: str,
+    upstream_parent: str,
+    upstream_tagged_ports: str,
+    downstream_parent: str,
+    downstream_tagged_ports: str,
+    previous_name: str,
+    purpose: str = "CLIENTS",
+) -> list[dict]:
+    names = station_vlan_xconnect_names(vlan_id, vlan_interface_name, purpose)
+    purpose_label = "AP Management" if purpose.upper().startswith("AP") else "Station Client"
+    comment_prefix = f"3J {purpose_label} - VLAN {vlan_id} xconnect"
+    return [
+        station_routeros_add_command(
+            f"Create VLAN {vlan_id} upstream handoff interface",
+            "/interface/vlan/add",
+            {
+                "comment": f"{comment_prefix} upstream on {upstream_parent}",
+                "interface": upstream_parent,
+                "name": names["upstream_vlan_interface"],
+                "vlan-id": str(vlan_id),
+            },
+            unique_field="name",
+            unique_value=names["upstream_vlan_interface"],
+        ),
+        station_routeros_add_command(
+            f"Create VLAN {vlan_id} downstream handoff interface",
+            "/interface/vlan/add",
+            {
+                "comment": f"{comment_prefix} downstream on {downstream_parent}",
+                "interface": downstream_parent,
+                "name": names["downstream_vlan_interface"],
+                "vlan-id": str(vlan_id),
+            },
+            unique_field="name",
+            unique_value=names["downstream_vlan_interface"],
+        ),
+        station_routeros_add_command(
+            f"Create VLAN {vlan_id} handoff bridge",
+            "/interface/bridge/add",
+            {
+                "comment": f"{comment_prefix} bridge from {previous_name or 'previous router'} to OLT/AP bridge",
+                "name": names["bridge"],
+                "protocol-mode": "none",
+            },
+            unique_field="name",
+            unique_value=names["bridge"],
+        ),
+        station_routeros_add_command(
+            f"Attach VLAN {vlan_id} upstream handoff to bridge",
+            "/interface/bridge/port/add",
+            {
+                "bridge": names["bridge"],
+                "comment": f"{comment_prefix} upstream bridge port",
+                "interface": names["upstream_vlan_interface"],
+            },
+            existing_query={"bridge": names["bridge"], "interface": names["upstream_vlan_interface"]},
+        ),
+        station_routeros_add_command(
+            f"Attach VLAN {vlan_id} downstream handoff to bridge",
+            "/interface/bridge/port/add",
+            {
+                "bridge": names["bridge"],
+                "comment": f"{comment_prefix} downstream bridge port",
+                "interface": names["downstream_vlan_interface"],
+            },
+            existing_query={"bridge": names["bridge"], "interface": names["downstream_vlan_interface"]},
+        ),
+        station_routeros_add_command(
+            f"Carry VLAN {vlan_id} on upstream side",
+            "/interface/bridge/vlan/add",
+            {
+                "bridge": upstream_parent,
+                "comment": f"{comment_prefix} upstream tagged side",
+                "tagged": station_dedupe_csv(upstream_parent, upstream_tagged_ports),
+                "vlan-ids": str(vlan_id),
+            },
+            existing_query={"bridge": upstream_parent, "vlan-ids": str(vlan_id)},
+            merge_bridge_vlan_tagged=True,
+        ),
+        station_routeros_add_command(
+            f"Carry VLAN {vlan_id} on downstream OLT/AP side",
+            "/interface/bridge/vlan/add",
+            {
+                "bridge": downstream_parent,
+                "comment": f"{comment_prefix} downstream tagged side",
+                "tagged": station_dedupe_csv(downstream_parent, downstream_tagged_ports),
+                "vlan-ids": str(vlan_id),
+            },
+            existing_query={"bridge": downstream_parent, "vlan-ids": str(vlan_id)},
+            merge_bridge_vlan_tagged=True,
+        ),
+    ]
+
+
+def station_vlan_xconnect_remove_commands(vlan_id: int, vlan_interface_name: str, purpose: str = "CLIENTS") -> list[dict]:
+    names = station_vlan_xconnect_names(vlan_id, vlan_interface_name, purpose)
+    purpose_label = "AP Management" if purpose.upper().startswith("AP") else "Station Client"
+    comment_prefix = f"3J {purpose_label} - VLAN {vlan_id} xconnect"
+    return [
+        station_routeros_remove_command(
+            f"Remove VLAN {vlan_id} downstream bridge VLAN xconnect row",
+            "/interface/bridge/vlan/print",
+            "comment",
+            f"{comment_prefix} downstream tagged side",
+        ),
+        station_routeros_remove_command(
+            f"Remove VLAN {vlan_id} upstream bridge VLAN xconnect row",
+            "/interface/bridge/vlan/print",
+            "comment",
+            f"{comment_prefix} upstream tagged side",
+        ),
+        station_routeros_remove_command(
+            f"Remove VLAN {vlan_id} downstream xconnect bridge port",
+            "/interface/bridge/port/print",
+            "comment",
+            f"{comment_prefix} downstream bridge port",
+        ),
+        station_routeros_remove_command(
+            f"Remove VLAN {vlan_id} upstream xconnect bridge port",
+            "/interface/bridge/port/print",
+            "comment",
+            f"{comment_prefix} upstream bridge port",
+        ),
+        station_routeros_remove_command(
+            f"Remove VLAN {vlan_id} xconnect bridge",
+            "/interface/bridge/print",
+            "name",
+            names["bridge"],
+        ),
+        station_routeros_remove_command(
+            f"Remove VLAN {vlan_id} downstream handoff interface",
+            "/interface/vlan/print",
+            "name",
+            names["downstream_vlan_interface"],
+        ),
+        station_routeros_remove_command(
+            f"Remove VLAN {vlan_id} upstream handoff interface",
+            "/interface/vlan/print",
+            "name",
+            names["upstream_vlan_interface"],
+        ),
+    ]
+
+
+def routeros_input_drop_place_before_query() -> dict:
+    return {
+        "print_path": "/ip/firewall/filter/print",
+        "query": {"chain": "input", "action": "drop"},
+        "proplist": ".id,chain,action,disabled,comment",
+        "missing_message": "No input drop rule was detected; WireGuard input allow rule can be appended safely.",
+    }
+
+
+def routeros_forward_drop_place_before_query() -> dict:
+    return {
+        "print_path": "/ip/firewall/filter/print",
+        "query": {"chain": "forward", "action": "drop"},
+        "proplist": ".id,chain,action,disabled,comment",
+        "missing_message": "No forward drop rule was detected; WireGuard endpoint forward allow rule can be appended safely.",
+    }
+
+
+def station_wireguard_route_commands(interface_name: str, allowed_addresses: str, distance: int, comment_prefix: str, excluded_hosts: Optional[list[str]] = None) -> list[dict]:
+    commands = []
+    excluded_ips = []
+    for host in excluded_hosts or []:
+        try:
+            excluded_ips.append(ip_address(str(host or "").strip()))
+        except Exception:
+            continue
+    for dst in station_wireguard_network_list(allowed_addresses):
+        try:
+            network = ip_network(dst, strict=False)
+        except Exception:
+            network = None
+        excluded_ip = next((item for item in excluded_ips if network and item.version == network.version and item in network), None)
+        if excluded_ip:
+            commands.append({
+                "label": f"Skip unsafe WireGuard route {dst}",
+                "preview": (
+                    f"Skipped route {dst} through {interface_name} because it contains the WireGuard endpoint {excluded_ip}.\n"
+                    "Routing the endpoint through its own tunnel can break MikroTik management and prevent the tunnel from handshaking."
+                ),
+                "path": None,
+                "params": None,
+                "unsafe_route_skipped": True,
+            })
+            continue
+        commands.append(
+            station_routeros_add_command(
+                f"Route {dst} through WireGuard",
+                "/ip/route/add",
+                {
+                    "dst-address": dst,
+                    "gateway": interface_name,
+                    "distance": str(distance),
+                    "comment": f"{comment_prefix} route {dst}",
+                },
+                unique_comment=f"{comment_prefix} route {dst}",
+            )
+        )
+    return commands
+
+
+def station_wireguard_management_source_networks(station: Optional[dict] = None) -> list[str]:
+    sources = [
+        WIREGUARD_CENTRAL_SERVICE_NETWORK,
+        WIREGUARD_MIKROTIK_HUB_HOST_ROUTE,
+    ]
+    return station_csv_networks(",".join(sources), "WireGuard station management sources")
+
+
+def station_wireguard_management_tcp_ports(station: Optional[dict] = None) -> str:
+    ports = []
+    for raw_port in str(WIREGUARD_STATION_MANAGEMENT_TCP_PORTS or "").split(","):
+        port = raw_port.strip()
+        if port and port not in ports:
+            ports.append(port)
+    try:
+        station_id = str((station or {}).get("id") or "").strip()
+        root_router = wireguard_station_root_router(station_id) if station_id else None
+        api_port = int((root_router or {}).get("api_port") or 0)
+        if 1 <= api_port <= 65535 and str(api_port) not in ports:
+            ports.append(str(api_port))
+    except Exception:
+        pass
+    return ",".join(ports)
+
+
+def wireguard_station_management_firewall_commands(station: dict) -> list[dict]:
+    interface_name = station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name"))
+    comment_prefix = wireguard_station_comment_prefix(station)
+    management_ports = station_wireguard_management_tcp_ports(station)
+    commands = []
+    for source in station_wireguard_management_source_networks(station):
+        source_label = source.replace("/", "-")
+        commands.append(
+            station_routeros_add_command(
+                f"Allow central Winbox/API over station WireGuard from {source}",
+                "/ip/firewall/filter/add",
+                {
+                    "chain": "input",
+                    "in-interface": interface_name,
+                    "src-address": source,
+                    "protocol": "tcp",
+                    "dst-port": management_ports,
+                    "action": "accept",
+                    "comment": f"{comment_prefix} allow central management TCP {source_label}",
+                },
+                unique_comment=f"{comment_prefix} allow central management TCP {source_label}",
+                place_before_query=routeros_input_drop_place_before_query(),
+            )
+        )
+        commands.append(
+            station_routeros_add_command(
+                f"Allow central ping over station WireGuard from {source}",
+                "/ip/firewall/filter/add",
+                {
+                    "chain": "input",
+                    "in-interface": interface_name,
+                    "src-address": source,
+                    "protocol": "icmp",
+                    "action": "accept",
+                    "comment": f"{comment_prefix} allow central ICMP {source_label}",
+                },
+                unique_comment=f"{comment_prefix} allow central ICMP {source_label}",
+                place_before_query=routeros_input_drop_place_before_query(),
+            )
+        )
+    return commands
+
+
+def station_wireguard_endpoint_route_commands(station: dict, comment_prefix: str) -> list[dict]:
+    gateway = str(station.get("wireguard_endpoint_route_gateway") or "").strip()
+    if not gateway:
+        return []
+    endpoint_host = str(station.get("wireguard_endpoint_host") or "").strip()
+    endpoint_ip = ""
+    try:
+        parsed_endpoint = ip_address(endpoint_host)
+        if parsed_endpoint.version == 4:
+            endpoint_ip = str(parsed_endpoint)
+    except Exception:
+        system_hub = public_wireguard_system_hub()
+        if endpoint_host and endpoint_host == system_hub.get("endpoint_host"):
+            endpoint_ip = str(system_hub.get("endpoint_public_ip") or "").strip()
+    if not endpoint_ip:
+        return [{
+            "label": "Skip WireGuard endpoint host route",
+            "preview": (
+                "Skipped endpoint host route because the station endpoint is a DNS name and no matching system hub public IP is saved.\n"
+                "Set the WireGuard server Endpoint Public IP, or enter the station endpoint as a public IPv4 address."
+            ),
+            "path": None,
+            "params": None,
+            "unsafe_route_skipped": True,
+        }]
+    dst = f"{endpoint_ip}/32"
+    endpoint_route_comment = f"{comment_prefix} endpoint via local ISP"
+    return [
+        station_routeros_add_command(
+            "Route WireGuard public endpoint through station local ISP",
+            "/ip/route/add",
+            {
+                "dst-address": dst,
+                "gateway": gateway,
+                "distance": "1",
+                "comment": endpoint_route_comment,
+            },
+            unique_comment=endpoint_route_comment,
+            replace_existing_on_mismatch=True,
+        )
+    ]
+
+
+def station_wireguard_station_commands(station: dict) -> list[dict]:
+    interface_name = station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name"))
+    station_address = station.get("wireguard_station_address") or station_wireguard_default_address(int(station.get("vlan_id") or 77))
+    peer_public_key = (station.get("wireguard_peer_public_key") or "").strip()
+    endpoint_host = (station.get("wireguard_endpoint_host") or "").strip()
+    endpoint_port = int(station.get("wireguard_endpoint_port") or WIREGUARD_BACKUP_ENDPOINT_PORT)
+    allowed_addresses = station.get("wireguard_allowed_addresses") or WIREGUARD_CENTRAL_ALLOWED_ADDRESSES
+    route_distance = int(station.get("wireguard_route_distance") or WIREGUARD_BACKUP_ROUTE_DISTANCE)
+    persistent_keepalive = int(station.get("wireguard_persistent_keepalive") or 25)
+    station_code = station.get("station_code") or station_code_from_text(station.get("station_name"))
+    comment_prefix = f"3J Station VPN - {station_code}"
+    commands = [
+        station_routeros_add_command(
+            "Create station WireGuard interface",
+            "/interface/wireguard/add",
+            {
+                "name": interface_name,
+                "comment": f"{comment_prefix} interface",
+            },
+            unique_field="name",
+            unique_value=interface_name,
+        ),
+        station_routeros_add_command(
+            "Add station WireGuard tunnel address",
+            "/ip/address/add",
+            {
+                "address": station_address,
+                "interface": interface_name,
+                "comment": f"{comment_prefix} tunnel address",
+            },
+            unique_comment=f"{comment_prefix} tunnel address",
+        ),
+    ]
+    commands.append(
+        station_routeros_add_command(
+            "Connect station WireGuard to central hub",
+            "/interface/wireguard/peers/add",
+            {
+                "interface": interface_name,
+                "public-key": peer_public_key,
+                "endpoint-address": endpoint_host,
+                "endpoint-port": str(endpoint_port),
+                "allowed-address": allowed_addresses,
+                "persistent-keepalive": f"{persistent_keepalive}s" if persistent_keepalive else "0s",
+                "comment": f"{comment_prefix} central hub peer",
+            },
+            unique_comment=f"{comment_prefix} central hub peer",
+        )
+    )
+    commands.extend(wireguard_station_management_firewall_commands(station))
+    commands.extend(station_wireguard_endpoint_route_commands(station, comment_prefix))
+    commands.extend(station_wireguard_route_commands(interface_name, allowed_addresses, route_distance, comment_prefix, excluded_hosts=[endpoint_host]))
+    return commands
+
+
+def station_wireguard_hub_commands(station: dict) -> list[dict]:
+    hub_router_id = str(station.get("wireguard_hub_router_id") or "").strip()
+    hub_interface_name = (station.get("wireguard_hub_interface_name") or "").strip()
+    station_public_key = (station.get("wireguard_station_public_key") or "").strip()
+    if not hub_router_id or not hub_interface_name:
+        return []
+    station_code = station.get("station_code") or station_code_from_text(station.get("station_name"))
+    comment_prefix = f"3J Station VPN - {station_code}"
+    hub_allowed_addresses = station.get("wireguard_hub_allowed_addresses") or ""
+    endpoint_port = int(station.get("wireguard_endpoint_port") or WIREGUARD_BACKUP_ENDPOINT_PORT)
+    route_distance = int(station.get("wireguard_route_distance") or WIREGUARD_BACKUP_ROUTE_DISTANCE)
+    if not station_public_key:
+        return [{
+            "label": "Add central hub peer after station public key is known",
+            "preview": (
+                "Station public key is not saved yet.\n"
+                "Apply the station WireGuard interface first, read its public-key from RouterOS, then save it in this station plan."
+            ),
+            "requires_station_public_key": True,
+            "path": None,
+            "params": None,
+        }]
+    commands = [
+        station_routeros_add_command(
+            "Allow WireGuard to central hub",
+            "/ip/firewall/filter/add",
+            {
+                "chain": "input",
+                "protocol": "udp",
+                "dst-port": str(endpoint_port),
+                "action": "accept",
+                "comment": f"{comment_prefix} allow WireGuard hub UDP {endpoint_port}",
+            },
+            unique_comment=f"{comment_prefix} allow WireGuard hub UDP {endpoint_port}",
+            place_before_query=routeros_input_drop_place_before_query(),
+        ),
+    ]
+    commands.extend([
+        station_routeros_add_command(
+            "Add station peer on central WireGuard hub",
+            "/interface/wireguard/peers/add",
+            {
+                "interface": hub_interface_name,
+                "public-key": station_public_key,
+                "allowed-address": hub_allowed_addresses,
+                "comment": f"{comment_prefix} station peer",
+            },
+            unique_comment=f"{comment_prefix} station peer",
+        ),
+    ])
+    commands.extend(station_wireguard_route_commands(hub_interface_name, hub_allowed_addresses, route_distance, comment_prefix))
+    return commands
+
+
+def station_wireguard_remove_commands(station: dict, side: str = "station") -> list[dict]:
+    station_code = station.get("station_code") or station_code_from_text(station.get("station_name"))
+    comment_prefix = f"3J Station VPN - {station_code}"
+    interface_name = station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name"))
+    endpoint_port = int(station.get("wireguard_endpoint_port") or WIREGUARD_BACKUP_ENDPOINT_PORT)
+    allowed_addresses = station.get("wireguard_allowed_addresses") or WIREGUARD_CENTRAL_ALLOWED_ADDRESSES
+    hub_allowed_addresses = station.get("wireguard_hub_allowed_addresses") or ""
+    commands = []
+    if side == "hub":
+        for dst in station_wireguard_network_list(hub_allowed_addresses):
+            commands.append(station_routeros_remove_command(f"Remove WireGuard hub route {dst}", "/ip/route/print", "comment", f"{comment_prefix} route {dst}"))
+        commands.extend([
+            station_routeros_remove_command("Remove station peer from central WireGuard hub", "/interface/wireguard/peers/print", "comment", f"{comment_prefix} station peer"),
+            station_routeros_remove_command("Remove WireGuard hub UDP allow rule", "/ip/firewall/filter/print", "comment", f"{comment_prefix} allow WireGuard hub UDP {endpoint_port}"),
+        ])
+        return commands
+    for source in station_wireguard_management_source_networks(station):
+        source_label = source.replace("/", "-")
+        commands.extend([
+            station_routeros_remove_command(
+                f"Remove station WireGuard central TCP management allow rule {source}",
+                "/ip/firewall/filter/print",
+                "comment",
+                f"{comment_prefix} allow central management TCP {source_label}",
+            ),
+            station_routeros_remove_command(
+                f"Remove station WireGuard central ICMP allow rule {source}",
+                "/ip/firewall/filter/print",
+                "comment",
+                f"{comment_prefix} allow central ICMP {source_label}",
+            ),
+        ])
+    for dst in station_wireguard_network_list(allowed_addresses):
+        commands.append(station_routeros_remove_command(f"Remove station WireGuard route {dst}", "/ip/route/print", "comment", f"{comment_prefix} route {dst}"))
+    endpoint_host = str(station.get("wireguard_endpoint_host") or "").strip()
+    endpoint_ip = ""
+    try:
+        parsed_endpoint = ip_address(endpoint_host)
+        if parsed_endpoint.version == 4:
+            endpoint_ip = str(parsed_endpoint)
+    except Exception:
+        system_hub = public_wireguard_system_hub()
+        if endpoint_host and endpoint_host == system_hub.get("endpoint_host"):
+            endpoint_ip = str(system_hub.get("endpoint_public_ip") or "").strip()
+    if endpoint_ip:
+        commands.append(station_routeros_remove_command(
+            f"Remove station WireGuard endpoint route {endpoint_ip}/32",
+            "/ip/route/print",
+            "comment",
+            f"{comment_prefix} endpoint via local ISP",
+        ))
+    commands.extend([
+        station_routeros_remove_command("Remove station WireGuard central peer", "/interface/wireguard/peers/print", "comment", f"{comment_prefix} central hub peer"),
+        station_routeros_remove_command("Remove station WireGuard tunnel address", "/ip/address/print", "comment", f"{comment_prefix} tunnel address"),
+        station_routeros_remove_command("Remove station WireGuard interface", "/interface/wireguard/print", "name", interface_name),
+    ])
+    return commands
+
+
+def wireguard_station_comment_prefix(station: dict) -> str:
+    station_code = station.get("station_code") or station_code_from_text(station.get("station_name"))
+    return f"3J Station VPN - {station_code}"
+
+
+def wireguard_hub_interface_setup_commands(station: dict) -> list[dict]:
+    hub_interface_name = (station.get("wireguard_hub_interface_name") or "").strip()
+    if not hub_interface_name:
+        return []
+    endpoint_port = int(station.get("wireguard_endpoint_port") or WIREGUARD_BACKUP_ENDPOINT_PORT)
+    return [
+        station_routeros_add_command(
+            "Create central WireGuard hub interface",
+            "/interface/wireguard/add",
+            {
+                "name": hub_interface_name,
+                "listen-port": str(endpoint_port),
+                "comment": "3J Station VPN - central hub interface",
+            },
+            unique_field="name",
+            unique_value=hub_interface_name,
+        ),
+        station_routeros_set_existing_command(
+            "Set central WireGuard hub listen port",
+            "/interface/wireguard/print",
+            {"name": hub_interface_name},
+            "/interface/wireguard/set",
+            {
+                "listen-port": str(endpoint_port),
+                "comment": "3J Station VPN - central hub interface",
+            },
+        ),
+        station_routeros_add_command(
+            "Add central WireGuard hub tunnel address",
+            "/ip/address/add",
+            {
+                "address": WIREGUARD_MIKROTIK_HUB_ADDRESS,
+                "interface": hub_interface_name,
+                "comment": "3J Station VPN - central hub tunnel address",
+            },
+            unique_comment="3J Station VPN - central hub tunnel address",
+        ),
+    ]
+
+
+def wireguard_station_interface_setup_commands(station: dict) -> list[dict]:
+    interface_name = station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name"))
+    station_address = station.get("wireguard_station_address") or station_wireguard_default_address(int(station.get("vlan_id") or 77))
+    comment_prefix = wireguard_station_comment_prefix(station)
+    commands = [
+        station_routeros_add_command(
+            "Create station WireGuard interface",
+            "/interface/wireguard/add",
+            {
+                "name": interface_name,
+                "comment": f"{comment_prefix} interface",
+            },
+            unique_field="name",
+            unique_value=interface_name,
+        ),
+        station_routeros_add_command(
+            "Add station WireGuard tunnel address",
+            "/ip/address/add",
+            {
+                "address": station_address,
+                "interface": interface_name,
+                "comment": f"{comment_prefix} tunnel address",
+            },
+            unique_comment=f"{comment_prefix} tunnel address",
+        ),
+    ]
+    commands.extend(wireguard_station_management_firewall_commands(station))
+    return commands
+
+
+def wireguard_station_sync_commands(station: dict) -> list[dict]:
+    commands = wireguard_station_interface_setup_commands(station)
+    interface_name = station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name"))
+    peer_public_key = (station.get("wireguard_peer_public_key") or "").strip()
+    endpoint_host = (station.get("wireguard_endpoint_host") or "").strip()
+    endpoint_port = int(station.get("wireguard_endpoint_port") or WIREGUARD_BACKUP_ENDPOINT_PORT)
+    allowed_addresses = station.get("wireguard_allowed_addresses") or WIREGUARD_CENTRAL_ALLOWED_ADDRESSES
+    persistent_keepalive = int(station.get("wireguard_persistent_keepalive") or 25)
+    comment_prefix = wireguard_station_comment_prefix(station)
+    if not peer_public_key:
+        hub_label = "MikroTik hub" if station.get("wireguard_hub_router_id") else "system hub"
+        commands.append({
+            "label": "Detect central hub key before station peer push",
+            "preview": (
+                f"Central {hub_label} public key is not saved yet.\n"
+                "Create or detect the central hub WireGuard interface first, then review/push this station peer again."
+            ),
+            "path": None,
+            "params": None,
+        })
+        return commands
+    commands.append(
+        station_routeros_add_command(
+            "Add station WireGuard central hub peer",
+            "/interface/wireguard/peers/add",
+            {
+                "interface": interface_name,
+                "public-key": peer_public_key,
+                "endpoint-address": endpoint_host,
+                "endpoint-port": str(endpoint_port),
+                "allowed-address": allowed_addresses,
+                "persistent-keepalive": f"{persistent_keepalive}s" if persistent_keepalive else "0s",
+                "comment": f"{comment_prefix} central hub peer",
+            },
+            unique_comment=f"{comment_prefix} central hub peer",
+        )
+    )
+    commands.append(
+        station_routeros_set_existing_command(
+            "Update station WireGuard central hub peer",
+            "/interface/wireguard/peers/print",
+            {"comment": f"{comment_prefix} central hub peer"},
+            "/interface/wireguard/peers/set",
+            {
+                "interface": interface_name,
+                "public-key": peer_public_key,
+                "endpoint-address": endpoint_host,
+                "endpoint-port": str(endpoint_port),
+                "allowed-address": allowed_addresses,
+                "persistent-keepalive": f"{persistent_keepalive}s" if persistent_keepalive else "0s",
+                "disabled": "no",
+            },
+        )
+    )
+    commands.extend(station_wireguard_endpoint_route_commands(station, comment_prefix))
+    commands.extend(station_wireguard_route_commands(
+        interface_name,
+        allowed_addresses,
+        int(station.get("wireguard_route_distance") or WIREGUARD_BACKUP_ROUTE_DISTANCE),
+        comment_prefix,
+        excluded_hosts=[endpoint_host],
+    ))
+    return commands
+
+
+def wireguard_hub_sync_commands(station: dict) -> list[dict]:
+    commands = station_wireguard_hub_commands(station)
+    hub_interface_name = (station.get("wireguard_hub_interface_name") or "").strip()
+    station_public_key = (station.get("wireguard_station_public_key") or "").strip()
+    hub_allowed_addresses = station.get("wireguard_hub_allowed_addresses") or ""
+    if not hub_interface_name or not station_public_key:
+        return commands
+    comment_prefix = wireguard_station_comment_prefix(station)
+    commands.append(
+        station_routeros_set_existing_command(
+            "Update central WireGuard hub station peer",
+            "/interface/wireguard/peers/print",
+            {"comment": f"{comment_prefix} station peer"},
+            "/interface/wireguard/peers/set",
+            {
+                "interface": hub_interface_name,
+                "public-key": station_public_key,
+                "allowed-address": hub_allowed_addresses,
+                "disabled": "no",
+            },
+        )
+    )
+    return commands
+
+
+def wireguard_public_station_row(station_id: str) -> dict:
+    station = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
+    if not station:
+        raise HTTPException(status_code=404, detail="MikroTik station not found")
+    return station
+
+
+def wireguard_full_router(router_id: Optional[str], label: str = "MikroTik") -> Optional[dict]:
+    if not router_id:
+        return None
+    router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_id,))
+    if not router:
+        raise HTTPException(status_code=404, detail=f"{label} router was not found.")
+    return router
+
+
+def wireguard_station_root_link(station_id: str) -> Optional[dict]:
+    routers = station_router_rows(station_id)
+    return routers[0] if routers else None
+
+
+def wireguard_station_client_link(station_id: str, station: Optional[dict] = None) -> Optional[dict]:
+    routers = station_router_rows(station_id)
+    if not routers:
+        return None
+    station = station or fetch_one("SELECT station_name, station_code, gateway_mode FROM mikrotik_stations WHERE id = %s", (station_id,))
+    station_name = re.sub(r"[^a-z0-9]+", "", str((station or {}).get("station_name") or "").lower())
+    station_code = re.sub(r"[^a-z0-9]+", "", str((station or {}).get("station_code") or "").lower())
+    for router in routers:
+        router_name = re.sub(r"[^a-z0-9]+", "", str(router.get("router_name") or "").lower())
+        if router_name and (router_name == station_name or router_name == station_code):
+            return router
+    if normalize_station_gateway_mode((station or {}).get("gateway_mode")) == STATION_GATEWAY_MODE_LOCAL:
+        return routers[-1]
+    return routers[0]
+
+
+def wireguard_station_root_router(station_id: str) -> Optional[dict]:
+    station = fetch_one("SELECT station_name, station_code, gateway_mode FROM mikrotik_stations WHERE id = %s", (station_id,))
+    root = wireguard_station_client_link(station_id, station)
+    if not root:
+        return None
+    return wireguard_full_router(root.get("router_id"), "Station root")
+
+
+def wireguard_router_password(router: dict, label: str) -> str:
+    if not router:
+        raise HTTPException(status_code=400, detail=f"{label} router is required.")
+    if not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        raise HTTPException(status_code=400, detail=f"{label} router host, username, and password are required.")
+    password = decrypt_secret(router.get("password_encrypted"))
+    if not password:
+        raise HTTPException(status_code=400, detail=f"{label} router password could not be decrypted.")
+    return password
+
+
+def wireguard_router_query(router: dict, words: list[str], label: str, timeout: float = 8.0) -> list[dict]:
+    password = wireguard_router_password(router, label)
+    rows = routeros_readonly_query(
+        router["host"],
+        router["api_port"],
+        router.get("username"),
+        password,
+        router.get("use_tls"),
+        words,
+        timeout=timeout,
+    )
+    return sanitize_routeros_snapshot(rows)
+
+
+def wireguard_router_interfaces(router: dict, interface_name: Optional[str] = None, label: str = "MikroTik") -> list[dict]:
+    words = ["/interface/wireguard/print"]
+    if interface_name:
+        words.append(f"?name={interface_name}")
+    words.append("=.proplist=.id,name,public-key,listen-port,disabled,running,comment,mtu")
+    return wireguard_router_query(router, words, label)
+
+
+def wireguard_router_peers(router: dict, query: Optional[dict] = None, label: str = "MikroTik") -> list[dict]:
+    words = ["/interface/wireguard/peers/print"]
+    for key, value in (query or {}).items():
+        if value not in (None, ""):
+            words.append(f"?{key}={value}")
+    words.append("=.proplist=.id,interface,public-key,endpoint-address,endpoint-port,current-endpoint-address,current-endpoint-port,allowed-address,persistent-keepalive,rx,tx,last-handshake,latest-handshake,disabled,comment")
+    return wireguard_router_query(router, words, label)
+
+
+def wireguard_read_interface_public_key(router: dict, interface_name: str, label: str) -> Optional[str]:
+    rows = wireguard_router_interfaces(router, interface_name, label)
+    for row in rows:
+        public_key = str(row.get("public-key") or "").strip()
+        if public_key:
+            return public_key
+    return None
+
+
+def wireguard_latest_handshake(peer: Optional[dict]) -> str:
+    if not peer:
+        return ""
+    for key in ("last-handshake", "latest-handshake"):
+        value = str(peer.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def wireguard_station_tunnel_host(station: dict) -> Optional[str]:
+    try:
+        return str(ip_interface(station.get("wireguard_station_address") or station_wireguard_default_address(int(station.get("vlan_id") or 77))).ip)
+    except Exception:
+        return None
+
+
+def wireguard_router_with_host(router: Optional[dict], host: Optional[str]) -> Optional[dict]:
+    if not router or not host:
+        return router
+    cloned = dict(router)
+    cloned["host"] = host
+    return cloned
+
+
+def wireguard_router_public_status(router: Optional[dict], error: Optional[str] = None) -> dict:
+    if not router:
+        return {"configured": False, "status": "MISSING", "message": error or "Router is not selected."}
+    configured = bool(router.get("host") and router.get("username") and router.get("password_encrypted"))
+    return {
+        "configured": configured,
+        "status": "READY" if configured else "MISSING_CREDENTIALS",
+        "id": str(router.get("id")),
+        "router_name": router.get("router_name"),
+        "host": router.get("host"),
+        "api_port": router.get("api_port"),
+        "message": error or ("Router API credentials are saved." if configured else "Router host, username, and password are required."),
+    }
+
+
+def wireguard_station_status(station: dict, live: bool = False) -> dict:
+    station_id = str(station["id"])
+    root_link = wireguard_station_root_link(station_id)
+    root_router = wireguard_station_root_router(station_id) if root_link else None
+    hub_router = wireguard_full_router(station.get("wireguard_hub_router_id"), "Central hub") if station.get("wireguard_hub_router_id") else None
+    system_hub = public_wireguard_system_hub()
+    system_hub_mode = not bool(hub_router)
+    interface_name = station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name"))
+    hub_interface_name = station.get("wireguard_hub_interface_name") or (system_hub.get("interface_name") if system_hub_mode else WIREGUARD_MIKROTIK_HUB_INTERFACE)
+    comment_prefix = wireguard_station_comment_prefix(station)
+    base = {
+        "station_id": station_id,
+        "station_name": station.get("station_name"),
+        "station_code": station.get("station_code"),
+        "hub_mode": "SYSTEM_SERVER" if system_hub_mode else "MIKROTIK_ROUTER",
+        "system_hub": system_hub if system_hub_mode else None,
+        "gateway_mode": normalize_station_gateway_mode(station.get("gateway_mode")),
+        "wireguard_enabled": bool(station.get("wireguard_enabled")),
+        "interface_name": interface_name,
+        "station_address": station.get("wireguard_station_address") or station_wireguard_default_address(int(station.get("vlan_id") or 77)),
+        "hub_interface_name": hub_interface_name,
+        "endpoint_host": station.get("wireguard_endpoint_host") or (system_hub.get("endpoint_host") if system_hub_mode else None),
+        "endpoint_port": station.get("wireguard_endpoint_port") or (system_hub.get("endpoint_port") if system_hub_mode else WIREGUARD_BACKUP_ENDPOINT_PORT),
+        "endpoint_route_gateway": station.get("wireguard_endpoint_route_gateway") or "",
+        "allowed_addresses": station.get("wireguard_allowed_addresses") or (system_hub.get("central_service_routes") if system_hub_mode else WIREGUARD_CENTRAL_ALLOWED_ADDRESSES),
+        "hub_allowed_addresses": station.get("wireguard_hub_allowed_addresses"),
+        "station_public_key_saved": bool(station.get("wireguard_station_public_key")),
+        "hub_public_key_saved": bool(station.get("wireguard_peer_public_key") or (system_hub_mode and system_hub.get("public_key"))),
+        "root_router": wireguard_router_public_status(root_router),
+        "hub_router": wireguard_router_public_status(hub_router) if not system_hub_mode else {"configured": True, "status": system_hub.get("status"), "router_name": "3J System Server", "host": system_hub.get("endpoint_host"), "api_port": None, "message": system_hub.get("message")},
+        "live": {
+            "checked": False,
+            "station_interface": None,
+            "station_peer": None,
+            "hub_interface": None,
+            "hub_peer": None,
+            "latest_handshake": "",
+            "rx": "",
+            "tx": "",
+            "errors": [],
+        },
+    }
+    if not base["wireguard_enabled"]:
+        return {**base, "status": "DISABLED", "label": "Disabled", "message": "WireGuard backup is disabled for this station."}
+    missing = []
+    if not root_router:
+        missing.append("station root router")
+    if system_hub_mode and not system_hub.get("public_key"):
+        missing.append("system hub public key")
+    if not system_hub_mode and not hub_router:
+        missing.append("central hub router")
+    if not interface_name:
+        missing.append("station interface")
+    if not station.get("wireguard_station_address"):
+        missing.append("station tunnel address")
+    if not base["endpoint_host"]:
+        missing.append("central endpoint host")
+    if not system_hub_mode and not station.get("wireguard_hub_interface_name"):
+        missing.append("hub interface")
+    if missing:
+        return {**base, "status": "NOT_READY", "label": "Needs setup", "message": f"Missing: {', '.join(missing)}."}
+    if not live:
+        if station.get("wireguard_station_public_key") and (station.get("wireguard_peer_public_key") or (system_hub_mode and system_hub.get("public_key"))):
+            return {**base, "status": "CONFIGURED", "label": "Configured", "message": "Saved WireGuard keys are available. Refresh live status to verify handshake."}
+        return {**base, "status": "NEEDS_KEY_REFRESH", "label": "Keys pending", "message": "Run Auto Setup or Refresh Keys to detect RouterOS public keys."}
+
+    live_data = {**base["live"], "checked": True}
+    station_query_router = root_router
+    station_tunnel_host = wireguard_station_tunnel_host(station)
+    station_primary_error = None
+    try:
+        station_interfaces = wireguard_router_interfaces(root_router, interface_name, "Station root")
+        live_data["station_interface"] = station_interfaces[0] if station_interfaces else None
+    except Exception as exc:
+        station_primary_error = sanitize_routeros_text(str(exc))
+        if station_tunnel_host and root_router and station_tunnel_host != root_router.get("host"):
+            try:
+                fallback_router = wireguard_router_with_host(root_router, station_tunnel_host)
+                station_interfaces = wireguard_router_interfaces(fallback_router, interface_name, "Station root tunnel")
+                live_data["station_interface"] = station_interfaces[0] if station_interfaces else None
+                station_query_router = fallback_router
+                live_data["station_check_fallback"] = {
+                    "from_host": root_router.get("host"),
+                    "to_host": station_tunnel_host,
+                    "reason": station_primary_error,
+                }
+            except Exception as fallback_exc:
+                live_data["errors"].append(
+                    f"Station interface check failed: {station_primary_error}; tunnel fallback {station_tunnel_host} failed: {sanitize_routeros_text(str(fallback_exc))}"
+                )
+        else:
+            live_data["errors"].append(f"Station interface check failed: {station_primary_error}")
+    try:
+        station_peers = wireguard_router_peers(station_query_router, {"comment": f"{comment_prefix} central hub peer"}, "Station root")
+        live_data["station_peer"] = station_peers[0] if station_peers else None
+    except Exception as exc:
+        peer_primary_error = sanitize_routeros_text(str(exc))
+        if station_query_router is root_router and station_tunnel_host and root_router and station_tunnel_host != root_router.get("host"):
+            try:
+                fallback_router = wireguard_router_with_host(root_router, station_tunnel_host)
+                station_peers = wireguard_router_peers(fallback_router, {"comment": f"{comment_prefix} central hub peer"}, "Station root tunnel")
+                live_data["station_peer"] = station_peers[0] if station_peers else None
+                station_query_router = fallback_router
+                live_data["station_check_fallback"] = {
+                    "from_host": root_router.get("host"),
+                    "to_host": station_tunnel_host,
+                    "reason": peer_primary_error,
+                }
+            except Exception as fallback_exc:
+                live_data["errors"].append(
+                    f"Station peer check failed: {peer_primary_error}; tunnel fallback {station_tunnel_host} failed: {sanitize_routeros_text(str(fallback_exc))}"
+                )
+        else:
+            live_data["errors"].append(f"Station peer check failed: {peer_primary_error}")
+    if not system_hub_mode:
+        try:
+            hub_interfaces = wireguard_router_interfaces(hub_router, hub_interface_name, "Central hub")
+            live_data["hub_interface"] = hub_interfaces[0] if hub_interfaces else None
+        except Exception as exc:
+            live_data["errors"].append(f"Hub interface check failed: {sanitize_routeros_text(str(exc))}")
+        try:
+            hub_peers = wireguard_router_peers(hub_router, {"comment": f"{comment_prefix} station peer"}, "Central hub")
+            live_data["hub_peer"] = hub_peers[0] if hub_peers else None
+        except Exception as exc:
+            live_data["errors"].append(f"Hub peer check failed: {sanitize_routeros_text(str(exc))}")
+    handshake = wireguard_latest_handshake(live_data.get("hub_peer")) or wireguard_latest_handshake(live_data.get("station_peer"))
+    live_data["latest_handshake"] = handshake
+    live_data["rx"] = (live_data.get("hub_peer") or {}).get("rx") or (live_data.get("station_peer") or {}).get("rx") or ""
+    live_data["tx"] = (live_data.get("hub_peer") or {}).get("tx") or (live_data.get("station_peer") or {}).get("tx") or ""
+    if live_data["errors"]:
+        return {**base, "live": live_data, "status": "CHECK_ERROR", "label": "Check error", "message": "; ".join(live_data["errors"])}
+    if not live_data.get("station_interface") or (not system_hub_mode and not live_data.get("hub_interface")):
+        return {**base, "live": live_data, "status": "INTERFACE_MISSING", "label": "Interface missing", "message": "WireGuard interface was not detected on station or hub router." if not system_hub_mode else "WireGuard interface was not detected on the station root router."}
+    if not live_data.get("station_peer") or (not system_hub_mode and not live_data.get("hub_peer")):
+        return {**base, "live": live_data, "status": "PEER_MISSING", "label": "Peer missing", "message": "WireGuard peer was not detected on station or hub router." if not system_hub_mode else "WireGuard peer to the system hub was not detected on the station root router."}
+    if handshake:
+        return {**base, "live": live_data, "status": "HANDSHAKE_OK", "label": "Handshake detected", "message": f"Latest WireGuard handshake: {handshake}."}
+    return {**base, "live": live_data, "status": "WAITING_HANDSHAKE", "label": "Waiting handshake", "message": "Interfaces and peers exist, but RouterOS has not reported a handshake yet."}
+
+
+def normalize_wireguard_station_settings(station: dict, payload: WireGuardStationSettingsPayload) -> dict:
+    if payload.wireguard_hub_router_id is not None:
+        hub_router_id = str(payload.wireguard_hub_router_id or "").strip() or None
+    else:
+        hub_router_id = str(station.get("wireguard_hub_router_id") or "").strip() or None
+    if hub_router_id:
+        try:
+            hub_router_id = str(uuid.UUID(hub_router_id))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Central WireGuard hub router ID is invalid.")
+    hub_router = wireguard_full_router(hub_router_id, "Central hub") if hub_router_id else None
+    system_hub = public_wireguard_system_hub()
+    system_hub_mode = not bool(hub_router_id)
+    interface_name = (payload.wireguard_interface_name or station.get("wireguard_interface_name") or "").strip() or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name"))
+    station_address = (payload.wireguard_station_address or station.get("wireguard_station_address") or "").strip() or station_wireguard_default_address(int(station.get("vlan_id") or 77))
+    try:
+        station_interface = ip_interface(station_address)
+        if station_interface.version != 4:
+            raise ValueError("not IPv4")
+    except Exception:
+        raise HTTPException(status_code=400, detail="WireGuard station tunnel address must be a valid IPv4 interface, for example 10.250.78.2/32.")
+    endpoint_host = (payload.wireguard_endpoint_host or station.get("wireguard_endpoint_host") or (system_hub.get("endpoint_host") if system_hub_mode else "") or "").strip()
+    if not endpoint_host and hub_router:
+        endpoint_host = str(hub_router.get("host") or "").strip()
+    if endpoint_host and any(char.isspace() for char in endpoint_host):
+        raise HTTPException(status_code=400, detail="WireGuard endpoint host must not contain spaces.")
+    endpoint_port = int(payload.wireguard_endpoint_port or station.get("wireguard_endpoint_port") or (system_hub.get("endpoint_port") if system_hub_mode else WIREGUARD_BACKUP_ENDPOINT_PORT))
+    endpoint_route_gateway = (payload.wireguard_endpoint_route_gateway if payload.wireguard_endpoint_route_gateway is not None else station.get("wireguard_endpoint_route_gateway") or "").strip()
+    if endpoint_route_gateway:
+        try:
+            parsed_endpoint_gateway = ip_address(endpoint_route_gateway)
+            if parsed_endpoint_gateway.version != 4:
+                raise ValueError
+            endpoint_route_gateway = str(parsed_endpoint_gateway)
+        except Exception:
+            raise HTTPException(status_code=400, detail="WireGuard endpoint route gateway must be a valid IPv4 address, for example the station local ISP gateway.")
+    route_distance = int(payload.wireguard_route_distance or station.get("wireguard_route_distance") or WIREGUARD_BACKUP_ROUTE_DISTANCE)
+    persistent_keepalive = int(payload.wireguard_persistent_keepalive if payload.wireguard_persistent_keepalive is not None else (station.get("wireguard_persistent_keepalive") if station.get("wireguard_persistent_keepalive") is not None else 25))
+    allowed_seed = payload.wireguard_allowed_addresses or station.get("wireguard_allowed_addresses") or (system_hub.get("central_service_routes") if system_hub_mode else WIREGUARD_CENTRAL_ALLOWED_ADDRESSES)
+    if not system_hub_mode:
+        allowed_seed = station_dedupe_csv(allowed_seed, WIREGUARD_MIKROTIK_HUB_HOST_ROUTE)
+    allowed_addresses = ",".join(station_csv_networks(allowed_seed, "WireGuard central allowed addresses"))
+    hub_interface_name = (payload.wireguard_hub_interface_name or station.get("wireguard_hub_interface_name") or "").strip() or (system_hub.get("interface_name") if system_hub_mode else WIREGUARD_MIKROTIK_HUB_INTERFACE)
+    hub_allowed_addresses = payload.wireguard_hub_allowed_addresses or station.get("wireguard_hub_allowed_addresses")
+    if not hub_allowed_addresses:
+        hub_allowed = [station_interface.with_prefixlen]
+        try:
+            hub_allowed.append(ip_network(station.get("client_network_cidr"), strict=False).with_prefixlen)
+        except Exception:
+            pass
+        if station.get("ap_management_enabled") and station.get("ap_management_network_cidr"):
+            try:
+                hub_allowed.append(ip_network(station.get("ap_management_network_cidr"), strict=False).with_prefixlen)
+            except Exception:
+                pass
+        hub_allowed_addresses = ",".join(station_csv_networks(",".join(hub_allowed), "WireGuard hub allowed addresses"))
+    else:
+        hub_allowed_addresses = ",".join(station_csv_networks(hub_allowed_addresses, "WireGuard hub allowed addresses"))
+    return {
+        "wireguard_enabled": bool(payload.wireguard_enabled),
+        "wireguard_interface_name": interface_name,
+        "wireguard_station_address": station_interface.with_prefixlen,
+        "wireguard_endpoint_host": endpoint_host,
+        "wireguard_endpoint_port": endpoint_port,
+        "wireguard_endpoint_route_gateway": endpoint_route_gateway,
+        "wireguard_allowed_addresses": allowed_addresses,
+        "wireguard_route_distance": route_distance,
+        "wireguard_persistent_keepalive": persistent_keepalive,
+        "wireguard_hub_router_id": hub_router_id,
+        "wireguard_hub_interface_name": hub_interface_name,
+        "wireguard_hub_allowed_addresses": hub_allowed_addresses,
+    }
+
+
+def update_wireguard_station_settings(station_id: str, values: dict):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE mikrotik_stations
+                SET wireguard_enabled = %s,
+                    wireguard_interface_name = %s,
+                    wireguard_station_address = %s,
+                    wireguard_endpoint_host = %s,
+                    wireguard_endpoint_port = %s,
+                    wireguard_endpoint_route_gateway = %s,
+                    wireguard_allowed_addresses = %s,
+                    wireguard_route_distance = %s,
+                    wireguard_persistent_keepalive = %s,
+                    wireguard_hub_router_id = %s,
+                    wireguard_hub_interface_name = %s,
+                    wireguard_hub_allowed_addresses = %s,
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                (
+                    values["wireguard_enabled"],
+                    values["wireguard_interface_name"],
+                    values["wireguard_station_address"],
+                    values["wireguard_endpoint_host"],
+                    values["wireguard_endpoint_port"],
+                    values["wireguard_endpoint_route_gateway"],
+                    values["wireguard_allowed_addresses"],
+                    values["wireguard_route_distance"],
+                    values["wireguard_persistent_keepalive"],
+                    values["wireguard_hub_router_id"],
+                    values["wireguard_hub_interface_name"],
+                    values["wireguard_hub_allowed_addresses"],
+                    station_id,
+                ),
+            )
+
+
+def update_wireguard_detected_keys(station_id: str, station_public_key: Optional[str] = None, hub_public_key: Optional[str] = None):
+    assignments = []
+    params = []
+    if station_public_key:
+        assignments.append("wireguard_station_public_key = %s")
+        params.append(station_public_key)
+    if hub_public_key:
+        assignments.append("wireguard_peer_public_key = %s")
+        params.append(hub_public_key)
+    if not assignments:
+        return
+    params.append(station_id)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE mikrotik_stations
+                SET {', '.join(assignments)},
+                    updated_at = now()
+                WHERE id = %s
+                """,
+                tuple(params),
+            )
+
+
+def wireguard_keypair() -> dict:
+    private = x25519.X25519PrivateKey.generate()
+    private_raw = private.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    public_raw = private.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    )
+    return {
+        "private_key": base64.b64encode(private_raw).decode(),
+        "public_key": base64.b64encode(public_raw).decode(),
+    }
+
+
+def wireguard_public_key_from_private(private_key: Optional[str]) -> Optional[str]:
+    text = str(private_key or "").strip()
+    if not text:
+        return None
+    try:
+        private_raw = base64.b64decode(text, validate=True)
+        private = x25519.X25519PrivateKey.from_private_bytes(private_raw)
+        public_raw = private.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        return base64.b64encode(public_raw).decode()
+    except Exception:
+        return None
+
+
+def wireguard_system_hub_default_host() -> str:
+    env_value = (os.getenv("WIREGUARD_SYSTEM_HUB_HOST") or "").strip()
+    if env_value:
+        return env_value
+    try:
+        parsed = urlparse(local_portal_url())
+        if parsed.hostname:
+            return parsed.hostname
+    except Exception:
+        pass
+    return "192.168.50.70"
+
+
+def wireguard_system_hub_defaults() -> dict:
+    return {
+        "enabled": True,
+        "endpoint_host": wireguard_system_hub_default_host(),
+        "endpoint_port": 51820,
+        "interface_name": "wg0",
+        "hub_address": "10.250.0.1/24",
+        "central_service_routes": "192.168.50.70/32,192.168.50.71/32",
+        "nat_enabled": True,
+        "endpoint_forwarding_enabled": True,
+        "endpoint_router_id": None,
+        "endpoint_wan_interface": "",
+        "endpoint_return_routing_table": "",
+        "endpoint_public_ip": "",
+        "endpoint_server_ip": "",
+        "public_key": None,
+        "private_key_encrypted": None,
+        "ssh_host": "",
+        "ssh_port": 22,
+        "ssh_username": None,
+        "ssh_auth_type": "PASSWORD",
+        "ssh_password_encrypted": None,
+        "ssh_private_key_encrypted": None,
+        "ssh_private_key_passphrase_encrypted": None,
+        "sudo_mode": "PASSWORDLESS",
+        "install_status": "NOT_INSTALLED",
+        "last_detected_version": None,
+        "last_status_check_at": None,
+        "last_error": None,
+    }
+
+
+def wireguard_system_hub_store() -> dict:
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'wireguard_system_hub'")
+    value = row["value"] if row and isinstance(row.get("value"), dict) else {}
+    store = {**wireguard_system_hub_defaults(), **value}
+    private_key = decrypt_secret(store.get("private_key_encrypted"))
+    public_key = (store.get("public_key") or wireguard_public_key_from_private(private_key) or "").strip() or None
+    return {
+        **store,
+        "public_key": public_key,
+        "private_key_configured": bool(private_key),
+    }
+
+
+def public_wireguard_system_hub(store: Optional[dict] = None) -> dict:
+    data = store or wireguard_system_hub_store()
+    central_routes = ",".join(station_csv_networks(data.get("central_service_routes") or "192.168.50.70/32,192.168.50.71/32", "WireGuard system hub central service routes"))
+    endpoint_router_id = (data.get("endpoint_router_id") or "").strip() or None
+    endpoint_server_ip = (data.get("endpoint_server_ip") or "").strip()
+    if not endpoint_server_ip:
+        try:
+            parsed_ssh_host = ip_address((data.get("ssh_host") or "").strip())
+            if parsed_ssh_host.version == 4:
+                endpoint_server_ip = str(parsed_ssh_host)
+        except Exception:
+            endpoint_server_ip = ""
+    return {
+        "enabled": bool(data.get("enabled")),
+        "endpoint_host": data.get("endpoint_host") or wireguard_system_hub_default_host(),
+        "endpoint_port": int(data.get("endpoint_port") or 51820),
+        "interface_name": data.get("interface_name") or "wg0",
+        "hub_address": data.get("hub_address") or "10.250.0.1/24",
+        "central_service_routes": central_routes,
+        "nat_enabled": bool(data.get("nat_enabled", True)),
+        "endpoint_forwarding_enabled": bool(data.get("endpoint_forwarding_enabled", True)),
+        "endpoint_router_id": endpoint_router_id,
+        "endpoint_wan_interface": data.get("endpoint_wan_interface") or "",
+        "endpoint_return_routing_table": data.get("endpoint_return_routing_table") or "",
+        "endpoint_public_ip": data.get("endpoint_public_ip") or "",
+        "endpoint_server_ip": endpoint_server_ip,
+        "public_key": data.get("public_key"),
+        "public_key_configured": bool(data.get("public_key")),
+        "private_key_configured": bool(data.get("private_key_configured")),
+        "ssh_host": data.get("ssh_host") or "",
+        "ssh_port": int(data.get("ssh_port") or 22),
+        "ssh_username": data.get("ssh_username"),
+        "ssh_auth_type": data.get("ssh_auth_type") or "PASSWORD",
+        "has_ssh_password": bool(decrypt_secret(data.get("ssh_password_encrypted"))),
+        "has_ssh_private_key": bool(decrypt_secret(data.get("ssh_private_key_encrypted"))),
+        "has_ssh_private_key_passphrase": bool(decrypt_secret(data.get("ssh_private_key_passphrase_encrypted"))),
+        "sudo_mode": data.get("sudo_mode") or "PASSWORDLESS",
+        "install_status": data.get("install_status") or "NOT_INSTALLED",
+        "last_detected_version": data.get("last_detected_version"),
+        "last_status_check_at": data.get("last_status_check_at"),
+        "last_error": data.get("last_error"),
+        "management_mode": "SYSTEM_SERVER",
+        "server_ip": data.get("endpoint_host") or wireguard_system_hub_default_host(),
+        "status": "KEY_READY" if data.get("public_key") else "KEY_MISSING",
+        "message": "System server hub key is ready." if data.get("public_key") else "Generate the system hub key pair before applying station clients.",
+    }
+
+
+def save_wireguard_system_hub_store(values: dict) -> dict:
+    current = wireguard_system_hub_store()
+    values = dict(values or {})
+    secret_fields = {
+        "ssh_password": "ssh_password_encrypted",
+        "ssh_private_key": "ssh_private_key_encrypted",
+        "ssh_private_key_passphrase": "ssh_private_key_passphrase_encrypted",
+    }
+    for plain_key, encrypted_key in secret_fields.items():
+        plain_value = values.pop(plain_key, None)
+        if plain_value:
+            values[encrypted_key] = encrypt_secret(plain_value)
+    merged = {**current, **values}
+    merged["endpoint_host"] = (merged.get("endpoint_host") or wireguard_system_hub_default_host()).strip()
+    if any(char.isspace() for char in merged["endpoint_host"]):
+        raise HTTPException(status_code=400, detail="System hub endpoint host must not contain spaces.")
+    merged["endpoint_port"] = int(merged.get("endpoint_port") or 51820)
+    merged["interface_name"] = (merged.get("interface_name") or "wg0").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", merged["interface_name"]):
+        raise HTTPException(status_code=400, detail="System hub interface name must be 1-15 characters and only use letters, numbers, dot, underscore, or dash.")
+    merged["endpoint_router_id"] = (merged.get("endpoint_router_id") or "").strip() or None
+    if merged["endpoint_router_id"] and not fetch_one("SELECT id FROM mikrotik_routers WHERE id = %s", (merged["endpoint_router_id"],)):
+        raise HTTPException(status_code=400, detail="Selected WireGuard endpoint MikroTik router was not found.")
+    merged["endpoint_wan_interface"] = (merged.get("endpoint_wan_interface") or "").strip()
+    merged["endpoint_return_routing_table"] = (merged.get("endpoint_return_routing_table") or "").strip()
+    if merged["endpoint_return_routing_table"] and not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", merged["endpoint_return_routing_table"]):
+        raise HTTPException(status_code=400, detail="Endpoint return routing table must only use letters, numbers, dot, underscore, or dash.")
+    merged["endpoint_public_ip"] = (merged.get("endpoint_public_ip") or "").strip()
+    if merged["endpoint_public_ip"]:
+        try:
+            parsed_public_ip = ip_address(merged["endpoint_public_ip"])
+            if parsed_public_ip.version != 4:
+                raise ValueError
+            merged["endpoint_public_ip"] = str(parsed_public_ip)
+        except Exception:
+            raise HTTPException(status_code=400, detail="IGATE static public IP must be a valid IPv4 address.")
+    merged["endpoint_server_ip"] = (merged.get("endpoint_server_ip") or "").strip()
+    if not merged["endpoint_server_ip"]:
+        ssh_host = (merged.get("ssh_host") or "").strip()
+        try:
+            parsed_ssh_host = ip_address(ssh_host)
+            if parsed_ssh_host.version == 4:
+                merged["endpoint_server_ip"] = str(parsed_ssh_host)
+        except Exception:
+            pass
+    if merged["endpoint_server_ip"]:
+        try:
+            parsed_server_ip = ip_address(merged["endpoint_server_ip"])
+            if parsed_server_ip.version != 4:
+                raise ValueError
+            merged["endpoint_server_ip"] = str(parsed_server_ip)
+        except Exception:
+            raise HTTPException(status_code=400, detail="WireGuard server LAN IP must be a valid IPv4 address.")
+    merged["ssh_host"] = (merged.get("ssh_host") or "").strip()
+    merged["ssh_port"] = int(merged.get("ssh_port") or 22)
+    merged["ssh_username"] = (merged.get("ssh_username") or "").strip() or None
+    merged["ssh_auth_type"] = (merged.get("ssh_auth_type") or "PASSWORD").strip().upper()
+    merged["sudo_mode"] = (merged.get("sudo_mode") or "PASSWORDLESS").strip().upper()
+    if merged["ssh_auth_type"] not in {"PASSWORD", "PRIVATE_KEY"}:
+        raise HTTPException(status_code=400, detail="Unsupported WireGuard server SSH auth type.")
+    if merged["sudo_mode"] not in {"PASSWORDLESS", "SUDO_PASSWORD", "NONE"}:
+        raise HTTPException(status_code=400, detail="Unsupported WireGuard server sudo mode.")
+    try:
+        merged["hub_address"] = ip_interface(merged.get("hub_address") or "10.250.0.1/24").with_prefixlen
+    except Exception:
+        raise HTTPException(status_code=400, detail="System hub tunnel address must be a valid IPv4 interface, for example 10.250.0.1/24.")
+    merged["central_service_routes"] = ",".join(station_csv_networks(merged.get("central_service_routes") or "192.168.50.70/32,192.168.50.71/32", "WireGuard system hub central service routes"))
+    private_key_encrypted = merged.get("private_key_encrypted")
+    public_key = merged.get("public_key")
+    private_key_configured = bool(decrypt_secret(private_key_encrypted))
+    stored = {
+        "enabled": bool(merged.get("enabled")),
+        "endpoint_host": merged["endpoint_host"],
+        "endpoint_port": merged["endpoint_port"],
+        "interface_name": merged["interface_name"],
+        "hub_address": merged["hub_address"],
+        "central_service_routes": merged["central_service_routes"],
+        "nat_enabled": bool(merged.get("nat_enabled", True)),
+        "endpoint_forwarding_enabled": bool(merged.get("endpoint_forwarding_enabled", True)),
+        "endpoint_router_id": merged["endpoint_router_id"],
+        "endpoint_wan_interface": merged["endpoint_wan_interface"],
+        "endpoint_return_routing_table": merged["endpoint_return_routing_table"],
+        "endpoint_public_ip": merged["endpoint_public_ip"],
+        "endpoint_server_ip": merged["endpoint_server_ip"],
+        "public_key": public_key,
+        "private_key_encrypted": private_key_encrypted,
+        "ssh_host": merged["ssh_host"],
+        "ssh_port": merged["ssh_port"],
+        "ssh_username": merged["ssh_username"],
+        "ssh_auth_type": merged["ssh_auth_type"],
+        "ssh_password_encrypted": merged.get("ssh_password_encrypted"),
+        "ssh_private_key_encrypted": merged.get("ssh_private_key_encrypted"),
+        "ssh_private_key_passphrase_encrypted": merged.get("ssh_private_key_passphrase_encrypted"),
+        "sudo_mode": merged["sudo_mode"],
+        "install_status": merged.get("install_status") or "NOT_INSTALLED",
+        "last_detected_version": merged.get("last_detected_version"),
+        "last_status_check_at": merged.get("last_status_check_at"),
+        "last_error": merged.get("last_error"),
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES ('wireguard_system_hub', %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (Json(stored),),
+            )
+    return public_wireguard_system_hub({**stored, "private_key_configured": private_key_configured})
+
+
+def wireguard_system_hub_ssh_client(settings: Optional[dict] = None):
+    data = settings or wireguard_system_hub_store()
+    ssh_host = (data.get("ssh_host") or data.get("endpoint_host") or "").strip()
+    username = (data.get("ssh_username") or "").strip()
+    if not ssh_host:
+        raise HTTPException(status_code=400, detail="WireGuard server SSH host is required.")
+    if not username:
+        raise HTTPException(status_code=400, detail="WireGuard server SSH username is required.")
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    kwargs = {
+        "hostname": ssh_host,
+        "port": int(data.get("ssh_port") or 22),
+        "username": username,
+        "timeout": 10,
+        "banner_timeout": 10,
+        "auth_timeout": 10,
+        "look_for_keys": False,
+        "allow_agent": False,
+    }
+    if (data.get("ssh_auth_type") or "PASSWORD").upper() == "PRIVATE_KEY":
+        key_text = decrypt_secret(data.get("ssh_private_key_encrypted"))
+        if not key_text:
+            raise HTTPException(status_code=400, detail="WireGuard server SSH private key is not configured.")
+        passphrase = decrypt_secret(data.get("ssh_private_key_passphrase_encrypted"))
+        key_file = io.StringIO(key_text)
+        try:
+            kwargs["pkey"] = paramiko.RSAKey.from_private_key(key_file, password=passphrase)
+        except paramiko.SSHException:
+            key_file.seek(0)
+            kwargs["pkey"] = paramiko.Ed25519Key.from_private_key(key_file, password=passphrase)
+    else:
+        password = decrypt_secret(data.get("ssh_password_encrypted"))
+        if not password:
+            raise HTTPException(status_code=400, detail="WireGuard server SSH password is not configured.")
+        kwargs["password"] = password
+    client.connect(**kwargs)
+    return client
+
+
+def wireguard_station_system_hub_peer_config(station: dict) -> Optional[dict]:
+    station_public_key = (station.get("wireguard_station_public_key") or "").strip()
+    if not station_public_key:
+        return None
+    allowed_addresses = station.get("wireguard_hub_allowed_addresses") or station.get("wireguard_station_address") or ""
+    try:
+        allowed_addresses = ",".join(station_csv_networks(allowed_addresses, "WireGuard station peer allowed addresses"))
+    except HTTPException:
+        allowed_addresses = station.get("wireguard_station_address") or ""
+    return {
+        "station_id": str(station.get("id")),
+        "station_name": station.get("station_name"),
+        "public_key": station_public_key,
+        "allowed_ips": allowed_addresses,
+        "comment": wireguard_station_comment_prefix(station),
+        "config": "\n".join([
+            "[Peer]",
+            f"# {wireguard_station_comment_prefix(station)}",
+            f"PublicKey = {station_public_key}",
+            f"AllowedIPs = {allowed_addresses}",
+        ]),
+    }
+
+
+def create_wireguard_log(admin_id, action: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO wireguard_install_logs(started_by_admin_id, action, status, progress_percent, current_step)
+                VALUES (%s, %s, 'RUNNING', 0, 'Queued') RETURNING id
+                """,
+                (admin_id, action),
+            )
+            return cur.fetchone()["id"]
+
+
+def update_wireguard_log(log_id, output: str, progress_percent: int = None, current_step: str = None):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT output_text FROM wireguard_install_logs WHERE id = %s", (log_id,))
+            row = cur.fetchone()
+            current_output = row["output_text"] if row else ""
+            next_output = redact((current_output + "\n\n" + output).strip())[-60000:] if output else current_output
+            cur.execute(
+                """
+                UPDATE wireguard_install_logs
+                SET output_text = %s,
+                    progress_percent = COALESCE(%s, progress_percent),
+                    current_step = COALESCE(%s, current_step)
+                WHERE id = %s
+                """,
+                (next_output, progress_percent, current_step, log_id),
+            )
+
+
+def finish_wireguard_log(log_id, status: str, output: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE wireguard_install_logs
+                SET status = %s,
+                    output_text = %s,
+                    progress_percent = CASE WHEN %s = 'SUCCESS' THEN 100 ELSE progress_percent END,
+                    current_step = CASE WHEN %s = 'SUCCESS' THEN 'Complete' ELSE 'Failed' END,
+                    completed_at = now()
+                WHERE id = %s
+                """,
+                (status, redact(output)[-60000:], status, status, log_id),
+            )
+
+
+def update_wireguard_system_hub_status(status: str, error: str = None, version: str = None):
+    save_wireguard_system_hub_store({
+        "install_status": status,
+        "last_error": error,
+        "last_detected_version": version,
+        "last_status_check_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+
+def detect_wireguard_system_hub(settings: Optional[dict] = None) -> dict:
+    hub = settings or wireguard_system_hub_store()
+    public_hub = public_wireguard_system_hub(hub)
+    interface_name = public_hub.get("interface_name") or "wg0"
+    sudo_mode = hub.get("sudo_mode") or "PASSWORDLESS"
+    sudo_password = decrypt_secret(hub.get("ssh_password_encrypted")) if sudo_mode == "SUDO_PASSWORD" else None
+    lines = []
+    status = "NOT_INSTALLED"
+    version = None
+    with wireguard_system_hub_ssh_client(hub) as client:
+        checks = [
+            ("os", "test -f /etc/os-release && . /etc/os-release && echo \"OS=$PRETTY_NAME\" || uname -a"),
+            ("wireguard_version", "command -v wg >/dev/null 2>&1 && wg --version || true"),
+            ("config_file", f"test -f /etc/wireguard/{interface_name}.conf && echo yes || echo no"),
+            ("service", f"systemctl is-active wg-quick@{interface_name} 2>/dev/null || true"),
+            ("service_detail", f"systemctl --no-pager --lines=8 status wg-quick@{interface_name} 2>/dev/null || true"),
+            ("wireguard_show", f"wg show {interface_name} 2>/dev/null || true"),
+            ("ipv4_forwarding", "sysctl net.ipv4.ip_forward 2>/dev/null || true"),
+            ("udp_listener", f"ss -lunp 2>/dev/null | grep ':{public_hub.get('endpoint_port') or 51820}' || true"),
+        ]
+        for label, command in checks:
+            code, out = run_ssh(client, command, sudo_mode=sudo_mode, sudo_password=sudo_password, timeout=45)
+            output = out.strip()
+            lines.append(f"$ {label}\n{output or '(no output)'}")
+            if label == "wireguard_version" and output:
+                version = output.splitlines()[0]
+            if label == "config_file" and output == "yes":
+                status = "INSTALLED"
+            if label == "service":
+                if output == "active":
+                    status = "RUNNING"
+                elif status == "INSTALLED":
+                    status = "STOPPED"
+            if code != 0:
+                lines.append(f"{label} exited with code {code}")
+    return {"status": status, "version": version, "output": "\n\n".join(lines)}
+
+
+def wireguard_system_hub_config_preview() -> dict:
+    hub = wireguard_system_hub_store()
+    public_hub = public_wireguard_system_hub(hub)
+    private_key = decrypt_secret(hub.get("private_key_encrypted"))
+    peers = []
+    for station in fetch_all("SELECT * FROM mikrotik_stations WHERE status <> 'ARCHIVED' AND wireguard_enabled = TRUE ORDER BY station_name ASC"):
+        if station.get("wireguard_hub_router_id"):
+            continue
+        peer = wireguard_station_system_hub_peer_config(station)
+        if peer:
+            peers.append(peer)
+    config_lines = [
+        "[Interface]",
+        f"Address = {public_hub['hub_address']}",
+        f"ListenPort = {public_hub['endpoint_port']}",
+        f"PrivateKey = {private_key or '<GENERATE_SYSTEM_HUB_KEY_FIRST>'}",
+    ]
+    if public_hub.get("nat_enabled"):
+        config_lines.extend([
+            "PostUp = sysctl -w net.ipv4.ip_forward=1; WAN_IF=$(ip route show default | awk '{print $5; exit}'); iptables -t nat -C POSTROUTING -s 10.250.0.0/16 -o \"$WAN_IF\" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s 10.250.0.0/16 -o \"$WAN_IF\" -j MASQUERADE",
+            "PostDown = WAN_IF=$(ip route show default | awk '{print $5; exit}'); iptables -t nat -D POSTROUTING -s 10.250.0.0/16 -o \"$WAN_IF\" -j MASQUERADE 2>/dev/null || true",
+        ])
+    for peer in peers:
+        config_lines.extend(["", peer["config"]])
+    return {
+        "hub": public_hub,
+        "peer_count": len(peers),
+        "peers": peers,
+        "config": "\n".join(config_lines),
+        "install_commands": [
+            "sudo apt update",
+            "sudo apt install -y wireguard wireguard-tools iptables iproute2",
+            f"sudo install -d -m 700 /etc/wireguard",
+            f"sudo install -m 600 /tmp/{public_hub['interface_name']}.conf /etc/wireguard/{public_hub['interface_name']}.conf",
+            f"sudo systemctl enable wg-quick@{public_hub['interface_name']} && sudo systemctl restart wg-quick@{public_hub['interface_name']}",
+            f"sudo wg show {public_hub['interface_name']}",
+        ],
+        "note": "Use the dedicated WireGuard server SSH settings to install/check the server hub. Stations dial this public endpoint; keep routed networks limited to controller, portal, and management reachability.",
+    }
+
+
+WIREGUARD_ENDPOINT_NAT_COMMENT = "3J WireGuard Endpoint - dstnat to system server"
+WIREGUARD_ENDPOINT_FILTER_COMMENT = "3J WireGuard Endpoint - allow forwarded UDP to system server"
+WIREGUARD_ENDPOINT_CONNECTION_MARK = "3J-WG-ENDPOINT"
+WIREGUARD_ENDPOINT_MARK_MANGLE_COMMENT = "3J WireGuard Endpoint - mark inbound endpoint flow"
+WIREGUARD_ENDPOINT_RETURN_MANGLE_COMMENT = "3J WireGuard Endpoint - route replies via selected WAN"
+
+
+def wireguard_endpoint_effective_wan_interface(public_hub: dict, router: Optional[dict] = None) -> dict:
+    selected = (public_hub.get("endpoint_wan_interface") or "").strip()
+    if not selected:
+        return {"selected_interface": "", "effective_interface": "", "is_bridge_slave": False}
+    router_id = public_hub.get("endpoint_router_id")
+    router = router or (wireguard_full_router(router_id, "WireGuard endpoint MikroTik") if router_id else None)
+    if not router or not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        return {"selected_interface": selected, "effective_interface": selected, "is_bridge_slave": False}
+    try:
+        password = wireguard_router_password(router, router.get("router_name") or "WireGuard endpoint MikroTik")
+        rows = sanitize_routeros_snapshot(routeros_readonly_query(
+            router["host"],
+            router["api_port"],
+            router.get("username"),
+            password,
+            router.get("use_tls"),
+            [
+                "/interface/bridge/port/print",
+                f"?interface={selected}",
+                "=.proplist=interface,bridge,disabled,comment",
+            ],
+            timeout=8.0,
+        ))
+        for row in rows:
+            bridge = sanitize_routeros_text(row.get("bridge"), max_length=200)
+            if bridge:
+                return {
+                    "selected_interface": selected,
+                    "effective_interface": bridge,
+                    "is_bridge_slave": True,
+                    "message": f"{selected} is a bridge slave. RouterOS firewall rules must use master bridge {bridge}.",
+                }
+    except Exception as exc:
+        return {
+            "selected_interface": selected,
+            "effective_interface": selected,
+            "is_bridge_slave": False,
+            "message": f"Could not check whether {selected} is a bridge slave: {sanitize_routeros_text(str(exc), max_length=500)}",
+        }
+    return {"selected_interface": selected, "effective_interface": selected, "is_bridge_slave": False}
+
+
+def wireguard_endpoint_forwarding_commands(hub: Optional[dict] = None, router: Optional[dict] = None) -> list[dict]:
+    public_hub = public_wireguard_system_hub(hub or wireguard_system_hub_store())
+    if not public_hub.get("endpoint_forwarding_enabled"):
+        return []
+    server_ip = (public_hub.get("endpoint_server_ip") or "").strip()
+    if not server_ip:
+        raise HTTPException(status_code=400, detail="WireGuard server LAN IP is required before building MikroTik endpoint forwarding.")
+    port = str(public_hub.get("endpoint_port") or 51820)
+    return_routing_table = (public_hub.get("endpoint_return_routing_table") or "").strip()
+    wan_interface = wireguard_endpoint_effective_wan_interface(public_hub, router)
+    nat_params = {
+        "chain": "dstnat",
+        "action": "dst-nat",
+        "protocol": "udp",
+        "dst-port": port,
+        "to-addresses": server_ip,
+        "to-ports": port,
+        "comment": WIREGUARD_ENDPOINT_NAT_COMMENT,
+    }
+    if public_hub.get("endpoint_public_ip"):
+        nat_params["dst-address"] = public_hub["endpoint_public_ip"]
+    if wan_interface.get("effective_interface"):
+        nat_params["in-interface"] = wan_interface["effective_interface"]
+    commands = [
+        station_routeros_add_command(
+            "Forward public WireGuard UDP to the server",
+            "/ip/firewall/nat/add",
+            nat_params,
+            unique_comment=WIREGUARD_ENDPOINT_NAT_COMMENT,
+            replace_existing_on_mismatch=True,
+            selected_wan_interface=wan_interface.get("selected_interface"),
+            effective_wan_interface=wan_interface.get("effective_interface"),
+            wan_interface_is_bridge_slave=wan_interface.get("is_bridge_slave"),
+            wan_interface_message=wan_interface.get("message"),
+        ),
+        station_routeros_add_command(
+            "Allow forwarded WireGuard UDP to the server",
+            "/ip/firewall/filter/add",
+            {
+                "chain": "forward",
+                "action": "accept",
+                "connection-nat-state": "dstnat",
+                "protocol": "udp",
+                "dst-address": server_ip,
+                "dst-port": port,
+                "comment": WIREGUARD_ENDPOINT_FILTER_COMMENT,
+            },
+            unique_comment=WIREGUARD_ENDPOINT_FILTER_COMMENT,
+            replace_existing_on_mismatch=True,
+            place_before_query=routeros_forward_drop_place_before_query(),
+        ),
+    ]
+    if return_routing_table:
+        mark_params = {
+            "chain": "prerouting",
+            "action": "mark-connection",
+            "connection-state": "new",
+            "connection-mark": "no-mark",
+            "protocol": "udp",
+            "dst-port": port,
+            "new-connection-mark": WIREGUARD_ENDPOINT_CONNECTION_MARK,
+            "passthrough": "yes",
+            "comment": WIREGUARD_ENDPOINT_MARK_MANGLE_COMMENT,
+        }
+        if public_hub.get("endpoint_public_ip"):
+            mark_params["dst-address"] = public_hub["endpoint_public_ip"]
+        if wan_interface.get("effective_interface"):
+            mark_params["in-interface"] = wan_interface["effective_interface"]
+        commands.append(
+            station_routeros_add_command(
+                "Mark inbound WireGuard endpoint flow",
+                "/ip/firewall/mangle/add",
+                mark_params,
+                unique_comment=WIREGUARD_ENDPOINT_MARK_MANGLE_COMMENT,
+                replace_existing_on_mismatch=True,
+                place_before_query={
+                    "print_path": "/ip/firewall/mangle/print",
+                    "query": {
+                        "chain": "prerouting",
+                        "action": "mark-connection",
+                        "connection-state": "new",
+                        "connection-mark": "no-mark",
+                        "in-interface": wan_interface.get("effective_interface") or "",
+                    },
+                    "proplist": ".id,chain,action,connection-state,connection-mark,in-interface,comment",
+                } if wan_interface.get("effective_interface") else None,
+            )
+        )
+        commands.append(
+            station_routeros_add_command(
+                "Route WireGuard endpoint replies through the selected WAN table",
+                "/ip/firewall/mangle/add",
+                {
+                    "chain": "prerouting",
+                    "action": "mark-routing",
+                    "connection-mark": WIREGUARD_ENDPOINT_CONNECTION_MARK,
+                    "protocol": "udp",
+                    "src-address": server_ip,
+                    "src-port": port,
+                    "new-routing-mark": return_routing_table,
+                    "passthrough": "no",
+                    "comment": WIREGUARD_ENDPOINT_RETURN_MANGLE_COMMENT,
+                },
+                unique_comment=WIREGUARD_ENDPOINT_RETURN_MANGLE_COMMENT,
+                replace_existing_on_mismatch=True,
+            )
+        )
+    return commands
+
+
+def wireguard_endpoint_forwarding_remove_commands() -> list[dict]:
+    return [
+        station_routeros_remove_command(
+            "Remove WireGuard endpoint return route mangle rule",
+            "/ip/firewall/mangle/print",
+            "comment",
+            WIREGUARD_ENDPOINT_RETURN_MANGLE_COMMENT,
+        ),
+        station_routeros_remove_command(
+            "Remove WireGuard endpoint connection mark rule",
+            "/ip/firewall/mangle/print",
+            "comment",
+            WIREGUARD_ENDPOINT_MARK_MANGLE_COMMENT,
+        ),
+        station_routeros_remove_command(
+            "Remove WireGuard endpoint forward allow rule",
+            "/ip/firewall/filter/print",
+            "comment",
+            WIREGUARD_ENDPOINT_FILTER_COMMENT,
+        ),
+        station_routeros_remove_command(
+            "Remove WireGuard endpoint dst-nat rule",
+            "/ip/firewall/nat/print",
+            "comment",
+            WIREGUARD_ENDPOINT_NAT_COMMENT,
+        ),
+    ]
+
+
+def wireguard_endpoint_forwarding_plan() -> dict:
+    hub = wireguard_system_hub_store()
+    public_hub = public_wireguard_system_hub(hub)
+    router_id = public_hub.get("endpoint_router_id")
+    router = wireguard_full_router(router_id, "WireGuard endpoint MikroTik") if router_id else None
+    wan_interface = wireguard_endpoint_effective_wan_interface(public_hub, router)
+    commands = wireguard_endpoint_forwarding_commands(hub, router=router) if public_hub.get("endpoint_forwarding_enabled") else []
+    remove_commands = wireguard_endpoint_forwarding_remove_commands()
+    return {
+        "enabled": bool(public_hub.get("endpoint_forwarding_enabled")),
+        "router": public_mikrotik_router(router) if router else None,
+        "router_ready": bool(router and router.get("host") and router.get("username") and router.get("password_encrypted")),
+        "endpoint_host": public_hub.get("endpoint_host"),
+        "endpoint_port": public_hub.get("endpoint_port"),
+        "endpoint_public_ip": public_hub.get("endpoint_public_ip"),
+        "endpoint_wan_interface": public_hub.get("endpoint_wan_interface"),
+        "endpoint_return_routing_table": public_hub.get("endpoint_return_routing_table"),
+        "effective_wan_interface": wan_interface.get("effective_interface"),
+        "wan_interface_is_bridge_slave": bool(wan_interface.get("is_bridge_slave")),
+        "wan_interface_message": wan_interface.get("message"),
+        "endpoint_server_ip": public_hub.get("endpoint_server_ip"),
+        "commands": commands,
+        "remove_commands": remove_commands,
+        "summary": "Forwards public UDP WireGuard traffic from the selected IGATE MikroTik WAN to the dedicated WireGuard server.",
+    }
+
+
+def wireguard_endpoint_forwarding_command_plan(mode: str = "push") -> dict:
+    normalized_mode = str(mode or "push").strip().lower()
+    base = wireguard_endpoint_forwarding_plan()
+    router = base.get("router")
+    if not router:
+        raise HTTPException(status_code=400, detail="Choose the MikroTik router that owns the IGATE static IP before reviewing endpoint forwarding.")
+    if normalized_mode == "remove":
+        commands = base.get("remove_commands") or []
+        title = "Remove WireGuard Endpoint Forwarding"
+        summary = "Removes only the 3J-managed WireGuard dst-nat and forward allow rules from the selected public edge MikroTik."
+        action = "REMOVE"
+        operation = "WIREGUARD_ENDPOINT_FORWARDING_REMOVE"
+    else:
+        if not base.get("enabled"):
+            raise HTTPException(status_code=400, detail="WireGuard endpoint forwarding is disabled.")
+        commands = base.get("commands") or []
+        title = "Push WireGuard Endpoint Forwarding"
+        summary = "Reviews the managed dst-nat and firewall allow rules before forwarding public WireGuard UDP to the dedicated server. Matching rules are skipped; mismatched managed rules are replaced."
+        action = "PUSH"
+        operation = "WIREGUARD_ENDPOINT_FORWARDING_PUSH"
+    plan = {
+        **base,
+        "mode": "remove" if normalized_mode == "remove" else "push",
+        "title": title,
+        "summary": summary,
+        "router_plans": [
+            wireguard_public_router_plan(
+                router,
+                "Public edge MikroTik",
+                commands,
+                operation,
+            )
+        ],
+    }
+    return wireguard_enrich_plan_detection(plan, action=action)
+
+
+def execute_wireguard_endpoint_forwarding_command(payload: WireGuardEndpointCommandApply, admin_id: str) -> dict:
+    normalized_mode = str(payload.mode or "push").strip().lower()
+    plan = wireguard_endpoint_forwarding_command_plan("remove" if normalized_mode == "remove" else "push")
+    router_plan, router, command = wireguard_find_plan_command(plan, payload.router_id, payload.command_index)
+    password = wireguard_router_password(router, router.get("router_name") or "WireGuard endpoint MikroTik")
+    use_remove_executor = normalized_mode == "remove" or bool(command.get("print_path") and not command.get("path"))
+    try:
+        if use_remove_executor:
+            result = routeros_execute_remove_commands(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                password,
+                router.get("use_tls"),
+                [command],
+            )
+        else:
+            result = routeros_execute_commands(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                password,
+                router.get("use_tls"),
+                [command],
+            )
+        item_result = (result.get("results") or [{}])[0]
+        status = item_result.get("status") or result.get("status") or "SUCCESS"
+        message = item_result.get("message") or result.get("message") or "WireGuard endpoint forwarding command completed."
+        audit(
+            admin_id,
+            "wireguard_endpoint_forwarding_command",
+            "mikrotik_router",
+            str(router.get("id")),
+            {
+                "mode": plan.get("mode"),
+                "operation": router_plan.get("operation"),
+                "command_index": payload.command_index,
+                "label": command.get("label"),
+                "status": status,
+            },
+        )
+        return {
+            "status": status,
+            "message": message,
+            "result": sanitize_summary(result),
+        }
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        audit(
+            admin_id,
+            "wireguard_endpoint_forwarding_command_failed",
+            "mikrotik_router",
+            str(router.get("id")),
+            {
+                "mode": plan.get("mode"),
+                "operation": router_plan.get("operation"),
+                "command_index": payload.command_index,
+                "label": command.get("label"),
+                "error": message,
+            },
+        )
+        raise HTTPException(status_code=500, detail=message)
+
+
+def apply_wireguard_endpoint_forwarding(admin_id: str) -> dict:
+    plan = wireguard_endpoint_forwarding_plan()
+    if not plan.get("enabled"):
+        raise HTTPException(status_code=400, detail="WireGuard endpoint forwarding is disabled.")
+    router = wireguard_full_router(plan.get("router", {}).get("id") if plan.get("router") else None, "WireGuard endpoint MikroTik")
+    if not router:
+        raise HTTPException(status_code=400, detail="Choose the MikroTik router that owns the IGATE static IP before pushing endpoint forwarding.")
+    password = wireguard_router_password(router, router.get("router_name") or "WireGuard endpoint MikroTik")
+    remove_result = routeros_execute_remove_commands(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), plan["remove_commands"])
+    add_result = routeros_execute_commands(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), plan["commands"])
+    audit(admin_id, "wireguard_endpoint_forwarding_apply", "mikrotik_router", str(router["id"]), {"router": router.get("router_name"), "endpoint_public_ip": plan.get("endpoint_public_ip"), "endpoint_server_ip": plan.get("endpoint_server_ip")})
+    return {**plan, "status": "SUCCESS", "remove_result": sanitize_summary(remove_result), "apply_result": sanitize_summary(add_result)}
+
+
+def remove_wireguard_endpoint_forwarding(admin_id: str) -> dict:
+    plan = wireguard_endpoint_forwarding_plan()
+    router = wireguard_full_router(plan.get("router", {}).get("id") if plan.get("router") else None, "WireGuard endpoint MikroTik")
+    if not router:
+        raise HTTPException(status_code=400, detail="Choose the MikroTik router that owns the IGATE static IP before removing endpoint forwarding.")
+    password = wireguard_router_password(router, router.get("router_name") or "WireGuard endpoint MikroTik")
+    remove_result = routeros_execute_remove_commands(router["host"], router["api_port"], router.get("username"), password, router.get("use_tls"), plan["remove_commands"])
+    audit(admin_id, "wireguard_endpoint_forwarding_remove", "mikrotik_router", str(router["id"]), {"router": router.get("router_name")})
+    return {**plan, "status": "SUCCESS", "remove_result": sanitize_summary(remove_result)}
+
+
+def run_wireguard_system_hub_action(action: str, admin_id, log_id=None):
+    action = str(action or "").upper()
+    hub = wireguard_system_hub_store()
+    log_id = log_id or create_wireguard_log(admin_id, action)
+    output = []
+    success = False
+    public_hub = public_wireguard_system_hub(hub)
+    interface_name = public_hub.get("interface_name") or "wg0"
+    sudo_mode = hub.get("sudo_mode") or "PASSWORDLESS"
+    sudo_password = decrypt_secret(hub.get("ssh_password_encrypted")) if sudo_mode == "SUDO_PASSWORD" else None
+    try:
+        if action in {"DETECT", "STATUS"}:
+            update_wireguard_log(log_id, "STEP: Detecting WireGuard server status", 25, "Detecting")
+            detected = detect_wireguard_system_hub(hub)
+            output.append(detected["output"])
+            update_wireguard_log(log_id, detected["output"], 90, "Detected")
+            update_wireguard_system_hub_status(detected["status"], None, detected.get("version"))
+            success = True
+        else:
+            commands = []
+            if action == "INSTALL":
+                private_key = decrypt_secret(hub.get("private_key_encrypted"))
+                if not private_key or not hub.get("public_key"):
+                    raise HTTPException(status_code=400, detail="Generate the WireGuard server key pair before installing the server.")
+                preview = wireguard_system_hub_config_preview()
+                config_b64 = base64.b64encode((preview.get("config") or "").encode()).decode()
+                update_wireguard_system_hub_status("INSTALLING")
+                commands = [
+                    ("Checking Ubuntu compatibility", 8, "test -f /etc/os-release && . /etc/os-release && echo \"OS=$PRETTY_NAME\" || uname -a"),
+                    ("Installing WireGuard packages", 24, "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard wireguard-tools iptables iproute2"),
+                    ("Creating /etc/wireguard", 38, "install -d -m 700 /etc/wireguard"),
+                    ("Backing up existing WireGuard config", 48, f"test ! -f /etc/wireguard/{interface_name}.conf || cp /etc/wireguard/{interface_name}.conf /etc/wireguard/{interface_name}.conf.$(date +%Y%m%d-%H%M%S).bak"),
+                    ("Writing WireGuard config", 58, f"printf '%s' {json.dumps(config_b64)} | base64 -d > /etc/wireguard/{interface_name}.conf && chmod 600 /etc/wireguard/{interface_name}.conf"),
+                    ("Enabling IPv4 forwarding", 68, "sysctl -w net.ipv4.ip_forward=1 && printf '%s\\n' 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-3j-wireguard.conf"),
+                    ("Starting WireGuard service", 82, f"systemctl daemon-reload && systemctl enable wg-quick@{interface_name} && systemctl restart wg-quick@{interface_name}"),
+                    ("Checking WireGuard status", 92, f"systemctl is-active wg-quick@{interface_name} && wg show {interface_name}"),
+                ]
+            elif action == "START":
+                commands = [("Starting WireGuard service", 60, f"systemctl enable --now wg-quick@{interface_name}")]
+            elif action == "STOP":
+                commands = [("Stopping WireGuard service", 60, f"systemctl stop wg-quick@{interface_name} || true")]
+            elif action == "RESTART":
+                commands = [("Restarting WireGuard service", 60, f"systemctl restart wg-quick@{interface_name}")]
+            elif action == "UNINSTALL":
+                commands = [
+                    ("Stopping WireGuard service", 18, f"systemctl disable --now wg-quick@{interface_name} || true"),
+                    ("Backing up managed WireGuard config", 34, f"test ! -f /etc/wireguard/{interface_name}.conf || cp /etc/wireguard/{interface_name}.conf /etc/wireguard/{interface_name}.conf.$(date +%Y%m%d-%H%M%S).bak"),
+                    ("Removing managed WireGuard config", 50, f"rm -f /etc/wireguard/{interface_name}.conf /etc/sysctl.d/99-3j-wireguard.conf && systemctl daemon-reload"),
+                    ("Removing WireGuard packages", 76, "DEBIAN_FRONTEND=noninteractive apt-get remove -y wireguard wireguard-tools || true"),
+                    ("Cleaning unused packages", 88, "DEBIAN_FRONTEND=noninteractive apt-get autoremove -y || true"),
+                ]
+            else:
+                raise HTTPException(status_code=400, detail="Unsupported WireGuard server action.")
+            with wireguard_system_hub_ssh_client(hub) as client:
+                for step, progress, command in commands:
+                    update_wireguard_log(log_id, f"STEP: {step}", progress, step)
+                    code, out = run_ssh(client, command, sudo_mode=sudo_mode, sudo_password=sudo_password, timeout=600)
+                    chunk = f"$ {command}\n{out.strip()}"
+                    output.append(chunk)
+                    update_wireguard_log(log_id, chunk, progress, step)
+                    if code != 0:
+                        raise RuntimeError(f"{step} failed with exit code {code}")
+            update_wireguard_log(log_id, "STEP: Verifying WireGuard server", 96, "Verifying")
+            detected = detect_wireguard_system_hub(wireguard_system_hub_store())
+            output.append(detected["output"])
+            update_wireguard_log(log_id, detected["output"], 98, "Verifying")
+            update_wireguard_system_hub_status("NOT_INSTALLED" if action == "UNINSTALL" else detected["status"], None, detected.get("version"))
+            success = True
+    except Exception as exc:
+        if action in {"INSTALL", "DETECT", "STATUS"}:
+            update_wireguard_system_hub_status("ERROR", str(exc))
+        else:
+            save_wireguard_system_hub_store({"last_error": str(exc), "last_status_check_at": datetime.now(timezone.utc).isoformat()})
+        output.append(f"ERROR: {exc}")
+    finish_wireguard_log(log_id, "SUCCESS" if success else "FAILED", "\n\n".join(output))
+    if not success:
+        raise HTTPException(status_code=400, detail="WireGuard server action failed. Check logs for details.")
+    audit(admin_id, f"wireguard_system_hub_{action.lower()}", "app_settings", "wireguard_system_hub", {"interface_name": interface_name, "log_id": str(log_id)})
+    return {"status": "ok", "log_id": log_id, "hub": public_wireguard_system_hub(wireguard_system_hub_store())}
+
+
+def execute_wireguard_router_commands(station_id: str, router: dict, operation: str, commands: list[dict], admin_id: Optional[str]) -> dict:
+    if not commands:
+        return {"status": "SKIPPED", "message": "No WireGuard commands were required.", "results": []}
+    password = wireguard_router_password(router, router.get("router_name") or "MikroTik")
+    result = routeros_execute_commands(
+        router["host"],
+        router["api_port"],
+        router.get("username"),
+        password,
+        router.get("use_tls"),
+        commands,
+    )
+    command_preview = "\n\n".join((command.get("preview") or command.get("label") or "") for command in commands[:12])
+    if len(commands) > 12:
+        command_preview += f"\n\n... {len(commands) - 12} more command(s)"
+    record_station_command_log(
+        station_id,
+        str(router.get("id")),
+        operation,
+        None,
+        {"label": operation.replace("_", " ").title(), "preview": command_preview},
+        result.get("status") or "SUCCESS",
+        result.get("message") or "WireGuard commands completed.",
+        result,
+        admin_id,
+    )
+    return sanitize_summary(result)
+
+
+def execute_wireguard_remove_router_commands(station_id: str, router: dict, operation: str, commands: list[dict], admin_id: Optional[str]) -> dict:
+    if not commands:
+        return {"status": "SKIPPED", "message": "No WireGuard remove commands were required.", "results": []}
+    password = wireguard_router_password(router, router.get("router_name") or "MikroTik")
+    result = routeros_execute_remove_commands(
+        router["host"],
+        router["api_port"],
+        router.get("username"),
+        password,
+        router.get("use_tls"),
+        commands,
+    )
+    command_preview = "\n\n".join((command.get("preview") or command.get("label") or "") for command in commands[:12])
+    if len(commands) > 12:
+        command_preview += f"\n\n... {len(commands) - 12} more command(s)"
+    record_station_command_log(
+        station_id,
+        str(router.get("id")),
+        operation,
+        None,
+        {"label": operation.replace("_", " ").title(), "preview": command_preview},
+        result.get("status") or "SUCCESS",
+        result.get("message") or "WireGuard remove commands completed.",
+        result,
+        admin_id,
+    )
+    return sanitize_summary(result)
+
+
+def wireguard_public_router_plan(router: dict, role: str, commands: list[dict], operation: str) -> dict:
+    return {
+        "router_id": str(router.get("id")),
+        "router_name": router.get("router_name"),
+        "host": router.get("host"),
+        "role": role,
+        "operation": operation,
+        "commands": commands,
+    }
+
+
+def wireguard_station_command_plan(station: dict, mode: str = "client") -> dict:
+    normalized_mode = str(mode or "client").strip().lower()
+    root_router = wireguard_station_root_router(str(station["id"]))
+    if not root_router:
+        raise HTTPException(status_code=400, detail="Station root router is required before building WireGuard commands.")
+    router_plans = []
+    if normalized_mode == "interface":
+        router_plans.append(wireguard_public_router_plan(root_router, "Station root", wireguard_station_interface_setup_commands(station), "WIREGUARD_STATION_INTERFACE"))
+        title = "Create Station WireGuard Interface"
+        summary = "Creates the station WireGuard interface and tunnel address, then the public key can be read from RouterOS."
+    elif normalized_mode == "remove":
+        router_plans.append(wireguard_public_router_plan(root_router, "Station root", station_wireguard_remove_commands(station, "station"), "WIREGUARD_STATION_REMOVE"))
+        if station.get("wireguard_hub_router_id"):
+            hub_router = wireguard_full_router(station.get("wireguard_hub_router_id"), "Central hub")
+            if hub_router:
+                router_plans.append(wireguard_public_router_plan(hub_router, "Central hub", station_wireguard_remove_commands(station, "hub"), "WIREGUARD_HUB_REMOVE"))
+        title = "Remove Station WireGuard Config"
+        summary = "Removes only the WireGuard objects created for this station from MikroTik. System hub wg0.conf must be reloaded separately if a peer should be removed there."
+    else:
+        router_plans.append(wireguard_public_router_plan(root_router, "Station root", wireguard_station_sync_commands(station), "WIREGUARD_STATION_CLIENT"))
+        if station.get("wireguard_hub_router_id"):
+            hub_router = wireguard_full_router(station.get("wireguard_hub_router_id"), "Central hub")
+            if hub_router:
+                router_plans.append(wireguard_public_router_plan(hub_router, "Central hub", [*wireguard_hub_interface_setup_commands(station), *wireguard_hub_sync_commands(station)], "WIREGUARD_HUB_CLIENT"))
+        title = "Push Station WireGuard Client"
+        summary = "Creates/updates the station WireGuard peer and routes to the central services. Review every RouterOS command before pushing."
+    return {
+        "station_id": str(station["id"]),
+        "station_name": station.get("station_name"),
+        "mode": normalized_mode,
+        "title": title,
+        "summary": summary,
+        "router_plans": router_plans,
+        "system_hub_peer": wireguard_station_system_hub_peer_config(station) if normalized_mode != "remove" and not station.get("wireguard_hub_router_id") else None,
+    }
+
+
+def wireguard_detect_router_plan(router_plan: dict, action: str = "PUSH") -> dict:
+    commands = router_plan.get("commands") or []
+    router_id = router_plan.get("router_id")
+    base = {
+        "router_id": str(router_id or ""),
+        "router_name": router_plan.get("router_name"),
+        "host": router_plan.get("host"),
+        "role": router_plan.get("role"),
+        "operation": router_plan.get("operation"),
+        "items": [],
+        "found_count": 0,
+        "has_managed_config": False,
+    }
+    if not commands:
+        return {**base, "status": "SUCCESS", "message": "No WireGuard commands were generated for this router."}
+    try:
+        router = wireguard_full_router(router_id, router_plan.get("router_name") or "MikroTik")
+    except Exception as exc:
+        return {**base, "status": "ERROR", "message": sanitize_routeros_text(str(exc))}
+    if not router or not router.get("host") or not router.get("username") or not router.get("password_encrypted"):
+        return {**base, "status": "NOT_READY", "message": "Router host, username, and password are required before checking WireGuard config."}
+    try:
+        password = wireguard_router_password(router, router.get("router_name") or "MikroTik")
+        if str(action or "").upper() == "REMOVE":
+            status = routeros_detect_remove_targets(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                password,
+                router.get("use_tls"),
+                commands,
+            )
+        else:
+            status = routeros_detect_station_apply_targets(
+                router["host"],
+                router["api_port"],
+                router.get("username"),
+                password,
+                router.get("use_tls"),
+                commands,
+            )
+        return {**base, **status, "router_id": str(router_id or ""), "router_name": router_plan.get("router_name"), "host": router_plan.get("host")}
+    except Exception as exc:
+        return {**base, "status": "ERROR", "message": sanitize_routeros_text(str(exc))}
+
+
+def wireguard_enrich_plan_detection(plan: dict, action: str = "PUSH") -> dict:
+    action = str(action or "PUSH").upper()
+    enriched_router_plans = []
+    router_statuses = []
+    detected_steps = 0
+    total_steps = 0
+    for router_plan in plan.get("router_plans") or []:
+        commands = router_plan.get("commands") or []
+        total_steps += len(commands)
+        status = wireguard_detect_router_plan(router_plan, action)
+        router_statuses.append(status)
+        item_map = {
+            int(item.get("command_index")): item
+            for item in status.get("items") or []
+            if str(item.get("command_index", "")).lstrip("-").isdigit()
+        }
+        enriched_commands = []
+        for index, command in enumerate(commands):
+            next_command = {**command}
+            item = item_map.get(index)
+            if not next_command.get("path") and not next_command.get("print_path"):
+                next_command.update({
+                    "initial_status": "SKIPPED",
+                    "informational": True,
+                    "detection_status": "SKIPPED",
+                    "initial_message": next_command.get("preview") or next_command.get("label") or "Informational WireGuard step.",
+                })
+            elif item:
+                detection_status = item.get("status")
+                next_command["detection_status"] = detection_status
+                next_command["detection_message"] = item.get("message") or ""
+                if action == "REMOVE":
+                    if detection_status == "NOT_FOUND":
+                        next_command.update({
+                            "initial_status": "SKIPPED",
+                            "detected": True,
+                            "initial_message": item.get("message") or "No matching WireGuard object was found on MikroTik.",
+                        })
+                    elif detection_status == "FOUND":
+                        next_command.update({
+                            "initial_status": "PENDING",
+                            "detected": True,
+                            "initial_message": "Detected on MikroTik. This remove step is ready to run.",
+                        })
+                elif detection_status == "FOUND":
+                    detected_steps += 1
+                    next_command.update({
+                        "initial_status": "SKIPPED",
+                        "detected": True,
+                        "initial_message": item.get("message") or "Detected on MikroTik. This step will be skipped during push.",
+                    })
+                elif detection_status == "UNKNOWN":
+                    next_command["initial_message"] = item.get("message") or ""
+            enriched_commands.append(next_command)
+        enriched_router_plans.append({**router_plan, "commands": enriched_commands, "detection": status})
+    progress_key = "remove_progress" if action == "REMOVE" else "push_progress"
+    progress_value = (
+        {"found_steps": sum(int(status.get("found_count") or 0) for status in router_statuses), "routers": router_statuses}
+        if action == "REMOVE"
+        else {"pushed_steps": detected_steps, "total_steps": total_steps, "routers": router_statuses}
+    )
+    return {
+        **plan,
+        "router_plans": enriched_router_plans,
+        progress_key: progress_value,
+    }
+
+
+def wireguard_find_plan_command(plan: dict, router_id: str, command_index: int) -> tuple[dict, dict, dict]:
+    for router_plan in plan.get("router_plans") or []:
+        if str(router_plan.get("router_id")) != str(router_id):
+            continue
+        commands = router_plan.get("commands") or []
+        if command_index < 0 or command_index >= len(commands):
+            raise HTTPException(status_code=400, detail="WireGuard command index is invalid.")
+        router = wireguard_full_router(router_plan.get("router_id"), router_plan.get("router_name") or "MikroTik")
+        return router_plan, router, commands[command_index]
+    raise HTTPException(status_code=404, detail="WireGuard command router was not found in the current plan.")
+
+
 def station_code_from_text(value: Optional[str]) -> str:
     text = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return text or f"station-{uuid.uuid4().hex[:8]}"
@@ -33316,8 +37096,13 @@ def station_snapshot_for_router(router_id: str) -> tuple[Optional[dict], dict]:
 
 
 def station_interface_map(snapshot: dict) -> dict[str, dict]:
+    bridge_membership = {
+        sanitize_routeros_text(item.get("interface"), max_length=200): sanitize_routeros_text(item.get("bridge"), max_length=200)
+        for item in mikrotik_snapshot_items(snapshot, "bridge_ports")
+        if item.get("interface") and item.get("bridge")
+    }
     return {
-        str(item.get("name") or ""): item
+        str(item.get("name") or ""): {**item, "bridge": bridge_membership.get(str(item.get("name") or ""), item.get("bridge"))}
         for item in mikrotik_snapshot_items(snapshot, "interfaces")
         if item.get("name")
     }
@@ -33383,10 +37168,12 @@ def mikrotik_live_interface_map(router_id: str) -> tuple[dict[str, dict], Option
 def station_interface_map_with_live_fallback(router_id: str, snapshot: dict, selected_names: list[str]) -> tuple[dict[str, dict], Optional[str], bool]:
     interfaces = station_interface_map(snapshot)
     required_names = [name for name in [str(value or "").strip() for value in selected_names] if name]
-    if required_names and any(name not in interfaces for name in required_names):
+    if required_names:
         live_interfaces, live_error = mikrotik_live_interface_map(router_id)
         if live_interfaces:
             return {**interfaces, **live_interfaces}, live_error, True
+        if any(name not in interfaces for name in required_names):
+            return interfaces, live_error, False
         return interfaces, live_error, False
     return interfaces, None, False
 
@@ -33594,18 +37381,48 @@ def station_validate_router_path(payload: MikrotikStationCreate, station_id: Opt
             continue
         bridge_name = (item.bridge_name or "").strip()
         port_names = [port.strip() for port in str(item.tagged_ports or "").split(",") if port.strip()]
-        interfaces, live_interface_error, used_live_interfaces = station_interface_map_with_live_fallback(item.router_id, snapshot, [bridge_name, *port_names])
+        transport_mode = normalize_station_transport_mode(item.transport_mode)
+        handoff_bridge_name = (item.handoff_bridge_name or "").strip()
+        handoff_port_names = [port.strip() for port in str(item.handoff_tagged_ports or "").split(",") if port.strip()]
+        selected_names = [bridge_name, *port_names]
+        if transport_mode == STATION_TRANSPORT_MODE_VLAN_XCONNECT:
+            selected_names.extend([handoff_bridge_name, *handoff_port_names])
+        interfaces, live_interface_error, used_live_interfaces = station_interface_map_with_live_fallback(item.router_id, snapshot, selected_names)
         if bridge_name not in interfaces:
             suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
             errors.append(f"{router_label}: selected bridge/interface '{bridge_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
-        elif station_interface_is_pppoe(interfaces[bridge_name]):
+        elif transport_mode == STATION_TRANSPORT_MODE_BRIDGE_TRUNK and station_interface_is_pppoe(interfaces[bridge_name]):
             errors.append(f"{router_label}: '{bridge_name}' is PPPoE-related and cannot carry the station captive portal VLAN.")
         for port_name in port_names:
             if port_name not in interfaces:
                 suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
                 errors.append(f"{router_label}: tagged port '{port_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
-            elif station_interface_is_pppoe(interfaces[port_name]):
+            elif transport_mode == STATION_TRANSPORT_MODE_BRIDGE_TRUNK and station_interface_is_pppoe(interfaces[port_name]):
                 errors.append(f"{router_label}: tagged port '{port_name}' is PPPoE-related and cannot carry the station captive portal VLAN.")
+            elif port_name != bridge_name:
+                port_bridge = str(interfaces[port_name].get("bridge") or "").strip()
+                if port_bridge and port_bridge != bridge_name:
+                    errors.append(f"{router_label}: tagged port '{port_name}' belongs to bridge '{port_bridge}', not selected bridge '{bridge_name}'. Choose a port that is already in {bridge_name}, or change the selected bridge.")
+                elif station_interface_is_physical_port(interfaces[port_name]) and not port_bridge:
+                    errors.append(f"{router_label}: tagged port '{port_name}' is not currently a bridge port. Add it to '{bridge_name}' first or select a different tagged port.")
+        if transport_mode == STATION_TRANSPORT_MODE_VLAN_XCONNECT:
+            if not handoff_bridge_name:
+                errors.append(f"{router_label}: downstream/OLT bridge is required for VLAN Handoff / Xconnect mode.")
+            elif handoff_bridge_name not in interfaces:
+                suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
+                errors.append(f"{router_label}: downstream/OLT bridge '{handoff_bridge_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
+            for port_name in handoff_port_names:
+                if port_name not in interfaces:
+                    suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
+                    errors.append(f"{router_label}: downstream/OLT tagged port '{port_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
+                    continue
+                if port_name == handoff_bridge_name:
+                    continue
+                port_bridge = str(interfaces[port_name].get("bridge") or "").strip()
+                if port_bridge and port_bridge != handoff_bridge_name:
+                    errors.append(f"{router_label}: downstream/OLT tagged port '{port_name}' belongs to bridge '{port_bridge}', not selected downstream bridge '{handoff_bridge_name}'.")
+                elif station_interface_is_physical_port(interfaces[port_name]) and not port_bridge:
+                    errors.append(f"{router_label}: downstream/OLT tagged port '{port_name}' is not currently a bridge port. Add it to '{handoff_bridge_name}' first or select a different downstream port.")
         existing_vlan_ids = set()
         for row in mikrotik_snapshot_items(snapshot, "interface_vlans"):
             existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-id")))
@@ -33660,9 +37477,82 @@ def station_validate_router_path(payload: MikrotikStationCreate, station_id: Opt
         raise HTTPException(status_code=400, detail=" ".join(errors))
 
 
+def validate_saved_mikrotik_station_router_path(station: dict, routers: list[dict]):
+    payload = MikrotikStationCreate(
+        station_name=station["station_name"],
+        station_code=station.get("station_code"),
+        description=station.get("description"),
+        vlan_id=int(station["vlan_id"]),
+        vlan_interface_name=station.get("vlan_interface_name"),
+        client_network_cidr=station["client_network_cidr"],
+        gateway_ip=str(station["gateway_ip"]),
+        pool_start_ip=str(station["pool_start_ip"]),
+        pool_end_ip=str(station["pool_end_ip"]),
+        pool_name=station.get("pool_name"),
+        dhcp_server_name=station.get("dhcp_server_name"),
+        dhcp_lease_time=station.get("dhcp_lease_time"),
+        create_dhcp_server=bool(station.get("create_dhcp_server")),
+        dns_servers=station.get("dns_servers"),
+        local_interface_list=station.get("local_interface_list"),
+        create_hotspot_profile=bool(station.get("create_hotspot_profile")),
+        create_hotspot_server=bool(station.get("create_hotspot_server")),
+        create_walled_garden=bool(station.get("create_walled_garden")),
+        hotspot_profile_name=station.get("hotspot_profile_name"),
+        hotspot_html_directory=station.get("hotspot_html_directory"),
+        hotspot_dns_name=station.get("hotspot_dns_name"),
+        hotspot_server_name=station.get("hotspot_server_name"),
+        portal_url=station.get("portal_url"),
+        ap_management_enabled=bool(station.get("ap_management_enabled")),
+        ap_management_vlan_id=station.get("ap_management_vlan_id"),
+        ap_management_vlan_interface_name=station.get("ap_management_vlan_interface_name"),
+        ap_management_network_cidr=station.get("ap_management_network_cidr"),
+        ap_management_gateway_ip=station.get("ap_management_gateway_ip"),
+        ap_management_pool_start_ip=station.get("ap_management_pool_start_ip"),
+        ap_management_pool_end_ip=station.get("ap_management_pool_end_ip"),
+        ap_management_pool_name=station.get("ap_management_pool_name"),
+        ap_management_dhcp_server_name=station.get("ap_management_dhcp_server_name"),
+        ap_management_dhcp_lease_time=station.get("ap_management_dhcp_lease_time"),
+        ap_management_dns_servers=station.get("ap_management_dns_servers"),
+        omada_site_id=station.get("omada_site_id"),
+        omada_site_name=station.get("omada_site_name"),
+        gateway_mode=station.get("gateway_mode"),
+        wireguard_enabled=bool(station.get("wireguard_enabled")),
+        wireguard_interface_name=station.get("wireguard_interface_name"),
+        wireguard_station_address=station.get("wireguard_station_address"),
+        wireguard_station_public_key=station.get("wireguard_station_public_key"),
+        wireguard_peer_public_key=station.get("wireguard_peer_public_key"),
+        wireguard_endpoint_host=station.get("wireguard_endpoint_host"),
+        wireguard_endpoint_port=station.get("wireguard_endpoint_port"),
+        wireguard_endpoint_route_gateway=station.get("wireguard_endpoint_route_gateway"),
+        wireguard_allowed_addresses=station.get("wireguard_allowed_addresses"),
+        wireguard_route_distance=station.get("wireguard_route_distance"),
+        wireguard_persistent_keepalive=station.get("wireguard_persistent_keepalive"),
+        wireguard_hub_router_id=str(station.get("wireguard_hub_router_id") or "") or None,
+        wireguard_hub_interface_name=station.get("wireguard_hub_interface_name"),
+        wireguard_hub_allowed_addresses=station.get("wireguard_hub_allowed_addresses"),
+        routers=[
+            MikrotikStationRouterPayload(
+                router_id=str(item["router_id"]),
+                transport_mode=item.get("transport_mode"),
+                bridge_name=item.get("bridge_name"),
+                tagged_ports=item.get("tagged_ports"),
+                handoff_bridge_name=item.get("handoff_bridge_name"),
+                handoff_tagged_ports=item.get("handoff_tagged_ports"),
+                notes=item.get("notes"),
+            )
+            for item in routers
+        ],
+    )
+    network, _, pool_start, pool_end, _ = validate_station_network(payload)
+    ap_management = validate_station_ap_management_network(payload, network)
+    station_validate_router_path(payload, str(station["id"]), network, pool_start, pool_end, ap_management)
+
+
 def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
     vlan_id = int(station["vlan_id"])
     network = ip_network(station["client_network_cidr"], strict=False)
+    gateway_mode = normalize_station_gateway_mode(station.get("gateway_mode"))
+    wireguard_enabled = bool(station.get("wireguard_enabled"))
     vlan_interface_name = station.get("vlan_interface_name") or f"VLAN{vlan_id}-3J-CLIENTS"
     pool_name = station.get("pool_name") or f"POOL-3J-CLIENTS-V{vlan_id}"
     dhcp_server_name = station.get("dhcp_server_name") or f"DHCP-3J-CLIENTS-V{vlan_id}"
@@ -33683,6 +37573,8 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
     client_dns_servers = normalize_upstream_dns_servers(station.get("dns_servers"), str(station["gateway_ip"]))
     upstream_dns_servers = normalize_upstream_dns_servers(station.get("dns_servers"), str(station["gateway_ip"]))
     local_interface_list = station.get("local_interface_list") or "LOCAL"
+    gateway_mode = normalize_station_gateway_mode(station.get("gateway_mode"))
+    wireguard_enabled = bool(station.get("wireguard_enabled"))
     nat_comment = f"3J Station - NAT for VLAN {vlan_id} clients"
     station_no_nat_office_comment = f"3J Station - preserve client IP for VLAN {vlan_id} to portal office subnet"
     station_iptv_dstnat_bypass_comment = f"3J Station - bypass transparent redirect for local IPTVweb on VLAN {vlan_id}"
@@ -33718,8 +37610,12 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
     for index, router in enumerate(routers):
         bridge_name = (router.get("bridge_name") or "").strip()
         tagged_ports = (router.get("tagged_ports") or "").strip()
+        transport_mode = normalize_station_transport_mode(router.get("transport_mode"))
+        handoff_bridge_name = (router.get("handoff_bridge_name") or "").strip()
+        handoff_tagged_ports = (router.get("handoff_tagged_ports") or "").strip()
         untagged_ports = (router.get("untagged_ports") or "").strip()
         effective_tagged_ports = station_dedupe_csv(bridge_name, tagged_ports)
+        effective_handoff_tagged_ports = station_dedupe_csv(handoff_bridge_name, handoff_tagged_ports)
         effective_untagged_ports = station_dedupe_csv(untagged_ports)
         untagged_port_list = [port.strip() for port in effective_untagged_ports.split(",") if port.strip()]
         is_root = index == 0
@@ -34239,75 +38135,122 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                     place_before_query=routeros_active_broad_notrack_condition(),
                 ),
             ])
+            if wireguard_enabled:
+                commands.extend(station_wireguard_station_commands(station))
         else:
             previous_name = routers[index - 1].get("router_name") or "previous router"
-            if ap_management_enabled:
+            if transport_mode == STATION_TRANSPORT_MODE_VLAN_XCONNECT:
+                if ap_management_enabled:
+                    commands.extend(station_vlan_xconnect_commands(
+                        ap_management_vlan_id,
+                        ap_management_vlan_interface_name,
+                        bridge_name,
+                        tagged_ports,
+                        handoff_bridge_name,
+                        handoff_tagged_ports,
+                        previous_name,
+                        "AP-MGMT",
+                    ))
+                commands.extend(station_vlan_xconnect_commands(
+                    vlan_id,
+                    vlan_interface_name,
+                    bridge_name,
+                    tagged_ports,
+                    handoff_bridge_name,
+                    handoff_tagged_ports,
+                    previous_name,
+                    "CLIENTS",
+                ))
+            else:
+                if ap_management_enabled:
+                    commands.extend([
+                        station_routeros_add_command(
+                            f"Create AP management VLAN {ap_management_vlan_id} monitoring interface",
+                            "/interface/vlan/add",
+                            {
+                                "comment": f"3J AP Management - VLAN {ap_management_vlan_id} monitor interface on {bridge_name}",
+                                "interface": bridge_name,
+                                "name": ap_management_vlan_interface_name,
+                                "vlan-id": str(ap_management_vlan_id),
+                            },
+                            unique_field="name",
+                            unique_value=ap_management_vlan_interface_name,
+                        ),
+                        station_routeros_add_command(
+                            f"Carry AP management VLAN {ap_management_vlan_id} through this router",
+                            "/interface/bridge/vlan/add",
+                            {
+                                "bridge": bridge_name,
+                                "comment": f"3J AP Management - VLAN {ap_management_vlan_id} trunk from {previous_name} to OLT/APs",
+                                "tagged": effective_tagged_ports,
+                                "vlan-ids": str(ap_management_vlan_id),
+                            },
+                            existing_query={"bridge": bridge_name, "vlan-ids": str(ap_management_vlan_id)},
+                            merge_bridge_vlan_tagged=True,
+                        ),
+                    ])
                 commands.extend([
                     station_routeros_add_command(
-                        f"Create AP management VLAN {ap_management_vlan_id} monitoring interface",
+                        f"Create VLAN {vlan_id} monitoring interface",
                         "/interface/vlan/add",
                         {
-                            "comment": f"3J AP Management - VLAN {ap_management_vlan_id} monitor interface on {bridge_name}",
+                            "comment": f"3J Station - VLAN {vlan_id} monitor interface on {bridge_name}",
                             "interface": bridge_name,
-                            "name": ap_management_vlan_interface_name,
-                            "vlan-id": str(ap_management_vlan_id),
+                            "name": vlan_interface_name,
+                            "vlan-id": str(vlan_id),
                         },
                         unique_field="name",
-                        unique_value=ap_management_vlan_interface_name,
+                        unique_value=vlan_interface_name,
                     ),
                     station_routeros_add_command(
-                        f"Carry AP management VLAN {ap_management_vlan_id} through this router",
+                        f"Carry VLAN {vlan_id} through this router",
                         "/interface/bridge/vlan/add",
                         {
                             "bridge": bridge_name,
-                            "comment": f"3J AP Management - VLAN {ap_management_vlan_id} trunk from {previous_name} to OLT/APs",
+                            "comment": f"3J Station - VLAN {vlan_id} trunk from {previous_name} to OLT/APs",
                             "tagged": effective_tagged_ports,
-                            "vlan-ids": str(ap_management_vlan_id),
+                            "vlan-ids": str(vlan_id),
                         },
-                        existing_query={"bridge": bridge_name, "vlan-ids": str(ap_management_vlan_id)},
+                        existing_query={"bridge": bridge_name, "vlan-ids": str(vlan_id)},
                         merge_bridge_vlan_tagged=True,
                     ),
                 ])
-            commands.extend([
-                station_routeros_add_command(
-                    f"Create VLAN {vlan_id} monitoring interface",
-                    "/interface/vlan/add",
-                    {
-                        "comment": f"3J Station - VLAN {vlan_id} monitor interface on {bridge_name}",
-                        "interface": bridge_name,
-                        "name": vlan_interface_name,
-                        "vlan-id": str(vlan_id),
-                    },
-                    unique_field="name",
-                    unique_value=vlan_interface_name,
-                ),
-                station_routeros_add_command(
-                    f"Carry VLAN {vlan_id} through this router",
-                    "/interface/bridge/vlan/add",
-                    {
-                        "bridge": bridge_name,
-                        "comment": f"3J Station - VLAN {vlan_id} trunk from {previous_name} to OLT/APs",
-                        "tagged": effective_tagged_ports,
-                        "vlan-ids": str(vlan_id),
-                    },
-                    existing_query={"bridge": bridge_name, "vlan-ids": str(vlan_id)},
-                    merge_bridge_vlan_tagged=True,
-                ),
-            ])
         router_plans.append({
             "router_id": str(router["router_id"]),
             "router_name": router.get("router_name"),
             "host": router.get("host"),
             "sequence_order": router.get("sequence_order", index),
             "role": role,
+            "transport_mode": transport_mode,
             "bridge_name": bridge_name,
             "tagged_ports": tagged_ports,
             "effective_tagged_ports": effective_tagged_ports,
+            "handoff_bridge_name": handoff_bridge_name,
+            "handoff_tagged_ports": handoff_tagged_ports,
+            "effective_handoff_tagged_ports": effective_handoff_tagged_ports,
             "commands": commands,
         })
+    if wireguard_enabled and station.get("wireguard_hub_router_id"):
+        hub_router = fetch_one("SELECT id, router_name, host FROM mikrotik_routers WHERE id = %s", (station.get("wireguard_hub_router_id"),))
+        router_plans.append({
+            "router_id": str(station.get("wireguard_hub_router_id")),
+            "router_name": (hub_router or {}).get("router_name") or "Central WireGuard hub",
+            "host": (hub_router or {}).get("host"),
+            "sequence_order": len(router_plans),
+            "role": "WIREGUARD_HUB",
+            "transport_mode": "WIREGUARD_HUB",
+            "bridge_name": station.get("wireguard_hub_interface_name"),
+            "tagged_ports": None,
+            "effective_tagged_ports": None,
+            "handoff_bridge_name": None,
+            "handoff_tagged_ports": None,
+            "effective_handoff_tagged_ports": None,
+            "commands": station_wireguard_hub_commands(station),
+        })
     plan = {
-        "summary": "Root router creates the customer VLAN gateway, DHCP, and NAT path. Downstream routers carry the VLAN as tagged trunks toward OLT/AP paths. Omada handles captive portal redirect/enforcement; MikroTik HotSpot is not created.",
+        "summary": "Root router creates the customer VLAN gateway, DHCP, and NAT path. Downstream routers carry the VLAN as tagged trunks toward OLT/AP paths. Omada handles captive portal redirect/enforcement; MikroTik HotSpot is not created." + (" WireGuard is included for station-to-central Omada/controller reachability over main or backup ISP." if wireguard_enabled else ""),
         "enforcement_mode": "OMADA_CAPTIVE_PORTAL",
+        "gateway_mode": gateway_mode,
         "station_code": station.get("station_code"),
         "vlan_id": vlan_id,
         "client_network_cidr": network.with_prefixlen,
@@ -34353,6 +38296,19 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
         "anti_tether_fasttrack_dst_comment": anti_tether_fasttrack_dst_comment,
         "raw_client_tracking_comment": raw_client_tracking_comment,
         "raw_return_tracking_comment": raw_return_tracking_comment,
+        "wireguard_enabled": wireguard_enabled,
+        "wireguard_interface_name": station.get("wireguard_interface_name"),
+        "wireguard_station_address": station.get("wireguard_station_address"),
+        "wireguard_station_public_key": station.get("wireguard_station_public_key"),
+        "wireguard_endpoint_host": station.get("wireguard_endpoint_host"),
+        "wireguard_endpoint_port": station.get("wireguard_endpoint_port"),
+        "wireguard_endpoint_route_gateway": station.get("wireguard_endpoint_route_gateway"),
+        "wireguard_allowed_addresses": station.get("wireguard_allowed_addresses"),
+        "wireguard_route_distance": station.get("wireguard_route_distance"),
+        "wireguard_persistent_keepalive": station.get("wireguard_persistent_keepalive"),
+        "wireguard_hub_router_id": station.get("wireguard_hub_router_id"),
+        "wireguard_hub_interface_name": station.get("wireguard_hub_interface_name"),
+        "wireguard_hub_allowed_addresses": station.get("wireguard_hub_allowed_addresses"),
         "router_plans": router_plans,
     }
     return combine_pending_cleanup_with_apply_plan(
@@ -34364,6 +38320,8 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
 
 def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> dict:
     vlan_id = int(station["vlan_id"])
+    gateway_mode = normalize_station_gateway_mode(station.get("gateway_mode"))
+    wireguard_enabled = bool(station.get("wireguard_enabled"))
     vlan_interface_name = station.get("vlan_interface_name") or f"VLAN{vlan_id}-3J-CLIENTS"
     pool_name = station.get("pool_name") or f"POOL-3J-CLIENTS-V{vlan_id}"
     dhcp_server_name = station.get("dhcp_server_name") or f"DHCP-3J-CLIENTS-V{vlan_id}"
@@ -34409,6 +38367,7 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
     router_plans = []
     for index, router in reversed(list(enumerate(routers))):
         bridge_name = (router.get("bridge_name") or "").strip()
+        transport_mode = normalize_station_transport_mode(router.get("transport_mode"))
         untagged_ports = [port.strip() for port in str(router.get("untagged_ports") or "").split(",") if port.strip()]
         is_root = index == 0
         role = "ROOT_GATEWAY" if is_root else "TRUNK_HELPER"
@@ -34708,6 +38667,8 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
                     vlan_interface_name,
                 ),
             ])
+            if wireguard_enabled:
+                commands.extend(station_wireguard_remove_commands(station, "station"))
             if ap_management_enabled:
                 commands.extend([
                     station_routeros_remove_command(
@@ -34784,55 +38745,76 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
                     ),
                 ])
         else:
-            commands.extend([
-                station_routeros_remove_command(
-                    f"Remove legacy station-created bridge VLAN {vlan_id}",
-                    "/interface/bridge/vlan/print",
-                    "comment",
-                    f"3J Hotspot - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
-                ),
-                station_routeros_remove_command(
-                    f"Remove station-created bridge VLAN {vlan_id}",
-                    "/interface/bridge/vlan/print",
-                    "comment",
-                    f"3J Station - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
-                ),
-                station_routeros_remove_command(
-                    f"Remove VLAN {vlan_id} monitoring interface",
-                    "/interface/vlan/print",
-                    "name",
-                    vlan_interface_name,
-                ),
-            ])
-            if ap_management_enabled:
+            if transport_mode == STATION_TRANSPORT_MODE_VLAN_XCONNECT:
+                commands.extend(station_vlan_xconnect_remove_commands(vlan_id, vlan_interface_name, "CLIENTS"))
+            else:
                 commands.extend([
                     station_routeros_remove_command(
-                        f"Remove AP management bridge VLAN {ap_management_vlan_id}",
+                        f"Remove legacy station-created bridge VLAN {vlan_id}",
                         "/interface/bridge/vlan/print",
                         "comment",
-                        f"3J AP Management - VLAN {ap_management_vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
+                        f"3J Hotspot - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
                     ),
                     station_routeros_remove_command(
-                        f"Remove AP management VLAN {ap_management_vlan_id} monitoring interface",
+                        f"Remove station-created bridge VLAN {vlan_id}",
+                        "/interface/bridge/vlan/print",
+                        "comment",
+                        f"3J Station - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
+                    ),
+                    station_routeros_remove_command(
+                        f"Remove VLAN {vlan_id} monitoring interface",
                         "/interface/vlan/print",
                         "name",
-                        ap_management_vlan_interface_name,
+                        vlan_interface_name,
                     ),
                 ])
+            if ap_management_enabled:
+                if transport_mode == STATION_TRANSPORT_MODE_VLAN_XCONNECT:
+                    commands.extend(station_vlan_xconnect_remove_commands(ap_management_vlan_id, ap_management_vlan_interface_name, "AP-MGMT"))
+                else:
+                    commands.extend([
+                        station_routeros_remove_command(
+                            f"Remove AP management bridge VLAN {ap_management_vlan_id}",
+                            "/interface/bridge/vlan/print",
+                            "comment",
+                            f"3J AP Management - VLAN {ap_management_vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
+                        ),
+                        station_routeros_remove_command(
+                            f"Remove AP management VLAN {ap_management_vlan_id} monitoring interface",
+                            "/interface/vlan/print",
+                            "name",
+                            ap_management_vlan_interface_name,
+                        ),
+                    ])
         router_plans.append({
             "router_id": str(router["router_id"]),
             "router_name": router.get("router_name"),
             "host": router.get("host"),
             "sequence_order": router.get("sequence_order", index),
             "role": role,
+            "transport_mode": transport_mode,
             "bridge_name": bridge_name,
             "commands": commands,
         })
+    if wireguard_enabled and station.get("wireguard_hub_router_id"):
+        hub_router = fetch_one("SELECT id, router_name, host FROM mikrotik_routers WHERE id = %s", (station.get("wireguard_hub_router_id"),))
+        router_plans.append({
+            "router_id": str(station.get("wireguard_hub_router_id")),
+            "router_name": (hub_router or {}).get("router_name") or "Central WireGuard hub",
+            "host": (hub_router or {}).get("host"),
+            "sequence_order": len(router_plans),
+            "role": "WIREGUARD_HUB",
+            "transport_mode": "WIREGUARD_HUB",
+            "bridge_name": station.get("wireguard_hub_interface_name"),
+            "commands": station_wireguard_remove_commands(station, "hub"),
+        })
     return {
         "summary": "Remove only station-created objects by exact station names/comments. Existing shared bridge VLAN rows are not deleted unless they carry the station-created comment.",
+        "gateway_mode": gateway_mode,
         "station_code": station.get("station_code"),
         "vlan_id": vlan_id,
         "client_network_cidr": network.with_prefixlen,
+        "wireguard_enabled": wireguard_enabled,
         "ap_management_enabled": ap_management_enabled,
         "ap_management_vlan_id": ap_management_vlan_id,
         "router_plans": router_plans,
@@ -34908,10 +38890,14 @@ def combine_pending_cleanup_with_apply_plan(apply_plan: dict, pending_cleanup_pl
                 "host": source.get("host"),
                 "sequence_order": source.get("sequence_order", len(router_order)),
                 "role": source.get("role"),
+                "transport_mode": source.get("transport_mode"),
                 "bridge_name": source.get("bridge_name"),
                 "tagged_ports": source.get("tagged_ports"),
+                "handoff_bridge_name": source.get("handoff_bridge_name"),
+                "handoff_tagged_ports": source.get("handoff_tagged_ports"),
                 "untagged_ports": source.get("untagged_ports"),
                 "effective_tagged_ports": source.get("effective_tagged_ports"),
+                "effective_handoff_tagged_ports": source.get("effective_handoff_tagged_ports"),
                 "effective_untagged_ports": source.get("effective_untagged_ports"),
                 "commands": [],
             }
@@ -35155,6 +39141,62 @@ def find_site_deployment_by_omada(site_id: Optional[str] = None, site_name: Opti
     return None
 
 
+def find_site_deployment_by_station_site_payload(site: MikrotikStationSitePayload | dict) -> Optional[dict]:
+    site_deployment_id = str((site.get("site_deployment_id") if isinstance(site, dict) else site.site_deployment_id) or "").strip()
+    omada_site_id = str((site.get("omada_site_id") if isinstance(site, dict) else site.omada_site_id) or "").strip()
+    omada_site_name = str((site.get("omada_site_name") if isinstance(site, dict) else site.omada_site_name) or "").strip()
+    if site_deployment_id:
+        row = fetch_one("SELECT * FROM site_deployments WHERE id::text = %s LIMIT 1", (site_deployment_id,))
+        if row:
+            return row
+    return find_site_deployment_by_omada(omada_site_id, omada_site_name)
+
+
+def normalize_station_site_bindings(payload: MikrotikStationCreate | MikrotikStationOmadaBindingUpdate, station_vlan_id: int) -> list[dict]:
+    raw_sites = list(payload.sites or [])
+    if not raw_sites and ((getattr(payload, "omada_site_id", None) or "").strip() or (getattr(payload, "omada_site_name", None) or "").strip()):
+        raw_sites = [
+            MikrotikStationSitePayload(
+                omada_site_id=getattr(payload, "omada_site_id", None),
+                omada_site_name=getattr(payload, "omada_site_name", None),
+                is_primary=True,
+            )
+        ]
+    bindings = []
+    seen = set()
+    primary_seen = False
+    for index, item in enumerate(raw_sites):
+        site_deployment_id = str(item.site_deployment_id or "").strip() or None
+        omada_site_id = str(item.omada_site_id or "").strip() or None
+        omada_site_name = str(item.omada_site_name or "").strip() or None
+        site_row = find_site_deployment_by_station_site_payload(item)
+        if site_row:
+            site_deployment_id = str(site_row.get("id") or site_deployment_id or "") or None
+            omada_site_id = (site_row.get("omada_site_id") or omada_site_id or "").strip() or None
+            omada_site_name = (site_row.get("site_name") or omada_site_name or "").strip() or None
+        if not (site_deployment_id or omada_site_id or omada_site_name):
+            continue
+        key = site_deployment_id or f"omada:{(omada_site_id or '').lower()}" or f"name:{(omada_site_name or '').lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        is_primary = bool(item.is_primary) and not primary_seen
+        if is_primary:
+            primary_seen = True
+        bindings.append({
+            "site_deployment_id": site_deployment_id,
+            "omada_site_id": omada_site_id,
+            "omada_site_name": omada_site_name,
+            "is_primary": is_primary,
+            "vlan_confirmed": bool(site_row and site_vlan_matches_station(site_row, station_vlan_id)),
+            "site_row": site_row,
+            "sequence": index,
+        })
+    if bindings and not any(item["is_primary"] for item in bindings):
+        bindings[0]["is_primary"] = True
+    return bindings
+
+
 def site_vlan_matches_station(site_row: Optional[dict], station_vlan_id: int) -> bool:
     if not site_row or site_row.get("vlan_tag") is None:
         return False
@@ -35164,13 +39206,82 @@ def site_vlan_matches_station(site_row: Optional[dict], station_vlan_id: int) ->
         return False
 
 
+def station_site_rows(station_id: str) -> list[dict]:
+    return fetch_all(
+        """
+        SELECT ss.*,
+               sd.site_name AS deployment_site_name,
+               sd.omada_site_id AS deployment_omada_site_id,
+               sd.vlan_tag AS deployment_vlan_tag,
+               sd.barangay,
+               sd.municipality,
+               sd.location,
+               sd.address,
+               sd.deployment_status,
+               sd.latitude,
+               sd.longitude
+        FROM mikrotik_station_sites ss
+        LEFT JOIN site_deployments sd ON sd.id = ss.site_deployment_id
+        WHERE ss.station_id = %s
+        ORDER BY ss.is_primary DESC, COALESCE(sd.site_name, ss.omada_site_name, ss.omada_site_id), ss.created_at ASC
+        """,
+        (station_id,),
+    )
+
+
+def public_station_site(row: dict) -> dict:
+    site_name = row.get("deployment_site_name") or row.get("omada_site_name")
+    omada_site_id = row.get("deployment_omada_site_id") or row.get("omada_site_id")
+    return {
+        "id": row.get("id"),
+        "station_id": row.get("station_id"),
+        "site_deployment_id": row.get("site_deployment_id"),
+        "omada_site_id": omada_site_id,
+        "omada_site_name": site_name,
+        "site_name": site_name,
+        "is_primary": bool(row.get("is_primary")),
+        "vlan_confirmed": bool(row.get("vlan_confirmed")),
+        "vlan_tag": row.get("deployment_vlan_tag"),
+        "barangay": row.get("barangay"),
+        "municipality": row.get("municipality"),
+        "location": row.get("location"),
+        "address": row.get("address"),
+        "deployment_status": row.get("deployment_status"),
+        "latitude": row.get("latitude"),
+        "longitude": row.get("longitude"),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def station_primary_site(row: dict) -> Optional[dict]:
+    sites = station_site_rows(str(row["id"]))
+    if sites:
+        return sites[0]
+    if (row.get("omada_site_id") or row.get("omada_site_name")):
+        return {
+            "station_id": row.get("id"),
+            "site_deployment_id": None,
+            "omada_site_id": row.get("omada_site_id"),
+            "omada_site_name": row.get("omada_site_name"),
+            "deployment_omada_site_id": row.get("omada_site_id"),
+            "deployment_site_name": row.get("omada_site_name"),
+            "is_primary": True,
+            "vlan_confirmed": bool(row.get("omada_site_vlan_confirmed")),
+        }
+    return None
+
+
 def public_mikrotik_station(row: dict) -> dict:
     routers = station_router_rows(str(row["id"]))
+    sites = [public_station_site(item) for item in station_site_rows(str(row["id"]))]
+    system_hub = public_wireguard_system_hub()
     return {
         "id": row["id"],
         "station_name": row["station_name"],
         "station_code": row.get("station_code"),
         "description": row.get("description"),
+        "gateway_mode": normalize_station_gateway_mode(row.get("gateway_mode")),
         "vlan_id": row["vlan_id"],
         "vlan_interface_name": row.get("vlan_interface_name") or f"VLAN{row['vlan_id']}-3J-CLIENTS",
         "client_network_cidr": row["client_network_cidr"],
@@ -35207,6 +39318,23 @@ def public_mikrotik_station(row: dict) -> dict:
         "omada_site_name": row.get("omada_site_name"),
         "omada_site_vlan_confirmed": bool(row.get("omada_site_vlan_confirmed")),
         "omada_site_bound_at": row.get("omada_site_bound_at"),
+        "wireguard_enabled": bool(row.get("wireguard_enabled")),
+        "wireguard_interface_name": row.get("wireguard_interface_name") or station_wireguard_default_interface_name(row.get("station_code"), row.get("station_name")),
+        "wireguard_station_address": row.get("wireguard_station_address") or station_wireguard_default_address(int(row["vlan_id"])),
+        "wireguard_station_public_key": row.get("wireguard_station_public_key"),
+        "wireguard_peer_public_key_configured": bool(row.get("wireguard_peer_public_key")),
+        "wireguard_peer_public_key": row.get("wireguard_peer_public_key"),
+        "wireguard_endpoint_host": row.get("wireguard_endpoint_host") or (system_hub.get("endpoint_host") if system_hub else None),
+        "wireguard_endpoint_port": row.get("wireguard_endpoint_port") or WIREGUARD_BACKUP_ENDPOINT_PORT,
+        "wireguard_endpoint_route_gateway": row.get("wireguard_endpoint_route_gateway") or "",
+        "wireguard_allowed_addresses": row.get("wireguard_allowed_addresses") or WIREGUARD_CENTRAL_ALLOWED_ADDRESSES,
+        "wireguard_route_distance": row.get("wireguard_route_distance") or WIREGUARD_BACKUP_ROUTE_DISTANCE,
+        "wireguard_persistent_keepalive": row.get("wireguard_persistent_keepalive") if row.get("wireguard_persistent_keepalive") is not None else 25,
+        "wireguard_hub_router_id": row.get("wireguard_hub_router_id"),
+        "wireguard_hub_interface_name": row.get("wireguard_hub_interface_name"),
+        "wireguard_hub_allowed_addresses": row.get("wireguard_hub_allowed_addresses"),
+        "sites": sites,
+        "site_count": len(sites) or (1 if row.get("omada_site_id") or row.get("omada_site_name") else 0),
         "hotspot_login_file_path": None,
         "hotspot_login_expected_hash": None,
         "hotspot_login_sync": {
@@ -35234,8 +39362,11 @@ def public_mikrotik_station(row: dict) -> dict:
                 "api_status": item["api_status"],
                 "sequence_order": item["sequence_order"],
                 "station_role": item["station_role"],
+                "transport_mode": normalize_station_transport_mode(item.get("transport_mode")),
                 "bridge_name": item.get("bridge_name"),
                 "tagged_ports": item.get("tagged_ports"),
+                "handoff_bridge_name": item.get("handoff_bridge_name"),
+                "handoff_tagged_ports": item.get("handoff_tagged_ports"),
                 "notes": item.get("notes"),
             }
             for item in routers
@@ -35273,14 +39404,22 @@ def station_omada_portal_plan(row: dict, admin=None) -> dict:
     routers = station_router_rows(str(row["id"]))
     settings = ensure_captive_portal_settings()
     api_settings, global_site_id, global_site_name = omada_selected_site(settings)
-    station_site_id = (row.get("omada_site_id") or "").strip()
-    station_site_name = (row.get("omada_site_name") or "").strip()
+    bound_site_rows = station_site_rows(str(row["id"]))
+    public_bound_sites = [public_station_site(item) for item in bound_site_rows]
+    primary_binding = bound_site_rows[0] if bound_site_rows else station_primary_site(row)
+    station_site_id = ((primary_binding or {}).get("deployment_omada_site_id") or (primary_binding or {}).get("omada_site_id") or row.get("omada_site_id") or "").strip()
+    station_site_name = ((primary_binding or {}).get("deployment_site_name") or (primary_binding or {}).get("omada_site_name") or row.get("omada_site_name") or "").strip()
     site_id = station_site_id or global_site_id
     site_name = station_site_name or global_site_name
-    uses_station_site = bool(station_site_id or station_site_name)
+    uses_station_site = bool(public_bound_sites or station_site_id or station_site_name)
     ap_config = ensure_ap_deployment_configuration()
     portal_url = station_portal_url(row)
-    selected_site = find_site_deployment_by_omada(site_id, site_name)
+    selected_site = None
+    primary_site_deployment_id = str((primary_binding or {}).get("site_deployment_id") or "").strip()
+    if primary_site_deployment_id:
+        selected_site = fetch_one("SELECT * FROM site_deployments WHERE id::text = %s LIMIT 1", (primary_site_deployment_id,))
+    if not selected_site:
+        selected_site = find_site_deployment_by_omada(site_id, site_name)
     if selected_site:
         resolved_site_id = (selected_site.get("omada_site_id") or "").strip()
         resolved_site_name = (selected_site.get("site_name") or "").strip()
@@ -35328,6 +39467,25 @@ def station_omada_portal_plan(row: dict, admin=None) -> dict:
             })
         except Exception as exc:
             ap_summary["omada_error"] = sanitize_routeros_text(str(exc))
+    bound_omada_site_ids = [site.get("omada_site_id") for site in public_bound_sites if site.get("omada_site_id")]
+    all_site_ap_summary = {"total_aps": ap_summary.get("total_aps") or 0, "connected_aps": ap_summary.get("connected_aps") or 0}
+    if bound_omada_site_ids:
+        local_all = fetch_one(
+            """
+            SELECT
+              COUNT(*) AS total_aps,
+              COUNT(*) FILTER (WHERE deployment_status = 'CONNECTED') AS connected_aps
+            FROM ap_deployments
+            WHERE deployment_status <> 'DELETED'
+              AND omada_site_id = ANY(%s)
+            """,
+            (bound_omada_site_ids,),
+        )
+        all_site_ap_summary = {
+            "total_aps": int((local_all or {}).get("total_aps") or 0),
+            "connected_aps": int((local_all or {}).get("connected_aps") or 0),
+            "source": "LOCAL_AP_DEPLOYMENTS",
+        }
     transport_status = None
     try:
         transport_status = mikrotik_station_managed_configuration_status(str(row["id"]), quiet=True, admin=admin or {"id": None})
@@ -35368,10 +39526,10 @@ def station_omada_portal_plan(row: dict, admin=None) -> dict:
     )
     add_check(
         "omada_site",
-        "Station Omada site bound",
+        "Station Omada site(s) bound",
         "READY" if uses_station_site else "NEEDS_ACTION",
-        site_name or site_id or "No Omada site is bound to this station yet.",
-        "Bind this station to the Omada site that owns its APs" if not uses_station_site else None,
+        f"{len(public_bound_sites)} site(s) bound. Primary: {site_name or site_id or 'not selected'}." if uses_station_site else "No Omada site is bound to this station yet.",
+        "Bind this station to the Omada site/barangay sites that own its APs" if not uses_station_site else None,
     )
     site_vlan_status = "WARNING"
     site_vlan_detail = "No local site VLAN tag is saved for the selected Omada site. Set the site VLAN in APs Deployment -> Sites -> Configurations."
@@ -35493,6 +39651,8 @@ def station_omada_portal_plan(row: dict, admin=None) -> dict:
             "omada_site_id": station_site_id or None,
             "omada_site_name": station_site_name or None,
             "omada_site_vlan_confirmed": bool(row.get("omada_site_vlan_confirmed")),
+            "sites": public_bound_sites,
+            "site_count": len(public_bound_sites) or (1 if station_site_id or station_site_name else 0),
             "routers": [
                 {
                     "router_id": item["router_id"],
@@ -35529,6 +39689,10 @@ def station_omada_portal_plan(row: dict, admin=None) -> dict:
             "global_selected_site_name": global_site_name,
             "selected_site_local_record_id": selected_site.get("id") if selected_site else None,
             "selected_site_vlan_id": selected_site_vlan,
+            "bound_sites": public_bound_sites,
+            "bound_site_count": len(public_bound_sites) or (1 if station_site_id or station_site_name else 0),
+            "all_sites_ap_total_count": all_site_ap_summary.get("total_aps") or 0,
+            "all_sites_ap_connected_count": all_site_ap_summary.get("connected_aps") or 0,
             "ap_total_count": ap_total,
             "ap_connected_count": ap_connected,
             "ap_count_source": ap_summary.get("source"),
@@ -35555,41 +39719,11 @@ def update_station_omada_binding(station_id: str, payload: MikrotikStationOmadaB
     station = fetch_one("SELECT * FROM mikrotik_stations WHERE id = %s AND status <> 'ARCHIVED'", (station_id,))
     if not station:
         raise HTTPException(status_code=404, detail="MikroTik station not found")
-    omada_site_id = (payload.omada_site_id or "").strip() or None
-    omada_site_name = (payload.omada_site_name or "").strip() or None
-    site_row = find_site_deployment_by_omada(omada_site_id, omada_site_name)
-    if site_row:
-        omada_site_id = site_row.get("omada_site_id") or omada_site_id
-        omada_site_name = site_row.get("site_name") or omada_site_name
-    vlan_confirmed = bool(omada_site_id or omada_site_name) or site_vlan_matches_station(site_row, station["vlan_id"])
+    station_site_bindings = normalize_station_site_bindings(payload, station["vlan_id"])
+    primary_site_binding = next((item for item in station_site_bindings if item.get("is_primary")), station_site_bindings[0] if station_site_bindings else {})
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE mikrotik_stations
-                SET omada_site_id = %s,
-                    omada_site_name = %s,
-                    omada_site_vlan_confirmed = %s,
-                    omada_site_bound_at = CASE WHEN %s::text IS NULL AND %s::text IS NULL THEN NULL ELSE now() END,
-                    omada_site_bound_by_admin_id = CASE WHEN %s::text IS NULL AND %s::text IS NULL THEN NULL ELSE %s::uuid END,
-                    updated_at = now()
-                WHERE id = %s
-                RETURNING *
-                """,
-                (
-                    omada_site_id,
-                    omada_site_name,
-                    vlan_confirmed,
-                    omada_site_id,
-                    omada_site_name,
-                    omada_site_id,
-                    omada_site_name,
-                    admin["id"],
-                    station_id,
-                ),
-            )
-            updated = cur.fetchone()
-            sync_site_vlan_from_station_row(cur, updated, admin["id"])
+            replace_station_site_bindings(cur, station, station_site_bindings, admin["id"])
             cur.execute("SELECT * FROM mikrotik_stations WHERE id = %s", (station_id,))
             updated = cur.fetchone()
     audit(
@@ -35597,7 +39731,11 @@ def update_station_omada_binding(station_id: str, payload: MikrotikStationOmadaB
         "update_mikrotik_station_omada_site",
         "mikrotik_stations",
         station_id,
-        {"omada_site_id": omada_site_id, "omada_site_name": omada_site_name, "vlan_confirmed": vlan_confirmed},
+        {
+            "omada_site_id": primary_site_binding.get("omada_site_id"),
+            "omada_site_name": primary_site_binding.get("omada_site_name"),
+            "omada_site_count": len(station_site_bindings),
+        },
     )
     return station_omada_portal_plan(updated, admin=admin)
 
@@ -37864,6 +42002,9 @@ def ap_management_config_signature_from_payload(normalized: dict, payload: Mikro
 
 
 def station_config_signature_from_values(station: dict, routers: list[dict]) -> dict:
+    # Keep this signature limited to objects that require removing/rebuilding the
+    # station VLAN/DHCP/trunk config. Gateway-mode labels and WireGuard reachability
+    # can be added or revised without forcing removal of existing station service.
     return {
         "station_code": str(station.get("station_code") or "").strip(),
         "vlan_id": int(station.get("vlan_id")),
@@ -37889,9 +42030,12 @@ def station_config_signature_from_values(station: dict, routers: list[dict]) -> 
 
 
 def station_config_signature_from_payload(payload: MikrotikStationCreate, station_code: str, network, gateway_ip, pool_start, pool_end, dns_servers: str, pool_name: str, dhcp_server_name: str, dhcp_lease_time: str, vlan_interface_name: str) -> dict:
+    ap_management = validate_station_ap_management_network(payload, network)
+    wireguard = normalize_station_wireguard_values(payload, station_code, network, ap_management)
     return station_config_signature_from_values(
         {
             "station_code": station_code,
+            "gateway_mode": normalize_station_gateway_mode(payload.gateway_mode),
             "vlan_id": payload.vlan_id,
             "vlan_interface_name": vlan_interface_name,
             "client_network_cidr": network.with_prefixlen,
@@ -37903,6 +42047,20 @@ def station_config_signature_from_payload(payload: MikrotikStationCreate, statio
             "dhcp_lease_time": dhcp_lease_time,
             "dns_servers": dns_servers,
             "local_interface_list": (payload.local_interface_list or "LOCAL").strip() or "LOCAL",
+            "wireguard_enabled": wireguard["enabled"],
+            "wireguard_interface_name": wireguard["interface_name"],
+            "wireguard_station_address": wireguard["station_address"],
+            "wireguard_station_public_key": wireguard["station_public_key"],
+            "wireguard_peer_public_key": wireguard["peer_public_key"],
+            "wireguard_endpoint_host": wireguard["endpoint_host"],
+            "wireguard_endpoint_port": wireguard["endpoint_port"],
+            "wireguard_endpoint_route_gateway": wireguard["endpoint_route_gateway"],
+            "wireguard_allowed_addresses": wireguard["allowed_addresses"],
+            "wireguard_route_distance": wireguard["route_distance"],
+            "wireguard_persistent_keepalive": wireguard["persistent_keepalive"],
+            "wireguard_hub_router_id": wireguard["hub_router_id"],
+            "wireguard_hub_interface_name": wireguard["hub_interface_name"],
+            "wireguard_hub_allowed_addresses": wireguard["hub_allowed_addresses"],
         },
         [
             {
@@ -38140,15 +42298,31 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
     if missing_ids:
         raise HTTPException(status_code=400, detail="One or more selected MikroTik routers no longer exist.")
     for index, item in enumerate(payload.routers):
+        transport_mode = normalize_station_transport_mode(item.transport_mode)
+        if index == 0 and transport_mode == STATION_TRANSPORT_MODE_VLAN_XCONNECT:
+            raise HTTPException(status_code=400, detail="The root gateway must use Bridge Trunk mode because it owns the VLAN gateway, DHCP, NAT, and firewall rules. Use VLAN Handoff / Xconnect only on downstream transport routers.")
         if not (item.bridge_name or "").strip():
             label = "root/primary router" if index == 0 else f"router #{index + 1}"
-            raise HTTPException(status_code=400, detail=f"Bridge/interface is required for the {label}.")
+            field_label = "Upstream bridge/interface" if transport_mode == STATION_TRANSPORT_MODE_VLAN_XCONNECT else "Bridge/interface"
+            raise HTTPException(status_code=400, detail=f"{field_label} is required for the {label}.")
         if not (item.tagged_ports or "").strip():
             label = "root/primary router" if index == 0 else f"router #{index + 1}"
-            raise HTTPException(status_code=400, detail=f"Tagged ports are required for the {label}.")
+            field_label = "Upstream tagged ports" if transport_mode == STATION_TRANSPORT_MODE_VLAN_XCONNECT else "Tagged ports"
+            raise HTTPException(status_code=400, detail=f"{field_label} are required for the {label}.")
+        if transport_mode == STATION_TRANSPORT_MODE_VLAN_XCONNECT:
+            if not (item.handoff_bridge_name or "").strip():
+                raise HTTPException(status_code=400, detail=f"Downstream/OLT bridge is required for router #{index + 1} when VLAN Handoff / Xconnect mode is selected.")
+            if not (item.handoff_tagged_ports or "").strip():
+                raise HTTPException(status_code=400, detail=f"Downstream/OLT tagged ports are required for router #{index + 1} when VLAN Handoff / Xconnect mode is selected.")
     network, gateway_ip, pool_start, pool_end, dns_servers = validate_station_network(payload)
     ap_management = validate_station_ap_management_network(payload, network)
     station_code = station_code_from_text(payload.station_code or payload.station_name)
+    gateway_mode = normalize_station_gateway_mode(payload.gateway_mode)
+    wireguard = normalize_station_wireguard_values(payload, station_code, network, ap_management)
+    if wireguard["hub_router_id"]:
+        hub_router = fetch_one("SELECT id, router_name FROM mikrotik_routers WHERE id = %s", (wireguard["hub_router_id"],))
+        if not hub_router:
+            raise HTTPException(status_code=400, detail="Selected central WireGuard hub router no longer exists.")
     vlan_interface_name = (payload.vlan_interface_name or "").strip() or f"VLAN{payload.vlan_id}-3J-CLIENTS"
     pool_name = (payload.pool_name or "").strip() or f"POOL-3J-CLIENTS-V{payload.vlan_id}"
     dhcp_server_name = (payload.dhcp_server_name or "").strip() or f"DHCP-3J-CLIENTS-V{payload.vlan_id}"
@@ -38177,13 +42351,11 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
     create_hotspot_server = False
     create_walled_garden = False
     portal_url = (payload.portal_url or "").strip() or "http://192.168.50.70:8080/portal"
-    omada_site_id = (payload.omada_site_id or "").strip() or None
-    omada_site_name = (payload.omada_site_name or "").strip() or None
-    bound_site = find_site_deployment_by_omada(omada_site_id, omada_site_name)
-    if bound_site:
-        omada_site_id = bound_site.get("omada_site_id") or omada_site_id
-        omada_site_name = bound_site.get("site_name") or omada_site_name
-    omada_site_vlan_confirmed = bool(omada_site_id or omada_site_name) or site_vlan_matches_station(bound_site, payload.vlan_id)
+    station_site_bindings = normalize_station_site_bindings(payload, payload.vlan_id)
+    primary_site_binding = next((item for item in station_site_bindings if item.get("is_primary")), station_site_bindings[0] if station_site_bindings else {})
+    omada_site_id = (primary_site_binding.get("omada_site_id") or "").strip() or None
+    omada_site_name = (primary_site_binding.get("omada_site_name") or "").strip() or None
+    omada_site_vlan_confirmed = bool(primary_site_binding.get("vlan_confirmed") or omada_site_id or omada_site_name)
     station_validate_router_path(payload, station_id, network, pool_start, pool_end, ap_management)
     global_errors = mikrotik_global_resource_conflict_errors(
         "Station customer",
@@ -38220,6 +42392,8 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
             ("ap_management_vlan_id", "ap_management_enabled = TRUE AND ap_management_vlan_id = %s", ap_management["vlan_id"], f"AP management VLAN {ap_management['vlan_id']} is already used by another active station."),
             ("ap_management_network_cidr", "ap_management_enabled = TRUE AND lower(btrim(ap_management_network_cidr)) = lower(btrim(%s))", ap_management["network"].with_prefixlen, f"AP management network {ap_management['network'].with_prefixlen} is already used by another active station."),
         ])
+    if wireguard["enabled"]:
+        duplicate_conditions.append(("wireguard_station_address", "wireguard_enabled = TRUE AND lower(btrim(wireguard_station_address)) = lower(btrim(%s))", wireguard["station_address"], f"WireGuard station address {wireguard['station_address']} is already used by another active station."))
     for _, condition, value, message in duplicate_conditions:
         existing = fetch_one(
             f"""
@@ -38279,6 +42453,7 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                     SET station_name = %s,
                         station_code = %s,
                         description = %s,
+                        gateway_mode = %s,
                         vlan_id = %s,
                         vlan_interface_name = %s,
                         client_network_cidr = %s,
@@ -38315,6 +42490,20 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         omada_site_vlan_confirmed = %s,
                         omada_site_bound_at = CASE WHEN %s::text IS NULL AND %s::text IS NULL THEN NULL ELSE now() END,
                         omada_site_bound_by_admin_id = CASE WHEN %s::text IS NULL AND %s::text IS NULL THEN NULL ELSE %s::uuid END,
+                        wireguard_enabled = %s,
+                        wireguard_interface_name = %s,
+                        wireguard_station_address = %s,
+                        wireguard_station_public_key = %s,
+                        wireguard_peer_public_key = %s,
+                        wireguard_endpoint_host = %s,
+                        wireguard_endpoint_port = %s,
+                        wireguard_endpoint_route_gateway = %s,
+                        wireguard_allowed_addresses = %s,
+                        wireguard_route_distance = %s,
+                        wireguard_persistent_keepalive = %s,
+                        wireguard_hub_router_id = %s,
+                        wireguard_hub_interface_name = %s,
+                        wireguard_hub_allowed_addresses = %s,
                         pending_cleanup_plan_json = %s,
                         pending_cleanup_reason = %s,
                         pending_cleanup_created_at = CASE WHEN %s::jsonb IS NULL THEN pending_cleanup_created_at ELSE now() END,
@@ -38328,6 +42517,7 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         payload.station_name.strip(),
                         station_code,
                         payload.description,
+                        gateway_mode,
                         payload.vlan_id,
                         vlan_interface_name,
                         network.with_prefixlen,
@@ -38367,6 +42557,20 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         omada_site_id,
                         omada_site_name,
                         admin["id"],
+                        wireguard["enabled"],
+                        wireguard["interface_name"],
+                        wireguard["station_address"],
+                        wireguard["station_public_key"],
+                        wireguard["peer_public_key"],
+                        wireguard["endpoint_host"],
+                        wireguard["endpoint_port"],
+                        wireguard["endpoint_route_gateway"],
+                        wireguard["allowed_addresses"],
+                        wireguard["route_distance"],
+                        wireguard["persistent_keepalive"],
+                        wireguard["hub_router_id"],
+                        wireguard["hub_interface_name"],
+                        wireguard["hub_allowed_addresses"],
                         Json(pending_cleanup_plan) if pending_cleanup_plan else None,
                         pending_cleanup_reason,
                         Json(pending_cleanup_plan) if pending_cleanup_plan else None,
@@ -38379,7 +42583,7 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                 cur.execute(
                     """
                     INSERT INTO mikrotik_stations(
-                        station_name, station_code, description, vlan_id, vlan_interface_name, client_network_cidr,
+                        station_name, station_code, description, gateway_mode, vlan_id, vlan_interface_name, client_network_cidr,
                         gateway_ip, pool_start_ip, pool_end_ip, pool_name, dhcp_server_name, dhcp_lease_time,
                         create_dhcp_server, dns_servers,
                         local_interface_list, create_hotspot_profile, create_hotspot_server, create_walled_garden,
@@ -38390,15 +42594,21 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         ap_management_dhcp_lease_time, ap_management_dns_servers,
                         omada_site_id, omada_site_name, omada_site_vlan_confirmed, omada_site_bound_at,
                         omada_site_bound_by_admin_id,
+                        wireguard_enabled, wireguard_interface_name, wireguard_station_address,
+                        wireguard_station_public_key, wireguard_peer_public_key, wireguard_endpoint_host,
+                        wireguard_endpoint_port, wireguard_endpoint_route_gateway, wireguard_allowed_addresses, wireguard_route_distance,
+                        wireguard_persistent_keepalive, wireguard_hub_router_id, wireguard_hub_interface_name,
+                        wireguard_hub_allowed_addresses,
                         status, created_by_admin_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'READY_FOR_REVIEW', %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'READY_FOR_REVIEW', %s)
                     RETURNING *
                     """,
                     (
                         payload.station_name.strip(),
                         station_code,
                         payload.description,
+                        gateway_mode,
                         payload.vlan_id,
                         vlan_interface_name,
                         network.with_prefixlen,
@@ -38435,6 +42645,20 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                         omada_site_vlan_confirmed,
                         datetime.now(timezone.utc) if omada_site_id or omada_site_name else None,
                         admin["id"] if omada_site_id or omada_site_name else None,
+                        wireguard["enabled"],
+                        wireguard["interface_name"],
+                        wireguard["station_address"],
+                        wireguard["station_public_key"],
+                        wireguard["peer_public_key"],
+                        wireguard["endpoint_host"],
+                        wireguard["endpoint_port"],
+                        wireguard["endpoint_route_gateway"],
+                        wireguard["allowed_addresses"],
+                        wireguard["route_distance"],
+                        wireguard["persistent_keepalive"],
+                        wireguard["hub_router_id"],
+                        wireguard["hub_interface_name"],
+                        wireguard["hub_allowed_addresses"],
                         admin["id"],
                     ),
                 )
@@ -38443,21 +42667,27 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
                 cur.execute(
                     """
                     INSERT INTO mikrotik_station_routers(
-                        station_id, router_id, sequence_order, station_role, bridge_name, tagged_ports, notes
+                        station_id, router_id, sequence_order, station_role, transport_mode,
+                        bridge_name, tagged_ports, handoff_bridge_name, handoff_tagged_ports, notes
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         station["id"],
                         item.router_id,
                         index,
                         "ROOT_GATEWAY" if index == 0 else "TRUNK_HELPER",
+                        normalize_station_transport_mode(item.transport_mode),
                         (item.bridge_name or "").strip(),
                         (item.tagged_ports or "").strip(),
+                        (item.handoff_bridge_name or "").strip(),
+                        (item.handoff_tagged_ports or "").strip(),
                         item.notes,
                     ),
                 )
-            sync_site_vlan_from_station_row(cur, station, admin["id"])
+            omada_site_id, omada_site_name, omada_site_vlan_confirmed = replace_station_site_bindings(cur, station, station_site_bindings, admin["id"])
+            cur.execute("SELECT * FROM mikrotik_stations WHERE id = %s", (station["id"],))
+            station = cur.fetchone()
     audit(
         admin["id"],
         action,
@@ -38466,6 +42696,7 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
         {
             "station_name": payload.station_name,
             "station_code": station_code,
+            "gateway_mode": gateway_mode,
             "vlan_id": payload.vlan_id,
             "client_network_cidr": network.with_prefixlen,
             "ap_management_enabled": bool(ap_management),
@@ -38473,7 +42704,11 @@ def save_mikrotik_station_payload(payload: MikrotikStationCreate, admin: dict, s
             "ap_management_network_cidr": ap_management["network"].with_prefixlen if ap_management else None,
             "omada_site_id": omada_site_id,
             "omada_site_name": omada_site_name,
+            "omada_site_count": len(station_site_bindings),
             "omada_site_vlan_confirmed": omada_site_vlan_confirmed,
+            "wireguard_enabled": wireguard["enabled"],
+            "wireguard_endpoint_host": wireguard["endpoint_host"] if wireguard["enabled"] else None,
+            "wireguard_hub_router_id": wireguard["hub_router_id"],
             "router_count": len(payload.routers),
         },
     )
@@ -39055,6 +43290,702 @@ def list_mikrotik_stations(admin=Depends(current_admin)):
         public_mikrotik_station(row)
         for row in fetch_all("SELECT * FROM mikrotik_stations WHERE status <> 'ARCHIVED' ORDER BY updated_at DESC, created_at DESC")
     ]
+
+
+def public_wireguard_station(row: dict, status: Optional[dict] = None) -> dict:
+    routers = station_router_rows(str(row["id"]))
+    root = wireguard_station_client_link(str(row["id"]), row)
+    system_hub = public_wireguard_system_hub() if not row.get("wireguard_hub_router_id") else None
+    return {
+        "id": str(row["id"]),
+        "station_name": row.get("station_name"),
+        "station_code": row.get("station_code"),
+        "description": row.get("description"),
+        "gateway_mode": normalize_station_gateway_mode(row.get("gateway_mode")),
+        "vlan_id": row.get("vlan_id"),
+        "client_network_cidr": row.get("client_network_cidr"),
+        "ap_management_enabled": bool(row.get("ap_management_enabled")),
+        "ap_management_network_cidr": row.get("ap_management_network_cidr"),
+        "wireguard_enabled": bool(row.get("wireguard_enabled")),
+        "wireguard_interface_name": row.get("wireguard_interface_name") or station_wireguard_default_interface_name(row.get("station_code"), row.get("station_name")),
+        "wireguard_station_address": row.get("wireguard_station_address") or station_wireguard_default_address(int(row.get("vlan_id") or 77)),
+        "wireguard_station_public_key": row.get("wireguard_station_public_key"),
+        "wireguard_peer_public_key_configured": bool(row.get("wireguard_peer_public_key") or (system_hub and system_hub.get("public_key"))),
+        "wireguard_endpoint_host": row.get("wireguard_endpoint_host"),
+        "wireguard_endpoint_port": row.get("wireguard_endpoint_port") or (system_hub.get("endpoint_port") if system_hub else WIREGUARD_BACKUP_ENDPOINT_PORT),
+        "wireguard_endpoint_route_gateway": row.get("wireguard_endpoint_route_gateway") or "",
+        "wireguard_allowed_addresses": row.get("wireguard_allowed_addresses") or (system_hub.get("central_service_routes") if system_hub else WIREGUARD_CENTRAL_ALLOWED_ADDRESSES),
+        "wireguard_route_distance": row.get("wireguard_route_distance") or WIREGUARD_BACKUP_ROUTE_DISTANCE,
+        "wireguard_persistent_keepalive": row.get("wireguard_persistent_keepalive") if row.get("wireguard_persistent_keepalive") is not None else 25,
+        "wireguard_hub_router_id": row.get("wireguard_hub_router_id"),
+        "wireguard_hub_mode": "SYSTEM_SERVER" if system_hub else "MIKROTIK_ROUTER",
+        "wireguard_system_hub": system_hub,
+        "wireguard_hub_interface_name": row.get("wireguard_hub_interface_name") or (system_hub.get("interface_name") if system_hub else WIREGUARD_MIKROTIK_HUB_INTERFACE),
+        "wireguard_hub_allowed_addresses": row.get("wireguard_hub_allowed_addresses"),
+        "root_router": {
+            "router_id": str(root.get("router_id")) if root else None,
+            "router_name": root.get("router_name") if root else None,
+            "host": root.get("host") if root else None,
+            "sequence_order": root.get("sequence_order") if root else None,
+            "station_role": root.get("station_role") if root else None,
+        },
+        "router_count": len(routers),
+        "status": status or wireguard_station_status(row, live=False),
+        "created_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+@app.get("/api/network/wireguard/overview")
+def get_wireguard_overview(live: bool = False, admin=Depends(current_admin)):
+    system_hub = public_wireguard_system_hub()
+    station_rows = fetch_all("SELECT * FROM mikrotik_stations WHERE status <> 'ARCHIVED' ORDER BY updated_at DESC, created_at DESC")
+    router_rows = fetch_all("SELECT id, router_name, host, api_port, status, username, password_encrypted FROM mikrotik_routers ORDER BY router_name ASC, created_at DESC")
+    stations = []
+    for station in station_rows:
+        status = wireguard_station_status(station, live=live and bool(station.get("wireguard_enabled")))
+        stations.append(public_wireguard_station(station, status=status))
+    enabled_count = sum(1 for row in station_rows if row.get("wireguard_enabled"))
+    live_statuses = [station.get("status") or {} for station in stations]
+    summary = {
+        "station_count": len(station_rows),
+        "enabled_count": enabled_count,
+        "configured_count": sum(1 for item in live_statuses if item.get("status") in {"CONFIGURED", "HANDSHAKE_OK"}),
+        "handshake_ok_count": sum(1 for item in live_statuses if item.get("status") == "HANDSHAKE_OK"),
+        "attention_count": sum(1 for item in live_statuses if item.get("status") not in {"DISABLED", "CONFIGURED", "HANDSHAKE_OK"}),
+        "live_checked": bool(live),
+        "system_hub_key_ready": bool(system_hub.get("public_key_configured")),
+    }
+    return {
+        "summary": summary,
+        "system_hub": system_hub,
+        "stations": stations,
+        "routers": [
+            {
+                "id": str(router["id"]),
+                "router_name": router.get("router_name"),
+                "host": router.get("host"),
+                "api_port": router.get("api_port"),
+                "status": router.get("status"),
+                "credentials_saved": bool(router.get("host") and router.get("username") and router.get("password_encrypted")),
+            }
+            for router in router_rows
+        ],
+    }
+
+
+@app.get("/api/network/wireguard/system-hub")
+def get_wireguard_system_hub(admin=Depends(current_admin)):
+    preview = wireguard_system_hub_config_preview()
+    return {
+        **preview["hub"],
+        "peer_count": preview["peer_count"],
+        "peers": preview["peers"],
+        "install_commands": preview["install_commands"],
+        "note": preview["note"],
+    }
+
+
+@app.patch("/api/network/wireguard/system-hub")
+def update_wireguard_system_hub(payload: WireGuardSystemHubUpdate, admin=Depends(current_admin)):
+    values = payload.model_dump()
+    updated = save_wireguard_system_hub_store(values)
+    preview = wireguard_system_hub_config_preview()
+    audit(admin["id"], "update_wireguard_system_hub", "app_settings", "wireguard_system_hub", sanitize_summary(updated))
+    return {
+        **updated,
+        "peer_count": preview["peer_count"],
+        "peers": preview["peers"],
+        "install_commands": preview["install_commands"],
+        "note": preview["note"],
+    }
+
+
+@app.post("/api/network/wireguard/system-hub/generate-keypair")
+def generate_wireguard_system_hub_keypair(admin=Depends(current_admin)):
+    pair = wireguard_keypair()
+    updated = save_wireguard_system_hub_store({
+        "private_key_encrypted": encrypt_secret(pair["private_key"]),
+        "public_key": pair["public_key"],
+    })
+    preview = wireguard_system_hub_config_preview()
+    audit(admin["id"], "generate_wireguard_system_hub_keypair", "app_settings", "wireguard_system_hub", {"public_key_configured": True})
+    return {
+        **updated,
+        "peer_count": preview["peer_count"],
+        "peers": preview["peers"],
+        "install_commands": preview["install_commands"],
+        "note": preview["note"],
+    }
+
+
+@app.get("/api/network/wireguard/system-hub/config-preview")
+def get_wireguard_system_hub_config_preview(admin=Depends(current_admin)):
+    return wireguard_system_hub_config_preview()
+
+
+@app.get("/api/network/wireguard/endpoint-forwarding/plan")
+def get_wireguard_endpoint_forwarding_plan(admin=Depends(current_admin)):
+    return wireguard_endpoint_forwarding_plan()
+
+
+@app.get("/api/network/wireguard/endpoint-forwarding/push-plan")
+def get_wireguard_endpoint_forwarding_push_plan(admin=Depends(current_admin)):
+    return wireguard_endpoint_forwarding_command_plan("push")
+
+
+@app.get("/api/network/wireguard/endpoint-forwarding/remove-plan")
+def get_wireguard_endpoint_forwarding_remove_plan(admin=Depends(current_admin)):
+    return wireguard_endpoint_forwarding_command_plan("remove")
+
+
+@app.post("/api/network/wireguard/endpoint-forwarding/apply-command")
+def apply_wireguard_endpoint_forwarding_command_endpoint(payload: WireGuardEndpointCommandApply, admin=Depends(current_admin)):
+    return execute_wireguard_endpoint_forwarding_command(payload, admin["id"])
+
+
+@app.post("/api/network/wireguard/endpoint-forwarding/remove-command")
+def remove_wireguard_endpoint_forwarding_command_endpoint(payload: WireGuardEndpointCommandApply, admin=Depends(current_admin)):
+    payload.mode = "remove"
+    return execute_wireguard_endpoint_forwarding_command(payload, admin["id"])
+
+
+@app.post("/api/network/wireguard/endpoint-forwarding/apply")
+def apply_wireguard_endpoint_forwarding_endpoint(admin=Depends(current_admin)):
+    return apply_wireguard_endpoint_forwarding(admin["id"])
+
+
+@app.post("/api/network/wireguard/endpoint-forwarding/remove")
+def remove_wireguard_endpoint_forwarding_endpoint(admin=Depends(current_admin)):
+    return remove_wireguard_endpoint_forwarding(admin["id"])
+
+
+@app.post("/api/network/wireguard/system-hub/test-ssh")
+def test_wireguard_system_hub_ssh(admin=Depends(current_admin)):
+    settings = wireguard_system_hub_store()
+    log_id = create_wireguard_log(admin["id"], "TEST_SSH")
+    try:
+        with wireguard_system_hub_ssh_client(settings) as client:
+            code, output = run_ssh(client, "echo WIREGUARD_SSH_OK && uname -a && command -v wg || true", sudo_mode="NONE", timeout=30)
+        if code != 0:
+            raise RuntimeError(output)
+        finish_wireguard_log(log_id, "SUCCESS", output)
+        audit(admin["id"], "test_wireguard_system_hub_ssh", "app_settings", "wireguard_system_hub")
+        return {
+            "status": "Reachable",
+            "output": output,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except HTTPException:
+        finish_wireguard_log(log_id, "FAILED", "WireGuard server SSH settings are incomplete.")
+        raise
+    except Exception as exc:
+        finish_wireguard_log(log_id, "FAILED", str(exc))
+        audit(admin["id"], "test_wireguard_system_hub_ssh_failed", "app_settings", "wireguard_system_hub", {"error": str(exc)})
+        raise HTTPException(status_code=400, detail=f"WireGuard server SSH failed: {exc}")
+
+
+@app.post("/api/network/wireguard/system-hub/detect")
+def detect_wireguard_system_hub_endpoint(admin=Depends(current_admin)):
+    return run_wireguard_system_hub_action("DETECT", admin["id"])
+
+
+@app.post("/api/network/wireguard/system-hub/install")
+def install_wireguard_system_hub_endpoint(admin=Depends(current_admin)):
+    existing = fetch_one("SELECT id FROM wireguard_install_logs WHERE action = 'INSTALL' AND status = 'RUNNING' ORDER BY created_at DESC LIMIT 1")
+    if existing:
+        return {"status": "running", "log_id": existing["id"], "hub": public_wireguard_system_hub(wireguard_system_hub_store())}
+    log_id = create_wireguard_log(admin["id"], "INSTALL")
+    update_wireguard_log(log_id, "WireGuard install queued.", 2, "Queued")
+    update_wireguard_system_hub_status("INSTALLING")
+    audit(admin["id"], "wireguard_system_hub_install_started", "app_settings", "wireguard_system_hub", {"log_id": str(log_id)})
+
+    def worker():
+        try:
+            run_wireguard_system_hub_action("INSTALL", admin["id"], log_id=log_id)
+        except Exception:
+            pass
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"status": "running", "log_id": log_id, "hub": public_wireguard_system_hub(wireguard_system_hub_store())}
+
+
+@app.post("/api/network/wireguard/system-hub/uninstall")
+def uninstall_wireguard_system_hub_endpoint(admin=Depends(current_admin)):
+    return run_wireguard_system_hub_action("UNINSTALL", admin["id"])
+
+
+@app.post("/api/network/wireguard/system-hub/start")
+def start_wireguard_system_hub_endpoint(admin=Depends(current_admin)):
+    return run_wireguard_system_hub_action("START", admin["id"])
+
+
+@app.post("/api/network/wireguard/system-hub/stop")
+def stop_wireguard_system_hub_endpoint(admin=Depends(current_admin)):
+    return run_wireguard_system_hub_action("STOP", admin["id"])
+
+
+@app.post("/api/network/wireguard/system-hub/restart")
+def restart_wireguard_system_hub_endpoint(admin=Depends(current_admin)):
+    return run_wireguard_system_hub_action("RESTART", admin["id"])
+
+
+@app.get("/api/network/wireguard/system-hub/logs")
+def wireguard_system_hub_logs(admin=Depends(current_admin)):
+    return fetch_all("SELECT id, action, status, progress_percent, current_step, output_text, created_at, completed_at FROM wireguard_install_logs ORDER BY created_at DESC LIMIT 50")
+
+
+@app.get("/api/network/wireguard/stations/{station_id}/status")
+def get_wireguard_station_status(station_id: str, live: bool = True, admin=Depends(current_admin)):
+    station = wireguard_public_station_row(station_id)
+    status = wireguard_station_status(station, live=live)
+    return public_wireguard_station(station, status=status)
+
+
+@app.get("/api/network/wireguard/stations/{station_id}/interfaces")
+def list_wireguard_station_interfaces(station_id: str, side: str = "station", admin=Depends(current_admin)):
+    station = wireguard_public_station_row(station_id)
+    normalized_side = str(side or "station").strip().lower()
+    if normalized_side == "hub":
+        router = wireguard_full_router(station.get("wireguard_hub_router_id"), "Central hub") if station.get("wireguard_hub_router_id") else None
+        router_label = "Central hub"
+        saved_name = station.get("wireguard_hub_interface_name") or WIREGUARD_MIKROTIK_HUB_INTERFACE
+    else:
+        router = wireguard_station_root_router(station_id)
+        router_label = "Station root"
+        saved_name = station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name"))
+    if not router:
+        raise HTTPException(status_code=400, detail=f"{router_label} router is required before detecting WireGuard interfaces.")
+    rows = wireguard_router_interfaces(router, None, router_label)
+    return {
+        "side": "hub" if normalized_side == "hub" else "station",
+        "router": wireguard_router_public_status(router),
+        "saved_name": saved_name,
+        "interfaces": [
+            {
+                "name": row.get("name"),
+                "public_key_detected": bool(row.get("public-key")),
+                "listen_port": row.get("listen-port"),
+                "running": row.get("running"),
+                "disabled": row.get("disabled"),
+                "comment": row.get("comment"),
+                "is_saved": str(row.get("name") or "") == str(saved_name or ""),
+                "is_3j_managed": "3j" in str(row.get("name") or row.get("comment") or "").lower(),
+            }
+            for row in rows
+            if row.get("name")
+        ],
+    }
+
+
+@app.put("/api/network/wireguard/stations/{station_id}/settings")
+def save_wireguard_station_settings(station_id: str, payload: WireGuardStationSettingsPayload, admin=Depends(current_admin)):
+    station = wireguard_public_station_row(station_id)
+    values = normalize_wireguard_station_settings(station, payload)
+    update_wireguard_station_settings(station_id, values)
+    system_hub_public_key = None
+    if values.get("wireguard_enabled") and not values.get("wireguard_hub_router_id"):
+        system_hub_public_key = public_wireguard_system_hub().get("public_key")
+        if system_hub_public_key:
+            update_wireguard_detected_keys(station_id, hub_public_key=system_hub_public_key)
+    audit(admin["id"], "save_wireguard_station_settings", "mikrotik_stations", station_id, sanitize_summary(values))
+    updated = wireguard_public_station_row(station_id)
+    return public_wireguard_station(updated, status=wireguard_station_status(updated, live=False))
+
+
+@app.post("/api/network/wireguard/stations/{station_id}/refresh-keys")
+def refresh_wireguard_station_keys(station_id: str, admin=Depends(current_admin)):
+    station = wireguard_public_station_row(station_id)
+    root_router = wireguard_station_root_router(station_id)
+    hub_router = wireguard_full_router(station.get("wireguard_hub_router_id"), "Central hub") if station.get("wireguard_hub_router_id") else None
+    if not root_router:
+        raise HTTPException(status_code=400, detail="Station root router is required before detecting WireGuard keys.")
+    detected_station_key = None
+    detected_hub_key = None
+    interface_name = station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name"))
+    detected_station_key = wireguard_read_interface_public_key(root_router, interface_name, "Station root")
+    if hub_router and station.get("wireguard_hub_interface_name"):
+        detected_hub_key = wireguard_read_interface_public_key(hub_router, station.get("wireguard_hub_interface_name"), "Central hub")
+    elif not hub_router:
+        detected_hub_key = public_wireguard_system_hub().get("public_key")
+    update_wireguard_detected_keys(station_id, detected_station_key, detected_hub_key)
+    updated = wireguard_public_station_row(station_id)
+    status = wireguard_station_status(updated, live=True)
+    audit(
+        admin["id"],
+        "refresh_wireguard_station_keys",
+        "mikrotik_stations",
+        station_id,
+        {"station_key_detected": bool(detected_station_key), "hub_key_detected": bool(detected_hub_key)},
+    )
+    return {
+        "message": "WireGuard public keys refreshed from RouterOS.",
+        "station_key_detected": bool(detected_station_key),
+        "hub_key_detected": bool(detected_hub_key),
+        "station": public_wireguard_station(updated, status=status),
+    }
+
+
+@app.post("/api/network/wireguard/stations/{station_id}/station-interface")
+def create_wireguard_station_interface(station_id: str, payload: WireGuardStationSettingsPayload, admin=Depends(current_admin)):
+    station = wireguard_public_station_row(station_id)
+    values = normalize_wireguard_station_settings(station, payload)
+    values["wireguard_enabled"] = True
+    update_wireguard_station_settings(station_id, values)
+    if not values.get("wireguard_hub_router_id"):
+        system_hub_public_key = public_wireguard_system_hub().get("public_key")
+        if system_hub_public_key:
+            update_wireguard_detected_keys(station_id, hub_public_key=system_hub_public_key)
+    station = wireguard_public_station_row(station_id)
+    root_router = wireguard_station_root_router(station_id)
+    if not root_router:
+        raise HTTPException(status_code=400, detail="Station root router is required before creating the WireGuard interface.")
+    steps = []
+    try:
+        interface_result = execute_wireguard_router_commands(
+            station_id,
+            root_router,
+            "WIREGUARD_STATION_INTERFACE",
+            wireguard_station_interface_setup_commands(station),
+            admin["id"],
+        )
+        steps.append({"step": "station_interface", "result": interface_result})
+        station_public_key = wireguard_read_interface_public_key(
+            root_router,
+            station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name")),
+            "Station root",
+        )
+        if not station_public_key:
+            raise RuntimeError("Station WireGuard public key was not detected after creating the station interface.")
+        update_wireguard_detected_keys(station_id, station_public_key=station_public_key)
+        updated = wireguard_public_station_row(station_id)
+        status = wireguard_station_status(updated, live=True)
+        audit(admin["id"], "create_wireguard_station_interface", "mikrotik_stations", station_id, {"station_key_detected": True, "status": status.get("status")})
+        return {
+            "message": "Station WireGuard interface was created and its public key was detected.",
+            "steps": steps,
+            "station_key_detected": True,
+            "station": public_wireguard_station(updated, status=status),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        record_station_command_log(
+            station_id,
+            str(root_router.get("id")) if root_router else None,
+            "WIREGUARD_STATION_INTERFACE",
+            None,
+            {"label": "WireGuard Station Interface", "preview": "Station WireGuard interface setup failed."},
+            "FAILED",
+            message,
+            {"error": message, "steps": sanitize_summary(steps)},
+            admin["id"],
+        )
+        audit(admin["id"], "create_wireguard_station_interface_failed", "mikrotik_stations", station_id, {"error": message})
+        raise HTTPException(status_code=500, detail=message)
+
+
+@app.get("/api/network/wireguard/stations/{station_id}/push-plan")
+def get_wireguard_station_push_plan(station_id: str, mode: str = "client", admin=Depends(current_admin)):
+    station = wireguard_public_station_row(station_id)
+    return wireguard_enrich_plan_detection(wireguard_station_command_plan(station, mode=mode), action="PUSH")
+
+
+@app.get("/api/network/wireguard/stations/{station_id}/remove-plan")
+def get_wireguard_station_remove_plan(station_id: str, admin=Depends(current_admin)):
+    station = wireguard_public_station_row(station_id)
+    return wireguard_enrich_plan_detection(wireguard_station_command_plan(station, mode="remove"), action="REMOVE")
+
+
+@app.post("/api/network/wireguard/stations/{station_id}/apply-command")
+def apply_wireguard_station_command(station_id: str, payload: WireGuardStationCommandApply, admin=Depends(current_admin)):
+    station = wireguard_public_station_row(station_id)
+    plan = wireguard_station_command_plan(station, mode=payload.mode)
+    router_plan, router, command = wireguard_find_plan_command(plan, payload.router_id, payload.command_index)
+    if not command.get("path"):
+        message = command.get("preview") or command.get("label") or "WireGuard command is informational and was skipped."
+        record_station_command_log(
+            station_id,
+            str(router.get("id")),
+            router_plan.get("operation") or "WIREGUARD_APPLY",
+            payload.command_index,
+            command,
+            "SKIPPED",
+            message,
+            {"status": "SKIPPED", "message": message},
+            admin["id"],
+        )
+        updated = wireguard_public_station_row(station_id)
+        return {
+            "status": "SKIPPED",
+            "message": message,
+            "result": {"status": "SKIPPED", "message": message},
+            "station": public_wireguard_station(updated, status=wireguard_station_status(updated, live=True)),
+        }
+    password = wireguard_router_password(router, router.get("router_name") or "MikroTik")
+    try:
+        result = routeros_execute_commands(
+            router["host"],
+            router["api_port"],
+            router.get("username"),
+            password,
+            router.get("use_tls"),
+            [command],
+        )
+        item_result = (result.get("results") or [{}])[0]
+        status = item_result.get("status") or result.get("status") or "SUCCESS"
+        message = item_result.get("message") or result.get("message") or "WireGuard command completed."
+        record_station_command_log(
+            station_id,
+            str(router.get("id")),
+            router_plan.get("operation") or "WIREGUARD_APPLY",
+            payload.command_index,
+            command,
+            status,
+            message,
+            result,
+            admin["id"],
+        )
+        if str(payload.mode or "").lower() in {"interface", "client"}:
+            try:
+                updated = wireguard_public_station_row(station_id)
+                root_router = wireguard_station_root_router(station_id)
+                if root_router:
+                    station_key = wireguard_read_interface_public_key(
+                        root_router,
+                        updated.get("wireguard_interface_name") or station_wireguard_default_interface_name(updated.get("station_code"), updated.get("station_name")),
+                        "Station root",
+                    )
+                    hub_key = None
+                    if not updated.get("wireguard_hub_router_id"):
+                        hub_key = public_wireguard_system_hub().get("public_key")
+                    elif updated.get("wireguard_hub_interface_name"):
+                        hub_router = wireguard_full_router(updated.get("wireguard_hub_router_id"), "Central hub")
+                        hub_key = wireguard_read_interface_public_key(hub_router, updated.get("wireguard_hub_interface_name"), "Central hub")
+                    update_wireguard_detected_keys(station_id, station_key, hub_key)
+            except Exception:
+                pass
+        updated = wireguard_public_station_row(station_id)
+        return {
+            "status": status,
+            "message": message,
+            "result": sanitize_summary(result),
+            "station": public_wireguard_station(updated, status=wireguard_station_status(updated, live=True)),
+        }
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        record_station_command_log(
+            station_id,
+            str(router.get("id")),
+            router_plan.get("operation") or "WIREGUARD_APPLY",
+            payload.command_index,
+            command,
+            "FAILED",
+            message,
+            {"error": message},
+            admin["id"],
+        )
+        raise HTTPException(status_code=500, detail=message)
+
+
+@app.post("/api/network/wireguard/stations/{station_id}/remove-command")
+def remove_wireguard_station_command(station_id: str, payload: WireGuardStationCommandApply, admin=Depends(current_admin)):
+    station = wireguard_public_station_row(station_id)
+    plan = wireguard_station_command_plan(station, mode="remove")
+    router_plan, router, command = wireguard_find_plan_command(plan, payload.router_id, payload.command_index)
+    if not command.get("print_path"):
+        message = command.get("preview") or command.get("label") or "WireGuard remove command is informational and was skipped."
+        record_station_command_log(
+            station_id,
+            str(router.get("id")),
+            router_plan.get("operation") or "WIREGUARD_REMOVE",
+            payload.command_index,
+            command,
+            "SKIPPED",
+            message,
+            {"status": "SKIPPED", "message": message},
+            admin["id"],
+        )
+        updated = wireguard_public_station_row(station_id)
+        return {
+            "status": "SKIPPED",
+            "message": message,
+            "result": {"status": "SKIPPED", "message": message},
+            "station": public_wireguard_station(updated, status=wireguard_station_status(updated, live=True)),
+        }
+    password = wireguard_router_password(router, router.get("router_name") or "MikroTik")
+    try:
+        result = routeros_execute_remove_commands(
+            router["host"],
+            router["api_port"],
+            router.get("username"),
+            password,
+            router.get("use_tls"),
+            [command],
+        )
+        item_result = (result.get("results") or [{}])[0]
+        status = item_result.get("status") or result.get("status") or "SUCCESS"
+        message = item_result.get("message") or result.get("message") or "WireGuard remove command completed."
+        record_station_command_log(
+            station_id,
+            str(router.get("id")),
+            router_plan.get("operation") or "WIREGUARD_REMOVE",
+            payload.command_index,
+            command,
+            status,
+            message,
+            result,
+            admin["id"],
+        )
+        updated = wireguard_public_station_row(station_id)
+        return {
+            "status": status,
+            "message": message,
+            "result": sanitize_summary(result),
+            "station": public_wireguard_station(updated, status=wireguard_station_status(updated, live=True)),
+        }
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        record_station_command_log(
+            station_id,
+            str(router.get("id")),
+            router_plan.get("operation") or "WIREGUARD_REMOVE",
+            payload.command_index,
+            command,
+            "FAILED",
+            message,
+            {"error": message},
+            admin["id"],
+        )
+        raise HTTPException(status_code=500, detail=message)
+
+
+@app.post("/api/network/wireguard/stations/{station_id}/auto-setup")
+def auto_setup_wireguard_station(station_id: str, payload: WireGuardStationSettingsPayload, admin=Depends(current_admin)):
+    station = wireguard_public_station_row(station_id)
+    values = normalize_wireguard_station_settings(station, payload)
+    values["wireguard_enabled"] = True
+    if not values.get("wireguard_endpoint_host"):
+        raise HTTPException(status_code=400, detail="Central endpoint host is required before running WireGuard Auto Setup.")
+    system_hub_mode = not values.get("wireguard_hub_router_id")
+    if system_hub_mode:
+        system_hub = public_wireguard_system_hub()
+        if not system_hub.get("public_key"):
+            raise HTTPException(status_code=400, detail="Generate the system server WireGuard hub key pair before running station Auto Setup.")
+    update_wireguard_station_settings(station_id, values)
+    if system_hub_mode:
+        update_wireguard_detected_keys(station_id, hub_public_key=system_hub.get("public_key"))
+    station = wireguard_public_station_row(station_id)
+    root_router = wireguard_station_root_router(station_id)
+    hub_router = wireguard_full_router(station.get("wireguard_hub_router_id"), "Central hub") if station.get("wireguard_hub_router_id") else None
+    if not root_router:
+        raise HTTPException(status_code=400, detail="Station root router is required before running WireGuard Auto Setup.")
+    steps = []
+    try:
+        if system_hub_mode:
+            station_result = execute_wireguard_router_commands(
+                station_id,
+                root_router,
+                "WIREGUARD_STATION_SIDE",
+                wireguard_station_sync_commands(station),
+                admin["id"],
+            )
+            steps.append({"step": "station_side", "result": station_result})
+
+            station_public_key = wireguard_read_interface_public_key(
+                root_router,
+                station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name")),
+                "Station root",
+            )
+            if not station_public_key:
+                raise RuntimeError("Station WireGuard public key was not detected after creating the station interface.")
+            update_wireguard_detected_keys(station_id, station_public_key=station_public_key)
+            updated = wireguard_public_station_row(station_id)
+            system_hub_peer = wireguard_station_system_hub_peer_config(updated)
+            steps.append({"step": "detect_station_public_key", "result": {"status": "SUCCESS", "detected": True}})
+            steps.append({"step": "system_hub_peer_ready", "result": {"status": "READY", "peer_configured_in_preview": bool(system_hub_peer)}})
+
+            status = wireguard_station_status(updated, live=True)
+            audit(admin["id"], "auto_setup_wireguard_station_system_hub", "mikrotik_stations", station_id, {"status": status.get("status")})
+            return {
+                "message": "Station WireGuard client was applied. Update/reload the system server wg0 config so the hub includes this station peer, then watch for handshake.",
+                "steps": steps,
+                "system_hub_peer": system_hub_peer,
+                "system_hub": public_wireguard_system_hub(),
+                "station": public_wireguard_station(updated, status=status),
+            }
+
+        hub_interface_result = execute_wireguard_router_commands(
+            station_id,
+            hub_router,
+            "WIREGUARD_HUB_INTERFACE",
+            wireguard_hub_interface_setup_commands(station),
+            admin["id"],
+        )
+        steps.append({"step": "hub_interface", "result": hub_interface_result})
+
+        hub_public_key = wireguard_read_interface_public_key(hub_router, station.get("wireguard_hub_interface_name"), "Central hub")
+        if not hub_public_key:
+            raise RuntimeError("Central hub WireGuard public key was not detected after creating the hub interface.")
+        update_wireguard_detected_keys(station_id, hub_public_key=hub_public_key)
+        station = wireguard_public_station_row(station_id)
+        steps.append({"step": "detect_hub_public_key", "result": {"status": "SUCCESS", "detected": True}})
+
+        station_result = execute_wireguard_router_commands(
+            station_id,
+            root_router,
+            "WIREGUARD_STATION_SIDE",
+            wireguard_station_sync_commands(station),
+            admin["id"],
+        )
+        steps.append({"step": "station_side", "result": station_result})
+
+        station_public_key = wireguard_read_interface_public_key(
+            root_router,
+            station.get("wireguard_interface_name") or station_wireguard_default_interface_name(station.get("station_code"), station.get("station_name")),
+            "Station root",
+        )
+        if not station_public_key:
+            raise RuntimeError("Station WireGuard public key was not detected after creating the station interface.")
+        update_wireguard_detected_keys(station_id, station_public_key=station_public_key)
+        station = wireguard_public_station_row(station_id)
+        steps.append({"step": "detect_station_public_key", "result": {"status": "SUCCESS", "detected": True}})
+
+        hub_peer_result = execute_wireguard_router_commands(
+            station_id,
+            hub_router,
+            "WIREGUARD_HUB_PEER",
+            wireguard_hub_sync_commands(station),
+            admin["id"],
+        )
+        steps.append({"step": "hub_peer", "result": hub_peer_result})
+
+        updated = wireguard_public_station_row(station_id)
+        status = wireguard_station_status(updated, live=True)
+        audit(admin["id"], "auto_setup_wireguard_station", "mikrotik_stations", station_id, {"status": status.get("status")})
+        return {
+            "message": "WireGuard Auto Setup completed. Refresh live status to confirm the next handshake.",
+            "steps": steps,
+            "station": public_wireguard_station(updated, status=status),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        message = sanitize_routeros_text(str(exc))
+        record_station_command_log(
+            station_id,
+            None,
+            "WIREGUARD_AUTO_SETUP",
+            None,
+            {"label": "WireGuard Auto Setup", "preview": "Automatic WireGuard setup failed before all steps completed."},
+            "FAILED",
+            message,
+            {"error": message, "steps": sanitize_summary(steps)},
+            admin["id"],
+        )
+        audit(admin["id"], "auto_setup_wireguard_station_failed", "mikrotik_stations", station_id, {"error": message})
+        raise HTTPException(status_code=500, detail=message)
 
 
 @app.get("/api/network/mikrotik/ap-management")
@@ -39871,6 +44802,30 @@ def station_remove_plan_for_id(station_id: str) -> tuple[dict, list[dict], dict]
 @app.get("/api/network/mikrotik/stations/{station_id}/managed-configuration-status")
 def mikrotik_station_managed_configuration_status(station_id: str, quiet: bool = False, admin=Depends(current_admin)):
     station, routers, remove_plan = station_remove_plan_for_id(station_id)
+    try:
+        validate_saved_mikrotik_station_router_path(station, routers)
+    except HTTPException as exc:
+        message = str(exc.detail or "Station router path validation failed.")
+        result = {
+            "status": "ERROR",
+            "station_id": station_id,
+            "station_name": station["station_name"],
+            "has_managed_config": False,
+            "found_count": 0,
+            "message": message,
+            "routers": [],
+            "push_progress": {
+                "pushed_steps": 0,
+                "total_steps": 0,
+                "routers": [],
+                "status": "BLOCKED",
+                "message": message,
+            },
+        }
+        if not quiet:
+            record_station_command_log(station_id, None, "CHECK", None, {"label": "Validate station router path", "preview": "Check bridge and tagged port selections"}, "ERROR", message, result, admin["id"])
+            audit(admin["id"], "check_mikrotik_station_managed_configuration", "mikrotik_stations", station_id, {"status": "ERROR", "message": message})
+        return result
     apply_plan = build_mikrotik_station_plan(station, routers)
     router_statuses = []
     total_found = 0
@@ -39958,6 +44913,7 @@ def implement_mikrotik_station_command(station_id: str, payload: MikrotikStation
     if not station:
         raise HTTPException(status_code=404, detail="MikroTik station not found")
     routers = station_router_rows(station_id)
+    validate_saved_mikrotik_station_router_path(station, routers)
     plan = build_mikrotik_station_plan(station, routers)
     router_plan = next((item for item in plan.get("router_plans") or [] if item.get("router_id") == payload.router_id), None)
     if not router_plan:
@@ -44646,10 +49602,10 @@ def omada_logs(admin=Depends(current_admin)):
 
 
 @app.get("/api/omada/payment-auth-free")
-def get_omada_payment_auth_free(admin=Depends(current_admin)):
+def get_omada_payment_auth_free(include_remote: bool = False, admin=Depends(current_admin)):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            return omada_payment_auth_free_dashboard_payload(cur)
+            return omada_payment_auth_free_dashboard_payload(cur, include_remote=include_remote)
 
 
 @app.put("/api/omada/payment-auth-free/settings")

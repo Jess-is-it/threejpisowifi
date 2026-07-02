@@ -30,6 +30,7 @@ import {
   IconDashboard,
   IconDatabase,
   IconDeviceFloppy,
+  IconDownload,
   IconEdit,
   IconGift,
   IconGripVertical,
@@ -68,6 +69,7 @@ import {
   IconServer,
   IconStar,
   IconSun,
+  IconTrophy,
   IconUser,
   IconUserCog,
   IconUserPlus,
@@ -1236,6 +1238,7 @@ function formatUptime(seconds = 0) {
 function omadaPortalBadgeClass(status) {
   const value = String(status || '').toUpperCase();
   if (value === 'UP' || value === 'SUCCESS') return 'bg-green-lt text-green';
+  if (value === 'CACHED' || value === 'LOCAL_CACHE') return 'bg-blue-lt text-blue';
   if (value === 'NEEDS_SETUP' || value === 'WARNING' || value === 'PARTIAL') return 'bg-yellow-lt text-yellow';
   if (value === 'CHECKING') return 'bg-blue-lt text-blue';
   return 'bg-red-lt text-red';
@@ -1244,6 +1247,7 @@ function omadaPortalBadgeClass(status) {
 function omadaPortalStatusLabel(status) {
   const value = String(status || '').toUpperCase();
   if (value === 'UP' || value === 'SUCCESS') return 'UP';
+  if (value === 'CACHED' || value === 'LOCAL_CACHE') return 'Local';
   if (value === 'NEEDS_SETUP') return 'Needs setup';
   if (value === 'PARTIAL') return 'Partial';
   if (value === 'CHECKING') return 'Checking';
@@ -1262,7 +1266,9 @@ const routePages = {
   'customers-accounts': 'Customer Devices',
   'connected-devices': 'Customer Devices',
   'customer-devices': 'Customer Devices',
+  'accounts/customer-devices': 'Customer Devices',
   'monthly-subscribers': 'Monthly Subscribers',
+  'accounts/monthly-subscribers': 'Monthly Subscribers',
   'integrations/3jtv-api': 'System Settings',
   '3jtv-api': 'System Settings',
   'sites-deployments': 'Sites',
@@ -1272,7 +1278,10 @@ const routePages = {
   'aps-deployment/long-lat': 'Long Lat',
   'list-of-aps': 'List of APs',
   'long-lat': 'Long Lat',
-  'location-management': 'Location Management',
+  location: 'Location',
+  'location-management': 'Location',
+  'settings/location': 'Location',
+  'settings/location-management': 'Location',
   vouchers: 'Vouchers',
   'product-items': 'Online Store',
   'online-store': 'Online Store',
@@ -1280,19 +1289,34 @@ const routePages = {
   'physical-stores/store-map': 'Store Map',
   'store-map': 'Store Map',
   sales: 'Sales',
+  'sales/overview': 'Sales',
+  'sales/stores': 'Stores',
+  'cash-collection': 'Stores',
+  stores: 'Stores',
   paymongo: 'PayMongo',
+  'settings/paymongo': 'PayMongo',
+  'sales/paymongo': 'PayMongo Sales',
   'payment-access': 'Payment Access',
+  'accounts/payment-access': 'Payment Access',
   'omada/payment-access': 'Payment Access',
   iptv: 'IPTV',
+  'settings/iptv': 'IPTV',
   'iptv-integration': 'IPTV',
   'captive-portal': 'Captive Portal',
+  'settings/captive-portal': 'Captive Portal',
   'support-inbox': 'Support Inbox',
   network: 'Network',
+  'settings/network': 'Network',
+  'settings/network/mikrotik/scan-result': 'MikroTik Scan Result',
   'network/mikrotik/scan-result': 'MikroTik Scan Result',
   'nas-router-ap-clients': 'Network',
+  settings: 'System Settings',
+  'settings/system': 'System Settings',
   'system-settings': 'System Settings',
   'settings/omada-controller': 'Omada Controller',
   'omada-controller': 'Omada Controller',
+  'settings/wireguard': 'WireGuard',
+  wireguard: 'WireGuard',
   notifications: 'Notifications',
   logs: 'Logs',
   'view-profile': 'View Profile',
@@ -1309,16 +1333,23 @@ function pageFromLocation() {
 function routeForPage(page) {
   if (page === 'Omada Controller') return '/admin/settings/omada-controller';
   if (page === 'AP & Client Map') return '/admin/ap-client-map';
-  if (page === 'MikroTik Scan Result') return '/admin/network/mikrotik/scan-result';
-  if (page === 'Customer Devices') return '/admin/customer-devices';
-  if (page === 'Monthly Subscribers') return '/admin/monthly-subscribers';
+  if (page === 'MikroTik Scan Result') return '/admin/settings/network/mikrotik/scan-result';
+  if (page === 'Customer Devices') return '/admin/accounts/customer-devices';
+  if (page === 'Monthly Subscribers') return '/admin/accounts/monthly-subscribers';
   if (page === 'Sites' || page === 'Sites Deployments') return '/admin/aps-deployment/sites';
   if (page === 'List of APs') return '/admin/aps-deployment/list-of-aps';
   if (page === 'Long Lat') return '/admin/aps-deployment/long-lat';
   if (page === 'Store Map') return '/admin/physical-stores/store-map';
-  if (page === 'IPTV') return '/admin/iptv';
-  if (page === 'PayMongo') return '/admin/paymongo';
-  if (page === 'Payment Access') return '/admin/payment-access';
+  if (page === 'IPTV') return '/admin/settings/iptv';
+  if (page === 'Captive Portal') return '/admin/settings/captive-portal';
+  if (page === 'PayMongo') return '/admin/settings/paymongo';
+  if (page === 'PayMongo Sales') return '/admin/sales/paymongo';
+  if (page === 'Stores' || page === 'Cash Collection') return '/admin/sales/stores';
+  if (page === 'Payment Access') return '/admin/accounts/payment-access';
+  if (page === 'WireGuard') return '/admin/settings/wireguard';
+  if (page === 'Network') return '/admin/settings/network';
+  if (page === 'Location' || page === 'Location Management') return '/admin/settings/location';
+  if (page === 'System Settings') return '/admin/settings/system';
   if (page === 'Online Store' || page === 'Product Items') return '/admin/online-store';
   return `/admin/${slugify(page)}`;
 }
@@ -1327,6 +1358,7 @@ function adminNotificationIcon(item) {
   if (item?.category === 'SUPPORT_MESSAGE') return IconMessageCircle;
   if (item?.category === 'A2P_SMS_FAILED') return IconSend;
   if (item?.category === 'IPTV_LOGIN_FAILED') return IconPlayerPlay;
+  if (item?.category === 'STORE_CASH_COLLECTION') return IconBuildingStore;
   if (item?.category === 'PAYMONGO_ALERT') return IconCash;
   if (item?.severity === 'DANGER' || item?.severity === 'WARNING') return IconAlertTriangle;
   return IconBell;
@@ -1337,6 +1369,7 @@ function adminNotificationTone(item) {
   if (item?.severity === 'WARNING') return 'yellow';
   if (item?.category === 'SUPPORT_MESSAGE') return 'orange';
   if (item?.category === 'IPTV_LOGIN_FAILED') return 'purple';
+  if (item?.category === 'STORE_CASH_COLLECTION') return item?.severity === 'WARNING' ? 'yellow' : 'green';
   if (item?.category === 'PAYMONGO_ALERT') return 'green';
   if (item?.severity === 'SUCCESS') return 'green';
   return 'blue';
@@ -11547,7 +11580,7 @@ function LocationMapPreview({ location }) {
     return <div className="alert alert-info mb-0">Select a location to preview it on the map.</div>;
   }
   if (!hasCoordinates) {
-    return <div className="alert alert-warning mb-0">This location has no latitude and longitude yet. Add coordinates in Location Management to show the map.</div>;
+    return <div className="alert alert-warning mb-0">This location has no latitude and longitude yet. Add coordinates in Settings - Location to show the map.</div>;
   }
   const lat = Number(location.latitude);
   const lon = Number(location.longitude);
@@ -12242,11 +12275,11 @@ function SitesDeploymentsPage() {
   const selectedEditLocation = locations.find((item) => item.id === editForm.location_id);
   function goToAddLocation() {
     setModalOpen(false);
-    window.history.pushState({ page: 'Location Management' }, '', '/admin/location-management?add=1');
+    window.history.pushState({ page: 'Location' }, '', '/admin/settings/location?add=1');
     window.dispatchEvent(new PopStateEvent('popstate'));
   }
   function goToNetworkMikrotik(tab = 'AP Management') {
-    window.history.pushState({ page: 'Network' }, '', `/admin/network?mikrotik_tab=${encodeURIComponent(tab)}`);
+    window.history.pushState({ page: 'Network' }, '', `/admin/settings/network?mikrotik_tab=${encodeURIComponent(tab)}`);
     window.dispatchEvent(new PopStateEvent('popstate'));
   }
   function goToListOfAps() {
@@ -12504,7 +12537,7 @@ function SitesDeploymentsPage() {
     <div className="row row-cards">
       <div className="col-12">
         <div className="alert alert-info">
-          Sites shows Omada Controller sites plus the local address and map coordinates used for planning WiFi locations. Manage reusable addresses in Location Management first.
+          Sites shows Omada Controller sites plus the local address and map coordinates used for planning WiFi locations. Manage reusable addresses in Settings - Location first.
         </div>
       </div>
       {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
@@ -12935,7 +12968,7 @@ function SitesDeploymentsPage() {
             <div className="row g-3">
               <div className="col-md-6"><label className="form-label">Site Name</label><input className="form-control" required value={form.site_name} onChange={(e) => setForm({ ...form, site_name: e.target.value })} /></div>
               <div className="col-md-6"><label className="form-label">Application Scenario</label><select className="form-select" required value={form.application_scenario} onChange={(e) => setForm({ ...form, application_scenario: e.target.value })}>{(options.application_scenarios || ['Office']).map((scenario) => <option key={scenario} value={scenario}>{scenario}</option>)}</select></div>
-              <div className="col-12"><div className="alert alert-secondary mb-0">Country / Region and Time Zone come from System Settings - General: {options.general?.country_region || 'Philippines'} / {options.general?.time_zone || 'Asia/Manila'}.</div></div>
+              <div className="col-12"><div className="alert alert-secondary mb-0">Country / Region and Time Zone come from Settings - System - General: {options.general?.country_region || 'Philippines'} / {options.general?.time_zone || 'Asia/Manila'}.</div></div>
               <div className="col-12">
                 <div className="alert alert-info mb-0">The system creates the Omada site only. It does not set or change AP GUI/device account credentials during site creation or AP adoption.</div>
               </div>
@@ -15174,7 +15207,7 @@ function LocationManagementPage() {
     <div className="row row-cards">
       <div className="col-12">
         <div className="alert alert-info">
-          Location Management stores reusable addresses for site planning. Search can auto-fill municipality, barangay, latitude, and longitude when the geocoder has a match; manual entry is always available.
+          Location stores reusable addresses for site planning. Search can auto-fill municipality, barangay, latitude, and longitude when the geocoder has a match; manual entry is always available.
         </div>
       </div>
       {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
@@ -16464,7 +16497,7 @@ function PhysicalStoresPage() {
     try {
       const nextPayload = payload();
       if (!nextPayload.store_name) throw new Error('Store name is required.');
-      if (!nextPayload.location_id) throw new Error('Select a saved Location Management record for this store.');
+      if (!nextPayload.location_id) throw new Error('Select a saved Location record for this store.');
       if (!nextPayload.site_ids.length) throw new Error('Select at least one site where this store is available.');
       if (!['PERCENT_OF_SALES', 'FIXED_MONTHLY'].includes(nextPayload.commission_type)) {
         setStoreFormTab('COMMISSION');
@@ -17191,12 +17224,12 @@ function PhysicalStoresPage() {
                       <div className="physical-store-panel-header">
                         <div>
                           <div className="fw-semibold">Store Location</div>
-                          <div className="text-muted small">Use a saved Location Management record to avoid mismatched Barangay, address, or coordinates.</div>
+                          <div className="text-muted small">Use a saved Location record to avoid mismatched Barangay, address, or coordinates.</div>
                         </div>
                       </div>
                       <div className="row g-3">
                         <div className="col-12">
-                          <FieldLabel info="Create reusable addresses in Location Management first, then choose one here to fill address, Barangay, municipality, and coordinates.">Search Location</FieldLabel>
+                          <FieldLabel info="Create reusable addresses in Settings - Location first, then choose one here to fill address, Barangay, municipality, and coordinates.">Search Location</FieldLabel>
                           <input
                             className="form-control"
                             list="physical-store-location-options"
@@ -17675,7 +17708,7 @@ function PhysicalStoresPage() {
               <div className="physical-store-map-empty">
                 <IconMapPin size={34} />
                 <strong>No coordinates available</strong>
-                <small>Select a Location Management record with coordinates, or enter latitude and longitude manually.</small>
+                <small>Select a Location record with coordinates, or enter latitude and longitude manually.</small>
               </div>
             )}
           </div>
@@ -17920,6 +17953,12 @@ function StoreOwnerPortalApp() {
   const [storePwaInstallPrompt, setStorePwaInstallPrompt] = useState(null);
   const [storePwaInstallResult, setStorePwaInstallResult] = useState(null);
   const [storeIosPwaInstallGuideOpen, setStoreIosPwaInstallGuideOpen] = useState(false);
+  const [storeGoalCollapsed, setStoreGoalCollapsed] = useState(false);
+  const [storeGoalChartFilter, setStoreGoalChartFilter] = useState('MONTH');
+  const [storeGoalFilterOpen, setStoreGoalFilterOpen] = useState(false);
+  const [storeGoalSelectedPoint, setStoreGoalSelectedPoint] = useState(null);
+  const [storeRemitModalOpen, setStoreRemitModalOpen] = useState(false);
+  const [storeRemitLoading, setStoreRemitLoading] = useState('');
   const qrVideoRef = useRef(null);
   const qrStreamRef = useRef(null);
   const qrScanTimerRef = useRef(null);
@@ -17938,11 +17977,51 @@ function StoreOwnerPortalApp() {
   const storeRequestAlertsActive = storeOwnerNotificationPermission === 'granted' && storeOwnerPushStatus === 'ACTIVE';
   const showStoreRequestAlertsPanel = Boolean(owner && !storeRequestAlertsActive && !storeRequestAlertsPanelHidden);
   const storeCommissionGoal = summary?.commission_goal || {};
-  const storeCommissionGoalTiers = Array.isArray(storeCommissionGoal.tiers) ? storeCommissionGoal.tiers : [];
+  const storeRemittance = summary?.remittance || {};
+  const storeRemittancePending = storeRemittance?.pending || null;
+  const storeRemitEligible = Boolean(storeRemittance?.eligible && Number(storeRemittance?.unremitted_sales_centavos || 0) > 0 && !storeRemittancePending);
   const storeCommissionGoalProgress = Math.max(0, Math.min(100, Number(storeCommissionGoal.progress_percent || 0)));
   const storeCurrentGoalTier = storeCommissionGoal.current_tier || null;
-  const storeGoalLevelCopy = `${Number(storeCommissionGoal.tier_index || 0)}/${Number(storeCommissionGoal.tier_count || storeCommissionGoalTiers.length || 5)}`;
   const storeGoalRateCopy = storeCurrentGoalTier?.rate_display || '0%';
+  const storeGoalTiers = Array.isArray(storeCommissionGoal.tiers) ? storeCommissionGoal.tiers : [];
+  const storeGoalTopThreshold = Math.max(1, Number(storeGoalTiers[storeGoalTiers.length - 1]?.threshold_centavos || 1));
+  const storeGoalTierLines = storeGoalTiers.map((tier) => {
+    const threshold = Number(tier.threshold_centavos || 0);
+    return {
+      ...tier,
+      goal_percent: Math.max(0, Math.min(100, (threshold / storeGoalTopThreshold) * 100)),
+    };
+  });
+  const storeGoalHistory = Array.isArray(storeCommissionGoal.history) ? storeCommissionGoal.history : [];
+  const storeGoalChartFilters = [
+    { key: 'MONTH', label: 'This month', days: 0 },
+    { key: '14D', label: 'Last 14 days', days: 14 },
+    { key: '7D', label: 'Last 7 days', days: 7 },
+  ];
+  const storeGoalActiveFilter = storeGoalChartFilters.find((item) => item.key === storeGoalChartFilter) || storeGoalChartFilters[0];
+  const storeGoalFilteredHistory = storeGoalActiveFilter.days > 0
+    ? storeGoalHistory.filter((point) => {
+      const pointTime = new Date(`${point.date}T00:00:00`).getTime();
+      const cutoff = Date.now() - ((storeGoalActiveFilter.days - 1) * 24 * 60 * 60 * 1000);
+      return Number.isFinite(pointTime) && pointTime >= cutoff;
+    })
+    : storeGoalHistory;
+  const storeGoalChartData = storeGoalFilteredHistory.length ? storeGoalFilteredHistory : storeGoalHistory.slice(-1);
+  const storeGoalChartSize = { width: 620, height: 270, left: 46, right: 18, top: 22, bottom: 38 };
+  const storeGoalChartInnerWidth = storeGoalChartSize.width - storeGoalChartSize.left - storeGoalChartSize.right;
+  const storeGoalChartInnerHeight = storeGoalChartSize.height - storeGoalChartSize.top - storeGoalChartSize.bottom;
+  const storeGoalChartPoints = storeGoalChartData.map((point, index) => {
+    const divisor = Math.max(storeGoalChartData.length - 1, 1);
+    const goalPercent = Math.max(0, Math.min(100, Number(point.goal_percent || 0)));
+    return {
+      ...point,
+      goal_percent: goalPercent,
+      x: storeGoalChartSize.left + ((index / divisor) * storeGoalChartInnerWidth),
+      y: storeGoalChartSize.top + (((100 - goalPercent) / 100) * storeGoalChartInnerHeight),
+    };
+  });
+  const storeGoalChartPath = storeGoalChartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ');
+  const storeGoalSelectedChartPoint = storeGoalSelectedPoint || null;
 
   function recentLoginVerificationActive(nextOwner = owner) {
     const expiresAt = nextOwner?.recent_login_verification?.expires_at;
@@ -18223,6 +18302,33 @@ function StoreOwnerPortalApp() {
     syncStoreOwnerPendingNotifications(nextRequests, true);
     storePendingCountRef.current = Number(nextSummary.pending || 0);
     return data;
+  }
+
+  async function submitStoreRemittance(kind) {
+    const endpoint = kind === 'ONLINE' ? '/store-portal/remittances/online' : '/store-portal/remittances/cash-pickup';
+    setStoreRemitLoading(kind);
+    setError('');
+    try {
+      const data = await storeOwnerRequest(endpoint, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      setStoreRemitModalOpen(false);
+      setStoreOwnerToast({
+        key: `remit-${kind}-${Date.now()}`,
+        tone: 'success',
+        title: kind === 'ONLINE' ? 'Online remittance started' : 'Cash pickup requested',
+        message: data.message || 'Sales remittance request was created.',
+      });
+      if (kind === 'ONLINE' && data.checkout_url) {
+        window.open(data.checkout_url, '_blank', 'noopener,noreferrer');
+      }
+      await loadStorePortal(statusFilter, { background: true });
+    } catch (err) {
+      setError(err.message || 'Could not create remittance request.');
+    } finally {
+      setStoreRemitLoading('');
+    }
   }
 
   async function loadStoreCustomers(options = {}) {
@@ -19556,47 +19662,205 @@ function StoreOwnerPortalApp() {
               </div>
             )}
           </div>
-          <div className="store-owner-goal-panel">
-            <div className="store-owner-goal-top">
-              <span className="store-owner-goal-level"><IconStar size={15} />Level {storeGoalLevelCopy}</span>
-              <span className="store-owner-goal-rate">{storeGoalRateCopy} commission</span>
-            </div>
-            <div className="store-owner-goal-copy">
-              <strong>Monthly sales sprint</strong>
-              <span>{storeCommissionGoal.headline || 'Start approving requests to unlock store commission tiers.'}</span>
-            </div>
-            <div className="store-owner-goal-track" aria-label={`Goal progress ${storeCommissionGoalProgress}%`}>
-              <span style={{ width: `${storeCommissionGoalProgress}%` }} />
-            </div>
-            <div className="store-owner-goal-milestones">
-              {storeCommissionGoalTiers.map((tier) => (
-                <span
-                  className={`store-owner-goal-milestone ${tier.reached ? 'is-reached' : ''} ${storeCommissionGoal.next_tier?.index === tier.index ? 'is-next' : ''}`}
-                  key={`${tier.index}-${tier.threshold_centavos}`}
-                >
-                  <i>{tier.rate_display}</i>
-                  <small>{tier.threshold_display || 'PHP 0.00'}</small>
-                </span>
-              ))}
-            </div>
-            <div className="store-owner-goal-kpis">
-              {[
-                { icon: IconCash, label: 'Today', value: summary.sales_today_display || 'PHP 0.00' },
-                { icon: IconCalendarStats, label: 'This month', value: summary.sales_month_display || 'PHP 0.00' },
-                { icon: IconWallet, label: 'Goal commission', value: storeCommissionGoal.estimated_commission_display || summary.commission_month_display || 'PHP 0.00' },
-              ].map((item) => {
-                const HeroIcon = item.icon;
-                return (
-                  <span className="store-owner-goal-kpi" key={item.label}>
-                    <HeroIcon size={15} />
-                    <small>{item.label}</small>
-                    <strong>{item.value}</strong>
+        </header>
+        <section className={`store-owner-goal-panel ${storeGoalCollapsed ? 'is-collapsed' : ''}`}>
+          <button
+            className="store-owner-goal-summary"
+            type="button"
+            onClick={() => setStoreGoalCollapsed((collapsed) => !collapsed)}
+            aria-expanded={!storeGoalCollapsed}
+          >
+            <span className="store-owner-goal-summary-icon"><IconTrophy size={22} /></span>
+            <span className="store-owner-goal-summary-main">
+              <small>Monthly sales</small>
+              <strong>Total Sales: {summary.sales_month_display || 'PHP 0.00'}</strong>
+            </span>
+            <span className="store-owner-goal-collapse-icon">
+              {storeGoalCollapsed ? <IconChevronDown size={18} /> : <IconChevronUp size={18} />}
+            </span>
+          </button>
+          {!storeGoalCollapsed && (
+            <div className="store-owner-goal-body">
+              <div className="store-owner-goal-copy">
+                <strong>{storeGoalRateCopy} current commission tier</strong>
+                <span>{storeCommissionGoal.headline || 'Approve more requests this month to unlock higher store commission tiers.'}</span>
+              </div>
+              <div className="store-owner-goal-track" aria-label={`Goal progress ${storeCommissionGoalProgress}%`}>
+                <span style={{ width: `${storeCommissionGoalProgress}%` }} />
+              </div>
+              <div className="store-owner-goal-content">
+                <div className="store-owner-goal-chart-card">
+                  <div className="store-owner-goal-chart-header">
+                    <div>
+                      <small>Goal progress chart</small>
+                      <strong>Goal % by date</strong>
+                    </div>
+                    <div className="store-owner-goal-filter">
+                      <button
+                        className="store-owner-goal-filter-button"
+                        type="button"
+                        onClick={() => setStoreGoalFilterOpen((open) => !open)}
+                        aria-label="Filter goal chart"
+                      >
+                        <IconFilter size={17} />
+                      </button>
+                      {storeGoalFilterOpen && (
+                        <div className="store-owner-goal-filter-menu">
+                          {storeGoalChartFilters.map((item) => (
+                            <button
+                              className={storeGoalChartFilter === item.key ? 'active' : ''}
+                              key={item.key}
+                              type="button"
+                              onClick={() => {
+                                setStoreGoalChartFilter(item.key);
+                                setStoreGoalSelectedPoint(null);
+                                setStoreGoalFilterOpen(false);
+                              }}
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="store-owner-goal-chart-wrap">
+                    <svg viewBox={`0 0 ${storeGoalChartSize.width} ${storeGoalChartSize.height}`} role="img" aria-label="Goal percentage by date line chart">
+                      {[0, 50, 100].map((tick) => {
+                        const y = storeGoalChartSize.top + (((100 - tick) / 100) * storeGoalChartInnerHeight);
+                        return (
+                          <g key={tick}>
+                            <line className="store-owner-goal-chart-grid" x1={storeGoalChartSize.left} x2={storeGoalChartSize.width - storeGoalChartSize.right} y1={y} y2={y} />
+                            <text className="store-owner-goal-chart-axis" x={storeGoalChartSize.left - 10} y={y + 4} textAnchor="end">{tick}%</text>
+                          </g>
+                        );
+                      })}
+                      {storeGoalTierLines.map((tier) => {
+                        const y = storeGoalChartSize.top + (((100 - tier.goal_percent) / 100) * storeGoalChartInnerHeight);
+                        return (
+                          <g key={`tier-${tier.index}`}>
+                            <line className="store-owner-goal-chart-tier-line" x1={storeGoalChartSize.left} x2={storeGoalChartSize.width - storeGoalChartSize.right} y1={y} y2={y} />
+                            <text className="store-owner-goal-chart-tier-label" x={storeGoalChartSize.width - storeGoalChartSize.right - 4} y={y - 5} textAnchor="end">
+                              {tier.rate_display} · {tier.threshold_display}
+                            </text>
+                          </g>
+                        );
+                      })}
+                      <line className="store-owner-goal-chart-axis-line" x1={storeGoalChartSize.left} x2={storeGoalChartSize.left} y1={storeGoalChartSize.top} y2={storeGoalChartSize.height - storeGoalChartSize.bottom} />
+                      <line className="store-owner-goal-chart-axis-line" x1={storeGoalChartSize.left} x2={storeGoalChartSize.width - storeGoalChartSize.right} y1={storeGoalChartSize.height - storeGoalChartSize.bottom} y2={storeGoalChartSize.height - storeGoalChartSize.bottom} />
+                      {storeGoalChartPath && <path className="store-owner-goal-chart-line" d={storeGoalChartPath} />}
+                      {storeGoalChartPoints.map((point, index) => {
+                        const showDate = index === 0 || index === storeGoalChartPoints.length - 1 || index % Math.max(1, Math.ceil(storeGoalChartPoints.length / 4)) === 0;
+                        const selected = storeGoalSelectedChartPoint?.date === point.date;
+                        return (
+                          <g key={`${point.date}-${index}`}>
+                            <circle
+                              className={`store-owner-goal-chart-point ${selected ? 'active' : ''}`}
+                              cx={point.x}
+                              cy={point.y}
+                              r={selected ? 6.5 : 5}
+                              role="button"
+                              tabIndex="0"
+                              aria-label={`Show ${point.label} goal data`}
+                              onClick={() => setStoreGoalSelectedPoint(point)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                  event.preventDefault();
+                                  setStoreGoalSelectedPoint(point);
+                                }
+                              }}
+                            />
+                            {showDate && <text className="store-owner-goal-chart-axis" x={point.x} y={storeGoalChartSize.height - 12} textAnchor="middle">{point.label}</text>}
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+                  {storeGoalSelectedPoint && (
+                    <div className="store-owner-goal-chart-selected">
+                      <span>Goal Details · {storeGoalSelectedChartPoint.label}</span>
+                      <strong>{storeGoalSelectedChartPoint.goal_percent}% goal</strong>
+                      <em>{storeGoalSelectedChartPoint.sales_display} sales · {storeGoalSelectedChartPoint.goals_reached || 0} goal(s) reached</em>
+                    </div>
+                  )}
+                </div>
+                <div className="store-owner-goal-kpis">
+                  {[
+                    { icon: IconCash, label: 'Sales today', value: summary.sales_today_display || 'PHP 0.00' },
+                    { icon: IconCalendarStats, label: 'Monthly sales', value: summary.sales_month_display || 'PHP 0.00' },
+                    { icon: IconWallet, label: 'Estimated commission', value: storeCommissionGoal.estimated_commission_display || summary.commission_month_display || 'PHP 0.00' },
+                  ].map((item) => {
+                    const HeroIcon = item.icon;
+                    return (
+                      <span className="store-owner-goal-kpi" key={item.label}>
+                        <HeroIcon size={17} />
+                        <small>{item.label}</small>
+                        <strong>{item.value}</strong>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="store-owner-remit-panel">
+                <div>
+                  <strong>Sales remittance</strong>
+                  <span>
+                    {storeRemittancePending
+                      ? `${storeRemittancePending.status_label || 'Remittance pending'} · ${storeRemittancePending.amount_display || storeRemittance.unremitted_sales_display || 'PHP 0.00'}`
+                      : storeRemitEligible
+                        ? `${storeRemittance.unremitted_sales_display || 'PHP 0.00'} ready to remit`
+                        : `Remit unlocks after ${storeRemittance.minimum_goal_display || 'the first goal'} monthly sales.`}
                   </span>
-                );
-              })}
+                </div>
+                <button
+                  className="btn btn-success"
+                  type="button"
+                  disabled={!storeRemitEligible}
+                  onClick={() => setStoreRemitModalOpen(true)}
+                >
+                  <IconCash size={17} className="me-1" />Remit Sales
+                </button>
+              </div>
             </div>
-          </div>
-		        </header>
+          )}
+        </section>
+        {storeRemitModalOpen && (
+          <Modal title="Remit Monthly Sales" onClose={() => setStoreRemitModalOpen(false)} size="md">
+            <div className="store-owner-remit-modal">
+              <div className="store-owner-remit-modal-summary">
+                <span className="store-owner-remit-modal-icon"><IconCash size={24} /></span>
+                <div>
+                  <strong>{storeRemittance.unremitted_sales_display || 'PHP 0.00'} ready for remittance</strong>
+                  <span>Choose how this store will remit approved current-month sales to 3J.</span>
+                </div>
+              </div>
+              <div className="store-owner-remit-options">
+                <button
+                  className="store-owner-remit-option"
+                  type="button"
+                  disabled={Boolean(storeRemitLoading)}
+                  onClick={() => submitStoreRemittance('ONLINE')}
+                >
+                  <span className="badge bg-green-lt text-green"><IconCash size={20} /></span>
+                  <strong>Pay online</strong>
+                  <small>Open a secure PayMongo checkout and remit now.</small>
+                  <em>{storeRemitLoading === 'ONLINE' ? 'Opening checkout...' : 'Use PayMongo'}</em>
+                </button>
+                <button
+                  className="store-owner-remit-option"
+                  type="button"
+                  disabled={Boolean(storeRemitLoading)}
+                  onClick={() => submitStoreRemittance('CASH_PICKUP')}
+                >
+                  <span className="badge bg-yellow-lt text-yellow"><IconBuildingStore size={20} /></span>
+                  <strong>Cash pickup</strong>
+                  <small>Notify admin that this store is ready for collection.</small>
+                  <em>{storeRemitLoading === 'CASH_PICKUP' ? 'Sending request...' : 'Request pickup'}</em>
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
 	        {showStorePwaInstallPanel && (
 	          <>
 	            <StorePwaInstallCard showClose onInstall={() => installStoreHomeScreenApp({ hideMainPanel: true })} />
@@ -21915,6 +22179,318 @@ function SalesPage() {
   );
 }
 
+const PAYMONGO_METHOD_LABELS = {
+  gcash: 'GCash',
+  qrph: 'QR PH',
+  shopee_pay: 'ShopeePay',
+  dob: 'BPI / UnionBank',
+  brankas: 'Online Banking',
+  paymaya: 'Maya',
+  grab_pay: 'GrabPay',
+  card: 'Card',
+};
+
+function paymongoMethodLabel(value = '') {
+  const key = String(value || '').toLowerCase();
+  return PAYMONGO_METHOD_LABELS[key] || (key ? key.replaceAll('_', ' ').replace(/\b\w/g, (char) => char.toUpperCase()) : 'PayMongo');
+}
+
+function PayMongoEarningsTrend({ rows = [] }) {
+  const trend = {
+    title: 'PayMongo Earnings',
+    date_count: rows.length,
+    colors: ['#2fb344'],
+    series: [{
+      name: 'PayMongo Earnings',
+      data: rows.map((row) => {
+        const ts = row.label ? new Date(row.label).getTime() : NaN;
+        return Number.isFinite(ts) ? { x: ts, y: Number(row.amount_centavos || 0), order_count: Number(row.order_count || 0) } : null;
+      }).filter(Boolean),
+    }],
+  };
+  return (
+    <Card title="PayMongo Earnings Trend" subtitle="Paid online checkout earnings by day.">
+      <SalesApexLineChart trend={trend} />
+    </Card>
+  );
+}
+
+function PayMongoBreakdownCard({ title, icon: Icon, rows = [] }) {
+  return (
+    <Card title={title}>
+      <div className="sales-breakdown-list">
+        {rows.length ? rows.slice(0, 8).map((row) => (
+          <div className="sales-breakdown-row" key={row.label}>
+            <div className="d-flex align-items-center gap-2">
+              <span className="badge bg-green-lt text-green"><Icon size={15} /></span>
+              <div>
+                <div className="fw-semibold">{title === 'By Payment Method' ? paymongoMethodLabel(row.label) : row.label}</div>
+                <div className="text-muted small">{row.order_count} paid order{Number(row.order_count) === 1 ? '' : 's'}</div>
+              </div>
+            </div>
+            <span className="badge bg-green-lt text-green">{row.amount_display || formatCentavos(row.amount_centavos)}</span>
+          </div>
+        )) : <div className="text-muted small">No PayMongo earnings yet.</div>}
+      </div>
+    </Card>
+  );
+}
+
+function PayMongoSalesPage() {
+  const [rangeDays, setRangeDays] = useState(30);
+  const [filters, setFilters] = useState({ search: '', fulfillment: '', payment_method: '', provider_mode: '' });
+  const [pageSize, setPageSize] = useState(20);
+  const [pageNo, setPageNo] = useState(1);
+  const [data, setData] = useState({ kpis: {}, daily_earnings: [], earnings_by_method: [], earnings_by_site: [], earnings_by_barangay: [], orders: [], pagination: { page: 1, page_size: 20, total: 0, total_pages: 1 } });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  async function load() {
+    setLoading(true);
+    setError('');
+    try {
+      const params = new URLSearchParams({
+        range_days: String(rangeDays),
+        page: String(pageNo),
+        page_size: String(pageSize),
+      });
+      Object.entries(filters).forEach(([key, value]) => {
+        if (value) params.set(key, value);
+      });
+      const result = await request(`/sales/paymongo?${params.toString()}`);
+      setData(result);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { load().catch(() => {}); }, 250);
+    return () => window.clearTimeout(timer);
+  }, [rangeDays, pageNo, pageSize, filters.search, filters.fulfillment, filters.payment_method, filters.provider_mode]);
+
+  function updateFilter(key, value) {
+    setFilters((current) => ({ ...current, [key]: value }));
+    setPageNo(1);
+  }
+
+  function exportCurrentCsv() {
+    const rows = data.orders || [];
+    const columns = [
+      'Order ID',
+      'Mode',
+      'Payment Method',
+      'Product',
+      'Customer',
+      'Contact',
+      'Site',
+      'Barangay',
+      'Amount',
+      'Fulfillment',
+      'Paid At',
+      'PayMongo Payment ID',
+      'Checkout Session ID',
+    ];
+    const escapeCell = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+    const body = rows.map((order) => [
+      order.public_order_id,
+      order.provider_mode,
+      paymongoMethodLabel(order.payment_method),
+      order.product_name,
+      order.profile_display_name || order.customer_display_name || order.device_name,
+      order.profile_contact_number || order.customer_contact_number,
+      order.site_name,
+      order.barangay,
+      order.amount_display,
+      order.fulfillment_status,
+      compactDateTime(order.sale_at),
+      order.provider_payment_id,
+      order.checkout_session_id,
+    ].map(escapeCell).join(','));
+    const csv = [columns.map(escapeCell).join(','), ...body].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `paymongo-earnings-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const kpis = data.kpis || {};
+  const pagination = data.pagination || {};
+  const currentPage = Number(pagination.page || pageNo || 1);
+  const totalPages = Number(pagination.total_pages || 1);
+  const totalRows = Number(pagination.total || 0);
+  const startEntry = totalRows ? ((currentPage - 1) * pageSize) + 1 : 0;
+  const endEntry = Math.min(currentPage * pageSize, totalRows);
+  const methodOptions = (data.earnings_by_method || []).map((row) => row.label).filter(Boolean);
+
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
+          <div>
+            <div className="page-pretitle">Sales</div>
+            <h2 className="page-title mb-1">PayMongo</h2>
+            <div className="text-muted">Online checkout earnings, fulfillment health, and PayMongo payment records.</div>
+          </div>
+          <div className="d-flex align-items-center gap-2 flex-wrap">
+            <select className="form-select" value={rangeDays} onChange={(e) => { setRangeDays(Number(e.target.value)); setPageNo(1); }}>
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+              <option value={365}>Last 365 days</option>
+            </select>
+            <button className="btn btn-outline-secondary" type="button" disabled={loading} onClick={() => load()}>
+              <IconRefresh size={18} className="me-2" />Refresh
+            </button>
+            <button className="btn btn-outline-primary" type="button" disabled={!data.orders?.length} onClick={exportCurrentCsv}>
+              <IconDownload size={18} className="me-2" />Export CSV
+            </button>
+          </div>
+        </div>
+      </div>
+      {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
+
+      <KpiCard icon={IconCash} label="PayMongo Earnings" value={kpis.gross_earnings_display || 'PHP 0.00'} tone="green" />
+      <KpiCard icon={IconClock} label="Today" value={kpis.today_earnings_display || 'PHP 0.00'} tone="purple" />
+      <KpiCard icon={IconCalendarStats} label="This Month" value={kpis.month_earnings_display || 'PHP 0.00'} tone="azure" />
+      <KpiCard icon={IconActivity} label="Average Order" value={kpis.average_order_display || 'PHP 0.00'} tone="yellow" />
+      <KpiCard icon={IconListDetails} label="Paid Checkouts" value={kpis.paid_orders || 0} tone="blue" />
+      <KpiCard icon={IconCircleCheck} label="Fulfilled" value={kpis.fulfilled_orders || 0} tone="green" />
+      <KpiCard icon={IconAlertTriangle} label="Pending / Failed" value={`${kpis.pending_fulfillments || 0} / ${kpis.failed_fulfillments || 0}`} tone={Number(kpis.failed_fulfillments || 0) ? 'red' : 'orange'} />
+      <KpiCard icon={IconUsers} label="Customers" value={kpis.customer_count || 0} tone="cyan" />
+
+      <div className="col-12 col-xl-8">
+        <PayMongoEarningsTrend rows={data.daily_earnings || []} />
+      </div>
+      <div className="col-12 col-xl-4">
+        <PayMongoBreakdownCard title="By Payment Method" icon={IconWallet} rows={data.earnings_by_method || []} />
+      </div>
+      <div className="col-12 col-xl-6">
+        <PayMongoBreakdownCard title="By Site" icon={IconRouter} rows={data.earnings_by_site || []} />
+      </div>
+      <div className="col-12 col-xl-6">
+        <PayMongoBreakdownCard title="By Barangay" icon={IconMapPin} rows={data.earnings_by_barangay || []} />
+      </div>
+
+      <div className="col-12">
+        <Card title="PayMongo Orders" subtitle="Paid hosted checkouts and their fulfillment result.">
+          <div className="row g-2 align-items-end mb-3">
+            <div className="col-md-4">
+              <label className="form-label">Search</label>
+              <div className="input-icon">
+                <span className="input-icon-addon"><IconSearch size={18} /></span>
+                <input className="form-control" value={filters.search} onChange={(e) => updateFilter('search', e.target.value)} placeholder="Order, customer, phone, MAC, payment ID..." />
+                {filters.search && (
+                  <button className="btn btn-icon input-icon-addon" type="button" onClick={() => updateFilter('search', '')} aria-label="Clear search"><IconX size={16} /></button>
+                )}
+              </div>
+            </div>
+            <div className="col-md-2">
+              <label className="form-label">Mode</label>
+              <select className="form-select" value={filters.provider_mode} onChange={(e) => updateFilter('provider_mode', e.target.value)}>
+                <option value="">All</option>
+                <option value="LIVE">Live</option>
+                <option value="TEST">Test</option>
+              </select>
+            </div>
+            <div className="col-md-2">
+              <label className="form-label">Method</label>
+              <select className="form-select" value={filters.payment_method} onChange={(e) => updateFilter('payment_method', e.target.value)}>
+                <option value="">All methods</option>
+                {methodOptions.map((method) => <option key={method} value={method}>{paymongoMethodLabel(method)}</option>)}
+              </select>
+            </div>
+            <div className="col-md-2">
+              <label className="form-label">Fulfillment</label>
+              <select className="form-select" value={filters.fulfillment} onChange={(e) => updateFilter('fulfillment', e.target.value)}>
+                <option value="">All</option>
+                <option value="FULFILLED">Fulfilled</option>
+                <option value="PENDING">Pending</option>
+                <option value="FAILED">Failed</option>
+                <option value="NOT_REQUIRED">Not required</option>
+              </select>
+            </div>
+            <div className="col-md-2">
+              <label className="form-label">Show entries</label>
+              <select className="form-select" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPageNo(1); }}>
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+          </div>
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead>
+                <tr>
+                  <th>Order</th>
+                  <th>Mode</th>
+                  <th>Payment</th>
+                  <th>Product</th>
+                  <th>Customer</th>
+                  <th>Site</th>
+                  <th>Amount</th>
+                  <th>Fulfillment</th>
+                  <th>Paid At</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(data.orders || []).map((order) => (
+                  <tr key={order.id}>
+                    <td>
+                      <code>{order.public_order_id}</code>
+                      {order.checkout_session_id && <div className="text-muted small">Checkout {truncateWithEllipsis(order.checkout_session_id, 18)}</div>}
+                    </td>
+                    <td><span className={`badge ${order.provider_mode === 'LIVE' ? 'bg-green-lt text-green' : 'bg-blue-lt text-blue'}`}>{order.provider_mode || 'TEST'}</span></td>
+                    <td>
+                      <span className="badge bg-green-lt text-green">{paymongoMethodLabel(order.payment_method)}</span>
+                      {order.provider_payment_id && <div className="text-muted small mt-1">{truncateWithEllipsis(order.provider_payment_id, 18)}</div>}
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{order.product_name}</div>
+                      <div className="text-muted small">{formatSeconds(order.duration_seconds || 0)}</div>
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{order.profile_display_name || order.customer_display_name || order.device_name || 'Unprofiled device'}</div>
+                      {(order.profile_contact_number || order.customer_contact_number) && <div className="text-muted small">{order.profile_contact_number || order.customer_contact_number}</div>}
+                      {order.client_mac && <div className="text-muted small">{order.client_mac}</div>}
+                    </td>
+                    <td>
+                      <div>{order.site_name || 'Unknown Site'}</div>
+                      <div className="text-muted small">{order.barangay || 'Unknown Barangay'}</div>
+                    </td>
+                    <td className="fw-semibold">{order.amount_display}</td>
+                    <td>
+                      <span className={`badge ${order.fulfillment_status === 'FULFILLED' ? 'bg-green-lt text-green' : order.fulfillment_status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-yellow-lt text-yellow'}`}>{order.fulfillment_status}</span>
+                      {order.last_error && <div className="text-danger small mt-1 text-truncate" style={{ maxWidth: 220 }} title={order.last_error}>{order.last_error}</div>}
+                    </td>
+                    <td>{compactDateTime(order.sale_at)}</td>
+                  </tr>
+                ))}
+                {!(data.orders || []).length && <tr><td colSpan="9" className="text-center text-muted py-4">{loading ? 'Loading PayMongo earnings...' : 'No PayMongo earnings found.'}</td></tr>}
+              </tbody>
+            </table>
+          </div>
+          <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap mt-3">
+            <div className="text-muted small">Showing {startEntry} to {endEntry} of {totalRows} entr{totalRows === 1 ? 'y' : 'ies'}</div>
+            <div className="btn-list">
+              <button className="btn btn-sm" type="button" disabled={currentPage <= 1 || loading} onClick={() => setPageNo(currentPage - 1)}>Previous</button>
+              <span className="btn btn-sm disabled">Page {currentPage} of {totalPages}</span>
+              <button className="btn btn-sm" type="button" disabled={currentPage >= totalPages || loading} onClick={() => setPageNo(currentPage + 1)}>Next</button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function VouchersPage() {
   const [tab, setTab] = useState('Overview');
   const [data, setData] = useState({ summary: {}, vouchers: [] });
@@ -22329,7 +22905,7 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [stationOmadaActionLoading, setStationOmadaActionLoading] = useState('');
   const [stationOmadaActionResult, setStationOmadaActionResult] = useState(null);
   const [stationOmadaBindingResult, setStationOmadaBindingResult] = useState(null);
-  const [stationOmadaBindingForm, setStationOmadaBindingForm] = useState({ omada_site_id: '', omada_site_name: '' });
+  const [stationOmadaBindingForm, setStationOmadaBindingForm] = useState({ omada_site_id: '', omada_site_name: '', sites: [] });
   const [stationOmadaBindingSaving, setStationOmadaBindingSaving] = useState(false);
   const [stationManagedStatus, setStationManagedStatus] = useState(null);
   const [stationCheckingManaged, setStationCheckingManaged] = useState(false);
@@ -22413,6 +22989,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     routers: []
   });
   const [stationProgressMap, setStationProgressMap] = useState({});
+  const [stationProgressLoadingMap, setStationProgressLoadingMap] = useState({});
   const [portalNotifTest, setPortalNotifTest] = useState(null);
   const stationStepRefs = useRef({});
   const [stationError, setStationError] = useState('');
@@ -22423,6 +23000,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     station_name: '',
     station_code: '',
     description: '',
+    gateway_mode: 'CENTRAL_ROOT_GATEWAY',
     vlan_id: '77',
     vlan_interface_name: 'VLAN77-3J-CLIENTS',
     client_network_cidr: '10.77.0.0/24',
@@ -22445,6 +23023,21 @@ function CaptivePortalPage({ mode = 'full' }) {
     portal_url: 'http://192.168.50.70:8080/portal',
     omada_site_id: '',
     omada_site_name: '',
+    wireguard_enabled: false,
+    wireguard_interface_name: 'WG-3J-station',
+    wireguard_station_address: '10.250.77.2/32',
+    wireguard_station_public_key: '',
+    wireguard_peer_public_key: '',
+    wireguard_endpoint_host: '',
+    wireguard_endpoint_port: '51820',
+    wireguard_endpoint_route_gateway: '',
+    wireguard_allowed_addresses: '192.168.50.0/24,10.250.0.1/32',
+    wireguard_route_distance: '200',
+    wireguard_persistent_keepalive: '25',
+    wireguard_hub_router_id: '',
+    wireguard_hub_interface_name: '',
+    wireguard_hub_allowed_addresses: '10.250.77.2/32,10.77.0.0/24',
+    sites: [],
     routers: []
   });
   const tabs = isMikrotikOnly ? ['MikroTik'] : ['Portal', 'Portal Design', 'PWA', 'Portal Notifs', 'Welcome SMS', 'Message Defaults', 'Portal Settings', 'Portal Sessions', 'Authorization Logs'];
@@ -22499,37 +23092,152 @@ function CaptivePortalPage({ mode = 'full' }) {
   function stationRouterTemplate(router = null) {
     return {
       router_id: router?.id || '',
+      transport_mode: 'BRIDGE_TRUNK',
       bridge_name: '',
       tagged_ports: '',
+      handoff_bridge_name: '',
+      handoff_tagged_ports: '',
       notes: ''
     };
+  }
+  function normalizeStationTransportMode(value) {
+    return String(value || '').toUpperCase() === 'VLAN_XCONNECT' ? 'VLAN_XCONNECT' : 'BRIDGE_TRUNK';
+  }
+  function stationRouterIsXconnect(router, index) {
+    return index > 0 && normalizeStationTransportMode(router?.transport_mode) === 'VLAN_XCONNECT';
+  }
+  function stationDefaultsForVlan(vlanValue) {
+    const vlan = String(vlanValue || 77);
+    return {
+      vlan_id: vlan,
+      vlan_interface_name: `VLAN${vlan}-3J-CLIENTS`,
+      client_network_cidr: `10.${vlan}.0.0/24`,
+      gateway_ip: `10.${vlan}.0.1`,
+      pool_start_ip: `10.${vlan}.0.10`,
+      pool_end_ip: `10.${vlan}.0.254`,
+      pool_name: `POOL-3J-CLIENTS-V${vlan}`,
+      dhcp_server_name: `DHCP-3J-CLIENTS-V${vlan}`
+    };
+  }
+  function stationWireGuardDefaultsForVlan(vlanValue, stationCode = 'station') {
+    const vlanNumber = Number(vlanValue || 77);
+    const safeThirdOctet = Number.isInteger(vlanNumber) && vlanNumber > 0 && vlanNumber <= 254 ? vlanNumber : (((vlanNumber || 77) - 1) % 254) + 1;
+    const safeCode = String(stationCode || 'station').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'station';
+    return {
+      wireguard_interface_name: `WG-3J-${safeCode}`.slice(0, 58),
+      wireguard_station_address: `10.250.${safeThirdOctet}.2/32`,
+      wireguard_allowed_addresses: '192.168.50.0/24,10.250.0.1/32',
+      wireguard_route_distance: '200',
+      wireguard_persistent_keepalive: '25',
+      wireguard_hub_allowed_addresses: `10.250.${safeThirdOctet}.2/32,10.${vlanNumber || 77}.0.0/24`
+    };
+  }
+  function nextStationVlanSuggestion() {
+    const used = new Set(
+      mikrotikStations
+        .map((station) => Number(station?.vlan_id))
+        .filter((vlan) => Number.isInteger(vlan) && vlan > 0 && vlan <= 4094)
+    );
+    let vlan = 77;
+    while (used.has(vlan) && vlan < 4094) vlan += 1;
+    return vlan;
   }
   function stationRouterDisplay(row, index) {
     const router = mikrotiks.find((item) => item.id === row?.router_id);
     return row?.router_name || router?.router_name || row?.router_id || `Router ${index + 1}`;
   }
   function siteOptionKey(site) {
-    return `${site?.omada_site_id || ''}|||${site?.site_name || ''}`;
+    return `${site?.id || ''}|||${site?.omada_site_id || ''}|||${site?.site_name || site?.omada_site_name || ''}`;
+  }
+  function stationSitePayloadFromSite(site, isPrimary = false) {
+    return {
+      site_deployment_id: site?.id || site?.site_deployment_id || '',
+      omada_site_id: site?.omada_site_id || '',
+      omada_site_name: site?.site_name || site?.omada_site_name || '',
+      is_primary: Boolean(isPrimary)
+    };
+  }
+  function stationSitePayloadKey(site) {
+    return `${site?.site_deployment_id || site?.id || ''}|||${site?.omada_site_id || ''}|||${site?.omada_site_name || site?.site_name || ''}`;
   }
   function selectedStationSiteKey(source = stationForm) {
-    return `${source?.omada_site_id || ''}|||${source?.omada_site_name || ''}`;
+    const primary = (source?.sites || []).find((site) => site.is_primary) || (source?.sites || [])[0];
+    if (primary) return stationSitePayloadKey(primary);
+    return `|||${source?.omada_site_id || ''}|||${source?.omada_site_name || ''}`;
   }
   function findSiteOptionByKey(value) {
     return siteDeployments.find((site) => siteOptionKey(site) === value);
   }
+  function selectedStationSiteKeys(source = stationForm) {
+    const sites = Array.isArray(source?.sites) ? source.sites : [];
+    if (sites.length) return new Set(sites.map((site) => stationSitePayloadKey(site)));
+    const key = selectedStationSiteKey(source);
+    return key && key !== '||||||' ? new Set([key]) : new Set();
+  }
+  function selectedStationSites(source = stationForm) {
+    const keys = selectedStationSiteKeys(source);
+    return siteDeployments.filter((site) => keys.has(siteOptionKey(site)));
+  }
   function selectedStationSite(source = stationForm) {
+    const primaryKey = selectedStationSiteKey(source);
+    const primaryByKey = siteDeployments.find((site) => siteOptionKey(site) === primaryKey);
+    if (primaryByKey) return primaryByKey;
     return siteDeployments.find((site) => (
       (source?.omada_site_id && site.omada_site_id === source.omada_site_id) ||
       (source?.omada_site_name && String(site.site_name || '').toLowerCase() === String(source.omada_site_name).toLowerCase())
     ));
   }
-  function updateStationOmadaSite(value) {
-    const site = findSiteOptionByKey(value);
+  function normalizeStationSitesForState(sites) {
+    const clean = (sites || []).filter((site) => site.site_deployment_id || site.omada_site_id || site.omada_site_name);
+    if (!clean.length) return [];
+    const hasPrimary = clean.some((site) => site.is_primary);
+    return clean.map((site, index) => ({ ...site, is_primary: hasPrimary ? Boolean(site.is_primary) : index === 0 }));
+  }
+  function updateStationSites(site, checked) {
     setStationForm((current) => ({
       ...current,
-      omada_site_id: site?.omada_site_id || '',
-      omada_site_name: site?.site_name || ''
+      sites: normalizeStationSitesForState(
+        checked
+          ? [...(current.sites || []), stationSitePayloadFromSite(site, !(current.sites || []).length)]
+          : (current.sites || []).filter((item) => stationSitePayloadKey(item) !== siteOptionKey(site))
+      )
     }));
+  }
+  function setStationPrimarySite(site) {
+    setStationForm((current) => {
+      const key = siteOptionKey(site);
+      return {
+        ...current,
+        sites: normalizeStationSitesForState((current.sites || []).map((item) => ({
+          ...item,
+          is_primary: stationSitePayloadKey(item) === key
+        })))
+      };
+    });
+  }
+  function updateStationBindingSites(site, checked) {
+    setStationOmadaBindingResult(null);
+    setStationOmadaBindingForm((current) => ({
+      ...current,
+      sites: normalizeStationSitesForState(
+        checked
+          ? [...(current.sites || []), stationSitePayloadFromSite(site, !(current.sites || []).length)]
+          : (current.sites || []).filter((item) => stationSitePayloadKey(item) !== siteOptionKey(site))
+      )
+    }));
+  }
+  function setStationBindingPrimarySite(site) {
+    setStationOmadaBindingResult(null);
+    setStationOmadaBindingForm((current) => {
+      const key = siteOptionKey(site);
+      return {
+        ...current,
+        sites: normalizeStationSitesForState((current.sites || []).map((item) => ({
+          ...item,
+          is_primary: stationSitePayloadKey(item) === key
+        })))
+      };
+    });
   }
   function omadaSiteVlanStatus(site, vlanId) {
     if (!site) return { status: 'missing', label: 'No station Omada site selected', className: 'bg-yellow-lt text-yellow' };
@@ -22605,6 +23313,7 @@ function CaptivePortalPage({ mode = 'full' }) {
       station_name: station.station_name || '',
       station_code: station.station_code || '',
       description: station.description || '',
+      gateway_mode: station.gateway_mode || 'CENTRAL_ROOT_GATEWAY',
       vlan_id: String(station.vlan_id || ''),
       vlan_interface_name: station.vlan_interface_name || '',
       client_network_cidr: station.client_network_cidr || '',
@@ -22627,10 +23336,33 @@ function CaptivePortalPage({ mode = 'full' }) {
       portal_url: station.portal_url || portalSettings.portal_url_staging || 'http://192.168.50.70:8080/portal',
       omada_site_id: station.omada_site_id || '',
       omada_site_name: station.omada_site_name || '',
+      wireguard_enabled: Boolean(station.wireguard_enabled),
+      wireguard_interface_name: station.wireguard_interface_name || stationWireGuardDefaultsForVlan(station.vlan_id, station.station_code).wireguard_interface_name,
+      wireguard_station_address: station.wireguard_station_address || stationWireGuardDefaultsForVlan(station.vlan_id, station.station_code).wireguard_station_address,
+      wireguard_station_public_key: station.wireguard_station_public_key || '',
+      wireguard_peer_public_key: station.wireguard_peer_public_key || '',
+      wireguard_endpoint_host: station.wireguard_endpoint_host || '',
+      wireguard_endpoint_port: String(station.wireguard_endpoint_port || 51820),
+      wireguard_endpoint_route_gateway: station.wireguard_endpoint_route_gateway || '',
+      wireguard_allowed_addresses: station.wireguard_allowed_addresses || '192.168.50.0/24,10.250.0.1/32',
+      wireguard_route_distance: String(station.wireguard_route_distance || 200),
+      wireguard_persistent_keepalive: String(station.wireguard_persistent_keepalive ?? 25),
+      wireguard_hub_router_id: station.wireguard_hub_router_id || '',
+      wireguard_hub_interface_name: station.wireguard_hub_interface_name || '',
+      wireguard_hub_allowed_addresses: station.wireguard_hub_allowed_addresses || stationWireGuardDefaultsForVlan(station.vlan_id, station.station_code).wireguard_hub_allowed_addresses,
+      sites: normalizeStationSitesForState((station.sites || []).map((site) => ({
+        site_deployment_id: site.site_deployment_id || '',
+        omada_site_id: site.omada_site_id || '',
+        omada_site_name: site.site_name || site.omada_site_name || '',
+        is_primary: Boolean(site.is_primary)
+      }))),
       routers: (station.routers || []).map((router) => ({
         router_id: router.router_id || '',
+        transport_mode: normalizeStationTransportMode(router.transport_mode),
         bridge_name: router.bridge_name || '',
         tagged_ports: router.tagged_ports || '',
+        handoff_bridge_name: router.handoff_bridge_name || '',
+        handoff_tagged_ports: router.handoff_tagged_ports || '',
         notes: router.notes || ''
       }))
     };
@@ -22648,19 +23380,23 @@ function CaptivePortalPage({ mode = 'full' }) {
     });
   }
   function openStationModal() {
+    const suggestedVlan = nextStationVlanSuggestion();
+    const vlanDefaults = stationDefaultsForVlan(suggestedVlan);
+    const wgDefaults = stationWireGuardDefaultsForVlan(suggestedVlan);
     setStationForm({
       station_name: '',
       station_code: '',
       description: '',
-      vlan_id: '77',
-      vlan_interface_name: 'VLAN77-3J-CLIENTS',
-      client_network_cidr: '10.77.0.0/24',
-      gateway_ip: '10.77.0.1',
-      pool_start_ip: '10.77.0.10',
-      pool_end_ip: '10.77.0.254',
-      pool_name: 'POOL-3J-CLIENTS-V77',
+      gateway_mode: 'CENTRAL_ROOT_GATEWAY',
+      vlan_id: vlanDefaults.vlan_id,
+      vlan_interface_name: vlanDefaults.vlan_interface_name,
+      client_network_cidr: vlanDefaults.client_network_cidr,
+      gateway_ip: vlanDefaults.gateway_ip,
+      pool_start_ip: vlanDefaults.pool_start_ip,
+      pool_end_ip: vlanDefaults.pool_end_ip,
+      pool_name: vlanDefaults.pool_name,
       create_dhcp_server: true,
-      dhcp_server_name: 'DHCP-3J-CLIENTS-V77',
+      dhcp_server_name: vlanDefaults.dhcp_server_name,
       dhcp_lease_time: '1h',
       dns_servers: '8.8.8.8,1.1.1.1',
       local_interface_list: 'LOCAL',
@@ -22674,6 +23410,20 @@ function CaptivePortalPage({ mode = 'full' }) {
       portal_url: portalSettings.portal_url_staging || 'http://192.168.50.70:8080/portal',
       omada_site_id: '',
       omada_site_name: '',
+      wireguard_enabled: false,
+      wireguard_interface_name: wgDefaults.wireguard_interface_name,
+      wireguard_station_address: wgDefaults.wireguard_station_address,
+      wireguard_station_public_key: '',
+      wireguard_peer_public_key: '',
+      wireguard_endpoint_host: '',
+      wireguard_endpoint_port: '51820',
+      wireguard_allowed_addresses: wgDefaults.wireguard_allowed_addresses,
+      wireguard_route_distance: wgDefaults.wireguard_route_distance,
+      wireguard_persistent_keepalive: wgDefaults.wireguard_persistent_keepalive,
+      wireguard_hub_router_id: '',
+      wireguard_hub_interface_name: '',
+      wireguard_hub_allowed_addresses: wgDefaults.wireguard_hub_allowed_addresses,
+      sites: [],
       routers: []
     });
     setStationActiveRouterIndex(0);
@@ -22688,6 +23438,17 @@ function CaptivePortalPage({ mode = 'full' }) {
       const next = { ...current, [key]: value };
       if (key === 'station_name' && (!current.station_code || /^[a-z0-9-]+$/.test(current.station_code))) {
         next.station_code = String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        if (!current.wireguard_interface_name || /^WG-3J-/i.test(current.wireguard_interface_name)) {
+          next.wireguard_interface_name = stationWireGuardDefaultsForVlan(current.vlan_id, next.station_code).wireguard_interface_name;
+        }
+      }
+      if (key === 'station_code' && (!current.wireguard_interface_name || /^WG-3J-/i.test(current.wireguard_interface_name))) {
+        next.wireguard_interface_name = stationWireGuardDefaultsForVlan(current.vlan_id, value).wireguard_interface_name;
+      }
+      if (key === 'wireguard_hub_router_id') {
+        next.wireguard_hub_interface_name = value ? (current.wireguard_hub_interface_name || 'WG-3J-HUB') : '';
+        if (value && (!current.wireguard_endpoint_port || current.wireguard_endpoint_port === '13231')) next.wireguard_endpoint_port = '51820';
+        if (value && (!current.wireguard_route_distance || current.wireguard_route_distance === '1')) next.wireguard_route_distance = '200';
       }
       return next;
     });
@@ -22711,6 +23472,9 @@ function CaptivePortalPage({ mode = 'full' }) {
         if (!current.pool_start_ip || /^10\.\d+\.0\.(2|10)$/.test(current.pool_start_ip)) next.pool_start_ip = `10.${vlanNumber}.0.10`;
         if (!current.pool_end_ip || /^10\.\d+\.0\.254$/.test(current.pool_end_ip)) next.pool_end_ip = `10.${vlanNumber}.0.254`;
         if (!current.dns_servers || /^(10\.\d+\.0\.1,)?8\.8\.8\.8,1\.1\.1\.1$/.test(current.dns_servers)) next.dns_servers = '8.8.8.8,1.1.1.1';
+        const wgDefaults = stationWireGuardDefaultsForVlan(vlanNumber, current.station_code || current.station_name);
+        if (!current.wireguard_station_address || /^10\.250\.\d+\.2\/32$/.test(current.wireguard_station_address)) next.wireguard_station_address = wgDefaults.wireguard_station_address;
+        if (!current.wireguard_hub_allowed_addresses || /^10\.250\.\d+\.2\/32,10\.\d+\.0\.0\/24$/.test(current.wireguard_hub_allowed_addresses)) next.wireguard_hub_allowed_addresses = wgDefaults.wireguard_hub_allowed_addresses;
       }
       return next;
     });
@@ -22748,18 +23512,24 @@ function CaptivePortalPage({ mode = 'full' }) {
       routers: current.routers.map((router, routerIndex) => routerIndex === index ? { ...router, ...patch } : router)
     }));
   }
-  function toggleStationTaggedPort(index, portName, checked) {
+  function toggleStationRouterCsvField(index, fieldName, value, checked) {
     setStationForm((current) => ({
       ...current,
       routers: current.routers.map((router, routerIndex) => {
         if (routerIndex !== index) return router;
-        const existing = String(router.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+        const existing = String(router[fieldName] || '').split(',').map((item) => item.trim()).filter(Boolean);
         const next = checked
-          ? Array.from(new Set([...existing, portName]))
-          : existing.filter((item) => item !== portName);
-        return { ...router, tagged_ports: next.join(',') };
+          ? Array.from(new Set([...existing, value]))
+          : existing.filter((item) => item !== value);
+        return { ...router, [fieldName]: next.join(',') };
       })
     }));
+  }
+  function toggleStationTaggedPort(index, portName, checked) {
+    toggleStationRouterCsvField(index, 'tagged_ports', portName, checked);
+  }
+  function toggleStationHandoffTaggedPort(index, portName, checked) {
+    toggleStationRouterCsvField(index, 'handoff_tagged_ports', portName, checked);
   }
   function addStationRouter() {
     setStationForm((current) => {
@@ -22789,9 +23559,17 @@ function CaptivePortalPage({ mode = 'full' }) {
     setStationSaving(true);
     setStationError('');
     try {
+      const selectedSites = normalizeStationSitesForState(stationForm.sites || []);
+      const primarySite = selectedSites.find((site) => site.is_primary) || selectedSites[0] || {};
+      const stationPayload = {
+        ...stationForm,
+        sites: selectedSites,
+        omada_site_id: primarySite.omada_site_id || stationForm.omada_site_id || '',
+        omada_site_name: primarySite.omada_site_name || stationForm.omada_site_name || ''
+      };
       const saved = await request(
         stationEditingId ? `/network/mikrotik/stations/${stationEditingId}` : '/network/mikrotik/stations',
-        { method: stationEditingId ? 'PUT' : 'POST', body: JSON.stringify(stationForm) }
+        { method: stationEditingId ? 'PUT' : 'POST', body: JSON.stringify(stationPayload) }
       );
       setStationReview(saved);
       setStationModalOpen(false);
@@ -23673,11 +24451,16 @@ function CaptivePortalPage({ mode = 'full' }) {
   }
   function stationRouterTooltip(station, router, index) {
     const ports = String(router.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+    const handoffPorts = String(router.handoff_tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+    const isXconnect = stationRouterIsXconnect(router, index);
     const lines = [
       index === 0 ? 'Root gateway' : `Hop ${index + 1}`,
       `${router.router_name || 'Router'}${router.host ? ` (${router.host})` : ''}`,
-      router.bridge_name ? `Bridge/interface: ${router.bridge_name}` : '',
-      ports.length ? `Tagged ports: ${ports.join(', ')}` : ''
+      isXconnect ? 'Transport: VLAN handoff / xconnect' : 'Transport: Bridge trunk',
+      router.bridge_name ? `${isXconnect ? 'Upstream bridge/interface' : 'Bridge/interface'}: ${router.bridge_name}` : '',
+      ports.length ? `${isXconnect ? 'Upstream tagged ports' : 'Tagged ports'}: ${ports.join(', ')}` : '',
+      isXconnect && router.handoff_bridge_name ? `Downstream/OLT bridge: ${router.handoff_bridge_name}` : '',
+      isXconnect && handoffPorts.length ? `Downstream/OLT tagged ports: ${handoffPorts.join(', ')}` : ''
     ].filter(Boolean);
     return lines.join('\n');
   }
@@ -23778,8 +24561,8 @@ function CaptivePortalPage({ mode = 'full' }) {
   function stationProgressSummary(station) {
     const progress = stationProgressMap[station.id] || station.push_progress;
     const fallbackTotal = stationImplementationStepList(station).length;
-    if (progress) return { pushed: progress.pushed_steps || 0, total: progress.total_steps || fallbackTotal };
-    return { pushed: 0, total: fallbackTotal };
+    if (progress) return { pushed: progress.pushed_steps || 0, total: progress.total_steps || fallbackTotal, loading: Boolean(stationProgressLoadingMap[station.id]) };
+    return { pushed: 0, total: fallbackTotal, loading: Boolean(stationProgressLoadingMap[station.id]) };
   }
   function scrollStationStepIntoView(stepId) {
     setTimeout(() => {
@@ -23838,7 +24621,13 @@ function CaptivePortalPage({ mode = 'full' }) {
   }
   async function refreshStationProgressSummaries(stations) {
     const rows = Array.isArray(stations) ? stations.filter((station) => station?.id) : [];
-    for (const station of rows) {
+    if (!rows.length) return;
+    setStationProgressLoadingMap((current) => {
+      const next = { ...current };
+      rows.forEach((station) => { next[station.id] = true; });
+      return next;
+    });
+    await Promise.allSettled(rows.map(async (station) => {
       try {
         const status = await request(`/network/mikrotik/stations/${station.id}/managed-configuration-status?quiet=true`);
         if (status.push_progress) {
@@ -23847,8 +24636,14 @@ function CaptivePortalPage({ mode = 'full' }) {
         }
       } catch {
         // Keep the last visible progress if a background refresh cannot reach a router.
+      } finally {
+        setStationProgressLoadingMap((current) => {
+          const next = { ...current };
+          delete next[station.id];
+          return next;
+        });
       }
-    }
+    }));
   }
   function openStationImplementation(station) {
     setStationImplementation(station);
@@ -23939,7 +24734,13 @@ function CaptivePortalPage({ mode = 'full' }) {
       setStationOmadaPlan({ station, plan });
       setStationOmadaBindingForm({
         omada_site_id: plan.station?.omada_site_id || '',
-        omada_site_name: plan.station?.omada_site_name || ''
+        omada_site_name: plan.station?.omada_site_name || '',
+        sites: normalizeStationSitesForState((plan.station?.sites || []).map((site) => ({
+          site_deployment_id: site.site_deployment_id || '',
+          omada_site_id: site.omada_site_id || '',
+          omada_site_name: site.site_name || site.omada_site_name || '',
+          is_primary: Boolean(site.is_primary)
+        })))
       });
     } catch (error) {
       setStationOmadaPlan({ station, plan: null, error: error.message || 'Could not load Omada captive portal plan.' });
@@ -23956,7 +24757,13 @@ function CaptivePortalPage({ mode = 'full' }) {
       setStationOmadaPlan({ station, plan });
       setStationOmadaBindingForm({
         omada_site_id: plan.station?.omada_site_id || '',
-        omada_site_name: plan.station?.omada_site_name || ''
+        omada_site_name: plan.station?.omada_site_name || '',
+        sites: normalizeStationSitesForState((plan.station?.sites || []).map((site) => ({
+          site_deployment_id: site.site_deployment_id || '',
+          omada_site_id: site.omada_site_id || '',
+          omada_site_name: site.site_name || site.omada_site_name || '',
+          is_primary: Boolean(site.is_primary)
+        })))
       });
     } catch (error) {
       setStationOmadaPlan((current) => ({ ...(current || {}), error: error.message || 'Could not refresh Omada captive portal plan.' }));
@@ -23972,11 +24779,16 @@ function CaptivePortalPage({ mode = 'full' }) {
     try {
       const plan = await request(`/network/mikrotik/stations/${station.id}/omada-site`, {
         method: 'PUT',
-        body: JSON.stringify(stationOmadaBindingForm)
+        body: JSON.stringify({
+          ...stationOmadaBindingForm,
+          sites: normalizeStationSitesForState(stationOmadaBindingForm.sites || []),
+          omada_site_id: (stationOmadaBindingForm.sites || []).find((site) => site.is_primary)?.omada_site_id || stationOmadaBindingForm.omada_site_id || '',
+          omada_site_name: (stationOmadaBindingForm.sites || []).find((site) => site.is_primary)?.omada_site_name || stationOmadaBindingForm.omada_site_name || ''
+        })
       });
       setStationOmadaPlan({ station: plan.station || station, plan });
-      const siteName = plan.station?.omada_site_name || stationOmadaBindingForm.omada_site_name || 'selected Omada site';
-      const successMessage = `${plan.station?.station_name || station.station_name || 'Station'} was bound to ${siteName}.`;
+      const siteCount = plan.station?.site_count || plan.station?.sites?.length || stationOmadaBindingForm.sites?.length || 0;
+      const successMessage = `${plan.station?.station_name || station.station_name || 'Station'} was bound to ${siteCount} Omada site${siteCount === 1 ? '' : 's'}.`;
       setStationOmadaBindingResult({ status: 'SUCCESS', message: successMessage });
       setMessage('Station Omada site binding saved.');
       await load();
@@ -24195,7 +25007,7 @@ function CaptivePortalPage({ mode = 'full' }) {
               <span className={`station-chain-node station-table-chain-node ${index === 0 ? 'root' : ''}`}><IconRouter size={16} /></span>
               <span className="station-table-chain-text">
                 <strong>{router.router_name || `Router ${index + 1}`}</strong>
-                <small>{index === 0 ? 'Root' : `Hop ${index + 1}`} · {router.bridge_name || 'No bridge'}</small>
+                <small>{index === 0 ? 'Root' : `Hop ${index + 1}`} · {stationRouterIsXconnect(router, index) ? 'VLAN handoff' : (router.bridge_name || 'No bridge')}</small>
               </span>
               <div className="station-router-popover">
                 <div className="station-chain-popover-header">
@@ -24207,6 +25019,9 @@ function CaptivePortalPage({ mode = 'full' }) {
                   <div className="station-chain-popover-badges">
                     <span className={`badge ${index === 0 ? 'bg-green-lt text-green' : 'bg-cyan-lt text-cyan'}`}>{index === 0 ? 'Root gateway' : `Hop ${index + 1}`}</span>
                     <span className="badge bg-secondary-lt text-secondary">{router.station_role || (index === 0 ? 'ROOT_GATEWAY' : 'TRUNK_HELPER')}</span>
+                    <span className={`badge ${stationRouterIsXconnect(router, index) ? 'bg-purple-lt text-purple' : 'bg-blue-lt text-blue'}`}>
+                      {stationRouterIsXconnect(router, index) ? 'VLAN handoff' : 'Bridge trunk'}
+                    </span>
                     {router.api_status && <span className={`badge ${router.api_status === 'REACHABLE' ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{router.api_status}</span>}
                   </div>
                   <div className="station-chain-popover-meta">
@@ -24215,12 +25030,21 @@ function CaptivePortalPage({ mode = 'full' }) {
                   </div>
                 </div>
                 <div className="station-chain-popover-section mb-0">
-                  <div className="station-chain-popover-label"><IconRouter size={14} /> Selected bridge and tags</div>
+                  <div className="station-chain-popover-label"><IconRouter size={14} /> {stationRouterIsXconnect(router, index) ? 'Upstream bridge and tags' : 'Selected bridge and tags'}</div>
                   <div className="station-chain-popover-route">
                     <span className="badge bg-secondary-lt text-secondary">{router.bridge_name || 'No bridge/interface'}</span>
                     {stationPortBadges(router.tagged_ports, `${station.id}-${router.router_id}-router`)}
                   </div>
                 </div>
+                {stationRouterIsXconnect(router, index) && (
+                  <div className="station-chain-popover-section mb-0 mt-2">
+                    <div className="station-chain-popover-label"><IconRouter size={14} /> Downstream / OLT bridge and tags</div>
+                    <div className="station-chain-popover-route">
+                      <span className="badge bg-secondary-lt text-secondary">{router.handoff_bridge_name || 'No downstream bridge'}</span>
+                      {stationPortBadges(router.handoff_tagged_ports, `${station.id}-${router.router_id}-handoff`, 'No downstream ports selected', 'bg-purple-lt text-purple')}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
             {index < routers.length - 1 && (
@@ -24258,7 +25082,9 @@ function CaptivePortalPage({ mode = 'full' }) {
                   <div className="station-chain-popover-section mb-0">
                     <div className="station-chain-popover-label"><IconRouter size={14} /> To router tags</div>
                     <div className="station-chain-popover-route">
-                      <span className="badge bg-secondary-lt text-secondary">{routers[index + 1]?.bridge_name || 'No bridge/interface'}</span>
+                      <span className="badge bg-secondary-lt text-secondary">
+                        {stationRouterIsXconnect(routers[index + 1], index + 1) ? 'Upstream: ' : ''}{routers[index + 1]?.bridge_name || 'No bridge/interface'}
+                      </span>
                       {stationPortBadges(routers[index + 1]?.tagged_ports, `${station.id}-${routers[index + 1]?.router_id}-to`)}
                     </div>
                   </div>
@@ -24471,40 +25297,45 @@ function CaptivePortalPage({ mode = 'full' }) {
     }
   }
   async function load() {
-    const [system, portalCfg, portalSmsCfg, omadaPortal, routerRows, stationRows, apManagementRow, siteRows, events, portalSessions, authLogs] = await Promise.all([
-      request('/system/settings'),
-      request('/captive-portal/settings'),
-      request('/captive-portal/sms-confirmation-settings').catch(() => null),
-      request('/captive-portal/omada/status').catch(() => null),
-      request('/captive-portal/mikrotik'),
-      request('/network/mikrotik/stations'),
-      request('/network/mikrotik/ap-management').catch(() => null),
-      request('/site-deployments').catch(() => []),
-      request('/portal/events'),
-      request('/captive-portal/sessions'),
-      request('/captive-portal/authorizations')
-    ]);
-    setSettings(system);
-    setPortalSettings(portalCfg);
-    if (portalSmsCfg) hydratePortalSmsForm(portalSmsCfg);
-    setOmadaPortalStatus(omadaPortal);
-    const safeRouterRows = Array.isArray(routerRows) ? routerRows : [];
-    setMikrotiks(safeRouterRows);
-    setMikrotikRows(editableMikrotikRows(safeRouterRows));
-    const safeStationRows = Array.isArray(stationRows) ? stationRows : [];
-    setMikrotikStations(safeStationRows);
-    setSiteDeployments(Array.isArray(siteRows) ? siteRows : []);
-    refreshStationProgressSummaries(safeStationRows);
-    if (apManagementRow) {
-      setApManagementConfig(apManagementRow);
-      if (apManagementRow.id) checkApManagementConfiguration(apManagementRow, { quiet: true });
-    }
+    const tasks = [
+      request('/system/settings').then(setSettings),
+      request('/captive-portal/settings').then(setPortalSettings),
+      request('/captive-portal/sms-confirmation-settings').then((portalSmsCfg) => {
+        if (portalSmsCfg) hydratePortalSmsForm(portalSmsCfg);
+      }).catch(() => null),
+      request('/captive-portal/omada/status').then(setOmadaPortalStatus).catch(() => null),
+      request('/captive-portal/mikrotik').then((routerRows) => {
+        const safeRouterRows = Array.isArray(routerRows) ? routerRows : [];
+        setMikrotiks(safeRouterRows);
+        setMikrotikRows(editableMikrotikRows(safeRouterRows));
+        setPreflightRouterId((current) => current || safeRouterRows[0]?.id || '');
+        setAiRouterId((current) => safeRouterRows.some((router) => router.id === current) ? current : '');
+      }),
+      request('/network/mikrotik/stations').then((stationRows) => {
+        const safeStationRows = Array.isArray(stationRows) ? stationRows : [];
+        setMikrotikStations(safeStationRows);
+        void refreshStationProgressSummaries(safeStationRows);
+      }),
+      request('/network/mikrotik/ap-management').then((apManagementRow) => {
+        if (apManagementRow) setApManagementConfig(apManagementRow);
+      }).catch(() => null),
+      request('/site-deployments').then((siteRows) => {
+        setSiteDeployments(Array.isArray(siteRows) ? siteRows : []);
+      }).catch(() => setSiteDeployments([])),
+      request('/portal/events').then((events) => {
+        setPortalEvents(Array.isArray(events) ? events : []);
+      }),
+      request('/captive-portal/sessions').then((portalSessions) => {
+        setSessions(Array.isArray(portalSessions) ? portalSessions : []);
+      }),
+      request('/captive-portal/authorizations').then((authLogs) => {
+        setAuthorizations(Array.isArray(authLogs) ? authLogs : []);
+      }),
+    ];
     setHotspotLoginSync({ summary: {}, stations: [] });
-    setPreflightRouterId((current) => current || safeRouterRows[0]?.id || '');
-    setAiRouterId((current) => safeRouterRows.some((router) => router.id === current) ? current : '');
-    setPortalEvents(Array.isArray(events) ? events : []);
-    setSessions(Array.isArray(portalSessions) ? portalSessions : []);
-    setAuthorizations(Array.isArray(authLogs) ? authLogs : []);
+    // Station cards should not wait for slower portal log/session/site requests.
+    // Station managed-config progress refreshes in the background after station rows render.
+    await Promise.allSettled(tasks);
   }
   async function enableOmadaPortal() {
     setOmadaPortalEnabling(true);
@@ -24590,7 +25421,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     return () => window.clearTimeout(timer);
   }, [stationRemoveCompleted, stationRemoveCloseCountdown, stationRemove]);
   useEffect(() => {
-    if (activeTab === 'MikroTik' && (mikrotikTab === 'Overview' || mikrotikTab === 'Configuration')) {
+    if (activeTab === 'MikroTik' && mikrotikTab === 'Overview') {
       loadPreflightSummary();
     }
     if (activeTab === 'MikroTik' && mikrotikTab === 'Scan Result' && preflightView) {
@@ -25797,6 +26628,11 @@ function CaptivePortalPage({ mode = 'full' }) {
     mikrotikRouter: 'Choose one of the MikroTik routers already saved in the system. The system uses read-only scan/API data to list its ports and bridges.',
     rootBridge: 'This is the bridge/interface on the root gateway where the VLAN interface is created. In your working example this is SwAC. PPPoE interfaces are hidden because this must not be a customer PPPoE session.',
     downstreamBridge: 'This is the downstream router bridge where the same VLAN should be carried. In your CRS317 example this is SwBridge.',
+    transportMode: 'Bridge Trunk is the normal router/switch trunk path. VLAN Handoff / Xconnect is only for downstream access-concentrator designs where the upstream trunk bridge and downstream OLT/PPPoE bridge are different bridges on the same MikroTik.',
+    xconnectUpstreamBridge: 'The bridge/interface where the station VLAN arrives from the previous router. In the CCR1009-Centro example this is SwBridge from CRS317.',
+    xconnectUpstreamPorts: 'Ports on the upstream bridge that carry the station VLAN from the previous router. In the CCR1009-Centro example this is sfp-sfpplus1.',
+    xconnectDownstreamBridge: 'The downstream bridge that leads to the OLT/AP path. This can intentionally be a PPPoE access bridge when VLAN Handoff / Xconnect is selected, for example BR_PPPOE.',
+    xconnectDownstreamPorts: 'Ports inside the downstream/OLT bridge that must carry the same station VLAN toward OLT/ONU/APs. In the CCR1009-Centro example this is ether5.',
     taggedPortsRoot: 'Select the root bridge itself plus the trunk port going to the next router. In your working example this was SwAC and sfp-sfpplus3. PPPoE interfaces are hidden here.',
     taggedPortsDownstream: 'Select the port from the previous router and the ports going toward OLTs/APs. In your CRS317 example these were sfp-sfpplus2, sfp-sfpplus3, and the OLT/AP-facing ports. PPPoE interfaces are hidden here.',
     vlanId: 'Customer VLAN used by the open captive portal SSID. In your tested setup this is VLAN 77.',
@@ -25821,7 +26657,21 @@ function CaptivePortalPage({ mode = 'full' }) {
     apManagementPoolEnd: 'Last DHCP address for AP management.',
     apManagementPoolName: 'RouterOS IP pool name for AP management leases.',
     apManagementDhcpServerName: 'RouterOS DHCP server name for AP management. This is root-gateway-only.',
-    apManagementDnsServers: 'DNS servers handed to APs on the management VLAN. AP adoption should still use the Omada controller IP or inform URL.'
+    apManagementDnsServers: 'DNS servers handed to APs on the management VLAN. AP adoption should still use the Omada controller IP or inform URL.',
+    gatewayMode: 'Central root means the first/root router in the chain owns the station VLAN from the core. Local station gateway means this station router owns its customer subnet and can fail over to its local ISP.',
+    wireguardEnabled: 'Enable this when the station must keep Omada/controller reachability through main fiber or local ISP backup.',
+    wireguardInterface: 'RouterOS WireGuard interface created on the station root gateway. RouterOS generates the private key; the system does not expose it.',
+    wireguardStationAddress: 'Station tunnel IP, for example 10.250.78.2/32. It must be unique per station.',
+    wireguardStationPublicKey: 'Paste the public key detected from the station WireGuard interface after the interface is created. This allows the central hub peer to be created.',
+    wireguardPeerPublicKey: 'Public key of the central WireGuard hub interface. This is not a secret.',
+    wireguardEndpointHost: 'Public IP or DNS name of the central WireGuard hub. The station reaches this over main fiber or local ISP backup.',
+    wireguardEndpointPort: 'UDP port listened to by the central WireGuard hub. Use 51820 for the 3J backup hub unless you intentionally changed it.',
+    wireguardEndpointRouteGateway: 'Optional station local ISP gateway used for a /32 route to the public WireGuard endpoint. Use this when the endpoint public IP is also learned through the main fiber/core route, so the station must force backup WireGuard dialing through local ISP.',
+    wireguardAllowedAddresses: 'Central networks reachable through the tunnel, normally the Omada/controller office subnet plus the hub tunnel host, such as 192.168.50.0/24,10.250.0.1/32. Use route distance 200 so normal OSPF/fiber routes win while healthy.',
+    wireguardPersistentKeepalive: 'Keepalive helps stations behind local ISP NAT keep the WireGuard tunnel open. 25 seconds is a common value.',
+    wireguardHubRouter: 'Optional legacy mode. Leave blank when using the dedicated WireGuard server.',
+    wireguardHubInterface: 'Existing WireGuard interface name on the legacy MikroTik hub router.',
+    wireguardHubAllowedAddresses: 'Station networks allowed on the central hub peer, usually station tunnel IP, customer subnet, and AP management subnet.',
   };
   function StationLabel({ children, hint }) {
     return (
@@ -25843,7 +26693,8 @@ function CaptivePortalPage({ mode = 'full' }) {
   function interfaceOptionLabel(iface = {}) {
     return [iface.name, iface.type, iface.bridge ? `bridge: ${iface.bridge}` : '', iface.comment].filter(Boolean).join(' - ');
   }
-  function bridgeInterfaceChoicesFromOptions(routerOptions = {}) {
+  function bridgeInterfaceChoicesFromOptions(routerOptions = {}, options = {}) {
+    const includePppoeInterfaces = Boolean(options.includePppoeInterfaces);
     const interfaceRows = Array.isArray(routerOptions.interfaces) ? routerOptions.interfaces : [];
     const bridgeRows = Array.isArray(routerOptions.bridges) ? routerOptions.bridges : [];
     const byName = new Map();
@@ -25861,7 +26712,7 @@ function CaptivePortalPage({ mode = 'full' }) {
       });
     });
     interfaceRows.forEach((iface) => {
-      if (!iface?.name || isPppoeInterface(iface)) return;
+      if (!iface?.name || (!includePppoeInterfaces && isPppoeInterface(iface))) return;
       const existing = byName.get(iface.name) || {};
       byName.set(iface.name, { ...iface, is_bridge: Boolean(iface.is_bridge || existing.is_bridge) });
     });
@@ -25873,7 +26724,11 @@ function CaptivePortalPage({ mode = 'full' }) {
     });
   }
   const stationChainReady = stationForm.routers.length > 0;
-  const stationRouterPathReady = stationForm.routers.length > 0 && stationForm.routers.every((router) => router.router_id && router.bridge_name && router.tagged_ports);
+  const stationRouterPathReady = stationForm.routers.length > 0 && stationForm.routers.every((router, index) => {
+    if (!(router.router_id && router.bridge_name && router.tagged_ports)) return false;
+    if (!stationRouterIsXconnect(router, index)) return true;
+    return Boolean(router.handoff_bridge_name && router.handoff_tagged_ports);
+  });
   const stationRootReady = Boolean(
     stationForm.vlan_id
     && stationForm.client_network_cidr
@@ -25883,10 +26738,19 @@ function CaptivePortalPage({ mode = 'full' }) {
 	    && (!stationForm.create_dhcp_server || stationForm.dhcp_server_name)
 	    && stationForm.portal_url
 	  );
+  const stationWireGuardReady = !stationForm.wireguard_enabled || Boolean(
+    stationForm.wireguard_interface_name
+    && stationForm.wireguard_station_address
+    && stationForm.wireguard_peer_public_key
+    && stationForm.wireguard_endpoint_host
+    && stationForm.wireguard_endpoint_port
+    && stationForm.wireguard_allowed_addresses
+    && (!stationForm.wireguard_hub_router_id || stationForm.wireguard_hub_interface_name)
+  );
   const stationStepItems = [
     { label: '1. Name Station', ready: Boolean(stationForm.station_name.trim() && stationForm.station_code.trim()), detail: 'Identify this substation network.' },
     { label: '2. Build Router Chain', ready: stationChainReady, detail: 'Root gateway first, downstream routers after.' },
-    { label: '3. Fill Router Fields', ready: stationRouterPathReady && stationRootReady, detail: 'Select bridges/ports plus customer VLAN values.' },
+    { label: '3. Fill Router Fields', ready: stationRouterPathReady && stationRootReady && stationWireGuardReady, detail: 'Select bridges/ports plus customer VLAN and optional WireGuard values.' },
     { label: '4. Review Plan', ready: false, detail: 'Generated commands open after save.' }
   ];
   const mikrotikFieldHints = {
@@ -26066,11 +26930,11 @@ function CaptivePortalPage({ mode = 'full' }) {
                               {checks.map((check) => (
                                 <span
                                   key={check.key}
-                                  className={`badge ${check.passed ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}
+                                  className={`badge ${check.skipped ? 'bg-blue-lt text-blue' : check.passed ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}
                                   title={check.message || check.label}
                                 >
-                                  {check.passed ? <IconCircleCheck size={11} className="me-1" /> : <IconAlertTriangle size={11} className="me-1" />}
-                                  {check.label}
+                                  {check.skipped ? <IconInfoCircle size={11} className="me-1" /> : check.passed ? <IconCircleCheck size={11} className="me-1" /> : <IconAlertTriangle size={11} className="me-1" />}
+                                  {check.skipped ? `${check.label}: skipped` : check.label}
                                 </span>
                               ))}
                             </div>
@@ -26867,7 +27731,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                           </td>
                           <td className="text-end">
                             <ActionBadgeGroup>
-                              <ActionBadgeButton icon={IconEye} label={router.latest_preflight_scan ? 'View scanned result' : 'Run a scan first'} tone="blue" disabled={!router.latest_preflight_scan} onClick={() => window.open(`/admin/network/mikrotik/scan-result?router_id=${encodeURIComponent(router.id)}`, '_blank', 'noopener,noreferrer')} />
+                              <ActionBadgeButton icon={IconEye} label={router.latest_preflight_scan ? 'View scanned result' : 'Run a scan first'} tone="blue" disabled={!router.latest_preflight_scan} onClick={() => window.open(`/admin/settings/network/mikrotik/scan-result?router_id=${encodeURIComponent(router.id)}`, '_blank', 'noopener,noreferrer')} />
                               <ActionBadgeButton icon={IconSearch} label={preflightScanning && preflightRouterId === router.id ? 'Scanning...' : 'Run scan'} tone="green" disabled={preflightScanning} onClick={() => runPreflightScan(router.id)} />
                             </ActionBadgeGroup>
                           </td>
@@ -26928,13 +27792,24 @@ function CaptivePortalPage({ mode = 'full' }) {
                               <span className="badge bg-secondary-lt text-secondary align-self-center">{station.status}</span>
 	                              {(() => {
 	                                const progress = stationProgressSummary(station);
-	                                return <span className={`badge align-self-center ${progress.pushed >= progress.total && progress.total ? 'bg-green-lt text-green' : progress.pushed ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>{progress.pushed}/{progress.total} pushed</span>;
+	                                const isChecking = progress.loading && !stationProgressMap[station.id] && !station.push_progress;
+	                                return <span className={`badge align-self-center ${isChecking ? 'bg-blue-lt text-blue' : progress.pushed >= progress.total && progress.total ? 'bg-green-lt text-green' : progress.pushed ? 'bg-yellow-lt text-yellow' : 'bg-secondary-lt text-secondary'}`}>{isChecking ? 'Checking config...' : `${progress.pushed}/${progress.total} pushed`}</span>;
 	                              })()}
                               {(station.has_pending_cleanup || station.plan?.has_pending_cleanup) && (
                                 <span className="badge bg-orange-lt text-orange align-self-center">Cleanup pending</span>
                               )}
+                              <span className={`badge align-self-center ${station.gateway_mode === 'LOCAL_STATION_GATEWAY' ? 'bg-purple-lt text-purple' : 'bg-secondary-lt text-secondary'}`}>
+                                {station.gateway_mode === 'LOCAL_STATION_GATEWAY' ? 'Local gateway' : 'Central root'}
+                              </span>
+                              {station.wireguard_enabled && (
+                                <span className="badge bg-blue-lt text-blue align-self-center">
+                                  <IconShieldLock size={13} className="me-1" />WireGuard
+                                </span>
+                              )}
                               <span className={`badge align-self-center ${station.omada_site_id || station.omada_site_name ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>
-                                {station.omada_site_name || station.omada_site_id ? `Omada: ${station.omada_site_name || station.omada_site_id}` : 'Omada site not bound'}
+                                {station.site_count || station.omada_site_name || station.omada_site_id
+                                  ? `Omada: ${station.omada_site_name || station.omada_site_id || 'primary'}${(station.site_count || 0) > 1 ? ` +${(station.site_count || 1) - 1} site(s)` : ''}`
+                                  : 'Omada sites not bound'}
                               </span>
 			                              <ActionBadgeButton icon={IconEye} label="View generated station plan" tone="blue" onClick={() => setStationReview(station)} />
                               <ActionBadgeButton icon={IconWifi} label="Review Omada captive portal setup for this station" tone="cyan" onClick={() => openStationOmadaPortalPlan(station)} />
@@ -28254,34 +29129,109 @@ function CaptivePortalPage({ mode = 'full' }) {
                           <input className="form-control" value={stationForm.description} onChange={(e) => updateStationField('description', e.target.value)} placeholder="Root router to CRS/OLT/AP captive portal VLAN path" />
 	                        </div>
 	                      </div>
+                      <div className="station-field-group mb-3">
+                        <div className="station-field-group-header d-flex align-items-center gap-1">
+                          Gateway / Backup Design <FieldHint text={stationFieldHints.gatewayMode} />
+                        </div>
+                        <div className="row g-3">
+                          {[
+                            {
+                              value: 'CENTRAL_ROOT_GATEWAY',
+                              title: 'Central root gateway',
+                              detail: 'Use when the core/root MikroTik owns this station VLAN and downstream routers only carry it.'
+                            },
+                            {
+                              value: 'LOCAL_STATION_GATEWAY',
+                              title: 'Local station gateway',
+                              detail: 'Use when this station router owns DHCP/NAT and can fail over to its own local ISP.'
+                            }
+                          ].map((option) => (
+                            <div className="col-md-6" key={`station-gateway-mode-${option.value}`}>
+                              <label className={`border rounded p-3 d-flex gap-2 h-100 ${stationForm.gateway_mode === option.value ? 'border-primary bg-primary-lt' : ''}`}>
+                                <input
+                                  className="form-check-input mt-1"
+                                  type="radio"
+                                  name="station-gateway-mode"
+                                  value={option.value}
+                                  checked={stationForm.gateway_mode === option.value}
+                                  onChange={() => updateStationField('gateway_mode', option.value)}
+                                />
+                                <span>
+                                  <span className="fw-semibold d-block">{option.title}</span>
+                                  <span className="text-muted small">{option.detail}</span>
+                                </span>
+                              </label>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
 	                      <div className="border rounded p-3 mb-3">
 	                        {(() => {
-	                          const boundSite = selectedStationSite(stationForm);
-	                          const stationSiteKey = boundSite ? siteOptionKey(boundSite) : selectedStationSiteKey();
-	                          const vlanStatus = omadaSiteVlanStatus(boundSite, stationForm.vlan_id);
+	                          const boundSites = selectedStationSites(stationForm);
+	                          const primarySite = selectedStationSite(stationForm);
+	                          const selectedKeys = selectedStationSiteKeys(stationForm);
+	                          const vlanMatches = boundSites.filter((site) => Number(site.vlan_tag) === Number(stationForm.vlan_id)).length;
+	                          const apConnected = boundSites.reduce((sum, site) => sum + Number(site.ap_connected_count || 0), 0);
+	                          const apTotal = boundSites.reduce((sum, site) => sum + Number(site.ap_total_count || 0), 0);
 	                          return (
-	                            <div className="row g-3 align-items-end">
+	                            <div className="row g-3">
 	                              <div className="col-lg-6">
-	                                <StationLabel hint="Choose the Omada site that owns the APs for this station. Omada will handle captive portal redirect and client authorization for this station's SSID.">Station Omada Site</StationLabel>
-	                                <select className="form-select" value={stationSiteKey} onChange={(e) => updateStationOmadaSite(e.target.value)}>
-	                                  <option value="|||">Select Omada site for this station</option>
-	                                  {siteDeployments.map((site) => (
-	                                    <option value={siteOptionKey(site)} key={`station-site-option-${siteOptionKey(site)}`}>
-	                                      {site.site_name}{site.omada_site_id ? ` (${site.omada_site_id})` : ''}{site.vlan_tag ? ` · VLAN ${site.vlan_tag}` : ''}
-	                                    </option>
-	                                  ))}
-	                                </select>
+	                                <StationLabel hint="Choose all Omada sites/barangays whose APs belong to this station. The primary site is used by current Omada automation buttons; all selected sites inherit this station VLAN.">Station Omada Sites / Barangays</StationLabel>
+	                                <div className="station-port-checkbox-list" style={{ maxHeight: 260 }}>
+	                                  {siteDeployments.map((site) => {
+	                                    const key = siteOptionKey(site);
+	                                    const checked = selectedKeys.has(key);
+	                                    const primary = checked && primarySite && siteOptionKey(primarySite) === key;
+	                                    return (
+	                                      <label className={`station-port-checkbox-item ${checked ? 'selected' : ''}`} key={`station-site-option-${key}`}>
+	                                        <input
+	                                          className="form-check-input"
+	                                          type="checkbox"
+	                                          checked={checked}
+	                                          onChange={(e) => updateStationSites(site, e.target.checked)}
+	                                        />
+	                                        <span className="station-port-checkbox-text">
+	                                          <strong>{site.site_name}</strong>
+	                                          <small>
+	                                            {[
+	                                              site.barangay || site.municipality,
+	                                              site.omada_site_id ? `Omada ${site.omada_site_id}` : 'Local site',
+	                                              site.vlan_tag ? `VLAN ${site.vlan_tag}` : 'No VLAN saved',
+	                                              `${site.ap_connected_count || 0}/${site.ap_total_count || 0} APs`
+	                                            ].filter(Boolean).join(' · ')}
+	                                          </small>
+	                                        </span>
+	                                        {checked && (
+	                                          <input
+	                                            className="form-check-input ms-auto"
+	                                            type="radio"
+	                                            name="station-primary-site"
+	                                            checked={primary}
+	                                            onChange={() => setStationPrimarySite(site)}
+	                                            title="Use as primary Omada automation target"
+	                                          />
+	                                        )}
+	                                      </label>
+	                                    );
+	                                  })}
+	                                  {!siteDeployments.length && <div className="text-muted small p-3">No sites found yet. Create barangay sites first in APs Deployment - Sites.</div>}
+	                                </div>
 	                              </div>
 	                              <div className="col-lg-3">
-	                                <div className="text-muted small">Selected site VLAN</div>
-	                                <div><span className={`badge ${vlanStatus.className}`}>{vlanStatus.label}</span></div>
+	                                <div className="text-muted small">Selected sites</div>
+	                                <div className="h4 mb-1">{boundSites.length}</div>
+	                                <div className="d-flex flex-wrap gap-1">
+	                                  <span className={`badge ${boundSites.length ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{boundSites.length ? 'Bound' : 'Not bound'}</span>
+	                                  <span className={`badge ${vlanMatches === boundSites.length && boundSites.length ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{vlanMatches}/{boundSites.length} VLAN match</span>
+	                                </div>
 	                              </div>
 	                              <div className="col-lg-3">
-	                                <div className="text-muted small">Connected APs</div>
-	                                <div className="h4 mb-0">{boundSite ? `${boundSite.ap_connected_count || 0}/${boundSite.ap_total_count || 0}` : '-'}</div>
+	                                <div className="text-muted small">APs in selected sites</div>
+	                                <div className="h4 mb-1">{boundSites.length ? `${apConnected}/${apTotal}` : '-'}</div>
+	                                <div className="text-muted small">Primary: {primarySite?.site_name || 'not selected'}</div>
 	                              </div>
 	                              <div className="col-12 text-muted small">
-	                                Bind the station to the Omada site before field testing. The site VLAN should match this station's customer VLAN.
+	                                One station can cover multiple barangay Omada sites. All selected sites will use station VLAN {stationForm.vlan_id || '-'}; the primary site is used by the current Omada automation buttons.
 	                              </div>
 	                            </div>
 	                          );
@@ -28333,15 +29283,28 @@ function CaptivePortalPage({ mode = 'full' }) {
                               const routerOptions = row?.router_id ? (mikrotikOptions[row.router_id] || {}) : {};
                               const routerInterfaces = routerOptions.interfaces || [];
                               const safeStationInterfaces = routerInterfaces.filter((iface) => !isPppoeInterface(iface));
+                              const transportMode = activeIndex === 0 ? 'BRIDGE_TRUNK' : normalizeStationTransportMode(row?.transport_mode);
+                              const isXconnect = activeIndex > 0 && transportMode === 'VLAN_XCONNECT';
                               const bridgeInterfaceChoices = bridgeInterfaceChoicesFromOptions(routerOptions);
+                              const handoffBridgeInterfaceChoices = bridgeInterfaceChoicesFromOptions(routerOptions, { includePppoeInterfaces: true });
                               const routerInterfaceLists = routerOptions.interface_lists || [];
                               const selectedTaggedPorts = String(row?.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
                               const selectedTaggedPortSet = new Set(selectedTaggedPorts);
+                              const selectedHandoffTaggedPorts = String(row?.handoff_tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+                              const selectedHandoffTaggedPortSet = new Set(selectedHandoffTaggedPorts);
                               const portSearchKey = row?.router_id || `index-${activeIndex}`;
                               const portSearchText = stationPortSearch[portSearchKey] || '';
+                              const handoffPortSearchKey = `${portSearchKey}-handoff`;
+                              const handoffPortSearchText = stationPortSearch[handoffPortSearchKey] || '';
                               const visibleTaggedInterfaces = safeStationInterfaces.filter((iface) => {
                                 const haystack = [iface.name, iface.type, iface.bridge, iface.comment].map((value) => String(value || '').toLowerCase()).join(' ');
                                 return !portSearchText.trim() || haystack.includes(portSearchText.trim().toLowerCase());
+                              });
+                              const visibleHandoffTaggedInterfaces = routerInterfaces.filter((iface) => {
+                                if (!iface?.name || iface.name === row?.handoff_bridge_name) return false;
+                                if (row?.handoff_bridge_name && iface.bridge !== row.handoff_bridge_name && !selectedHandoffTaggedPortSet.has(iface.name)) return false;
+                                const haystack = [iface.name, iface.type, iface.bridge, iface.comment].map((value) => String(value || '').toLowerCase()).join(' ');
+                                return !handoffPortSearchText.trim() || haystack.includes(handoffPortSearchText.trim().toLowerCase());
                               });
                               return (
                                 <div className="station-router-panel">
@@ -28351,7 +29314,9 @@ function CaptivePortalPage({ mode = 'full' }) {
                                       <div className="text-muted small">
                                         {activeIndex === 0
                                           ? 'This router creates the VLAN interface, gateway IP, DHCP pool, and first tagged trunk.'
-                                          : 'This router carries the same customer VLAN through its bridge/tagged ports toward OLTs and APs.'}
+                                          : isXconnect
+                                            ? 'This router bridges the station VLAN between an upstream trunk bridge and a downstream OLT/PPPoE bridge without moving existing ports.'
+                                            : 'This router carries the same customer VLAN through its bridge/tagged ports toward OLTs and APs.'}
                                       </div>
                                     </div>
                                     <div className="btn-list">
@@ -28369,7 +29334,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                           <div className="col-md-6">
                                             <StationLabel hint={stationFieldHints.mikrotikRouter}>MikroTik Router</StationLabel>
                                             <select className="form-select" value={row.router_id} onChange={(e) => {
-                                              updateStationRouter(activeIndex, { router_id: e.target.value, bridge_name: '', tagged_ports: '' });
+                                              updateStationRouter(activeIndex, { router_id: e.target.value, bridge_name: '', tagged_ports: '', handoff_bridge_name: '', handoff_tagged_ports: '' });
                                               loadMikrotikRouterOptions(e.target.value);
                                             }} required>
                                               <option value="">Choose router</option>
@@ -28382,10 +29347,54 @@ function CaptivePortalPage({ mode = 'full' }) {
                                     </div>
                                     <div className="col-12">
                                       <div className="station-subpanel">
-                                        <div className="station-subpanel-title">{activeIndex === 0 ? 'Step 3B: Select Root Bridge and Tagged Ports' : 'Step 3B: Select Bridge and Tagged Ports'}</div>
+                                        <div className="station-subpanel-title">
+                                          {activeIndex === 0
+                                            ? 'Step 3B: Select Root Bridge and Tagged Ports'
+                                            : isXconnect
+                                              ? 'Step 3B: Select VLAN Handoff Path'
+                                              : 'Step 3B: Select Bridge and Tagged Ports'}
+                                        </div>
+                                        {activeIndex > 0 && (
+                                          <div className="mb-3">
+                                            <StationLabel hint={stationFieldHints.transportMode}>Transport Mode</StationLabel>
+                                            <div className="row g-2">
+                                              {[
+                                                {
+                                                  value: 'BRIDGE_TRUNK',
+                                                  title: 'Bridge trunk',
+                                                  detail: 'Use when all selected tagged ports belong to the same bridge.'
+                                                },
+                                                {
+                                                  value: 'VLAN_XCONNECT',
+                                                  title: 'VLAN handoff / xconnect',
+                                                  detail: 'Use when the upstream trunk and downstream OLT/PPPoE path are different bridges on this router.'
+                                                }
+                                              ].map((option) => (
+                                                <div className="col-md-6" key={`station-transport-mode-${option.value}`}>
+                                                  <label className={`border rounded p-3 d-flex gap-2 h-100 ${transportMode === option.value ? 'border-primary bg-primary-lt' : ''}`}>
+                                                    <input
+                                                      className="form-check-input mt-1"
+                                                      type="radio"
+                                                      name={`station-transport-mode-${activeIndex}`}
+                                                      value={option.value}
+                                                      checked={transportMode === option.value}
+                                                      onChange={() => updateStationRouter(activeIndex, option.value === 'VLAN_XCONNECT'
+                                                        ? { transport_mode: option.value, handoff_bridge_name: row.handoff_bridge_name || '', handoff_tagged_ports: row.handoff_tagged_ports || '' }
+                                                        : { transport_mode: option.value, handoff_bridge_name: '', handoff_tagged_ports: '' })}
+                                                    />
+                                                    <span>
+                                                      <span className="fw-semibold d-block">{option.title}</span>
+                                                      <span className="text-muted small">{option.detail}</span>
+                                                    </span>
+                                                  </label>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
                                         <div className="row g-3">
                                           <div className="col-md-6">
-                                            <StationLabel hint={activeIndex === 0 ? stationFieldHints.rootBridge : stationFieldHints.downstreamBridge}>{activeIndex === 0 ? 'Root Bridge / Interface' : 'Bridge'}</StationLabel>
+                                            <StationLabel hint={activeIndex === 0 ? stationFieldHints.rootBridge : isXconnect ? stationFieldHints.xconnectUpstreamBridge : stationFieldHints.downstreamBridge}>{activeIndex === 0 ? 'Root Bridge / Interface' : isXconnect ? 'Upstream Bridge / Interface' : 'Bridge'}</StationLabel>
                                             <select className="form-select" value={row.bridge_name} onChange={(e) => updateStationRouter(activeIndex, { bridge_name: e.target.value })} required disabled={!row.router_id}>
                                               <option value="">{row.router_id ? 'Choose detected bridge/interface' : 'Choose router first'}</option>
                                               {bridgeInterfaceChoices.map((iface) => <option value={iface.name} key={`station-bridge-${activeIndex}-${iface.name}`}>{iface.name}{iface.type ? ` (${iface.type})` : ''}{iface.bridge ? ` - in ${iface.bridge}` : ''}{iface.disabled ? ' - disabled' : ''}{iface.running ? ' - running' : ''}</option>)}
@@ -28393,7 +29402,9 @@ function CaptivePortalPage({ mode = 'full' }) {
                                             {!!(routerOptions.warnings || []).length && <div className="text-warning small mt-1">Some optional RouterOS option lists were unavailable, but interfaces loaded.</div>}
                                           </div>
                                           <div className="col-12">
-                                            <StationLabel hint={activeIndex === 0 ? stationFieldHints.taggedPortsRoot : stationFieldHints.taggedPortsDownstream}>Tagged Ports</StationLabel>
+                                            <StationLabel hint={activeIndex === 0 ? stationFieldHints.taggedPortsRoot : isXconnect ? stationFieldHints.xconnectUpstreamPorts : stationFieldHints.taggedPortsDownstream}>
+                                              {isXconnect ? 'Upstream Tagged Ports' : 'Tagged Ports'}
+                                            </StationLabel>
                                             <div className="station-port-picker">
                                               <div className="input-group station-port-search-group">
                                                 <input
@@ -28444,7 +29455,11 @@ function CaptivePortalPage({ mode = 'full' }) {
                                                 )}
                                               </div>
                                             </div>
-                                            <div className="text-muted small">Check every detected RouterOS interface that should carry VLAN {stationForm.vlan_id || 'x'} on this router. PPPoE interfaces are hidden.</div>
+                                            <div className="text-muted small">
+                                              {isXconnect
+                                                ? `Check the upstream trunk port(s) where VLAN ${stationForm.vlan_id || 'x'} arrives on this router. PPPoE interfaces are hidden on this upstream side.`
+                                                : `Check every detected RouterOS interface that should carry VLAN ${stationForm.vlan_id || 'x'} on this router. PPPoE interfaces are hidden.`}
+                                            </div>
                                             {!!selectedTaggedPorts.length && (
                                               <div className="d-flex flex-wrap gap-1 mt-2">
                                                 {selectedTaggedPorts.map((port) => (
@@ -28464,6 +29479,109 @@ function CaptivePortalPage({ mode = 'full' }) {
                                               </div>
                                             )}
                                           </div>
+                                          {isXconnect && (
+                                            <>
+                                              <div className="col-md-6">
+                                                <StationLabel hint={stationFieldHints.xconnectDownstreamBridge}>Downstream / OLT Bridge</StationLabel>
+                                                <select
+                                                  className="form-select"
+                                                  value={row.handoff_bridge_name || ''}
+                                                  onChange={(e) => updateStationRouter(activeIndex, { handoff_bridge_name: e.target.value, handoff_tagged_ports: '' })}
+                                                  required
+                                                  disabled={!row.router_id}
+                                                >
+                                                  <option value="">{row.router_id ? 'Choose downstream bridge/interface' : 'Choose router first'}</option>
+                                                  {row.handoff_bridge_name && !handoffBridgeInterfaceChoices.some((iface) => iface.name === row.handoff_bridge_name) && (
+                                                    <option value={row.handoff_bridge_name}>{row.handoff_bridge_name} (current)</option>
+                                                  )}
+                                                  {handoffBridgeInterfaceChoices.map((iface) => (
+                                                    <option value={iface.name} key={`station-handoff-bridge-${activeIndex}-${iface.name}`}>
+                                                      {iface.name}{iface.type ? ` (${iface.type})` : ''}{iface.bridge ? ` - in ${iface.bridge}` : ''}{iface.disabled ? ' - disabled' : ''}{iface.running ? ' - running' : ''}
+                                                    </option>
+                                                  ))}
+                                                </select>
+                                              </div>
+                                              <div className="col-12">
+                                                <StationLabel hint={stationFieldHints.xconnectDownstreamPorts}>Downstream / OLT Tagged Ports</StationLabel>
+                                                <div className="station-port-picker">
+                                                  <div className="input-group station-port-search-group">
+                                                    <input
+                                                      className="form-control station-port-search"
+                                                      value={handoffPortSearchText}
+                                                      onChange={(e) => setStationPortSearch((current) => ({ ...current, [handoffPortSearchKey]: e.target.value }))}
+                                                      placeholder="Search downstream/OLT port, bridge, type, or comment"
+                                                      disabled={!row.router_id}
+                                                    />
+                                                    <button
+                                                      className="btn btn-outline-secondary station-port-search-clear"
+                                                      type="button"
+                                                      onClick={() => setStationPortSearch((current) => ({ ...current, [handoffPortSearchKey]: '' }))}
+                                                      disabled={!row.router_id || !handoffPortSearchText}
+                                                      title="Clear downstream port search"
+                                                      aria-label="Clear downstream port search"
+                                                    >
+                                                      <IconX size={15} />
+                                                    </button>
+                                                  </div>
+                                                  <div className="station-port-checkbox-list">
+                                                    {visibleHandoffTaggedInterfaces.map((iface) => (
+                                                      <label className={`station-port-checkbox-item ${selectedHandoffTaggedPortSet.has(iface.name) ? 'selected' : ''}`} key={`station-handoff-tagged-${activeIndex}-${iface.name}`}>
+                                                        <input
+                                                          className="form-check-input"
+                                                          type="checkbox"
+                                                          checked={selectedHandoffTaggedPortSet.has(iface.name)}
+                                                          onChange={(e) => toggleStationHandoffTaggedPort(activeIndex, iface.name, e.target.checked)}
+                                                          disabled={!row.router_id}
+                                                        />
+                                                        <span className="station-port-checkbox-text">
+                                                          <strong>{iface.name}</strong>
+                                                          <small>
+                                                            {[
+                                                              iface.type,
+                                                              iface.bridge ? `in ${iface.bridge}` : '',
+                                                              iface.comment,
+                                                              iface.disabled ? 'disabled' : '',
+                                                              iface.running ? 'running' : ''
+                                                            ].filter(Boolean).join(' · ') || 'interface'}
+                                                          </small>
+                                                        </span>
+                                                      </label>
+                                                    ))}
+                                                    {!visibleHandoffTaggedInterfaces.length && (
+                                                      <div className="text-muted small p-3">
+                                                        {row.router_id
+                                                          ? row.handoff_bridge_name
+                                                            ? `No matching downstream ports found inside ${row.handoff_bridge_name}.`
+                                                            : 'Choose a downstream/OLT bridge first.'
+                                                          : 'Choose a router first.'}
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                                <div className="text-muted small">
+                                                  Check the downstream OLT/AP port(s) where VLAN {stationForm.vlan_id || 'x'} should leave this router. PPPoE bridges are allowed here only because VLAN Handoff / Xconnect is explicit.
+                                                </div>
+                                                {!!selectedHandoffTaggedPorts.length && (
+                                                  <div className="d-flex flex-wrap gap-1 mt-2">
+                                                    {selectedHandoffTaggedPorts.map((port) => (
+                                                      <span className="badge bg-purple-lt text-purple station-selected-port-badge" key={`selected-handoff-port-${activeIndex}-${port}`}>
+                                                        <span>{port}</span>
+                                                        <button
+                                                          className="station-selected-port-remove"
+                                                          type="button"
+                                                          onClick={() => toggleStationHandoffTaggedPort(activeIndex, port, false)}
+                                                          title={`Remove ${port}`}
+                                                          aria-label={`Remove ${port}`}
+                                                        >
+                                                          <IconX size={12} />
+                                                        </button>
+                                                      </span>
+                                                    ))}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            </>
+                                          )}
                                         </div>
                                       </div>
                                     </div>
@@ -28557,6 +29675,82 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                                              </div>
 	                                            </div>
 	                                          </div>
+                                          <div className="station-field-group">
+                                            <div className="station-field-group-header d-flex align-items-center justify-content-between gap-2">
+                                              <span className="d-inline-flex align-items-center gap-1">WireGuard Omada Reachability <FieldHint text={stationFieldHints.wireguardEnabled} /></span>
+                                              <label className="form-check form-switch mb-0">
+                                                <input
+                                                  className="form-check-input"
+                                                  type="checkbox"
+                                                  checked={stationForm.wireguard_enabled}
+                                                  onChange={(e) => updateStationField('wireguard_enabled', e.target.checked)}
+                                                />
+                                              </label>
+                                            </div>
+                                            <div className="text-muted small mb-3">
+                                              Use this for stations with local ISP backup. The station keeps a tunnel to central Omada/portal services when the main fiber path fails.
+                                            </div>
+                                            {stationForm.wireguard_enabled && (
+                                              <div className="row g-3">
+                                                <div className="col-md-4">
+                                                  <StationLabel hint={stationFieldHints.wireguardInterface}>Station WG Interface</StationLabel>
+                                                  <input className="form-control" value={stationForm.wireguard_interface_name} onChange={(e) => updateStationField('wireguard_interface_name', e.target.value)} placeholder="WG-3J-centro" />
+                                                </div>
+                                                <div className="col-md-4">
+                                                  <StationLabel hint={stationFieldHints.wireguardStationAddress}>Station Tunnel Address</StationLabel>
+                                                  <input className="form-control" value={stationForm.wireguard_station_address} onChange={(e) => updateStationField('wireguard_station_address', e.target.value)} placeholder="10.250.78.2/32" />
+                                                </div>
+                                                <div className="col-md-4">
+                                                  <StationLabel hint={stationFieldHints.wireguardPeerPublicKey}>Central Hub Public Key</StationLabel>
+                                                  <input className="form-control" value={stationForm.wireguard_peer_public_key} onChange={(e) => updateStationField('wireguard_peer_public_key', e.target.value)} placeholder="Base64 public key from central hub" />
+                                                </div>
+                                                <div className="col-md-5">
+                                                  <StationLabel hint={stationFieldHints.wireguardEndpointHost}>Central Endpoint Host</StationLabel>
+                                                  <input className="form-control" value={stationForm.wireguard_endpoint_host} onChange={(e) => updateStationField('wireguard_endpoint_host', e.target.value)} placeholder="vpn.3jhotspot.com or public IP" />
+                                                </div>
+                                                <div className="col-md-2">
+                                                  <StationLabel hint={stationFieldHints.wireguardEndpointPort}>UDP Port</StationLabel>
+                                                  <input className="form-control" type="number" min="1" max="65535" value={stationForm.wireguard_endpoint_port} onChange={(e) => updateStationField('wireguard_endpoint_port', e.target.value)} placeholder="51820" />
+                                                </div>
+                                                <div className="col-md-3">
+                                                  <StationLabel hint={stationFieldHints.wireguardEndpointRouteGateway}>Endpoint Route Gateway</StationLabel>
+                                                  <input className="form-control" value={stationForm.wireguard_endpoint_route_gateway || ''} onChange={(e) => updateStationField('wireguard_endpoint_route_gateway', e.target.value)} placeholder="Local ISP gateway, e.g. 192.168.5.1" />
+                                                </div>
+                                                <div className="col-md-3">
+                                                  <StationLabel hint={stationFieldHints.wireguardPersistentKeepalive}>Keepalive Seconds</StationLabel>
+                                                  <input className="form-control" type="number" min="0" max="65535" value={stationForm.wireguard_persistent_keepalive} onChange={(e) => updateStationField('wireguard_persistent_keepalive', e.target.value)} placeholder="25" />
+                                                </div>
+                                                <div className="col-md-2">
+                                                  <StationLabel hint={stationFieldHints.wireguardAllowedAddresses}>Route Distance</StationLabel>
+                                                  <input className="form-control" type="number" min="1" max="255" value={stationForm.wireguard_route_distance} onChange={(e) => updateStationField('wireguard_route_distance', e.target.value)} placeholder="200" />
+                                                </div>
+                                                <div className="col-12">
+                                                  <StationLabel hint={stationFieldHints.wireguardAllowedAddresses}>Central Networks Routed Through WG</StationLabel>
+                                                  <input className="form-control" value={stationForm.wireguard_allowed_addresses} onChange={(e) => updateStationField('wireguard_allowed_addresses', e.target.value)} placeholder="192.168.50.0/24,10.250.0.1/32" />
+                                                </div>
+                                                <div className="col-md-6">
+                                                  <StationLabel hint={stationFieldHints.wireguardHubRouter}>Central Hub Router</StationLabel>
+                                                  <select className="form-select" value={stationForm.wireguard_hub_router_id} onChange={(e) => updateStationField('wireguard_hub_router_id', e.target.value)}>
+                                                    <option value="">Do not manage central hub peer yet</option>
+                                                    {mikrotiks.map((router) => <option value={router.id} key={`wg-hub-router-${router.id}`}>{router.router_name} ({router.host})</option>)}
+                                                  </select>
+                                                </div>
+                                                <div className="col-md-6">
+                                                  <StationLabel hint={stationFieldHints.wireguardHubInterface}>Central Hub WG Interface</StationLabel>
+                                                  <input className="form-control" value={stationForm.wireguard_hub_interface_name} onChange={(e) => updateStationField('wireguard_hub_interface_name', e.target.value)} placeholder="wg-3j-hub" disabled={!stationForm.wireguard_hub_router_id} />
+                                                </div>
+                                                <div className="col-md-6">
+                                                  <StationLabel hint={stationFieldHints.wireguardStationPublicKey}>Station Public Key</StationLabel>
+                                                  <input className="form-control" value={stationForm.wireguard_station_public_key} onChange={(e) => updateStationField('wireguard_station_public_key', e.target.value)} placeholder="Paste after station WG interface is created" />
+                                                  <div className="text-muted small">Leave blank on first save. After pushing the station WG interface, read its public key from RouterOS and save it here to enable the hub peer step.</div>
+                                                </div>
+                                                <div className="col-md-6">
+                                                  <StationLabel hint={stationFieldHints.wireguardHubAllowedAddresses}>Hub Peer Allowed Addresses</StationLabel>
+                                                  <input className="form-control" value={stationForm.wireguard_hub_allowed_addresses} onChange={(e) => updateStationField('wireguard_hub_allowed_addresses', e.target.value)} placeholder="10.250.78.2/32,10.78.0.0/24" disabled={!stationForm.wireguard_hub_router_id} />
+                                                </div>
+                                              </div>
+                                            )}
+                                          </div>
 	                                          <div className="alert alert-info mb-0">
 		                                            MikroTik Station setup creates only the customer VLAN gateway, DHCP, NAT, trunk path, and one-device WiFi pass fairness guard. Omada Controller provides the captive portal redirect and enforcement for the SSID.
 	                                          </div>
@@ -28609,14 +29803,20 @@ function CaptivePortalPage({ mode = 'full' }) {
 		                    <div className="row g-3 mb-3">
 		                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Station Code</div><div className="fw-semibold">{stationReview.station_code || '-'}</div></div></div>
 		                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Enforcement</div><div className="fw-semibold">Omada Captive Portal</div></div></div>
-		                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Station Role</div><div className="fw-semibold">Gateway / Transport</div></div></div>
+		                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Gateway Mode</div><div className="fw-semibold">{stationReview.gateway_mode === 'LOCAL_STATION_GATEWAY' ? 'Local station gateway' : 'Central root gateway'}</div></div></div>
 		                      <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Portal URL</div><div className="fw-semibold text-truncate" title={stationReview.portal_url || ''}>{stationReview.portal_url || '-'}</div></div></div>
 	                    </div>
 	                    <div className="row g-3 mb-3">
 	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">Root DHCP Server</div><div className="fw-semibold">{stationReview.create_dhcp_server ? (stationReview.dhcp_server_name || '-') : 'Disabled'}</div></div></div>
 	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">DHCP Lease Time</div><div className="fw-semibold">{stationReview.create_dhcp_server ? (stationReview.dhcp_lease_time || '1h') : '-'}</div></div></div>
-	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">DHCP Ownership</div><div className="fw-semibold">Root gateway only</div></div></div>
+	                      <div className="col-md-4"><div className="border rounded p-3 h-100"><div className="text-muted small">WireGuard Reachability</div><div className="fw-semibold">{stationReview.wireguard_enabled ? `${stationReview.wireguard_interface_name || 'Enabled'} -> ${stationReview.wireguard_endpoint_host || 'central hub'}` : 'Disabled'}</div></div></div>
 	                    </div>
+                      {stationReview.wireguard_enabled && (
+                        <div className="alert alert-info">
+                          <div className="fw-semibold mb-1">WireGuard station backup path</div>
+                          <div>Station tunnel address: {stationReview.wireguard_station_address || '-'} · Central routes: {stationReview.wireguard_allowed_addresses || '-'} · Hub peer: {stationReview.wireguard_hub_router_id ? (stationReview.wireguard_station_public_key ? 'ready when applied' : 'needs station public key after first station-side push') : 'not managed in this plan'}</div>
+                        </div>
+                      )}
 		                    <div className="text-muted small mb-3">{stationReview.plan?.summary || 'Root router creates the customer VLAN gateway/DHCP network. Downstream routers carry the same VLAN as a tagged trunk toward OLT/AP paths.'}</div>
 	                    {(stationReview.plan?.router_plans || []).map((routerPlan) => (
 	                      <details className="border rounded mb-2" key={`station-review-plan-${routerPlan.router_id}`} open>
@@ -28649,49 +29849,73 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                            </div>
 	                            <div className="border rounded p-3 mb-3">
 	                              {(() => {
-	                                const rawBindingKey = `${stationOmadaBindingForm.omada_site_id || ''}|||${stationOmadaBindingForm.omada_site_name || ''}`;
-	                                const bindingSite = siteDeployments.find((site) => siteOptionKey(site) === rawBindingKey) || selectedStationSite(stationOmadaBindingForm);
-	                                const bindingKey = bindingSite ? siteOptionKey(bindingSite) : rawBindingKey;
-	                                const vlanStatus = omadaSiteVlanStatus(bindingSite, stationOmadaPlan.plan.station?.vlan_id);
+	                                const bindingSites = selectedStationSites(stationOmadaBindingForm);
+	                                const bindingPrimarySite = selectedStationSite(stationOmadaBindingForm);
+	                                const selectedKeys = selectedStationSiteKeys(stationOmadaBindingForm);
+	                                const stationVlan = stationOmadaPlan.plan.station?.vlan_id;
+	                                const vlanMatches = bindingSites.filter((site) => Number(site.vlan_tag) === Number(stationVlan)).length;
+	                                const apConnected = bindingSites.reduce((sum, site) => sum + Number(site.ap_connected_count || 0), 0);
+	                                const apTotal = bindingSites.reduce((sum, site) => sum + Number(site.ap_total_count || 0), 0);
 	                                return (
-	                                  <div className="row g-3 align-items-end">
-	                                    <div className="col-lg-5">
-	                                      <label className="form-label">Bind Station to Omada Site</label>
-	                                      <select
-	                                        className="form-select"
-	                                        value={bindingKey}
-		                                        onChange={(e) => {
-		                                          const site = findSiteOptionByKey(e.target.value);
-		                                          setStationOmadaBindingResult(null);
-		                                          setStationOmadaBindingForm({
-		                                            omada_site_id: site?.omada_site_id || '',
-		                                            omada_site_name: site?.site_name || ''
-		                                          });
-		                                        }}
-	                                      >
-	                                        <option value="|||">Select Omada site</option>
-	                                        {siteDeployments.map((site) => (
-	                                          <option value={siteOptionKey(site)} key={`omada-binding-site-${siteOptionKey(site)}`}>
-	                                            {site.site_name}{site.omada_site_id ? ` (${site.omada_site_id})` : ''}{site.vlan_tag ? ` · VLAN ${site.vlan_tag}` : ''}
-	                                          </option>
-	                                        ))}
-	                                      </select>
-	                                    </div>
-	                                    <div className="col-lg-3">
-	                                      <div className="text-muted small">VLAN check</div>
-	                                      <span className={`badge ${vlanStatus.className}`}>{vlanStatus.label}</span>
+	                                  <div className="row g-3">
+	                                    <div className="col-lg-6">
+	                                      <label className="form-label">Bind Station to Omada Sites / Barangays</label>
+	                                      <div className="station-port-checkbox-list" style={{ maxHeight: 260 }}>
+	                                        {siteDeployments.map((site) => {
+	                                          const key = siteOptionKey(site);
+	                                          const checked = selectedKeys.has(key);
+	                                          const primary = checked && bindingPrimarySite && siteOptionKey(bindingPrimarySite) === key;
+	                                          return (
+	                                            <label className={`station-port-checkbox-item ${checked ? 'selected' : ''}`} key={`omada-binding-site-${key}`}>
+	                                              <input
+	                                                className="form-check-input"
+	                                                type="checkbox"
+	                                                checked={checked}
+	                                                onChange={(e) => updateStationBindingSites(site, e.target.checked)}
+	                                              />
+	                                              <span className="station-port-checkbox-text">
+	                                                <strong>{site.site_name}</strong>
+	                                                <small>
+	                                                  {[
+	                                                    site.barangay || site.municipality,
+	                                                    site.omada_site_id ? `Omada ${site.omada_site_id}` : 'Local site',
+	                                                    site.vlan_tag ? `VLAN ${site.vlan_tag}` : 'No VLAN saved',
+	                                                    `${site.ap_connected_count || 0}/${site.ap_total_count || 0} APs`
+	                                                  ].filter(Boolean).join(' · ')}
+	                                                </small>
+	                                              </span>
+	                                              {checked && (
+	                                                <input
+	                                                  className="form-check-input ms-auto"
+	                                                  type="radio"
+	                                                  name="station-binding-primary-site"
+	                                                  checked={primary}
+	                                                  onChange={() => setStationBindingPrimarySite(site)}
+	                                                  title="Use as primary Omada automation target"
+	                                                />
+	                                              )}
+	                                            </label>
+	                                          );
+	                                        })}
+	                                      </div>
 	                                    </div>
 	                                    <div className="col-lg-2">
-	                                      <div className="text-muted small">APs in site</div>
-	                                      <div className="fw-semibold">{bindingSite ? `${bindingSite.ap_connected_count || 0}/${bindingSite.ap_total_count || 0}` : '-'}</div>
+	                                      <div className="text-muted small">VLAN check</div>
+	                                      <div className="h4 mb-1">{vlanMatches}/{bindingSites.length}</div>
+	                                      <span className={`badge ${vlanMatches === bindingSites.length && bindingSites.length ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>VLAN {stationVlan || '-'} match</span>
+	                                    </div>
+	                                    <div className="col-lg-2">
+	                                      <div className="text-muted small">APs in sites</div>
+	                                      <div className="fw-semibold">{bindingSites.length ? `${apConnected}/${apTotal}` : '-'}</div>
+	                                      <div className="text-muted small text-truncate" title={bindingPrimarySite?.site_name || ''}>Primary: {bindingPrimarySite?.site_name || '-'}</div>
 	                                    </div>
 	                                    <div className="col-lg-2">
 	                                      <button type="button" className="btn btn-primary w-100" onClick={saveStationOmadaBinding} disabled={stationOmadaBindingSaving}>
 	                                        {stationOmadaBindingSaving ? 'Saving...' : 'Save Binding'}
 	                                      </button>
-	                                    </div>
+		                                    </div>
 		                                    <div className="col-12 text-muted small">
-		                                      Each station should be bound to the Omada site that owns its APs. Omada automation actions below will target this station site.
+		                                      Each station can be bound to multiple barangay sites. The primary site is used by the current Omada automation actions below.
 		                                    </div>
 		                                    {stationOmadaBindingResult && (
 		                                      <div className="col-12">
@@ -28709,7 +29933,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                               <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Readiness</div><div className="h3 mb-0"><span className={`badge ${omadaReadinessClass(stationOmadaPlan.plan.status)}`}>{stationOmadaPlan.plan.status}</span></div></div></div>
                               <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Station VLAN</div><div className="h3 mb-0">VLAN {stationOmadaPlan.plan.station?.vlan_id}</div></div></div>
                               <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">SSID</div><div className="fw-semibold text-truncate" title={stationOmadaPlan.plan.ssid?.display_ssid}>{stationOmadaPlan.plan.ssid?.display_ssid || '-'}</div><div className="text-muted small">{stationOmadaPlan.plan.ssid?.security_mode || 'OPEN'}</div></div></div>
-                              <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Omada Site</div><div className="fw-semibold text-truncate" title={stationOmadaPlan.plan.omada?.selected_site_name || stationOmadaPlan.plan.omada?.selected_site_id}>{stationOmadaPlan.plan.omada?.selected_site_name || stationOmadaPlan.plan.omada?.selected_site_id || '-'}</div><div className="text-muted small">{stationOmadaPlan.plan.omada?.ap_connected_count || 0}/{stationOmadaPlan.plan.omada?.ap_total_count || 0} APs connected · {stationOmadaPlan.plan.omada?.ap_count_source === 'OMADA_API' ? 'live Omada' : 'local records'}</div></div></div>
+                              <div className="col-md-3"><div className="border rounded p-3 h-100"><div className="text-muted small">Omada Sites</div><div className="fw-semibold text-truncate" title={stationOmadaPlan.plan.omada?.selected_site_name || stationOmadaPlan.plan.omada?.selected_site_id}>{stationOmadaPlan.plan.omada?.selected_site_name || stationOmadaPlan.plan.omada?.selected_site_id || '-'}</div><div className="text-muted small">{stationOmadaPlan.plan.omada?.bound_site_count || 0} site(s) · {(stationOmadaPlan.plan.omada?.all_sites_ap_connected_count ?? stationOmadaPlan.plan.omada?.ap_connected_count) || 0}/{(stationOmadaPlan.plan.omada?.all_sites_ap_total_count ?? stationOmadaPlan.plan.omada?.ap_total_count) || 0} APs</div></div></div>
                             </div>
                             <div className="row g-3 mb-3">
                               <div className="col-lg-7">
@@ -29780,7 +31004,7 @@ function CaptivePortalPage({ mode = 'full' }) {
 		                    </span>
 		                    <span className="text-muted small">{portalSmsSettings.a2p_provider || 'Smart Messaging Suite'}</span>
 		                  </div>
-		                  {!portalSmsSettings.a2p_configured && <div className="text-danger small mt-2">Configure Smart A2P credentials in System Settings before welcome SMS can send.</div>}
+		                  {!portalSmsSettings.a2p_configured && <div className="text-danger small mt-2">Configure Smart A2P credentials in Settings - System before welcome SMS can send.</div>}
 		                </div>
 		                <div className="border rounded p-3">
 		                  <div className="text-muted small">Sender ID</div>
@@ -29888,7 +31112,7 @@ function CaptivePortalPage({ mode = 'full' }) {
 	                    <div className="border rounded p-3 h-100">
 	                      <span className={`badge ${portalSmsSettings.enabled ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>{portalSmsSettings.enabled ? 'Enabled' : 'Disabled'}</span>
 	                      <div className="text-muted small mt-2">{portalSmsSettings.a2p_provider || 'Smart Messaging Suite'}</div>
-	                      {!portalSmsSettings.a2p_configured && <div className="text-danger small mt-2">Configure Smart A2P credentials in System Settings before sending customer verification codes.</div>}
+	                      {!portalSmsSettings.a2p_configured && <div className="text-danger small mt-2">Configure Smart A2P credentials in Settings - System before sending customer verification codes.</div>}
 	                    </div>
 	                  </div>
 	                  <div className="col-md-5">
@@ -30581,7 +31805,7 @@ function MikroTikScanResultPage() {
 
   function changeRouter(nextRouterId) {
     setRouterId(nextRouterId);
-    const url = `/admin/network/mikrotik/scan-result?router_id=${encodeURIComponent(nextRouterId)}`;
+    const url = `/admin/settings/network/mikrotik/scan-result?router_id=${encodeURIComponent(nextRouterId)}`;
     window.history.replaceState({ page: 'MikroTik Scan Result' }, '', url);
     loadScan(nextRouterId);
   }
@@ -30792,6 +32016,1914 @@ function NetworkPage({ refresh }) {
       <div className="col-12">
         {tab === 'MikroTik' && <CaptivePortalPage mode="mikrotik-only" />}
       </div>
+    </div>
+  );
+}
+
+function WireGuardPage() {
+  const [stations, setStations] = useState([]);
+  const [routers, setRouters] = useState([]);
+  const [summary, setSummary] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [configureStation, setConfigureStation] = useState(null);
+  const [form, setForm] = useState(null);
+  const [stationInterfaceOptions, setStationInterfaceOptions] = useState([]);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState('');
+  const [wireguardCommandPlan, setWireguardCommandPlan] = useState(null);
+  const [wireguardCommandSteps, setWireguardCommandSteps] = useState([]);
+  const [wireguardCommandRunning, setWireguardCommandRunning] = useState(false);
+  const [wireguardCommandMessage, setWireguardCommandMessage] = useState('');
+  const [wireguardCommandCompleted, setWireguardCommandCompleted] = useState(false);
+  const [tab, setTab] = useState('Status');
+  const [systemHubSettingsTab, setSystemHubSettingsTab] = useState('Server');
+  const [systemHub, setSystemHub] = useState(null);
+  const [systemHubForm, setSystemHubForm] = useState(null);
+  const [systemHubSshOutput, setSystemHubSshOutput] = useState('');
+  const [systemHubPreview, setSystemHubPreview] = useState(null);
+  const [endpointForwardingPlan, setEndpointForwardingPlan] = useState(null);
+  const [endpointForwardingResult, setEndpointForwardingResult] = useState(null);
+  const [endpointInterfaceOptions, setEndpointInterfaceOptions] = useState([]);
+  const [endpointInterfaceWarnings, setEndpointInterfaceWarnings] = useState([]);
+  const [endpointInterfaceError, setEndpointInterfaceError] = useState('');
+  const [endpointInterfaceLoading, setEndpointInterfaceLoading] = useState(false);
+  const [systemHubLogs, setSystemHubLogs] = useState([]);
+  const [systemHubInstallLog, setSystemHubInstallLog] = useState(null);
+
+  async function load(background = false) {
+    if (!background) setLoading(true);
+    try {
+      const [data, logs] = await Promise.all([
+        request('/network/wireguard/overview?live=true'),
+        request('/network/wireguard/system-hub/logs')
+      ]);
+      setStations(Array.isArray(data.stations) ? data.stations : []);
+      setRouters(Array.isArray(data.routers) ? data.routers : []);
+      setSummary(data.summary || {});
+      setSystemHubLogs(Array.isArray(logs) ? logs : []);
+      const runningLog = (Array.isArray(logs) ? logs : []).find((row) => row.status === 'RUNNING');
+      if (runningLog) setSystemHubInstallLog(runningLog);
+      if (data.system_hub) {
+        setSystemHub(data.system_hub);
+        setSystemHubForm((current) => current || wireGuardSystemHubToForm(data.system_hub));
+      }
+      setLastUpdatedAt(new Date().toISOString());
+      refreshEndpointForwardingStatus();
+      if (!background) setError('');
+    } catch (err) {
+      if (!background) setError(err.message || 'Could not load WireGuard status.');
+    } finally {
+      if (!background) setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(() => load(true), 15000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (systemHubInstallLog?.status !== 'RUNNING') return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const nextLogs = await request('/network/wireguard/system-hub/logs');
+        setSystemHubLogs(Array.isArray(nextLogs) ? nextLogs : []);
+        const current = (Array.isArray(nextLogs) ? nextLogs : []).find((row) => row.id === systemHubInstallLog.id)
+          || (Array.isArray(nextLogs) ? nextLogs : []).find((row) => row.status === 'RUNNING');
+        if (current) {
+          setSystemHubInstallLog(current);
+          if (current.status !== 'RUNNING') {
+            setBusy('');
+            await load(true);
+            setMessage(current.status === 'SUCCESS' ? 'WireGuard server action completed.' : 'WireGuard server action failed. Check logs for details.');
+          }
+        }
+      } catch (_err) {
+        // Keep polling on transient network/API errors.
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [systemHubInstallLog?.id, systemHubInstallLog?.status]);
+
+  useEffect(() => {
+    const routerId = systemHubForm?.endpoint_router_id;
+    if (systemHubSettingsTab !== 'Endpoint' || !routerId) return;
+    loadEndpointInterfaces(routerId);
+    loadEndpointForwardingPlan({ quiet: true });
+  }, [systemHubSettingsTab, systemHubForm?.endpoint_router_id]);
+
+  const routerNameById = Object.fromEntries(routers.map((router) => [router.id, router.router_name || router.host || router.id]));
+
+  function wireGuardSystemHubToForm(hub = {}) {
+    return {
+      enabled: hub.enabled !== false,
+      endpoint_host: hub.endpoint_host || '',
+      endpoint_port: hub.endpoint_port || 51820,
+      interface_name: hub.interface_name || 'wg0',
+      hub_address: hub.hub_address || '10.250.0.1/24',
+      central_service_routes: hub.central_service_routes || '192.168.50.70/32,192.168.50.71/32',
+      nat_enabled: hub.nat_enabled !== false,
+      endpoint_forwarding_enabled: hub.endpoint_forwarding_enabled !== false,
+      endpoint_router_id: hub.endpoint_router_id || '',
+      endpoint_wan_interface: hub.endpoint_wan_interface || '',
+      endpoint_return_routing_table: hub.endpoint_return_routing_table || '',
+      endpoint_public_ip: hub.endpoint_public_ip || '',
+      endpoint_server_ip: hub.endpoint_server_ip || hub.ssh_host || '',
+      ssh_host: hub.ssh_host || hub.endpoint_host || '',
+      ssh_port: hub.ssh_port || 22,
+      ssh_username: hub.ssh_username || '',
+      ssh_auth_type: hub.ssh_auth_type || 'PASSWORD',
+      ssh_password: '',
+      ssh_private_key: '',
+      ssh_private_key_passphrase: '',
+      sudo_mode: hub.sudo_mode || 'PASSWORDLESS',
+    };
+  }
+
+  function updateSystemHubField(key, value) {
+    setSystemHubForm((current) => ({ ...(current || wireGuardSystemHubToForm(systemHub || {})), [key]: value }));
+  }
+
+  function endpointInterfaceOptionLabel(iface = {}) {
+    return [iface.name, iface.type, iface.bridge ? `uses master ${iface.bridge}` : '', iface.running ? 'running' : '', iface.disabled ? 'disabled' : '', iface.comment].filter(Boolean).join(' - ');
+  }
+
+  async function loadEndpointInterfaces(routerId) {
+    const selectedRouterId = routerId || (systemHubForm || systemHub || {}).endpoint_router_id;
+    if (!selectedRouterId) {
+      setEndpointInterfaceOptions([]);
+      setEndpointInterfaceWarnings([]);
+      setEndpointInterfaceError('');
+      return;
+    }
+    setEndpointInterfaceLoading(true);
+    setEndpointInterfaceError('');
+    try {
+      const data = await request(`/captive-portal/mikrotik/${selectedRouterId}/routeros-options`);
+      const interfaces = Array.isArray(data.interfaces) ? data.interfaces : [];
+      setEndpointInterfaceOptions(interfaces);
+      setEndpointInterfaceWarnings(Array.isArray(data.warnings) ? data.warnings : []);
+    } catch (err) {
+      setEndpointInterfaceOptions([]);
+      setEndpointInterfaceWarnings([]);
+      setEndpointInterfaceError(err.message || 'Could not load MikroTik interfaces.');
+    } finally {
+      setEndpointInterfaceLoading(false);
+    }
+  }
+
+  function handleEndpointRouterChange(routerId) {
+    updateSystemHubField('endpoint_router_id', routerId);
+    updateSystemHubField('endpoint_wan_interface', '');
+    setEndpointForwardingPlan(null);
+    setEndpointForwardingResult(null);
+    loadEndpointInterfaces(routerId);
+  }
+
+  function handleEndpointWanInterfaceChange(interfaceName) {
+    const selected = endpointInterfaceOptions.find((iface) => iface.name === interfaceName);
+    updateSystemHubField('endpoint_wan_interface', selected?.bridge || interfaceName);
+    setEndpointForwardingPlan(null);
+    setEndpointForwardingResult(null);
+  }
+
+  async function saveSystemHubDraft() {
+    const data = await request('/network/wireguard/system-hub', { method: 'PATCH', body: JSON.stringify(systemHubForm || wireGuardSystemHubToForm(systemHub || {})) });
+    setSystemHub(data);
+    setSystemHubForm(wireGuardSystemHubToForm(data));
+    return data;
+  }
+
+  async function saveSystemHubSettings(event) {
+    event.preventDefault();
+    if (!systemHubForm) return;
+    setBusy('system-hub-save');
+    setError('');
+    setSystemHubSshOutput('');
+    try {
+      await saveSystemHubDraft();
+      setMessage('WireGuard server settings saved.');
+      await load(true);
+    } catch (err) {
+      setError(err.message || 'Could not save WireGuard server settings.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function generateSystemHubKeypair() {
+    setBusy('system-hub-keypair');
+    setError('');
+    try {
+      const data = await request('/network/wireguard/system-hub/generate-keypair', { method: 'POST' });
+      setSystemHub(data);
+      setSystemHubForm(wireGuardSystemHubToForm(data));
+      setMessage('WireGuard server key pair generated.');
+      await load(true);
+    } catch (err) {
+      setError(err.message || 'Could not generate WireGuard server key pair.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function testSystemHubSsh() {
+    setBusy('system-hub-test-ssh');
+    setError('');
+    setSystemHubSshOutput('');
+    try {
+      await saveSystemHubDraft();
+      const data = await request('/network/wireguard/system-hub/test-ssh', { method: 'POST' });
+      setSystemHubSshOutput(data.output || 'WireGuard server SSH is reachable.');
+      setMessage('WireGuard server SSH is reachable.');
+      await load(true);
+    } catch (err) {
+      setError(err.message || 'WireGuard server SSH test failed.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function installSystemHub() {
+    if (!window.confirm('Install or update WireGuard on the saved dedicated server? This will install packages, write the generated WireGuard config, enable IPv4 forwarding, and start wg-quick.')) return;
+    setBusy('system-hub-install');
+    setError('');
+    try {
+      await saveSystemHubDraft();
+      const data = await request('/network/wireguard/system-hub/install', { method: 'POST' });
+      setSystemHubInstallLog({ id: data.log_id, action: 'INSTALL', status: 'RUNNING', progress_percent: 2, current_step: 'Queued' });
+      if (data.hub) setSystemHub(data.hub);
+      setMessage('WireGuard install started.');
+      await load(true);
+    } catch (err) {
+      setError(err.message || 'WireGuard server install failed.');
+      setBusy('');
+    }
+  }
+
+  async function loadEndpointForwardingPlan(options = {}) {
+    const quiet = Boolean(options.quiet);
+    const skipSave = Boolean(options.skipSave);
+    if (!quiet) setBusy('endpoint-forward-preview');
+    if (!quiet) setError('');
+    if (!quiet) setEndpointForwardingResult(null);
+    try {
+      if (!skipSave) await saveSystemHubDraft();
+      const data = await request('/network/wireguard/endpoint-forwarding/push-plan');
+      setEndpointForwardingPlan(data);
+      if (!quiet) setMessage('WireGuard endpoint forwarding preview loaded.');
+    } catch (err) {
+      if (!quiet) setError(err.message || 'Could not load endpoint forwarding preview.');
+    } finally {
+      if (!quiet) setBusy('');
+    }
+  }
+
+  async function refreshEndpointForwardingStatus() {
+    try {
+      const data = await request('/network/wireguard/endpoint-forwarding/push-plan');
+      setEndpointForwardingPlan(data);
+    } catch (_err) {
+      // Status refresh must not hide station health if endpoint forwarding is not configured yet.
+    }
+  }
+
+  async function applyEndpointForwarding() {
+    if (!window.confirm('Push WireGuard endpoint forwarding to the selected MikroTik? This will update the managed dst-nat and forward allow rules.')) return;
+    setBusy('endpoint-forward-apply');
+    setError('');
+    setEndpointForwardingResult(null);
+    try {
+      await saveSystemHubDraft();
+      const data = await request('/network/wireguard/endpoint-forwarding/apply', { method: 'POST' });
+      setEndpointForwardingResult(data);
+      setEndpointForwardingPlan(data);
+      setMessage('WireGuard endpoint forwarding pushed to MikroTik.');
+    } catch (err) {
+      setError(err.message || 'Could not push WireGuard endpoint forwarding.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function removeEndpointForwarding() {
+    if (!window.confirm('Remove the managed WireGuard endpoint forwarding rules from the selected MikroTik?')) return;
+    setBusy('endpoint-forward-remove');
+    setError('');
+    setEndpointForwardingResult(null);
+    try {
+      await saveSystemHubDraft();
+      const data = await request('/network/wireguard/endpoint-forwarding/remove', { method: 'POST' });
+      setEndpointForwardingResult(data);
+      setEndpointForwardingPlan(data);
+      setMessage('WireGuard endpoint forwarding removed from MikroTik.');
+    } catch (err) {
+      setError(err.message || 'Could not remove WireGuard endpoint forwarding.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function openEndpointForwardingCommandPlan(action = 'push') {
+    const normalizedAction = action === 'remove' ? 'remove' : 'push';
+    const busyKey = normalizedAction === 'remove' ? 'endpoint-forward-remove-plan' : 'endpoint-forward-push-plan';
+    setBusy(busyKey);
+    setError('');
+    setWireguardCommandCompleted(false);
+    setWireguardCommandMessage(normalizedAction === 'remove' ? 'Loading endpoint forwarding remove plan...' : 'Loading endpoint forwarding push plan...');
+    try {
+      await saveSystemHubDraft();
+      const plan = await request(`/network/wireguard/endpoint-forwarding/${normalizedAction === 'remove' ? 'remove-plan' : 'push-plan'}`);
+      setEndpointForwardingPlan(plan);
+      setEndpointForwardingResult(null);
+      setWireguardCommandPlan({
+        ...plan,
+        scope: 'endpoint-forwarding',
+        action: normalizedAction === 'remove' ? 'REMOVE' : 'PUSH',
+        target_name: 'Endpoint Forwarding',
+      });
+      setWireguardCommandSteps(wireguardPlanSteps(plan));
+      setWireguardCommandMessage(normalizedAction === 'remove'
+        ? 'Review the exact RouterOS remove commands before starting.'
+        : 'Review the cleanup and RouterOS push commands before starting.');
+    } catch (err) {
+      setError(err.message || 'Could not load WireGuard endpoint forwarding plan.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function systemHubAction(actionName, label, confirmText = '') {
+    if (confirmText && !window.confirm(confirmText)) return;
+    setBusy(`system-hub-${actionName}`);
+    setError('');
+    try {
+      const data = await request(`/network/wireguard/system-hub/${actionName}`, { method: 'POST' });
+      if (data.hub) {
+        setSystemHub(data.hub);
+        setSystemHubForm((current) => current || wireGuardSystemHubToForm(data.hub));
+      }
+      setMessage(`WireGuard ${label} completed.`);
+      await load(true);
+    } catch (err) {
+      setError(err.message || `WireGuard ${label} failed.`);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function loadSystemHubPreview() {
+    setBusy('system-hub-preview');
+    setError('');
+    try {
+      const data = await request('/network/wireguard/system-hub/config-preview');
+      setSystemHubPreview(data);
+    } catch (err) {
+      setError(err.message || 'Could not load WireGuard server config preview.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function statusTone(status) {
+    if (status === 'HANDSHAKE_OK') return 'green';
+    if (status === 'CONFIGURED' || status === 'WAITING_HANDSHAKE') return 'blue';
+    if (status === 'DISABLED') return 'secondary';
+    if (status === 'CHECK_ERROR' || status === 'INTERFACE_MISSING' || status === 'PEER_MISSING') return 'red';
+    return 'yellow';
+  }
+
+  function statusIcon(status) {
+    if (status === 'HANDSHAKE_OK') return IconCircleCheck;
+    if (status === 'DISABLED' || status === 'CONFIGURED') return IconInfoCircle;
+    return IconAlertTriangle;
+  }
+
+  function stationStatusBadge(station) {
+    const state = station.status || {};
+    const tone = statusTone(state.status);
+    const StatusIcon = statusIcon(state.status);
+    return (
+      <span className={`badge bg-${tone}-lt text-${tone}`}>
+        <StatusIcon size={13} className="me-1" />{state.label || state.status || 'Unknown'}
+      </span>
+    );
+  }
+
+  function systemHubStatusTone(status) {
+    if (status === 'RUNNING') return 'green';
+    if (status === 'INSTALLING') return 'blue';
+    if (status === 'INSTALLED' || status === 'STOPPED') return 'yellow';
+    if (status === 'ERROR') return 'red';
+    return 'secondary';
+  }
+
+  function renderSystemHubProgress(log) {
+    if (!log) return null;
+    const progress = Math.max(0, Math.min(100, Number(log.progress_percent || 0)));
+    return (
+      <div className="mt-3 border rounded p-3 bg-light">
+        <div className="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-2">
+          <div>
+            <div className="fw-semibold">
+              {log.action === 'INSTALL' ? 'WireGuard install is running.' : `WireGuard ${String(log.action || '').toLowerCase()} is running.`}
+            </div>
+            <div className="text-muted small">Logs refresh automatically. Current step: {log.current_step || 'Queued'}</div>
+          </div>
+          <span className={`badge ${log.status === 'RUNNING' ? 'bg-blue-lt text-blue' : log.status === 'SUCCESS' ? 'bg-green-lt text-green' : 'bg-red-lt text-red'}`}>
+            {log.status}
+          </span>
+        </div>
+        <div className="progress progress-sm mb-3">
+          <div className="progress-bar" style={{ width: `${progress}%` }} />
+        </div>
+        <pre className="bg-dark text-white rounded p-3 mb-0" style={{ maxHeight: 320, overflow: 'auto' }}>
+          <code>{log.output_text || 'Queued...'}</code>
+        </pre>
+      </div>
+    );
+  }
+
+  function renderSystemHubManageCard() {
+    const activeLog = systemHubInstallLog?.status === 'RUNNING'
+      ? systemHubInstallLog
+      : systemHubLogs.find((row) => row.status === 'RUNNING');
+    const latestLog = activeLog || systemHubLogs[0] || null;
+    const hubStatus = systemHub?.install_status || 'NOT_INSTALLED';
+    const hubInstalled = ['RUNNING', 'INSTALLED', 'STOPPED', 'INSTALLING'].includes(String(hubStatus || '').toUpperCase());
+    const tone = systemHubStatusTone(hubStatus);
+    return (
+      <Card title="Manage WireGuard Server" subtitle="Install, start, stop, restart, and verify the dedicated server hub from the saved SSH settings.">
+        <div className="row g-3 align-items-stretch">
+          <div className="col-md-4">
+            <div className="border rounded p-3 h-100">
+              <div className="text-muted small">Server status</div>
+              <div className="d-flex align-items-center gap-2 mt-1">
+                <span className={`avatar bg-${tone}-lt text-${tone}`}><IconShieldLock size={22} /></span>
+                <div>
+                  <div className="fw-semibold">{hubStatus}</div>
+                  <div className="text-muted small">{systemHub?.last_status_check_at ? `Checked ${compactDateTime(systemHub.last_status_check_at)}` : 'Not checked yet'}</div>
+                </div>
+              </div>
+              {systemHub?.last_error && <div className="text-danger small mt-2">{systemHub.last_error}</div>}
+            </div>
+          </div>
+          <div className="col-md-4">
+            <div className="border rounded p-3 h-100">
+              <div className="text-muted small">Public endpoint</div>
+              <div className="fw-semibold mt-1">{systemHub?.endpoint_host || '-'}:{systemHub?.endpoint_port || 51820}</div>
+              <div className="text-muted small">Interface {systemHub?.interface_name || 'wg0'} · {systemHub?.hub_address || '10.250.0.1/24'}</div>
+              <div className="text-muted small">Peers ready: {systemHub?.peer_count ?? 0}</div>
+            </div>
+          </div>
+          <div className="col-md-4">
+            <div className="border rounded p-3 h-100">
+              <div className="text-muted small">SSH target</div>
+              <div className="fw-semibold mt-1">{systemHub?.ssh_host || 'No SSH host saved'}</div>
+              <div className="text-muted small">{systemHub?.ssh_username || 'No username'} · port {systemHub?.ssh_port || 22} · {systemHub?.ssh_auth_type || 'PASSWORD'}</div>
+              <div className="text-muted small">Sudo: {systemHub?.sudo_mode || 'PASSWORDLESS'}</div>
+            </div>
+          </div>
+          <div className="col-12">
+            <div className="btn-list">
+              {hubInstalled ? (
+                <button
+                  className="btn btn-danger"
+                  type="button"
+                  disabled={busy === 'system-hub-uninstall' || activeLog?.status === 'RUNNING'}
+                  onClick={() => systemHubAction('uninstall', 'uninstall', 'Uninstall WireGuard from the dedicated server? This stops the tunnel service, backs up/removes the managed config, and removes WireGuard packages.')}
+                >
+                  <IconTrash size={18} className="me-2" />{busy === 'system-hub-uninstall' ? 'Uninstalling...' : 'Uninstall WireGuard'}
+                </button>
+              ) : (
+                <button className="btn btn-success" type="button" disabled={busy === 'system-hub-install' || activeLog?.status === 'RUNNING'} onClick={installSystemHub}>
+                  <IconDownload size={18} className="me-2" />{busy === 'system-hub-install' ? 'Installing...' : 'Install / Update WireGuard'}
+                </button>
+              )}
+              <button className="btn btn-outline-primary" type="button" disabled={busy === 'system-hub-detect' || activeLog?.status === 'RUNNING'} onClick={() => systemHubAction('detect', 'detect')}>
+                <IconRefresh size={18} className="me-2" />Detect
+              </button>
+              <button className="btn btn-outline-success" type="button" disabled={busy === 'system-hub-start' || activeLog?.status === 'RUNNING'} onClick={() => systemHubAction('start', 'start')}>
+                <IconPlayerPlay size={18} className="me-2" />Start
+              </button>
+              <button className="btn btn-outline-warning" type="button" disabled={busy === 'system-hub-restart' || activeLog?.status === 'RUNNING'} onClick={() => systemHubAction('restart', 'restart')}>
+                <IconRefresh size={18} className="me-2" />Restart
+              </button>
+              <button className="btn btn-outline-danger" type="button" disabled={busy === 'system-hub-stop' || activeLog?.status === 'RUNNING'} onClick={() => systemHubAction('stop', 'stop', 'Stop the WireGuard server service? Existing backup tunnels will disconnect until it is started again.')}>
+                <IconPlayerStop size={18} className="me-2" />Stop
+              </button>
+              <button className="btn btn-outline-secondary" type="button" disabled={busy === 'system-hub-preview'} onClick={loadSystemHubPreview}>
+                <IconListDetails size={18} className="me-2" />Preview Config
+              </button>
+            </div>
+          </div>
+        </div>
+        {activeLog && renderSystemHubProgress(activeLog)}
+        {!activeLog && latestLog && (
+          <div className="alert alert-info mt-3 mb-0">
+            Last action: <strong>{latestLog.action}</strong> · {latestLog.status} · {latestLog.completed_at ? compactDateTime(latestLog.completed_at) : compactDateTime(latestLog.created_at)}
+          </div>
+        )}
+      </Card>
+    );
+  }
+
+  function renderWireGuardReadinessCard() {
+    const hubStatus = String(systemHub?.install_status || 'NOT_INSTALLED').toUpperCase();
+    const hubTone = systemHubStatusTone(hubStatus);
+    const hubReady = hubStatus === 'RUNNING';
+    const endpointProgress = endpointForwardingPlan?.push_progress || {};
+    const endpointTotalSteps = Number(
+      endpointProgress.total_steps
+      || endpointForwardingPlan?.router_plans?.reduce((total, routerPlan) => total + (routerPlan.commands?.length || 0), 0)
+      || endpointForwardingPlan?.commands?.length
+      || 0
+    );
+    const endpointPushedSteps = Number(endpointProgress.pushed_steps || 0);
+    const endpointReady = endpointTotalSteps > 0 && endpointPushedSteps >= endpointTotalSteps;
+    const endpointTone = endpointReady ? 'green' : endpointTotalSteps ? 'yellow' : 'secondary';
+    const enabledStations = Number(summary.enabled_count || stations.filter((station) => station.wireguard_enabled).length || 0);
+    const handshakes = Number(summary.handshake_ok_count || 0);
+    const handshakeTone = enabledStations ? (handshakes >= enabledStations ? 'green' : handshakes ? 'yellow' : 'red') : 'secondary';
+    const endpointRouter = endpointForwardingPlan?.router || {};
+    const selectedWan = endpointForwardingPlan?.endpoint_wan_interface || systemHub?.endpoint_wan_interface || '';
+    const effectiveWan = endpointForwardingPlan?.effective_wan_interface || selectedWan;
+    const serverIp = endpointForwardingPlan?.endpoint_server_ip || systemHub?.endpoint_server_ip || systemHub?.ssh_host || '-';
+    const readinessIssues = [];
+    if (!hubReady) readinessIssues.push('WireGuard server is not running.');
+    if (!endpointReady) readinessIssues.push('Public endpoint forwarding is not fully pushed.');
+    if (enabledStations && handshakes < enabledStations) readinessIssues.push('One or more station tunnels do not have a live handshake yet.');
+    const ReadinessItem = ({ icon: Icon, tone, label, value, detail, badge }) => (
+      <div className="col-md-6 col-xl-3">
+        <div className="border rounded p-3 h-100">
+          <div className="d-flex align-items-start gap-3">
+            <span className={`avatar bg-${tone}-lt text-${tone}`}><Icon size={22} /></span>
+            <div className="min-w-0 flex-fill">
+              <div className="text-muted small">{label}</div>
+              <div className="fw-semibold text-truncate">{value}</div>
+              {detail && <div className="text-muted small text-break">{detail}</div>}
+              {badge && <div className="mt-2">{badge}</div>}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+    return (
+      <Card title="WireGuard Backup Readiness" subtitle="Read-only status for the dedicated server, public endpoint, MikroTik forwarding, and station handshakes.">
+        <div className="row g-3">
+          <ReadinessItem
+            icon={IconServer}
+            tone={hubTone}
+            label="Dedicated server"
+            value={hubStatus}
+            detail={`${systemHub?.ssh_host || 'No SSH host'} · ${systemHub?.interface_name || 'wg0'} · ${systemHub?.hub_address || '10.250.0.1/24'}`}
+            badge={<span className={`badge bg-${hubTone}-lt text-${hubTone}`}>{hubReady ? 'Running' : 'Needs check'}</span>}
+          />
+          <ReadinessItem
+            icon={IconShieldLock}
+            tone={systemHub?.public_key_configured ? 'green' : 'yellow'}
+            label="Public endpoint"
+            value={`${systemHub?.endpoint_host || endpointForwardingPlan?.endpoint_host || '-'}:${systemHub?.endpoint_port || endpointForwardingPlan?.endpoint_port || 51820}`}
+            detail={`Public IP ${endpointForwardingPlan?.endpoint_public_ip || systemHub?.endpoint_public_ip || '-'} · server ${serverIp}`}
+            badge={<span className={`badge ${systemHub?.public_key_configured ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{systemHub?.public_key_configured ? 'Key ready' : 'Key missing'}</span>}
+          />
+          <ReadinessItem
+            icon={IconRouter}
+            tone={endpointTone}
+            label="Endpoint forwarding"
+            value={endpointTotalSteps ? `${endpointPushedSteps}/${endpointTotalSteps} pushed` : 'Not checked'}
+            detail={`${endpointRouter.router_name || routerNameById[systemHub?.endpoint_router_id] || 'No router'} · ${effectiveWan || 'No WAN interface'}`}
+            badge={selectedWan && effectiveWan && selectedWan !== effectiveWan
+              ? <span className="badge bg-yellow-lt text-yellow">Selected {selectedWan}; using {effectiveWan}</span>
+              : <span className={`badge bg-${endpointTone}-lt text-${endpointTone}`}>{endpointReady ? 'Ready' : 'Review push config'}</span>}
+          />
+          <ReadinessItem
+            icon={IconActivity}
+            tone={handshakeTone}
+            label="Station handshakes"
+            value={`${handshakes}/${enabledStations}`}
+            detail={enabledStations ? 'Live station tunnel handshakes detected.' : 'No enabled station tunnels yet.'}
+            badge={<span className={`badge bg-${handshakeTone}-lt text-${handshakeTone}`}>{enabledStations && handshakes >= enabledStations ? 'All live' : enabledStations ? 'Needs attention' : 'No stations'}</span>}
+          />
+        </div>
+        <div className={`alert ${readinessIssues.length ? 'alert-warning' : 'alert-success'} mt-3 mb-0 d-flex gap-2 align-items-start`}>
+          {readinessIssues.length ? <IconAlertTriangle size={20} className="mt-1 flex-shrink-0" /> : <IconCircleCheck size={20} className="mt-1 flex-shrink-0" />}
+          <div>
+            <div className="fw-semibold">{readinessIssues.length ? 'Backup reachability still needs checking.' : 'Backup reachability basics are ready.'}</div>
+            <div>{readinessIssues.length ? readinessIssues.join(' ') : 'Next real test is cutting the main fiber path and confirming station Winbox/API reachability through the public WireGuard endpoint.'}</div>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  function renderSystemHubLogs() {
+    return (
+      <Card title="WireGuard Logs" subtitle="Recent install, status, SSH, and service actions.">
+        <div className="table-responsive">
+          <table className="table table-vcenter card-table">
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Status</th>
+                <th>Step</th>
+                <th>Progress</th>
+                <th>Started</th>
+                <th>Completed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {systemHubLogs.map((log) => (
+                <tr key={log.id}>
+                  <td className="fw-semibold">{log.action}</td>
+                  <td><span className={`badge ${log.status === 'SUCCESS' ? 'bg-green-lt text-green' : log.status === 'FAILED' ? 'bg-red-lt text-red' : 'bg-blue-lt text-blue'}`}>{log.status}</span></td>
+                  <td>{log.current_step || '-'}</td>
+                  <td style={{ minWidth: 160 }}>
+                    <div className="d-flex align-items-center gap-2">
+                      <div className="progress progress-sm flex-fill">
+                        <div className="progress-bar" style={{ width: `${Math.max(0, Math.min(100, Number(log.progress_percent || 0)))}%` }} />
+                      </div>
+                      <span className="text-muted small">{log.progress_percent || 0}%</span>
+                    </div>
+                  </td>
+                  <td>{compactDateTime(log.created_at)}</td>
+                  <td>{log.completed_at ? compactDateTime(log.completed_at) : '-'}</td>
+                </tr>
+              ))}
+              {!systemHubLogs.length && <tr><td colSpan="6"><div className="empty">No WireGuard logs yet.</div></td></tr>}
+            </tbody>
+          </table>
+        </div>
+        {systemHubLogs[0]?.output_text && (
+          <details className="mt-3">
+            <summary className="fw-semibold">Latest log output</summary>
+            <pre className="bg-dark text-white rounded p-3 mt-2 mb-0" style={{ maxHeight: 420, overflow: 'auto' }}>
+              <code>{systemHubLogs[0].output_text}</code>
+            </pre>
+          </details>
+        )}
+      </Card>
+    );
+  }
+
+  function defaultWireGuardHubRouterId(station = {}) {
+    if (station.wireguard_hub_router_id) return station.wireguard_hub_router_id;
+    return '';
+  }
+
+  function stationFormDefaults(station) {
+    const hubRouterId = defaultWireGuardHubRouterId(station);
+    const hubRouter = hubRouterId ? routers.find((router) => router.id === hubRouterId) : null;
+    const hub = station.wireguard_system_hub || systemHub || {};
+    return {
+      wireguard_enabled: true,
+      wireguard_interface_name: station.wireguard_interface_name || '',
+      wireguard_station_address: station.wireguard_station_address || '',
+      wireguard_endpoint_host: station.wireguard_endpoint_host || hubRouter?.host || hub.endpoint_host || '',
+      wireguard_endpoint_port: station.wireguard_endpoint_port || hub.endpoint_port || 51820,
+      wireguard_endpoint_route_gateway: station.wireguard_endpoint_route_gateway || '',
+      wireguard_allowed_addresses: station.wireguard_allowed_addresses || hub.central_service_routes || '192.168.50.0/24,10.250.0.1/32',
+      wireguard_route_distance: station.wireguard_route_distance || 200,
+      wireguard_persistent_keepalive: station.wireguard_persistent_keepalive ?? 25,
+      wireguard_hub_router_id: hubRouterId,
+      wireguard_hub_interface_name: station.wireguard_hub_interface_name || (hubRouterId ? 'WG-3J-HUB' : hub.interface_name || 'wg0'),
+      wireguard_hub_allowed_addresses: station.wireguard_hub_allowed_addresses || '',
+    };
+  }
+
+  function openConfigure(station) {
+    setConfigureStation(station);
+    setForm(stationFormDefaults(station));
+    setStationInterfaceOptions([]);
+    setMessage('');
+    setError('');
+  }
+
+  function updateFormValue(key, value) {
+    setForm((current) => {
+      const next = { ...(current || {}), [key]: value };
+      if (key === 'wireguard_hub_router_id') {
+        const router = routers.find((item) => item.id === value);
+        if (router && !next.wireguard_endpoint_host) next.wireguard_endpoint_host = router.host || '';
+        if (router) {
+          if (!next.wireguard_endpoint_port || next.wireguard_endpoint_port === 13231) next.wireguard_endpoint_port = 51820;
+          if (!next.wireguard_route_distance || next.wireguard_route_distance === 1) next.wireguard_route_distance = 200;
+          if (!next.wireguard_hub_interface_name || next.wireguard_hub_interface_name === 'wg0') next.wireguard_hub_interface_name = 'WG-3J-HUB';
+        }
+      }
+      return next;
+    });
+  }
+
+  function wireguardPlanSteps(plan) {
+    return (plan?.router_plans || []).flatMap((routerPlan) => (
+      (routerPlan.commands || []).map((command, commandIndex) => ({
+        id: `${routerPlan.router_id}-${plan.mode}-${commandIndex}`,
+        router_id: routerPlan.router_id,
+        router_name: routerPlan.router_name,
+        router_role: routerPlan.role,
+        host: routerPlan.host,
+        operation: routerPlan.operation,
+        command_index: commandIndex,
+	        label: command.label || `Command ${commandIndex + 1}`,
+	        preview: command.preview || '',
+	        command,
+	        status: command.initial_status || (command.detected ? 'SKIPPED' : 'PENDING'),
+	        message: command.initial_message || command.detection_message || '',
+	        detected: Boolean(command.detected),
+	        informational: Boolean(command.informational || (!command.path && !command.print_path)),
+	        detection_status: command.detection_status || '',
+	        result: null,
+	      }))
+	    ));
+	  }
+
+  function wireguardCommandStatusIcon(status) {
+    if (status === 'SUCCESS' || status === 'SKIPPED') return <IconCircleCheck size={17} />;
+    if (status === 'FAILED') return <IconAlertTriangle size={17} />;
+    if (status === 'RUNNING') return <IconRefresh size={17} />;
+    return <IconClock size={17} />;
+  }
+
+  async function saveWireGuardStationPayload(station, payload) {
+    const data = await request(`/network/wireguard/stations/${station.id}/settings`, { method: 'PUT', body: JSON.stringify(payload) });
+    setConfigureStation(data);
+    setForm(stationFormDefaults(data));
+    return data;
+  }
+
+  async function saveSettings(event) {
+    event.preventDefault();
+    if (!configureStation || !form) return;
+    setBusy('save');
+    setError('');
+    try {
+      const data = await saveWireGuardStationPayload(configureStation, form);
+      setMessage('WireGuard backup settings saved.');
+      setConfigureStation(data);
+      setForm(stationFormDefaults(data));
+      await load(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function openWireGuardPushPlan(station = configureStation, mode = 'client', payload = form) {
+    if (!station) return;
+    const busyKey = `plan:${mode}:${station.id}`;
+    setBusy(busyKey);
+    setError('');
+    setWireguardCommandCompleted(false);
+    setWireguardCommandMessage('Loading WireGuard RouterOS command plan...');
+    try {
+      let currentStation = station;
+      if (payload) {
+        currentStation = await saveWireGuardStationPayload(station, payload);
+      }
+      const plan = await request(`/network/wireguard/stations/${currentStation.id}/push-plan?mode=${encodeURIComponent(mode)}`);
+      setWireguardCommandPlan({ ...plan, station: currentStation, action: 'PUSH' });
+      setWireguardCommandSteps(wireguardPlanSteps(plan));
+      setWireguardCommandMessage('Review the exact RouterOS commands before starting push.');
+      setConfigureStation(null);
+    } catch (err) {
+      setError(err.message || 'Could not load WireGuard push plan.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function openWireGuardRemovePlan(station = configureStation) {
+    if (!station) return;
+    const busyKey = `remove-plan:${station.id}`;
+    setBusy(busyKey);
+    setError('');
+    setWireguardCommandCompleted(false);
+    setWireguardCommandMessage('Loading WireGuard remove command plan...');
+    try {
+      const plan = await request(`/network/wireguard/stations/${station.id}/remove-plan`);
+      setWireguardCommandPlan({ ...plan, station, action: 'REMOVE' });
+      setWireguardCommandSteps(wireguardPlanSteps(plan));
+      setWireguardCommandMessage('Review the exact RouterOS remove commands before starting remove.');
+      setConfigureStation(null);
+    } catch (err) {
+      setError(err.message || 'Could not load WireGuard remove plan.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function runWireGuardCommandPlan() {
+    if (!wireguardCommandPlan || wireguardCommandRunning) return;
+    const action = wireguardCommandPlan.action === 'REMOVE' ? 'REMOVE' : 'PUSH';
+    const endpoint = action === 'REMOVE' ? 'remove-command' : 'apply-command';
+    const isEndpointForwarding = wireguardCommandPlan.scope === 'endpoint-forwarding';
+    setWireguardCommandRunning(true);
+    setWireguardCommandCompleted(false);
+    setWireguardCommandMessage(action === 'REMOVE' ? 'Remove config started. Commands are sent one at a time.' : 'Push started. Commands are sent one at a time.');
+	    let failed = false;
+	    for (let index = 0; index < wireguardCommandSteps.length; index += 1) {
+	      const step = wireguardCommandSteps[index];
+	      if (step.status === 'SKIPPED' && (step.detected || step.informational)) {
+	        continue;
+	      }
+	      setWireguardCommandSteps((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, status: 'RUNNING', message: action === 'REMOVE' ? 'Removing from MikroTik...' : 'Sending to MikroTik...' } : item));
+      try {
+        const requestPath = isEndpointForwarding
+          ? `/network/wireguard/endpoint-forwarding/${endpoint}`
+          : `/network/wireguard/stations/${wireguardCommandPlan.station_id}/${endpoint}`;
+        const result = await request(requestPath, {
+          method: 'POST',
+          body: JSON.stringify({
+            router_id: step.router_id,
+            command_index: step.command_index,
+            mode: isEndpointForwarding ? (action === 'REMOVE' ? 'remove' : 'push') : (wireguardCommandPlan.mode || 'client'),
+          }),
+        });
+        const status = result.status || 'SUCCESS';
+        setWireguardCommandSteps((current) => current.map((item, itemIndex) => itemIndex === index ? {
+          ...item,
+          status,
+          message: result.message || (status === 'SKIPPED' ? 'Already in the desired state.' : 'Command completed.'),
+          result,
+        } : item));
+      } catch (err) {
+        failed = true;
+        setWireguardCommandSteps((current) => current.map((item, itemIndex) => itemIndex === index ? {
+          ...item,
+          status: 'FAILED',
+          message: err.message || 'Command failed.',
+          result: null,
+        } : item));
+        setWireguardCommandMessage(`Stopped at ${step.router_name || 'router'}: ${err.message || 'command failed.'}`);
+        break;
+      }
+    }
+	    setWireguardCommandRunning(false);
+	    if (!failed) {
+	      setWireguardCommandCompleted(true);
+	      setWireguardCommandMessage(action === 'REMOVE' ? 'WireGuard remove completed. Refresh status to verify RouterOS state.' : 'WireGuard push completed. Refresh status to verify RouterOS state.');
+	      setMessage(isEndpointForwarding
+	        ? (action === 'REMOVE' ? 'WireGuard endpoint forwarding remove completed.' : 'WireGuard endpoint forwarding push completed.')
+	        : (action === 'REMOVE' ? 'WireGuard remove completed.' : 'WireGuard push completed.'));
+	      await load(true);
+	      if (isEndpointForwarding) {
+	        await loadEndpointForwardingPlan({ quiet: true });
+	      }
+	    }
+	  }
+
+  async function autoSetup(station = configureStation, payload = form, options = {}) {
+    if (!station || !payload) return;
+    if (!options.skipConfirm && !window.confirm(`Apply WireGuard backup configuration for ${station.station_name}? This writes WireGuard interface, peer, and route objects on the station root router. A legacy MikroTik hub is only touched if one is selected.`)) return;
+    setBusy(`setup:${station.id}`);
+    setError('');
+    try {
+      const data = await request(`/network/wireguard/stations/${station.id}/auto-setup`, { method: 'POST', body: JSON.stringify(payload) });
+      setMessage(data.message || 'WireGuard Auto Setup completed.');
+      setConfigureStation(data.station || station);
+      if (data.station) setForm(stationFormDefaults(data.station));
+      await load(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function refreshKeys(station) {
+    setBusy(`keys:${station.id}`);
+    setError('');
+    try {
+      const data = await request(`/network/wireguard/stations/${station.id}/refresh-keys`, { method: 'POST' });
+      setMessage(data.message || 'WireGuard public keys refreshed.');
+      if (configureStation?.id === station.id && data.station) {
+        setConfigureStation(data.station);
+        setForm(stationFormDefaults(data.station));
+      }
+      await load(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function createStationWireGuardInterface(station = configureStation, payload = form) {
+    if (!station || !payload) return;
+    setBusy(`interface:${station.id}`);
+    setError('');
+    try {
+      const data = await request(`/network/wireguard/stations/${station.id}/station-interface`, { method: 'POST', body: JSON.stringify(payload) });
+      setMessage(data.message || 'Station WireGuard interface was created.');
+      setConfigureStation(data.station || station);
+      if (data.station) setForm(stationFormDefaults(data.station));
+      await load(true);
+    } catch (err) {
+      setError(err.message || 'Could not create station WireGuard interface.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function detectStationWireGuardInterface() {
+    if (!configureStation) return;
+    setBusy('detect-station-interface');
+    setError('');
+    try {
+      const data = await request(`/network/wireguard/stations/${configureStation.id}/interfaces?side=station`);
+      const interfaces = Array.isArray(data.interfaces) ? data.interfaces : [];
+      setStationInterfaceOptions(interfaces);
+      const currentName = form?.wireguard_interface_name || data.saved_name || '';
+      const selected = interfaces.find((item) => item.name === currentName)
+        || interfaces.find((item) => item.is_saved)
+        || interfaces.find((item) => item.is_3j_managed)
+        || (interfaces.length === 1 ? interfaces[0] : null);
+      if (selected?.name) {
+        updateFormValue('wireguard_interface_name', selected.name);
+        setMessage(`Detected station WireGuard interface: ${selected.name}`);
+      } else if (!interfaces.length) {
+        setMessage('No existing WireGuard interface was detected on the station root router. Auto Setup can create one using the entered name.');
+      } else {
+        setMessage('Multiple WireGuard interfaces were detected. Select the correct interface below.');
+      }
+    } catch (err) {
+      setError(err.message || 'Could not detect station WireGuard interfaces.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function InfoLabel({ children, info }) {
+    return (
+      <label className="form-label d-flex align-items-center gap-1">
+        {children}
+        <IconInfoCircle size={16} className="text-muted" title={info} />
+      </label>
+    );
+  }
+
+  function renderWireGuardCommandModal() {
+    if (!wireguardCommandPlan) return null;
+    const action = wireguardCommandPlan.action === 'REMOVE' ? 'REMOVE' : 'PUSH';
+    const isRemove = action === 'REMOVE';
+    const isEndpointForwarding = wireguardCommandPlan.scope === 'endpoint-forwarding';
+    const targetName = isEndpointForwarding
+      ? 'Endpoint Forwarding'
+      : (wireguardCommandPlan.station_name || wireguardCommandPlan.station?.station_name || wireguardCommandPlan.target_name || 'Station');
+    const totalSteps = wireguardCommandSteps.length;
+    const completedSteps = wireguardCommandSteps.filter((step) => ['SUCCESS', 'SKIPPED', 'FAILED'].includes(step.status)).length;
+    const successSteps = wireguardCommandSteps.filter((step) => ['SUCCESS', 'SKIPPED'].includes(step.status)).length;
+    const failedSteps = wireguardCommandSteps.filter((step) => step.status === 'FAILED').length;
+    const progressPercent = totalSteps ? Math.round((completedSteps / totalSteps) * 100) : 0;
+    const footerDisabled = wireguardCommandRunning || !totalSteps;
+    return (
+      <Modal
+        title={`${isRemove ? 'Remove' : 'Push'} WireGuard Config - ${targetName}`}
+        onClose={() => {
+          if (!wireguardCommandRunning) {
+            setWireguardCommandPlan(null);
+            setWireguardCommandSteps([]);
+            setWireguardCommandMessage('');
+            setWireguardCommandCompleted(false);
+          }
+        }}
+        size="xl"
+      >
+        <div className={`alert ${isRemove ? 'alert-danger' : 'alert-info'} d-flex gap-2 align-items-start`}>
+          {isRemove ? <IconAlertTriangle size={20} className="mt-1 flex-shrink-0" /> : <IconInfoCircle size={20} className="mt-1 flex-shrink-0" />}
+          <div>
+            <div className="fw-semibold">{wireguardCommandPlan.title || (isRemove ? 'Remove Station WireGuard Config' : 'Push Station WireGuard Config')}</div>
+            <div>{wireguardCommandPlan.summary || 'Review every RouterOS command before continuing.'}</div>
+          </div>
+        </div>
+        <div className="row g-3 mb-3">
+          <div className="col-md-4">
+            <div className="border rounded p-3 h-100">
+              <div className="text-muted small">Routers</div>
+              <div className="h2 mb-0">{wireguardCommandPlan.router_plans?.length || 0}</div>
+            </div>
+          </div>
+          <div className="col-md-4">
+            <div className="border rounded p-3 h-100">
+              <div className="text-muted small">Commands</div>
+              <div className="h2 mb-0">{totalSteps}</div>
+            </div>
+          </div>
+          <div className="col-md-4">
+            <div className="border rounded p-3 h-100">
+              <div className="text-muted small">Completed</div>
+              <div className="h2 mb-0">{successSteps}/{totalSteps}</div>
+            </div>
+          </div>
+          <div className="col-12">
+            <div className="progress" style={{ height: 8 }}>
+              <div className={`progress-bar ${failedSteps ? 'bg-danger' : isRemove ? 'bg-warning' : 'bg-primary'}`} style={{ width: `${progressPercent}%` }} />
+            </div>
+            {wireguardCommandMessage && <div className={`small mt-2 ${failedSteps ? 'text-danger' : 'text-muted'}`}>{wireguardCommandMessage}</div>}
+          </div>
+        </div>
+        {wireguardCommandCompleted ? (
+          <div className="station-push-success mb-3">
+            <div className="station-push-success-icon">
+              <IconCircleCheck size={56} />
+            </div>
+            <div>
+              <div className="h3 mb-1">{isEndpointForwarding ? (isRemove ? 'Endpoint forwarding remove completed' : 'Endpoint forwarding push completed') : (isRemove ? 'WireGuard remove completed' : 'WireGuard push completed')}</div>
+              <div className="text-muted">
+                {isEndpointForwarding
+                  ? (isRemove ? 'The 3J-managed public WireGuard forwarding rules were removed where detected.' : 'The public WireGuard UDP forwarding rules were pushed. Station routers can now dial the dedicated server endpoint.')
+                  : (isRemove ? 'The station-created WireGuard MikroTik config was removed where detected.' : 'The station WireGuard MikroTik config was pushed. Check live handshake after the station reaches the hub.')}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="station-implementation-list">
+	            {wireguardCommandSteps.map((step, index) => {
+	              const badgeText = step.detected && step.status === 'SKIPPED'
+	                ? (isRemove ? 'Already clean' : 'Already pushed')
+	                : step.detected && isRemove
+	                  ? 'Detected'
+	                  : step.informational
+	                    ? 'Info'
+	                    : (step.status || 'PENDING');
+	              const badgeClass = step.status === 'FAILED'
+	                ? 'bg-danger-lt text-danger'
+	                : step.detected || step.status === 'SUCCESS' || step.status === 'SKIPPED'
+	                  ? 'bg-green-lt text-green'
+	                  : step.status === 'RUNNING'
+	                    ? 'bg-blue-lt text-blue'
+	                    : 'bg-secondary-lt text-secondary';
+	              return (
+	              <div className={`station-implementation-step ${step.status?.toLowerCase() || 'pending'} ${step.detected ? 'detected' : ''}`} key={step.id || `${step.router_id}-${index}`}>
+	                <div className="station-implementation-step-header">
+	                  <span className="station-implementation-status-icon">{wireguardCommandStatusIcon(step.status)}</span>
+	                  <div className="flex-fill min-w-0">
+	                    <div className="d-flex justify-content-between gap-2 flex-wrap">
+	                      <div className="fw-semibold">{index + 1}. {step.label}</div>
+	                      <span className={`badge ${badgeClass}`}>
+	                        {badgeText}
+	                      </span>
+	                    </div>
+	                    <div className="text-muted small">
+	                      {step.router_name || 'MikroTik'}{step.host ? ` · ${step.host}` : ''}{step.router_role ? ` · ${step.router_role}` : ''}
+	                    </div>
+                    {step.message && <div className={`small mt-1 ${step.status === 'FAILED' ? 'text-danger' : 'text-muted'}`}>{step.message}</div>}
+                  </div>
+	                </div>
+	                <pre className="station-implementation-command mb-0"><code>{step.preview || 'No command preview available.'}</code></pre>
+	              </div>
+	              );
+	            })}
+            {!wireguardCommandSteps.length && <div className="empty">No RouterOS commands were generated for this action.</div>}
+          </div>
+        )}
+        <div className="modal-footer px-0 pb-0 mt-3">
+          <button
+            className="btn"
+            type="button"
+            disabled={wireguardCommandRunning}
+            onClick={() => {
+              setWireguardCommandPlan(null);
+              setWireguardCommandSteps([]);
+              setWireguardCommandMessage('');
+              setWireguardCommandCompleted(false);
+            }}
+          >
+            Close
+          </button>
+          {!wireguardCommandCompleted && (
+            <button className={`btn ${isRemove ? 'btn-danger' : 'btn-primary'}`} type="button" disabled={footerDisabled} onClick={runWireGuardCommandPlan}>
+              {isRemove ? <IconTrash size={18} className="me-2" /> : <IconPlayerPlay size={18} className="me-2" />}
+              {wireguardCommandRunning ? (isRemove ? 'Removing...' : 'Pushing...') : isRemove ? 'Start Remove Config' : 'Start Push Config'}
+            </button>
+          )}
+        </div>
+      </Modal>
+    );
+  }
+
+  function renderConfigureModal() {
+    if (!configureStation || !form) return null;
+    const selectedHub = routers.find((router) => router.id === form.wireguard_hub_router_id);
+    const modalState = configureStation.status || {};
+    const modalLive = modalState.live || {};
+    const usingSystemHub = !form.wireguard_hub_router_id;
+    const hubReady = usingSystemHub ? Boolean(systemHub?.public_key_configured) : Boolean(selectedHub?.credentials_saved);
+    const rootReady = Boolean(configureStation.root_router?.router_id);
+    const stationClientReady = Boolean(configureStation.wireguard_enabled && configureStation.wireguard_station_public_key && configureStation.wireguard_peer_public_key_configured);
+    const stationInterfaceReady = Boolean(modalLive.station_interface || configureStation.wireguard_station_public_key);
+    const hubPeerReady = stationClientReady;
+    const handshakeReady = modalState.status === 'HANDSHAKE_OK';
+    const stepBadge = (ready, label = null) => (
+      <span className={`badge ${ready ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>
+        {ready ? <IconCircleCheck size={13} className="me-1" /> : <IconAlertTriangle size={13} className="me-1" />}{label || (ready ? 'Ready' : 'Pending')}
+      </span>
+    );
+    return (
+      <Modal title={`WireGuard Backup - ${configureStation.station_name}`} onClose={() => setConfigureStation(null)} size="xl">
+        <form onSubmit={saveSettings}>
+          <div className="alert alert-info d-flex gap-2 align-items-start">
+            <IconInfoCircle size={20} className="mt-1 flex-shrink-0" />
+            <div>
+              Station setup reads public keys from RouterOS automatically. The default design uses the dedicated WireGuard server as the hub; the optional MikroTik hub fields are retained only for legacy deployments.
+            </div>
+          </div>
+          <div className="row g-3 mb-3">
+            <div className="col-lg-3 col-md-6">
+              <div className="border rounded p-3 h-100">
+                <div className="d-flex justify-content-between align-items-start gap-2">
+	                  <div>
+	                    <div className="fw-semibold">1. Server Ready</div>
+	                    <div className="text-muted small mt-1">{usingSystemHub ? 'Dedicated WireGuard server public key.' : 'Legacy MikroTik hub router.'}</div>
+	                  </div>
+	                  {stepBadge(hubReady)}
+	                </div>
+	                <div className="small mt-2">{usingSystemHub ? `${systemHub?.endpoint_host || 'WireGuard server'}:${systemHub?.endpoint_port || 51820}` : (selectedHub?.router_name || selectedHub?.host || 'No hub selected')}</div>
+	              </div>
+            </div>
+            <div className="col-lg-3 col-md-6">
+              <div className="border rounded p-3 h-100">
+                <div className="d-flex justify-content-between align-items-start gap-2">
+                  <div>
+                    <div className="fw-semibold">2. Station Root</div>
+                    <div className="text-muted small mt-1">Router where the station client will be created.</div>
+                  </div>
+                  {stepBadge(rootReady)}
+                </div>
+                <div className="small mt-2">{configureStation.root_router?.router_name || 'No station root router'} {configureStation.root_router?.host ? `· ${configureStation.root_router.host}` : ''}</div>
+              </div>
+            </div>
+            <div className="col-lg-3 col-md-6">
+              <div className="border rounded p-3 h-100">
+                <div className="d-flex justify-content-between align-items-start gap-2">
+                  <div>
+                    <div className="fw-semibold">3. Station Interface</div>
+                    <div className="text-muted small mt-1">Creates the MikroTik WireGuard interface and tunnel IP, then reads the public key.</div>
+                  </div>
+                  {stepBadge(stationInterfaceReady, stationInterfaceReady ? 'Created' : 'Not created')}
+                </div>
+                <button
+                  className="btn btn-primary btn-sm mt-3"
+                  type="button"
+                  disabled={!hubReady || !rootReady || busy === `plan:interface:${configureStation.id}`}
+                  onClick={() => openWireGuardPushPlan(configureStation, 'interface', form || stationFormDefaults(configureStation))}
+                >
+                  <IconPlayerPlay size={16} className="me-1" />{busy === `plan:interface:${configureStation.id}` ? 'Loading...' : stationInterfaceReady ? 'Review Interface Push' : 'Review Interface Push'}
+                </button>
+                {stationInterfaceReady && <div className="text-muted small mt-2">Interface: {configureStation.wireguard_interface_name || form.wireguard_interface_name || 'Auto-generated'}</div>}
+              </div>
+            </div>
+            <div className="col-lg-3 col-md-6">
+              <div className="border rounded p-3 h-100">
+                <div className="d-flex justify-content-between align-items-start gap-2">
+	                  <div>
+	                    <div className="fw-semibold">4. Connect + Verify</div>
+	                    <div className="text-muted small mt-1">Creates station peer/routes and verifies handshake. Legacy mode also prepares hub-side RouterOS objects.</div>
+	                  </div>
+                  {stepBadge(handshakeReady, handshakeReady ? 'Handshake OK' : hubPeerReady ? 'Peer ready' : 'Pending')}
+                </div>
+                <div className="btn-list mt-3">
+                  <button
+                    className="btn btn-primary btn-sm"
+                    type="button"
+                    disabled={!stationInterfaceReady || busy === `plan:client:${configureStation.id}`}
+                    onClick={() => openWireGuardPushPlan(configureStation, 'client', form || stationFormDefaults(configureStation))}
+                  >
+                    <IconPlayerPlay size={16} className="me-1" />{busy === `plan:client:${configureStation.id}` ? 'Loading...' : stationClientReady ? 'Review Peer Push' : 'Review Peer Push'}
+                  </button>
+	                  <button className="btn btn-outline-secondary btn-sm" type="button" disabled={busy === `keys:${configureStation.id}` || !configureStation.wireguard_enabled} onClick={() => refreshKeys(configureStation)}>
+	                    <IconRefresh size={16} className="me-1" />Check
+                  </button>
+                </div>
+                <div className="text-muted small mt-2">{modalState.message || 'Create the station client first.'}</div>
+              </div>
+            </div>
+          </div>
+	          <details className="border rounded p-3">
+	            <summary className="fw-semibold">Advanced manual WireGuard settings</summary>
+	            <div className="text-muted small mt-1 mb-3">Normal setup does not require selecting an interface manually. Use these fields only when you need to override names, endpoint, or routes.</div>
+	          <div className="row g-3">
+            <div className="col-md-4">
+              <InfoLabel info="The MikroTik that owns or starts this station path. WireGuard station-side interface, peer, and routes are applied on this router.">
+                Station Root Router
+              </InfoLabel>
+              <input className="form-control" value={configureStation.root_router?.router_name || 'No station root router'} readOnly />
+              <div className="form-hint">This is the first router in the station path.</div>
+            </div>
+	            <div className="col-md-4">
+	              <InfoLabel info="Optional legacy mode only. Leave blank for the dedicated WireGuard server. Select a MikroTik hub only if this station should be managed through an existing RouterOS WireGuard hub.">
+	                Legacy MikroTik Hub Router
+	              </InfoLabel>
+	              <select className="form-select" value={form.wireguard_hub_router_id || ''} onChange={(event) => updateFormValue('wireguard_hub_router_id', event.target.value)}>
+	                <option value="">Use dedicated WireGuard server</option>
+	                {routers.map((router) => (
+	                  <option key={router.id} value={router.id}>{router.router_name || router.host} {router.credentials_saved ? '' : '(missing API login)'}</option>
+	                ))}
+	              </select>
+	              <div className="form-hint">Dedicated server mode is recommended for production backup reachability.</div>
+	            </div>
+	            <div className="col-md-4">
+	              <InfoLabel info="The public IP or DNS name the station uses to dial the dedicated WireGuard server.">
+	                WireGuard Server Endpoint
+	              </InfoLabel>
+	              <div className="input-group">
+	                <input className="form-control" value={form.wireguard_endpoint_host || ''} onChange={(event) => updateFormValue('wireguard_endpoint_host', event.target.value)} placeholder="Public IP/DDNS or reachable hub IP" />
+	                <button className="btn btn-outline-secondary" type="button" onClick={() => updateFormValue('wireguard_endpoint_host', usingSystemHub ? (systemHub?.endpoint_host || '') : (selectedHub?.host || ''))}>
+	                  Use saved endpoint
+	                </button>
+	              </div>
+              <div className="form-hint">For backup over local ISP, this must be reachable from the substation.</div>
+            </div>
+            <div className="col-md-4">
+              <InfoLabel info="The WireGuard interface name created on the station root router. The system uses this name for peer and route commands.">
+                Station WireGuard Interface
+              </InfoLabel>
+              <div className="input-group">
+                <input className="form-control" value={form.wireguard_interface_name || ''} onChange={(event) => updateFormValue('wireguard_interface_name', event.target.value)} />
+                <button className="btn btn-outline-secondary" type="button" disabled={busy === 'detect-station-interface'} onClick={detectStationWireGuardInterface}>
+                  <IconSearch size={16} className="me-1" />{busy === 'detect-station-interface' ? 'Detecting...' : 'Detect'}
+                </button>
+              </div>
+              {stationInterfaceOptions.length > 1 && (
+                <div className="mt-2 d-flex flex-wrap gap-2">
+                  {stationInterfaceOptions.map((item) => (
+                    <button
+                      key={item.name}
+                      className={`badge border-0 ${form.wireguard_interface_name === item.name ? 'bg-blue text-white' : 'bg-blue-lt text-blue'}`}
+                      type="button"
+                      onClick={() => updateFormValue('wireguard_interface_name', item.name)}
+                    >
+                      {item.name}{item.running ? ` · running ${item.running}` : ''}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="col-md-4">
+              <InfoLabel info="The tunnel IP assigned to the station side of WireGuard. Use a unique /32 per station so the hub can route back to it.">
+                Station Tunnel Address
+              </InfoLabel>
+              <input className="form-control" value={form.wireguard_station_address || ''} onChange={(event) => updateFormValue('wireguard_station_address', event.target.value)} placeholder="10.250.77.2/32" />
+            </div>
+	            <div className="col-md-2">
+	              <InfoLabel info="The UDP port opened on the MikroTik hub for WireGuard. The station connects to this port. Default is 51820.">
+	                UDP Port
+	              </InfoLabel>
+	              <input className="form-control" type="number" min="1" max="65535" value={form.wireguard_endpoint_port || 51820} onChange={(event) => updateFormValue('wireguard_endpoint_port', Number(event.target.value))} />
+	            </div>
+            <div className="col-md-2">
+              <InfoLabel info="Persistent keepalive sent by the station peer. This keeps the tunnel usable behind NAT or local ISP routers. 25 seconds is a common value.">
+                Keepalive
+              </InfoLabel>
+              <input className="form-control" type="number" min="0" max="65535" value={form.wireguard_persistent_keepalive ?? 25} onChange={(event) => updateFormValue('wireguard_persistent_keepalive', Number(event.target.value))} />
+            </div>
+            <div className="col-md-4">
+              <InfoLabel info="Optional station local ISP gateway for a /32 route to the public WireGuard endpoint. For CCR1009-Centro this is 192.168.5.1, so the tunnel dials through local ISP when the main fiber route is unavailable or would loop through the core.">
+                Endpoint Route Gateway
+              </InfoLabel>
+              <input className="form-control" value={form.wireguard_endpoint_route_gateway || ''} onChange={(event) => updateFormValue('wireguard_endpoint_route_gateway', event.target.value)} placeholder="Local ISP gateway, e.g. 192.168.5.1" />
+            </div>
+	            <div className="col-md-4">
+	              <InfoLabel info="Dedicated server mode uses the server interface name. Legacy MikroTik hub mode uses the RouterOS hub interface name.">
+	                Hub WireGuard Interface
+	              </InfoLabel>
+	              <input className="form-control" value={form.wireguard_hub_interface_name || ''} onChange={(event) => updateFormValue('wireguard_hub_interface_name', event.target.value)} placeholder="WG-3J-HUB" />
+	            </div>
+            <div className="col-md-2">
+              <InfoLabel info="RouterOS route distance for WireGuard routes. Use 200 for backup so OSPF/fiber routes with lower distance stay primary; WireGuard only wins when the normal route disappears.">
+                Route Distance
+              </InfoLabel>
+              <input className="form-control" type="number" min="1" max="255" value={form.wireguard_route_distance || 200} onChange={(event) => updateFormValue('wireguard_route_distance', Number(event.target.value))} />
+            </div>
+            <div className="col-md-6">
+              <InfoLabel info="Networks that the station should send through WireGuard, usually central Omada, portal, API, and monitoring networks only. Do not put 0.0.0.0/0 here for this backup design.">
+                Station Routes to Central
+              </InfoLabel>
+              <textarea className="form-control" rows="3" value={form.wireguard_allowed_addresses || ''} onChange={(event) => updateFormValue('wireguard_allowed_addresses', event.target.value)} placeholder="192.168.50.0/24,10.250.0.1/32" />
+              <div className="form-hint">Routes installed on the station. Keep this limited to central controller/portal/service networks.</div>
+            </div>
+            <div className="col-md-6">
+              <InfoLabel info="Networks that the central hub should route back to this station, normally the station tunnel IP, customer subnet, and AP management subnet if enabled.">
+                Hub Routes Back to Station
+              </InfoLabel>
+              <textarea className="form-control" rows="3" value={form.wireguard_hub_allowed_addresses || ''} onChange={(event) => updateFormValue('wireguard_hub_allowed_addresses', event.target.value)} placeholder="Auto: station tunnel IP, customer subnet, AP management subnet" />
+              <div className="form-hint">Leave blank to auto include station tunnel IP, customer subnet, and AP management subnet if enabled.</div>
+            </div>
+            <div className="col-12">
+              <label className="form-check form-switch">
+                <input className="form-check-input" type="checkbox" checked={Boolean(form.wireguard_enabled)} onChange={(event) => updateFormValue('wireguard_enabled', event.target.checked)} />
+                <span className="form-check-label">Use WireGuard as backup reachability for this station</span>
+              </label>
+            </div>
+          </div>
+          </details>
+          <div className="modal-footer px-0 pb-0 mt-3">
+            <button className="btn" type="button" onClick={() => setConfigureStation(null)}>Close</button>
+            <button className="btn btn-outline-primary" type="submit" disabled={busy === 'save'}>
+              <IconDeviceFloppy size={18} className="me-2" />{busy === 'save' ? 'Saving...' : 'Save Settings'}
+            </button>
+            <button className="btn btn-outline-danger" type="button" disabled={busy === `remove-plan:${configureStation.id}`} onClick={() => openWireGuardRemovePlan(configureStation)}>
+              <IconTrash size={18} className="me-2" />{busy === `remove-plan:${configureStation.id}` ? 'Loading...' : 'Remove Config'}
+            </button>
+            <button className="btn btn-primary" type="button" disabled={busy === `plan:client:${configureStation.id}`} onClick={() => openWireGuardPushPlan(configureStation, 'client', form || stationFormDefaults(configureStation))}>
+              <IconPlayerPlay size={18} className="me-2" />{busy === `plan:client:${configureStation.id}` ? 'Loading...' : 'Review Push Config'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    );
+  }
+
+  function renderSystemHubSettings() {
+    const hubForm = systemHubForm || wireGuardSystemHubToForm(systemHub || {});
+    const endpointPushProgress = endpointForwardingPlan?.push_progress || {};
+    const endpointTotalSteps = Number(endpointPushProgress.total_steps || endpointForwardingPlan?.router_plans?.reduce((total, routerPlan) => total + (routerPlan.commands?.length || 0), 0) || 0);
+    const endpointPushedSteps = Number(endpointPushProgress.pushed_steps || 0);
+    const endpointFullyPushed = endpointTotalSteps > 0 && endpointPushedSteps >= endpointTotalSteps;
+    const endpointStatusTone = endpointFullyPushed ? 'green' : endpointTotalSteps ? 'yellow' : 'secondary';
+    return (
+      <div className="row row-cards">
+        <div className="col-12">
+          {renderSystemHubManageCard()}
+        </div>
+        <div className="col-12">
+          <Card title="WireGuard Server Settings" subtitle="Dedicated public WireGuard server used by substations for backup reachability.">
+            <ul className="nav nav-tabs mb-3">
+              {[
+                { key: 'Server', label: 'Server', icon: IconShieldLock },
+                { key: 'Endpoint', label: 'Endpoint Forwarding', icon: IconRouter },
+                { key: 'SSH', label: 'SSH Install', icon: IconServer },
+                { key: 'Keys', label: 'Keys & Preview', icon: IconKey },
+              ].map((item) => {
+                const TabIcon = item.icon;
+                return (
+                  <li className="nav-item" key={`wireguard-settings-${item.key}`}>
+                    <button className={`nav-link ${systemHubSettingsTab === item.key ? 'active' : ''}`} type="button" onClick={() => setSystemHubSettingsTab(item.key)}>
+                      <TabIcon size={16} className="me-1" />{item.label}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            <form onSubmit={saveSystemHubSettings}>
+              <div className="row g-3">
+                <div className={systemHubSettingsTab === 'Server' ? 'col-12' : 'd-none'}>
+                  <label className="form-check form-switch">
+                    <input className="form-check-input" type="checkbox" checked={Boolean(hubForm.enabled)} onChange={(event) => updateSystemHubField('enabled', event.target.checked)} />
+                    <span className="form-check-label">Enable dedicated WireGuard server hub</span>
+                  </label>
+                </div>
+                <div className={systemHubSettingsTab === 'Server' ? 'col-md-4' : 'd-none'}>
+                  <InfoLabel info="Public IP or DNS name that station MikroTik routers will dial, for example wg.3jhotspot.com or a public IP.">
+                    Public Endpoint Host
+                  </InfoLabel>
+                  <input className="form-control" value={hubForm.endpoint_host || ''} onChange={(event) => updateSystemHubField('endpoint_host', event.target.value)} placeholder="wg.3jhotspot.com or public IP" />
+                </div>
+                <div className={systemHubSettingsTab === 'Server' ? 'col-md-2' : 'd-none'}>
+                  <InfoLabel info="UDP listen port on the WireGuard server. This must be open from the substation local ISP.">
+                    UDP Port
+                  </InfoLabel>
+                  <input className="form-control" type="number" min="1" max="65535" value={hubForm.endpoint_port || 51820} onChange={(event) => updateSystemHubField('endpoint_port', Number(event.target.value))} />
+                </div>
+                <div className={systemHubSettingsTab === 'Server' ? 'col-md-3' : 'd-none'}>
+                  <InfoLabel info="Linux WireGuard interface name on the dedicated server. Default is wg0.">
+                    Server Interface
+                  </InfoLabel>
+                  <input className="form-control" value={hubForm.interface_name || ''} onChange={(event) => updateSystemHubField('interface_name', event.target.value)} placeholder="wg0" />
+                </div>
+                <div className={systemHubSettingsTab === 'Server' ? 'col-md-3' : 'd-none'}>
+                  <InfoLabel info="Tunnel IP assigned to the dedicated server side of WireGuard.">
+                    Server Tunnel Address
+                  </InfoLabel>
+                  <input className="form-control" value={hubForm.hub_address || ''} onChange={(event) => updateSystemHubField('hub_address', event.target.value)} placeholder="10.250.0.1/24" />
+                </div>
+                <div className={systemHubSettingsTab === 'Server' ? 'col-12' : 'd-none'}>
+                  <InfoLabel info="Central services that stations should reach through backup WireGuard, such as portal, API, Omada controller, and management addresses.">
+                    Central Service Routes
+                  </InfoLabel>
+                  <textarea className="form-control" rows="3" value={hubForm.central_service_routes || ''} onChange={(event) => updateSystemHubField('central_service_routes', event.target.value)} placeholder="192.168.50.70/32,192.168.50.71/32" />
+                </div>
+                <div className={systemHubSettingsTab === 'Endpoint' ? 'col-12' : 'd-none'}>
+                  <div className="border rounded p-3">
+                    <div className="d-flex align-items-start justify-content-between gap-3 flex-wrap mb-3">
+                      <div>
+                        <div className="fw-semibold d-flex align-items-center gap-2"><IconRouter size={18} />MikroTik Endpoint Forwarding</div>
+                        <div className="text-muted small">Use this when the WireGuard server is behind a MikroTik public WAN. For your setup, choose CORE1, WAN interface ether12, and forward UDP {hubForm.endpoint_port || 51820} to the WireGuard server LAN IP.</div>
+                      </div>
+                      <label className="form-check form-switch mb-0">
+                        <input className="form-check-input" type="checkbox" checked={hubForm.endpoint_forwarding_enabled !== false} onChange={(event) => updateSystemHubField('endpoint_forwarding_enabled', event.target.checked)} />
+                        <span className="form-check-label">Enable endpoint forwarding</span>
+                      </label>
+                    </div>
+                    <div className="row g-3">
+                      <div className="col-12">
+                        <div className="border rounded p-3 d-flex align-items-center justify-content-between gap-3 flex-wrap">
+                          <div className="d-flex align-items-center gap-3">
+                            <span className={`avatar bg-${endpointStatusTone}-lt text-${endpointStatusTone}`}>
+                              {endpointFullyPushed ? <IconCircleCheck size={22} /> : endpointTotalSteps ? <IconClock size={22} /> : <IconInfoCircle size={22} />}
+                            </span>
+                            <div>
+                              <div className="fw-semibold">Endpoint forwarding status</div>
+                              <div className="text-muted small">
+                                {endpointTotalSteps
+                                  ? `${endpointPushedSteps}/${endpointTotalSteps} managed rule(s) pushed on the selected MikroTik.`
+                                  : 'Choose a MikroTik router, then preview or review push config to check managed rules.'}
+                              </div>
+                              {endpointForwardingPlan?.effective_wan_interface && endpointForwardingPlan.effective_wan_interface !== endpointForwardingPlan.endpoint_wan_interface && (
+                                <div className="text-warning small mt-1">
+                                  Selected {endpointForwardingPlan.endpoint_wan_interface}; RouterOS firewall rule uses master interface {endpointForwardingPlan.effective_wan_interface}.
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <span className={`badge bg-${endpointStatusTone}-lt text-${endpointStatusTone}`}>
+                            {endpointTotalSteps ? `${endpointPushedSteps}/${endpointTotalSteps} pushed` : 'Not checked'}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="col-md-4">
+                        <InfoLabel info="The MikroTik router that owns the IGATE static public IP. In your current topology this should be CORE1 because PLDT IGATE is connected to ether12 of CORE1.">
+                          Public Edge MikroTik
+                        </InfoLabel>
+                        <select className="form-select" value={hubForm.endpoint_router_id || ''} onChange={(event) => handleEndpointRouterChange(event.target.value)}>
+                          <option value="">Choose router</option>
+                          {routers.map((router) => (
+                            <option value={router.id} key={`wireguard-endpoint-router-${router.id}`}>{router.router_name || router.host} - {router.host}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="col-md-2">
+                        <InfoLabel info="The physical or logical WAN interface where PLDT IGATE enters the selected MikroTik. For your current CORE1 design use ether12.">
+                          IGATE WAN Interface
+                        </InfoLabel>
+                        <div className="input-group">
+                          <select
+                            className="form-select"
+                            value={hubForm.endpoint_wan_interface || ''}
+                            disabled={!hubForm.endpoint_router_id || endpointInterfaceLoading || (!endpointInterfaceOptions.length && !hubForm.endpoint_wan_interface)}
+                            onChange={(event) => handleEndpointWanInterfaceChange(event.target.value)}
+                          >
+                            <option value="">{endpointInterfaceLoading ? 'Loading interfaces...' : 'Choose interface'}</option>
+                            {hubForm.endpoint_wan_interface && !endpointInterfaceOptions.some((iface) => iface.name === hubForm.endpoint_wan_interface) && (
+                              <option value={hubForm.endpoint_wan_interface}>{hubForm.endpoint_wan_interface} - saved/manual</option>
+                            )}
+                            {endpointInterfaceOptions.map((iface) => (
+                              <option value={iface.name} key={`wireguard-endpoint-iface-${iface.name}`}>
+                                {endpointInterfaceOptionLabel(iface)}
+                              </option>
+                            ))}
+                          </select>
+                          <button className="btn btn-outline-secondary" type="button" disabled={!hubForm.endpoint_router_id || endpointInterfaceLoading} onClick={() => loadEndpointInterfaces(hubForm.endpoint_router_id)}>
+                            <IconRefresh size={16} />
+                          </button>
+                        </div>
+                        {endpointInterfaceError ? (
+                          <div className="mt-2">
+                            <input className="form-control" value={hubForm.endpoint_wan_interface || ''} onChange={(event) => updateSystemHubField('endpoint_wan_interface', event.target.value)} placeholder="Type interface manually, e.g. ether12" />
+                            <div className="text-danger small mt-1">{endpointInterfaceError}</div>
+                          </div>
+                        ) : endpointInterfaceWarnings.length ? (
+                          <div className="text-warning small mt-1">Interfaces loaded, but some optional RouterOS option lists were unavailable.</div>
+                        ) : (
+                          <div className="form-hint">Choose the WAN interface detected from the selected MikroTik.</div>
+                        )}
+                      </div>
+                      <div className="col-md-3">
+                        <InfoLabel info="The static public IPv4 address assigned by PLDT IGATE. Cloudflare wg.3jhotspot.com should point to this exact IP as DNS-only.">
+                          IGATE Static Public IP
+                        </InfoLabel>
+                        <input className="form-control" value={hubForm.endpoint_public_ip || ''} onChange={(event) => updateSystemHubField('endpoint_public_ip', event.target.value)} placeholder="Public IPv4" />
+                      </div>
+                      <div className="col-md-3">
+                        <InfoLabel info="Private LAN IP of the dedicated WireGuard server. The MikroTik dst-nat rule forwards UDP traffic to this address.">
+                          WireGuard Server LAN IP
+                        </InfoLabel>
+                        <input className="form-control" value={hubForm.endpoint_server_ip || ''} onChange={(event) => updateSystemHubField('endpoint_server_ip', event.target.value)} placeholder="192.168.50.25" />
+                      </div>
+                      <div className="col-md-3">
+                        <InfoLabel info="Routing table used by the public edge MikroTik when returning WireGuard replies to substations. In the current CORE1 IGATE setup, use IGATE so replies leave through PLDT IGATE instead of the normal core/default route.">
+                          Return Routing Table
+                        </InfoLabel>
+                        <input className="form-control" value={hubForm.endpoint_return_routing_table || ''} onChange={(event) => updateSystemHubField('endpoint_return_routing_table', event.target.value)} placeholder="IGATE" />
+                      </div>
+                      <div className="col-12">
+                        <div className="btn-list">
+                          <button className="btn btn-outline-secondary" type="button" disabled={busy === 'endpoint-forward-preview'} onClick={loadEndpointForwardingPlan}>
+                            <IconListDetails size={18} className="me-2" />{busy === 'endpoint-forward-preview' ? 'Loading...' : 'Preview MikroTik Rules'}
+                          </button>
+                          <button className="btn btn-outline-success" type="button" disabled={busy === 'endpoint-forward-push-plan'} onClick={() => openEndpointForwardingCommandPlan('push')}>
+                            <IconPlayerPlay size={18} className="me-2" />{busy === 'endpoint-forward-push-plan' ? 'Loading...' : 'Review Push Config'}
+                          </button>
+                          <button className="btn btn-outline-danger" type="button" disabled={busy === 'endpoint-forward-remove-plan'} onClick={() => openEndpointForwardingCommandPlan('remove')}>
+                            <IconTrash size={18} className="me-2" />{busy === 'endpoint-forward-remove-plan' ? 'Loading...' : 'Review Remove Config'}
+                          </button>
+                        </div>
+                      </div>
+                      {endpointForwardingPlan && (
+                        <div className="col-12">
+                          <div className="row g-3">
+                            <div className="col-lg-6">
+                              <div className="fw-semibold mb-2">Push preview</div>
+                              <pre className="bg-dark text-white rounded p-3 mb-0"><code>{(endpointForwardingPlan.commands || []).map((command) => command.preview || command.label).join('\n\n') || 'No push commands generated.'}</code></pre>
+                            </div>
+                            <div className="col-lg-6">
+                              <div className="fw-semibold mb-2">Remove preview</div>
+                              <pre className="bg-light rounded p-3 mb-0"><code>{(endpointForwardingPlan.remove_commands || []).map((command) => command.preview || command.label).join('\n\n') || 'No remove commands generated.'}</code></pre>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      {endpointForwardingResult && (
+                        <div className="col-12">
+                          <details className="border rounded p-3">
+                            <summary className="fw-semibold">Last endpoint forwarding result</summary>
+                            <pre className="bg-light rounded p-3 mt-2 mb-0"><code>{JSON.stringify({
+                              remove_result: endpointForwardingResult.remove_result,
+                              apply_result: endpointForwardingResult.apply_result,
+                            }, null, 2)}</code></pre>
+                          </details>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <div className={systemHubSettingsTab === 'Server' ? 'col-12' : 'd-none'}>
+                  <label className="form-check form-switch">
+                    <input className="form-check-input" type="checkbox" checked={Boolean(hubForm.nat_enabled)} onChange={(event) => updateSystemHubField('nat_enabled', event.target.checked)} />
+                    <span className="form-check-label">Enable server-side NAT helper in generated config</span>
+                  </label>
+                  <div className="form-hint">Keep enabled until routing between the dedicated WireGuard server and central LAN is finalized.</div>
+                </div>
+              </div>
+              <hr className={systemHubSettingsTab === 'SSH' ? '' : 'd-none'} />
+              <div className={systemHubSettingsTab === 'SSH' ? 'row g-3' : 'd-none'}>
+                <div className="col-12">
+                  <div className="fw-semibold d-flex align-items-center gap-2"><IconServer size={18} />SSH Installation Settings</div>
+                  <div className="text-muted small">Use these credentials to test and later install/check WireGuard on the dedicated server, similar to the Omada SSH setup.</div>
+                </div>
+                <div className="col-md-4">
+                  <InfoLabel info="SSH host of the dedicated server. Usually the same public IP/DNS as the endpoint, unless SSH uses a private management IP.">
+                    SSH Host
+                  </InfoLabel>
+                  <input className="form-control" value={hubForm.ssh_host || ''} onChange={(event) => updateSystemHubField('ssh_host', event.target.value)} placeholder="Server IP or hostname" />
+                </div>
+                <div className="col-md-2">
+                  <InfoLabel info="SSH port on the dedicated server. Default is 22.">
+                    SSH Port
+                  </InfoLabel>
+                  <input className="form-control" type="number" min="1" max="65535" value={hubForm.ssh_port || 22} onChange={(event) => updateSystemHubField('ssh_port', Number(event.target.value))} />
+                </div>
+                <div className="col-md-3">
+                  <InfoLabel info="Linux account used to access the dedicated WireGuard server.">
+                    SSH Username
+                  </InfoLabel>
+                  <input className="form-control" value={hubForm.ssh_username || ''} onChange={(event) => updateSystemHubField('ssh_username', event.target.value)} placeholder="root or sudo user" />
+                </div>
+                <div className="col-md-3">
+                  <InfoLabel info="Use password for simple setup or private key for production hardening. Secrets are stored encrypted.">
+                    Authentication
+                  </InfoLabel>
+                  <select className="form-select" value={hubForm.ssh_auth_type || 'PASSWORD'} onChange={(event) => updateSystemHubField('ssh_auth_type', event.target.value)}>
+                    <option value="PASSWORD">Password</option>
+                    <option value="PRIVATE_KEY">Private key</option>
+                  </select>
+                </div>
+                {hubForm.ssh_auth_type === 'PRIVATE_KEY' ? (
+                  <>
+                    <div className="col-md-8">
+                      <InfoLabel info="Paste the private key only when changing it. Existing saved key remains if left blank.">
+                        SSH Private Key {systemHub?.has_ssh_private_key ? <span className="badge bg-green-lt text-green ms-1">saved</span> : null}
+                      </InfoLabel>
+                      <textarea className="form-control" rows="4" value={hubForm.ssh_private_key || ''} onChange={(event) => updateSystemHubField('ssh_private_key', event.target.value)} placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" />
+                    </div>
+                    <div className="col-md-4">
+                      <InfoLabel info="Optional passphrase for the private key. Existing saved passphrase remains if left blank.">
+                        Key Passphrase {systemHub?.has_ssh_private_key_passphrase ? <span className="badge bg-green-lt text-green ms-1">saved</span> : null}
+                      </InfoLabel>
+                      <input className="form-control" type="password" value={hubForm.ssh_private_key_passphrase || ''} onChange={(event) => updateSystemHubField('ssh_private_key_passphrase', event.target.value)} placeholder="Optional" />
+                    </div>
+                  </>
+                ) : (
+                  <div className="col-md-6">
+                    <InfoLabel info="Paste the SSH password only when changing it. Existing saved password remains if left blank.">
+                      SSH Password {systemHub?.has_ssh_password ? <span className="badge bg-green-lt text-green ms-1">saved</span> : null}
+                    </InfoLabel>
+                    <input className="form-control" type="password" value={hubForm.ssh_password || ''} onChange={(event) => updateSystemHubField('ssh_password', event.target.value)} placeholder={systemHub?.has_ssh_password ? 'Saved password unchanged' : 'SSH password'} />
+                  </div>
+                )}
+                <div className="col-md-3">
+                  <InfoLabel info="Passwordless sudo is recommended for a setup user. Use Sudo password if the SSH password must be supplied to sudo. Use No sudo only when logging in as root.">
+                    Sudo Mode
+                  </InfoLabel>
+                  <select className="form-select" value={hubForm.sudo_mode || 'PASSWORDLESS'} onChange={(event) => updateSystemHubField('sudo_mode', event.target.value)}>
+                    <option value="PASSWORDLESS">Passwordless sudo</option>
+                    <option value="SUDO_PASSWORD">Sudo password</option>
+                    <option value="NONE">No sudo/root shell</option>
+                  </select>
+                </div>
+                <div className="col-12 d-none">
+                  <div className="btn-list">
+                    <button className="btn btn-primary" type="submit" disabled={busy === 'system-hub-save'}>
+                      <IconDeviceFloppy size={18} className="me-2" />{busy === 'system-hub-save' ? 'Saving...' : 'Save WireGuard Server'}
+                    </button>
+                    <button className="btn btn-outline-primary" type="button" disabled={busy === 'system-hub-keypair'} onClick={generateSystemHubKeypair}>
+                      <IconKey size={18} className="me-2" />{busy === 'system-hub-keypair' ? 'Generating...' : systemHub?.public_key_configured ? 'Regenerate Key Pair' : 'Generate Key Pair'}
+                    </button>
+                    <button className="btn btn-outline-success" type="button" disabled={busy === 'system-hub-test-ssh'} onClick={testSystemHubSsh}>
+                      <IconServer size={18} className="me-2" />{busy === 'system-hub-test-ssh' ? 'Testing...' : 'Test SSH'}
+                    </button>
+                    <button className="btn btn-outline-secondary" type="button" disabled={busy === 'system-hub-preview'} onClick={loadSystemHubPreview}>
+                      <IconListDetails size={18} className="me-2" />Preview Config
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="btn-list mt-3">
+                <button className="btn btn-primary" type="submit" disabled={busy === 'system-hub-save'}>
+                  <IconDeviceFloppy size={18} className="me-2" />{busy === 'system-hub-save' ? 'Saving...' : 'Save WireGuard Server'}
+                </button>
+                {systemHubSettingsTab === 'Keys' && (
+                  <>
+                    <button className="btn btn-outline-primary" type="button" disabled={busy === 'system-hub-keypair'} onClick={generateSystemHubKeypair}>
+                      <IconKey size={18} className="me-2" />{busy === 'system-hub-keypair' ? 'Generating...' : systemHub?.public_key_configured ? 'Regenerate Key Pair' : 'Generate Key Pair'}
+                    </button>
+                    <button className="btn btn-outline-secondary" type="button" disabled={busy === 'system-hub-preview'} onClick={loadSystemHubPreview}>
+                      <IconListDetails size={18} className="me-2" />Preview Config
+                    </button>
+                  </>
+                )}
+                {systemHubSettingsTab === 'SSH' && (
+                  <button className="btn btn-outline-success" type="button" disabled={busy === 'system-hub-test-ssh'} onClick={testSystemHubSsh}>
+                    <IconServer size={18} className="me-2" />{busy === 'system-hub-test-ssh' ? 'Testing...' : 'Test SSH'}
+                  </button>
+                )}
+              </div>
+            </form>
+            {systemHubSshOutput && <pre className="mt-3 bg-dark text-white rounded p-3 mb-0"><code>{systemHubSshOutput}</code></pre>}
+          </Card>
+        </div>
+        <div className={systemHubSettingsTab === 'Keys' ? 'col-lg-6' : 'd-none'}>
+          <Card title="Server Key Status" subtitle="Stations need this public key before peer setup can work.">
+            <div className="d-flex align-items-center gap-3">
+              <span className={`avatar ${systemHub?.public_key_configured ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}><IconKey size={24} /></span>
+              <div>
+                <div className="fw-semibold">{systemHub?.public_key_configured ? 'Public key ready' : 'Public key missing'}</div>
+                <div className="text-muted small text-break">{systemHub?.public_key || 'Generate the dedicated server key pair before pushing station peers.'}</div>
+              </div>
+            </div>
+          </Card>
+        </div>
+        <div className={systemHubSettingsTab === 'SSH' || systemHubSettingsTab === 'Keys' ? 'col-lg-6' : 'd-none'}>
+          <Card title="SSH Status" subtitle="Use Test SSH after saving the server credentials.">
+            <div className="d-flex align-items-center gap-3">
+              <span className={`avatar ${(systemHub?.has_ssh_password || systemHub?.has_ssh_private_key) ? 'bg-blue-lt text-blue' : 'bg-secondary-lt text-secondary'}`}><IconServer size={24} /></span>
+              <div>
+                <div className="fw-semibold">{systemHub?.ssh_host || 'No SSH host saved'}</div>
+                <div className="text-muted small">{systemHub?.ssh_username || 'No username'} · port {systemHub?.ssh_port || 22} · {systemHub?.ssh_auth_type || 'PASSWORD'}</div>
+              </div>
+            </div>
+          </Card>
+        </div>
+        {systemHubSettingsTab === 'Keys' && systemHubPreview && (
+          <div className="col-12">
+            <Card title="Generated Server Config Preview" subtitle={`${systemHubPreview.peer_count || 0} station peer(s) detected from enabled station plans.`}>
+              <pre className="bg-dark text-white rounded p-3"><code>{systemHubPreview.config || ''}</code></pre>
+              <div className="row g-3">
+                <div className="col-md-6">
+                  <div className="fw-semibold mb-2">Install commands</div>
+                  <pre className="bg-light rounded p-3"><code>{(systemHubPreview.install_commands || []).join('\n')}</code></pre>
+                </div>
+                <div className="col-md-6">
+                  <div className="fw-semibold mb-2">Note</div>
+                  <div className="alert alert-info mb-0">{systemHubPreview.note}</div>
+                </div>
+              </div>
+            </Card>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="row row-cards">
+      <div className="col-12">
+        <div className="alert alert-info d-flex gap-2 align-items-start">
+          <IconInfoCircle size={20} className="mt-1 flex-shrink-0" />
+          <div>
+            <div className="fw-semibold">WireGuard is backup reachability only.</div>
+            <div>
+              Use this page to set up station-to-central WireGuard for Omada/controller/portal reachability when the main fiber is cut and the substation local ISP is still online.
+              It does not replace station VLAN/DHCP setup and it does not route customer internet through the central site.
+            </div>
+          </div>
+        </div>
+      </div>
+      {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
+      {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
+      <div className="col-12">
+        <ul className="nav nav-tabs">
+          {['Status', 'Settings', 'Logs'].map((item) => (
+            <li className="nav-item" key={item}>
+              <button className={`nav-link ${tab === item ? 'active' : ''}`} type="button" onClick={() => setTab(item)}>
+                {item === 'Status' ? <IconActivity size={16} className="me-1" /> : item === 'Settings' ? <IconSettings size={16} className="me-1" /> : <IconListDetails size={16} className="me-1" />}
+                {item}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+      {tab === 'Status' ? (
+      <>
+      <KpiCard icon={IconRouter} label="Station Plans" value={summary.station_count ?? stations.length} tone="blue" />
+      <KpiCard icon={IconShieldLock} label="WireGuard Enabled" value={summary.enabled_count || 0} tone="green" />
+      <KpiCard icon={IconActivity} label="Live Handshakes" value={summary.handshake_ok_count || 0} tone="cyan" />
+      <KpiCard icon={IconAlertTriangle} label="Needs Attention" value={summary.attention_count || 0} tone={(summary.attention_count || 0) ? 'yellow' : 'green'} />
+
+      <div className="col-12">
+        {renderWireGuardReadinessCard()}
+      </div>
+
+      {systemHubPreview && (
+        <div className="col-12">
+          <Card title="Generated Server Config Preview" subtitle={`${systemHubPreview.peer_count || 0} station peer(s) detected from enabled station plans.`}>
+            <pre className="bg-dark text-white rounded p-3"><code>{systemHubPreview.config || ''}</code></pre>
+            <div className="row g-3">
+              <div className="col-md-6">
+                <div className="fw-semibold mb-2">Install commands</div>
+                <pre className="bg-light rounded p-3"><code>{(systemHubPreview.install_commands || []).join('\n')}</code></pre>
+              </div>
+              <div className="col-md-6">
+                <div className="fw-semibold mb-2">Note</div>
+                <div className="alert alert-info mb-0">{systemHubPreview.note}</div>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      <div className="col-12">
+        <Card title="WireGuard Backup Status" subtitle="Automatic public-key detection, RouterOS setup, and live handshake monitoring.">
+          <div className="d-flex justify-content-between align-items-center gap-2 flex-wrap mb-3">
+            <div className="text-muted small">
+              Last checked: <strong>{lastUpdatedAt ? compactDateTime(lastUpdatedAt) : '-'}</strong> · Live refresh every 15 seconds
+            </div>
+            <div className="btn-list">
+              <button className="btn btn-outline-secondary btn-sm" type="button" disabled={loading} onClick={() => load()}>
+                <IconRefresh size={16} className="me-1" />{loading ? 'Refreshing...' : 'Refresh'}
+              </button>
+              <a className="btn btn-primary btn-sm" href="/admin/settings/network">
+                <IconRouter size={16} className="me-1" />Open Station Plans
+              </a>
+            </div>
+          </div>
+          <div className="table-responsive">
+            <table className="table table-vcenter card-table">
+              <thead>
+                <tr>
+                  <th>Station</th>
+                  <th>Station Root</th>
+                  <th>Central Hub</th>
+                  <th>Tunnel</th>
+                  <th>Status</th>
+                  <th>Live Handshake</th>
+                  <th className="text-end">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stations.map((station) => {
+                  const state = station.status || {};
+                  const live = state.live || {};
+                  const stationInterface = live.station_interface || {};
+                  const hubPeer = live.hub_peer || live.station_peer || {};
+                  const stationHub = station.wireguard_system_hub || systemHub || {};
+                  const hubName = station.wireguard_hub_router_id
+                    ? (routerNameById[station.wireguard_hub_router_id] || station.wireguard_hub_router_id)
+                    : 'Dedicated WireGuard Server';
+                  return (
+                  <tr key={station.id}>
+                    <td>
+                      <div className="fw-semibold">{station.station_name}</div>
+                      <div className="text-muted small">
+                        {station.station_code || 'No code'} · VLAN {station.vlan_id} · {station.client_network_cidr}
+                      </div>
+                      <span className={`badge mt-1 ${station.gateway_mode === 'LOCAL_STATION_GATEWAY' ? 'bg-purple-lt text-purple' : 'bg-secondary-lt text-secondary'}`}>
+                        {station.gateway_mode === 'LOCAL_STATION_GATEWAY' ? 'Local gateway' : 'Central root design'}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="fw-semibold">{station.root_router?.router_name || 'No root router'}</div>
+                      <div className="text-muted small">{station.root_router?.host || '-'}</div>
+                      <div className="text-muted small">Interface: {station.wireguard_interface_name || '-'}</div>
+                      <div className="text-muted small">Address: {station.wireguard_station_address || '-'}</div>
+                    </td>
+                    <td>
+	                      {station.wireguard_enabled ? (
+	                        <>
+	                          <div className="fw-semibold">{hubName}</div>
+	                          <div className="text-muted small">Interface: {station.wireguard_hub_interface_name || stationHub.interface_name || '-'}</div>
+	                          <div className="text-muted small">Endpoint: {station.wireguard_endpoint_host || stationHub.endpoint_host || '-'}:{station.wireguard_endpoint_port || stationHub.endpoint_port || 51820}</div>
+	                          <div className="text-muted small">Keys: hub {station.wireguard_peer_public_key_configured ? 'saved' : 'pending'} · station {station.wireguard_station_public_key ? 'saved' : 'pending'}</div>
+                        </>
+                      ) : (
+                        <span className="text-muted">Not applicable</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="text-muted small">Station routes</div>
+                      <div className="small">{station.wireguard_allowed_addresses || '-'}</div>
+                      <div className="text-muted small mt-1">Hub return routes</div>
+                      <div className="small">{station.wireguard_hub_allowed_addresses || '-'}</div>
+                    </td>
+                    <td>{stationStatusBadge(station)}<div className="text-muted small mt-1">{state.message}</div></td>
+                    <td>
+                      <div className="fw-semibold">{live.latest_handshake || '-'}</div>
+                      <div className="text-muted small">RX/TX: {live.rx || '-'} / {live.tx || '-'}</div>
+                      <div className="text-muted small">Station running: {stationInterface.running || '-'}</div>
+                      <div className="text-muted small">Current endpoint: {hubPeer['current-endpoint-address'] || '-'}:{hubPeer['current-endpoint-port'] || '-'}</div>
+                    </td>
+                    <td className="text-end">
+	                      <div className="btn-list justify-content-end flex-nowrap">
+	                        <button className="btn btn-primary btn-sm" type="button" onClick={() => openConfigure(station)}><IconShieldLock size={16} className="me-1" />Setup</button>
+	                        <button className="btn btn-outline-success btn-sm" type="button" disabled={busy === `plan:client:${station.id}`} onClick={() => openWireGuardPushPlan(station, 'client', stationFormDefaults(station))}><IconPlayerPlay size={16} className="me-1" />Push</button>
+	                        <button className="btn btn-outline-primary btn-sm" type="button" disabled={busy === `keys:${station.id}` || !station.wireguard_enabled} onClick={() => refreshKeys(station)}><IconKey size={16} className="me-1" />Keys</button>
+	                        <button className="btn btn-outline-danger btn-sm" type="button" disabled={busy === `remove-plan:${station.id}`} onClick={() => openWireGuardRemovePlan(station)}><IconTrash size={16} className="me-1" />Remove</button>
+	                      </div>
+	                    </td>
+                  </tr>
+                  );
+                })}
+                {!stations.length && (
+                  <tr><td colSpan="7"><div className="empty">No station plans yet. Create station plans in Settings - Network - Configuration first.</div></td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+
+      <div className="col-lg-6">
+        <Card title="Recommended Setup Sequence" subtitle="Use this for substations with local ISP backup.">
+          <div className="list-group list-group-flush">
+            <div className="list-group-item px-0">
+              <div className="fw-semibold">1. Keep VLAN/DHCP station config in Network</div>
+              <div className="text-muted small">The substation router owns the customer VLAN, DHCP, NAT, queues, and local ISP failover.</div>
+            </div>
+            <div className="list-group-item px-0">
+              <div className="fw-semibold">2. Prepare the dedicated WireGuard server</div>
+              <div className="text-muted small">Configure the public endpoint, server key, and SSH login in Settings. Keep routes limited to Omada/portal/API reachability. Do not route customer internet through WireGuard.</div>
+            </div>
+            <div className="list-group-item px-0">
+              <div className="fw-semibold">3. Create the station interface</div>
+              <div className="text-muted small">The setup wizard creates the WireGuard interface and tunnel IP on the station MikroTik, then reads the station public key automatically.</div>
+            </div>
+            <div className="list-group-item px-0">
+              <div className="fw-semibold">4. Connect the station to the hub</div>
+              <div className="text-muted small">The wizard adds station-side peer/routes and checks handshake status from RouterOS. Legacy MikroTik hub mode is available only when explicitly selected.</div>
+            </div>
+            <div className="list-group-item px-0">
+              <div className="fw-semibold">5. Watch live handshake</div>
+              <div className="text-muted small">Handshake, RX/TX, and current endpoint update automatically from the station side. A missing handshake means endpoint reachability, firewall, host WireGuard service, or routes still need checking.</div>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      <div className="col-lg-6">
+        <Card title="Customer Movement Between Substations" subtitle="What happens when a customer connects in another barangay/station.">
+          <div className="d-flex flex-column gap-3">
+            <div>
+              <div className="fw-semibold">Profile/account is central</div>
+              <div className="text-muted small">Customer profile, phone number, WiFi bag, monthly subscriber access, and purchase history are stored in this central system, not inside one MikroTik station.</div>
+            </div>
+            <div>
+              <div className="fw-semibold">Network session changes per station</div>
+              <div className="text-muted small">When the customer moves, they get a new DHCP IP from the new station VLAN. Omada/captive portal re-checks the central account and authorizes that new session.</div>
+            </div>
+            <div>
+              <div className="fw-semibold">Scope still matters</div>
+              <div className="text-muted small">All-location passes and monthly subscriber access can work across stations. Barangay-only products should remain limited to the configured barangay/site.</div>
+            </div>
+            <div>
+              <div className="fw-semibold">Why WireGuard matters</div>
+              <div className="text-muted small">If the main fiber is cut but the substation local ISP is online, WireGuard keeps Omada/portal/API reachability back to the central system so roaming and authorization can still work.</div>
+            </div>
+          </div>
+        </Card>
+      </div>
+      </>
+      ) : tab === 'Settings' ? (
+        <div className="col-12">{renderSystemHubSettings()}</div>
+      ) : (
+        <div className="col-12">{renderSystemHubLogs()}</div>
+      )}
+      {renderConfigureModal()}
+      {renderWireGuardCommandModal()}
     </div>
   );
 }
@@ -35940,8 +39072,16 @@ function ThreeJtvApiPage() {
 const nav = [
   { page: 'Dashboard', icon: IconDashboard, tone: 'blue' },
   { page: 'AP & Client Map', icon: IconMapPin, tone: 'teal' },
-  { page: 'Customer Devices', icon: IconWifi, tone: 'azure' },
-  { page: 'Monthly Subscribers', icon: IconUsers, tone: 'blue' },
+  {
+    page: 'Accounts',
+    icon: IconUsers,
+    tone: 'blue',
+    children: [
+      { page: 'Customer Devices', label: 'Customer Devices', icon: IconWifi, tone: 'azure' },
+      { page: 'Monthly Subscribers', label: 'Monthly Subscribers', icon: IconUsers, tone: 'blue' },
+      { page: 'Payment Access', label: 'Payment Access', icon: IconBrowserCheck, tone: 'cyan' }
+    ]
+  },
   {
     page: 'APs Deployment',
     icon: IconRouter,
@@ -35952,7 +39092,6 @@ const nav = [
       { page: 'Long Lat', icon: IconMapPin, tone: 'green' }
     ]
   },
-  { page: 'Location Management', icon: IconMapPin, tone: 'green' },
   { page: 'Vouchers', icon: IconKey, tone: 'yellow' },
   { page: 'Online Store', icon: IconListDetails, tone: 'green' },
   {
@@ -35964,15 +39103,32 @@ const nav = [
       { page: 'Store Map', icon: IconMapPin, tone: 'green' }
     ]
   },
-  { page: 'Sales', icon: IconCalendarStats, tone: 'green' },
-  { page: 'PayMongo', icon: IconCash, tone: 'green' },
-  { page: 'Payment Access', icon: IconBrowserCheck, tone: 'cyan' },
-  { page: 'IPTV', icon: IconPlayerPlay, tone: 'purple' },
-  { page: 'Captive Portal', icon: IconWifi, tone: 'blue' },
+  {
+    page: 'Sales',
+    icon: IconCalendarStats,
+    tone: 'green',
+    children: [
+      { page: 'Sales', label: 'Overview', icon: IconCalendarStats, tone: 'green' },
+      { page: 'Stores', label: 'Stores', icon: IconBuildingStore, tone: 'yellow' },
+      { page: 'PayMongo Sales', label: 'PayMongo', icon: IconCash, tone: 'green' }
+    ]
+  },
   { page: 'Support Inbox', icon: IconMessageCircle, tone: 'orange' },
-  { page: 'Network', icon: IconRouter, tone: 'purple' },
-  { page: 'Omada Controller', icon: IconServer, tone: 'cyan' },
-  { page: 'System Settings', icon: IconSettings, tone: 'secondary' },
+  {
+    page: 'Settings',
+    icon: IconSettings,
+    tone: 'secondary',
+    children: [
+      { page: 'System Settings', label: 'System', icon: IconSettings, tone: 'secondary' },
+      { page: 'PayMongo', label: 'PayMongo', icon: IconCash, tone: 'green' },
+      { page: 'Omada Controller', label: 'Omada Controller', icon: IconServer, tone: 'cyan' },
+      { page: 'Network', label: 'Network', icon: IconRouter, tone: 'purple' },
+      { page: 'WireGuard', label: 'WireGuard', icon: IconShieldLock, tone: 'blue' },
+      { page: 'Location', label: 'Location', icon: IconMapPin, tone: 'green' },
+      { page: 'IPTV', label: 'IPTV', icon: IconPlayerPlay, tone: 'purple' },
+      { page: 'Captive Portal', label: 'Captive Portal', icon: IconWifi, tone: 'blue' }
+    ]
+  },
   { page: 'Logs', icon: IconListDetails, tone: 'yellow' }
 ];
 
@@ -36220,6 +39376,220 @@ function NotificationsPage({ onNavigate }) {
   );
 }
 
+function CashCollectionPage() {
+  const [data, setData] = useState(null);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [busy, setBusy] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function loadCashCollection() {
+    try {
+      const nextData = await request('/cash-collection');
+      setData(nextData);
+      setError('');
+    } catch (err) {
+      setError(err.message || 'Could not load cash collection.');
+    }
+  }
+
+  useEffect(() => {
+    loadCashCollection();
+    const timer = window.setInterval(loadCashCollection, 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  async function schedulePickup(store) {
+    setBusy(store.id);
+    setError('');
+    setMessage('');
+    try {
+      const result = await request(`/cash-collection/stores/${encodeURIComponent(store.id)}/pickup`, {
+        method: 'POST',
+        body: JSON.stringify({ notes: 'Manual pickup scheduled from Stores page.' }),
+      });
+      setMessage(result.message || 'Cash pickup scheduled.');
+      window.dispatchEvent(new CustomEvent('admin-notification-refresh'));
+      await loadCashCollection();
+    } catch (err) {
+      setError(err.message || 'Could not schedule cash pickup.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const stores = data?.stores || [];
+  const filteredStores = stores.filter((store) => {
+    const term = search.trim().toLowerCase();
+    const matchesSearch = !term || [
+      store.store_name,
+      store.owner?.display_name,
+      store.owner?.contact_number,
+      store.barangay,
+      store.municipality,
+    ].some((value) => String(value || '').toLowerCase().includes(term));
+    if (!matchesSearch) return false;
+    if (statusFilter === 'GOAL_REACHED') return Number(store.goal?.tier_index || 0) > 0;
+    if (statusFilter === 'PENDING') return Boolean(store.active_remittance);
+    if (statusFilter === 'READY') return Number(store.unremitted_sales_centavos || 0) > 0 && !store.active_remittance;
+    return true;
+  });
+  const summary = data?.summary || {};
+  const kpis = [
+    { label: 'Monthly Sales', value: summary.sales_month_display || 'PHP 0.00', icon: IconCalendarStats, tone: 'green' },
+    { label: 'Unremitted Sales', value: summary.unremitted_sales_display || 'PHP 0.00', icon: IconCash, tone: 'yellow' },
+    { label: 'Goal Stores', value: summary.goal_reached_count || 0, icon: IconTrophy, tone: 'orange' },
+    { label: 'Pickup Pending', value: summary.pickup_pending_count || 0, icon: IconBuildingStore, tone: 'blue' },
+  ];
+
+  function remittanceBadge(store) {
+    const active = store.active_remittance;
+    if (active) return <span className="badge bg-yellow-lt text-yellow">{active.status_label}</span>;
+    if (Number(store.unremitted_sales_centavos || 0) > 0) return <span className="badge bg-green-lt text-green">Ready</span>;
+    return <span className="badge bg-secondary-lt text-secondary">No sales</span>;
+  }
+
+  function pickupButtonState(store) {
+    const active = store.active_remittance;
+    if (active?.method === 'ONLINE') return { disabled: true, label: 'Online Pending' };
+    if (active?.status === 'CASH_PICKUP_SCHEDULED') return { disabled: true, label: 'Scheduled' };
+    if (active?.status === 'CASH_PICKUP_REQUESTED') return { disabled: false, label: 'Schedule Pickup' };
+    if (Number(store.unremitted_sales_centavos || 0) <= 0) return { disabled: true, label: 'No Sales' };
+    return { disabled: false, label: 'Manual Pickup' };
+  }
+
+  return (
+    <div className="cash-collection-page">
+      <div className="page-header d-print-none">
+        <div className="row align-items-center">
+          <div className="col">
+            <div className="page-pretitle">Physical stores</div>
+            <h2 className="page-title">Stores</h2>
+            <div className="text-muted">Track store sales, goal tier status, and cash pickup scheduling.</div>
+          </div>
+          <div className="col-auto ms-auto">
+            <button className="btn btn-outline-secondary" type="button" onClick={loadCashCollection}>
+              <IconRefresh size={17} className="me-2" />Refresh
+            </button>
+          </div>
+        </div>
+      </div>
+      {message && <AutoDismissAlert message={message} tone="success" onDismiss={() => setMessage('')} />}
+      {error && <AutoDismissAlert message={error} tone="danger" onDismiss={() => setError('')} />}
+      <div className="row row-cards mb-3">
+        {kpis.map((kpi) => {
+          const KpiIcon = kpi.icon;
+          return (
+            <div className="col-12 col-sm-6 col-xl-3" key={kpi.label}>
+              <div className="card card-sm">
+                <div className="card-body d-flex align-items-center gap-3">
+                  <span className={`badge bg-${kpi.tone}-lt text-${kpi.tone} admin-page-kpi-icon`}><KpiIcon size={22} /></span>
+                  <div className="flex-fill">
+                    <div className="text-muted small">{kpi.label}</div>
+                    <div className="h2 mb-0">{kpi.value}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <Card
+        title={(
+          <CardHeaderContent>
+            <div className="d-flex flex-wrap align-items-center justify-content-between gap-2 w-100">
+              <div>
+                <h3 className="card-title mb-1">Store Collection Status</h3>
+                <div className="text-muted small">Minimum owner remittance goal: {summary.minimum_goal_display || 'PHP 1,000.00'}.</div>
+              </div>
+              <div className="d-flex flex-wrap gap-2">
+                <div className="input-icon">
+                  <span className="input-icon-addon"><IconSearch size={16} /></span>
+                  <input className="form-control" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search store or owner..." />
+                </div>
+                <select className="form-select w-auto" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                  <option value="ALL">All stores</option>
+                  <option value="READY">Ready to collect</option>
+                  <option value="GOAL_REACHED">Goal reached</option>
+                  <option value="PENDING">Pickup or remit pending</option>
+                </select>
+              </div>
+            </div>
+          </CardHeaderContent>
+        )}
+      >
+        <div className="table-responsive">
+          <table className="table table-vcenter card-table">
+            <thead>
+              <tr>
+                <th>Store</th>
+                <th>Owner</th>
+                <th>Monthly Sales</th>
+                <th>Goal Status</th>
+                <th>Unremitted</th>
+                <th>Collection</th>
+                <th className="w-1">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredStores.map((store) => {
+                const goal = store.goal || {};
+                const button = pickupButtonState(store);
+                return (
+                  <tr key={store.id}>
+                    <td>
+                      <div className="fw-bold">{store.store_name}</div>
+                      <div className="text-muted small">{[store.barangay, store.municipality].filter(Boolean).join(', ') || 'Location not set'}</div>
+                    </td>
+                    <td>
+                      <div>{store.owner?.display_name || 'No active owner'}</div>
+                      <div className="text-muted small">{store.owner?.contact_number || store.owner?.contact_hint || 'No contact'}</div>
+                    </td>
+                    <td className="fw-bold">{store.sales_month_display}</td>
+                    <td>
+                      <div className="d-flex flex-column gap-1">
+                        <span className={`badge ${Number(goal.tier_index || 0) > 0 ? 'bg-green-lt text-green' : 'bg-secondary-lt text-secondary'}`}>
+                          {Number(goal.tier_index || 0) > 0 ? `${goal.current_tier?.rate_display || 'Goal'} tier reached` : 'No goal reached'}
+                        </span>
+                        <span className="text-muted small">{goal.headline || 'No sales yet.'}</span>
+                      </div>
+                    </td>
+                    <td>
+                      <div className="fw-bold">{store.unremitted_sales_display}</div>
+                      <div className="text-muted small">{store.unremitted_request_count || 0} approved sale(s)</div>
+                    </td>
+                    <td>
+                      <div className="d-grid gap-1">
+                        {remittanceBadge(store)}
+                        {store.active_remittance?.created_at && <span className="text-muted small">{formatPortalDateTime(store.active_remittance.created_at)}</span>}
+                      </div>
+                    </td>
+                    <td>
+                      <button
+                        className="btn btn-icon btn-outline-primary"
+                        type="button"
+                        title={button.label}
+                        disabled={button.disabled || busy === store.id}
+                        onClick={() => schedulePickup(store)}
+                      >
+                        {busy === store.id ? <span className="spinner-border spinner-border-sm" /> : <IconCash size={17} />}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!filteredStores.length && (
+                <tr><td colSpan="7" className="text-center text-muted py-5">{data ? 'No stores match the selected filters.' : 'Loading cash collection...'}</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnreadCount = 0, paymentAccessGrantedCount = 0 }) {
   const [open, setOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -36268,7 +39638,10 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnread
                             <li className="nav-item" key={child.page}>
                               <button className={`nav-link nav-sub-link ${page === child.page ? 'active' : ''}`} onClick={() => setActivePage(child.page)}>
                                 <IconWrap><ChildIcon size={18} /></IconWrap>
-                                <span className="nav-link-title">{child.page}</span>
+                                <span className="nav-link-title">{child.label || child.page}</span>
+                                {child.page === 'Payment Access' && paymentAccessGrantedCount > 0 && (
+                                  <span className="nav-unread-badge nav-payment-access-badge">{paymentAccessGrantedCount > 99 ? '99+' : paymentAccessGrantedCount}</span>
+                                )}
                               </button>
                             </li>
                           );
@@ -36374,6 +39747,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
     if (item.category === 'SUPPORT_MESSAGE') return IconMessageCircle;
     if (item.category === 'A2P_SMS_FAILED') return IconSend;
     if (item.category === 'IPTV_LOGIN_FAILED') return IconPlayerPlay;
+    if (item.category === 'STORE_CASH_COLLECTION') return IconBuildingStore;
     if (item.category === 'PAYMONGO_ALERT') return IconCash;
     if (item.severity === 'DANGER' || item.severity === 'WARNING') return IconAlertTriangle;
     return IconBell;
@@ -36384,6 +39758,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
     if (item.severity === 'WARNING') return 'yellow';
     if (item.category === 'SUPPORT_MESSAGE') return 'orange';
     if (item.category === 'IPTV_LOGIN_FAILED') return 'purple';
+    if (item.category === 'STORE_CASH_COLLECTION') return item.severity === 'WARNING' ? 'yellow' : 'green';
     if (item.category === 'PAYMONGO_ALERT') return 'green';
     if (item.severity === 'SUCCESS') return 'green';
     return 'blue';
@@ -36495,6 +39870,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
 function Header({ page, dashboard, resources, omadaPortalStatus, onToggleSidebar, sidebarCollapsed, onOpenCaptivePortal, onNavigatePage, onSupportCountChange }) {
   const meta = pageMeta(page);
   const PageIcon = meta.icon;
+  const pageTitle = meta.label || (page === 'System Settings' ? 'System' : page);
   const ramAllocated = resources?.ram_used_incl_cache_pct;
   const omadaPortalRatio = omadaPortalStatus?.portal_ap_ratio || `${omadaPortalStatus?.portal_ap_connected_count ?? 0}/${omadaPortalStatus?.portal_ap_count ?? 0}`;
   return (
@@ -36503,7 +39879,7 @@ function Header({ page, dashboard, resources, omadaPortalStatus, onToggleSidebar
         <div className="d-flex w-100 align-items-center">
           <button className="topnav-title" type="button" onClick={onToggleSidebar} aria-pressed={sidebarCollapsed} title={sidebarCollapsed ? 'Expand side navigation' : 'Collapse side navigation'}>
             <span className={`badge bg-${meta.tone}-lt text-${meta.tone} header-icon-badge`}><PageIcon size={18} /></span>
-            <div className="h3 m-0">{page}</div>
+            <div className="h3 m-0">{pageTitle}</div>
           </button>
           <div className="sys-metrics d-none d-lg-flex ms-auto gap-4">
             <button
@@ -36683,17 +40059,20 @@ function App() {
             {page === 'Monthly Subscribers' && <MonthlySubscribersPage />}
             {page === 'Sites' && <SitesDeploymentsPage />}
             {page === 'List of APs' && <ListOfApsPage />}
-            {page === 'Location Management' && <LocationManagementPage />}
+            {(page === 'Location' || page === 'Location Management') && <LocationManagementPage />}
             {page === 'Vouchers' && <VouchersPage />}
             {(page === 'Online Store' || page === 'Product Items') && <ProductItemsPage />}
 	            {page === 'Physical Stores' && <PhysicalStoresPage />}
 	            {page === 'Sales' && <SalesPage />}
+	            {(page === 'Stores' || page === 'Cash Collection') && <CashCollectionPage />}
+	            {page === 'PayMongo Sales' && <PayMongoSalesPage />}
 	            {page === 'PayMongo' && <PayMongoPage />}
 	            {page === 'Payment Access' && <PaymentAccessPage />}
 	            {page === 'IPTV' && <IptvPage />}
 	            {page === 'Captive Portal' && <CaptivePortalPage />}
             {page === 'Support Inbox' && <SupportInboxPage />}
             {page === 'Network' && <NetworkPage refresh={refresh} />}
+            {page === 'WireGuard' && <WireGuardPage />}
             {page === 'MikroTik Scan Result' && <MikroTikScanResultPage />}
             {page === 'System Settings' && <SystemSettingsPage refresh={refresh} />}
             {page === 'Omada Controller' && <OmadaControllerPage refresh={refresh} />}

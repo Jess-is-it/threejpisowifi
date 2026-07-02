@@ -14006,7 +14006,7 @@ button.portal-bag-control-card {
 .store-owner-hero {
   border-radius: 1rem;
   box-shadow: 0 18px 46px rgba(15, 23, 42, 0.13);
-  min-height: 320px;
+  min-height: 180px;
   overflow: hidden;
   position: relative;
 }
@@ -14016,7 +14016,7 @@ button.portal-bag-control-card {
     radial-gradient(circle at 20% 18%, rgba(255, 255, 255, 0.22), transparent 30%),
     linear-gradient(135deg, rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.86), rgba(15, 23, 42, 0.9));
   display: flex;
-  height: 320px;
+  height: 180px;
   object-fit: cover;
   width: 100%;
 }
@@ -14133,52 +14133,90 @@ button.portal-bag-control-card {
 }
 
 .store-owner-goal-panel {
-  backdrop-filter: blur(14px);
   background:
-    radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.18), transparent 30%),
-    linear-gradient(135deg, rgba(15, 23, 42, 0.72), rgba(15, 23, 42, 0.44));
-  border: 1px solid rgba(255, 255, 255, 0.2);
+    radial-gradient(circle at 8% 0%, rgba(250, 204, 21, 0.12), transparent 28%),
+    linear-gradient(135deg, #ffffff, #f8fafc);
+  border: 1px solid rgba(98, 105, 118, 0.16);
   border-radius: 1rem;
-  bottom: 1rem;
-  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.28);
-  color: #ffffff;
-  display: grid;
-  gap: 0.62rem;
-  left: 1rem;
-  max-width: min(760px, calc(100% - 2rem));
-  padding: 0.8rem;
-  position: absolute;
-  text-shadow: 0 1px 10px rgba(15, 23, 42, 0.55);
-  width: calc(100% - 2rem);
-  z-index: 3;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.09);
+  color: #172033;
+  margin-top: 0.85rem;
+  overflow: hidden;
 }
 
-.store-owner-goal-top,
-.store-owner-goal-kpis {
+.store-owner-goal-summary {
   align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem;
-  justify-content: space-between;
+  gap: 0.75rem;
+  min-height: 4.2rem;
+  padding: 0.85rem;
+  text-align: left;
+  width: 100%;
 }
 
-.store-owner-goal-level,
-.store-owner-goal-rate {
+.store-owner-goal-summary:hover {
+  background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.04);
+}
+
+.store-owner-goal-summary-icon {
   align-items: center;
-  background: rgba(255, 255, 255, 0.14);
-  border: 1px solid rgba(255, 255, 255, 0.18);
+  animation: store-goal-rate-pulse 2.8s ease-in-out infinite;
+  background: linear-gradient(135deg, #fff7ed, #fde68a);
+  border: 1px solid rgba(245, 158, 11, 0.26);
   border-radius: 999px;
+  color: #b45309;
   display: inline-flex;
-  font-size: 0.76rem;
-  font-weight: 900;
-  gap: 0.35rem;
-  min-height: 1.85rem;
-  padding: 0.24rem 0.58rem;
+  flex: 0 0 auto;
+  height: 2.55rem;
+  justify-content: center;
+  width: 2.55rem;
 }
 
-.store-owner-goal-rate {
-  animation: store-goal-rate-pulse 2.8s ease-in-out infinite;
-  background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.32);
+.store-owner-goal-summary-main {
+  display: grid;
+  flex: 1;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.store-owner-goal-summary-main small,
+.store-owner-goal-kpi small {
+  color: #667085;
+  font-size: 0.68rem;
+  font-weight: 850;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.store-owner-goal-summary-main strong {
+  color: #111827;
+  font-size: clamp(1rem, 2vw, 1.28rem);
+  font-weight: 950;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.store-owner-goal-collapse-icon {
+  align-items: center;
+  background: rgba(98, 105, 118, 0.08);
+  border-radius: 999px;
+  color: #475467;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 2rem;
+  justify-content: center;
+  width: 2rem;
+}
+
+.store-owner-goal-body {
+  border-top: 1px solid rgba(98, 105, 118, 0.14);
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.85rem;
 }
 
 .store-owner-goal-copy {
@@ -14187,17 +14225,18 @@ button.portal-bag-control-card {
 }
 
 .store-owner-goal-copy strong {
-  font-size: 1rem;
+  color: #111827;
+  font-size: 0.98rem;
   font-weight: 900;
 }
 
 .store-owner-goal-copy span {
-  color: rgba(255, 255, 255, 0.82);
+  color: #667085;
   font-size: 0.8rem;
 }
 
 .store-owner-goal-track {
-  background: rgba(255, 255, 255, 0.14);
+  background: rgba(98, 105, 118, 0.12);
   border-radius: 999px;
   height: 0.65rem;
   overflow: hidden;
@@ -14217,90 +14256,312 @@ button.portal-bag-control-card {
   transition: width 420ms ease;
 }
 
-.store-owner-goal-milestones {
+.store-owner-goal-content {
   display: grid;
-  gap: 0.35rem;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.85rem;
+  grid-template-columns: minmax(260px, 0.86fr) minmax(260px, 1fr);
 }
 
-.store-owner-goal-milestone {
-  align-items: center;
-  color: rgba(255, 255, 255, 0.6);
+.store-owner-goal-chart-card {
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(98, 105, 118, 0.14);
+  border-radius: 0.95rem;
+  align-content: start;
   display: grid;
-  gap: 0.1rem;
-  justify-items: center;
-  min-width: 0;
+  gap: 0.65rem;
+  padding: 0.75rem;
+}
+
+.store-owner-goal-chart-header {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
   position: relative;
 }
 
-.store-owner-goal-milestone::before {
-  background: rgba(255, 255, 255, 0.22);
-  border: 1px solid rgba(255, 255, 255, 0.24);
-  border-radius: 999px;
-  content: "";
-  height: 0.58rem;
-  width: 0.58rem;
-}
-
-.store-owner-goal-milestone.is-reached::before {
-  animation: store-goal-dot-pulse 1.8s ease-in-out infinite;
-  background: #31c48d;
-  box-shadow: 0 0 0 5px rgba(49, 196, 141, 0.18);
-}
-
-.store-owner-goal-milestone.is-next::before {
-  background: #facc15;
-  box-shadow: 0 0 0 4px rgba(250, 204, 21, 0.16);
-}
-
-.store-owner-goal-milestone i,
-.store-owner-goal-milestone small {
-  font-style: normal;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.store-owner-goal-milestone i {
+.store-owner-goal-chart-header small {
+  color: #667085;
+  display: block;
   font-size: 0.68rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.store-owner-goal-chart-header strong {
+  color: #111827;
+  display: block;
+  font-size: 0.98rem;
+  font-weight: 950;
+}
+
+.store-owner-goal-filter {
+  position: relative;
+}
+
+.store-owner-goal-filter-button {
+  align-items: center;
+  background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.08);
+  border: 1px solid rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.14);
+  border-radius: 999px;
+  color: var(--tblr-primary, #206bc4);
+  display: inline-flex;
+  height: 2.1rem;
+  justify-content: center;
+  width: 2.1rem;
+}
+
+.store-owner-goal-filter-menu {
+  background: #ffffff;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 0.75rem;
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.14);
+  display: grid;
+  min-width: 150px;
+  padding: 0.32rem;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 12;
+}
+
+.store-owner-goal-filter-menu button {
+  background: transparent;
+  border: 0;
+  border-radius: 0.55rem;
+  color: #344054;
+  font-size: 0.82rem;
+  font-weight: 800;
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+}
+
+.store-owner-goal-filter-menu button.active,
+.store-owner-goal-filter-menu button:hover {
+  background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.08);
+  color: var(--tblr-primary, #206bc4);
+}
+
+.store-owner-goal-chart-wrap {
+  overflow: hidden;
+}
+
+.store-owner-goal-chart-wrap svg {
+  display: block;
+  height: auto;
+  max-width: 100%;
+  overflow: visible;
+  width: 100%;
+}
+
+.store-owner-goal-chart-grid {
+  stroke: rgba(98, 105, 118, 0.16);
+  stroke-width: 1;
+}
+
+.store-owner-goal-chart-axis-line {
+  stroke: rgba(98, 105, 118, 0.24);
+  stroke-width: 1.2;
+}
+
+.store-owner-goal-chart-axis {
+  fill: #667085;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
+.store-owner-goal-chart-tier-line {
+  stroke: rgba(245, 158, 11, 0.58);
+  stroke-dasharray: 6 5;
+  stroke-linecap: round;
+  stroke-width: 1.4;
+}
+
+.store-owner-goal-chart-tier-label {
+  fill: #b45309;
+  font-size: 0.63rem;
   font-weight: 900;
 }
 
-.store-owner-goal-milestone small {
-  font-size: 0.6rem;
-  max-width: 100%;
+.store-owner-goal-chart-line {
+  fill: none;
+  stroke: var(--tblr-primary, #206bc4);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 4;
 }
 
-.store-owner-goal-milestone.is-reached,
-.store-owner-goal-milestone.is-next {
-  color: #ffffff;
+.store-owner-goal-chart-point {
+  cursor: pointer;
+  fill: #ffffff;
+  outline: none;
+  stroke: var(--tblr-primary, #206bc4);
+  stroke-width: 3;
+  transition: r 160ms ease, stroke-width 160ms ease, fill 160ms ease;
+}
+
+.store-owner-goal-chart-point:hover,
+.store-owner-goal-chart-point.active {
+  fill: var(--tblr-primary, #206bc4);
+  stroke-width: 4;
+}
+
+.store-owner-goal-chart-selected {
+  align-items: center;
+  background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.07);
+  border: 1px solid rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.13);
+  border-radius: 0.8rem;
+  color: #344054;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  padding: 0.5rem 0.65rem;
+}
+
+.store-owner-goal-chart-selected span,
+.store-owner-goal-chart-selected em {
+  font-size: 0.76rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.store-owner-goal-chart-selected strong {
+  color: var(--tblr-primary, #206bc4);
+  font-size: 0.85rem;
+  font-weight: 950;
 }
 
 .store-owner-goal-kpis {
-  justify-content: flex-start;
+  display: grid;
+  gap: 0.55rem;
 }
 
 .store-owner-goal-kpi {
   align-items: center;
-  background: rgba(255, 255, 255, 0.13);
-  border: 1px solid rgba(255, 255, 255, 0.17);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(98, 105, 118, 0.14);
   border-radius: 0.72rem;
-  display: inline-flex;
-  gap: 0.36rem;
-  min-height: 2rem;
-  padding: 0.35rem 0.52rem;
+  display: grid;
+  gap: 0.12rem;
+  grid-template-columns: auto 1fr;
+  min-height: 3.4rem;
+  padding: 0.65rem;
 }
 
-.store-owner-goal-kpi small {
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 0.66rem;
-  font-weight: 800;
-  text-transform: uppercase;
+.store-owner-goal-kpi svg {
+  color: var(--tblr-primary, #206bc4);
+  grid-row: span 2;
 }
 
 .store-owner-goal-kpi strong {
-  font-size: 0.8rem;
+  color: #111827;
+  font-size: 0.95rem;
   font-weight: 950;
+}
+
+.store-owner-remit-panel {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(98, 105, 118, 0.14);
+  border-radius: 0.9rem;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.72rem;
+}
+
+.store-owner-remit-panel div {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.store-owner-remit-panel strong {
+  color: #111827;
+  font-size: 0.92rem;
+  font-weight: 950;
+}
+
+.store-owner-remit-panel span {
+  color: #667085;
+  font-size: 0.8rem;
+}
+
+.store-owner-remit-modal {
+  display: grid;
+  gap: 1rem;
+}
+
+.store-owner-remit-modal-summary {
+  align-items: center;
+  background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.07);
+  border: 1px solid rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.14);
+  border-radius: 0.9rem;
+  display: flex;
+  gap: 0.8rem;
+  padding: 0.9rem;
+}
+
+.store-owner-remit-modal-icon {
+  align-items: center;
+  background: #ffffff;
+  border-radius: 999px;
+  color: var(--tblr-primary, #206bc4);
+  display: inline-flex;
+  height: 2.7rem;
+  justify-content: center;
+  width: 2.7rem;
+}
+
+.store-owner-remit-modal-summary strong,
+.store-owner-remit-option strong {
+  color: #111827;
+  display: block;
+  font-weight: 950;
+}
+
+.store-owner-remit-modal-summary span,
+.store-owner-remit-option small {
+  color: #667085;
+  display: block;
+  font-size: 0.82rem;
+}
+
+.store-owner-remit-options {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.store-owner-remit-option {
+  background: #ffffff;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 0.95rem;
+  display: grid;
+  gap: 0.38rem;
+  min-height: 10rem;
+  padding: 0.9rem;
+  text-align: left;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.store-owner-remit-option:hover:not(:disabled) {
+  border-color: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.34);
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.1);
+  transform: translateY(-1px);
+}
+
+.store-owner-remit-option:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.store-owner-remit-option em {
+  color: var(--tblr-primary, #206bc4);
+  font-size: 0.78rem;
+  font-style: normal;
+  font-weight: 900;
+  margin-top: auto;
 }
 
 @keyframes store-goal-progress-shine {
@@ -14763,11 +15024,11 @@ button.portal-bag-control-card {
   }
 
   .store-owner-hero {
-    min-height: 360px;
+    min-height: 220px;
   }
 
   .store-owner-hero-image {
-    height: 360px;
+    height: 220px;
   }
 
   .store-owner-hero-title {
@@ -14787,24 +15048,39 @@ button.portal-bag-control-card {
   }
 
   .store-owner-goal-panel {
-    bottom: 1rem;
-    left: 1rem;
-    right: 1rem;
-    width: auto;
+    border-radius: 0.9rem;
   }
 
-  .store-owner-goal-top,
-  .store-owner-goal-kpis {
+  .store-owner-goal-summary {
+    align-items: flex-start;
+    gap: 0.6rem;
+    padding: 0.75rem;
+  }
+
+  .store-owner-goal-summary-main strong {
+    white-space: normal;
+  }
+
+  .store-owner-goal-content {
+    grid-template-columns: 1fr;
+  }
+
+  .store-owner-goal-chart-selected {
     align-items: flex-start;
     flex-direction: column;
   }
 
-  .store-owner-goal-kpi {
+  .store-owner-remit-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .store-owner-remit-panel .btn {
     width: 100%;
   }
 
-  .store-owner-goal-milestone small {
-    display: none;
+  .store-owner-remit-options {
+    grid-template-columns: 1fr;
   }
 
   .store-owner-grid {
