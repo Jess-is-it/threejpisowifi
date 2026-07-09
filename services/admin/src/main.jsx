@@ -2778,6 +2778,7 @@ function PortalApp() {
   const [portalNotificationPermission, setPortalNotificationPermission] = useState(() => portalNotificationPermissionStatus());
   const [portalBooting, setPortalBooting] = useState(true);
   const [outsideNetworkConfirmed, setOutsideNetworkConfirmed] = useState(false);
+  const [localPresenceDetected, setLocalPresenceDetected] = useState(null);
   const [bag, setBag] = useState(null);
   const [bagSaving, setBagSaving] = useState(false);
   const [iptvWatchLoading, setIptvWatchLoading] = useState('');
@@ -3177,6 +3178,7 @@ function PortalApp() {
       ...context,
       portal_session_id: sessionId || localStorage.getItem('centralwifi_portal_session') || context.portal_session_id,
       device_token: deviceToken || localStorage.getItem('centralwifi_portal_device_token') || context.device_token,
+      local_presence_detected: localPresenceDetected,
       ...extra,
     };
   }
@@ -3229,6 +3231,12 @@ function PortalApp() {
     const query = new URLSearchParams();
     query.set('portal_session_id', statusSessionId);
     if (options.quiet) query.set('quiet', '1');
+    const localPresenceOption = options.localPresenceDetected;
+    if (localPresenceOption === true || localPresenceOption === false) {
+      query.set('local_presence_detected', localPresenceOption ? '1' : '0');
+    } else if (localPresenceDetected === true || localPresenceDetected === false) {
+      query.set('local_presence_detected', localPresenceDetected ? '1' : '0');
+    }
     if (options.includeContext && deviceDetected) {
       query.set('portal_context_present', '1');
       [
@@ -3264,7 +3272,16 @@ function PortalApp() {
     const statusSessionId = options.portalSessionId || sessionId || localStorage.getItem('centralwifi_portal_session');
     if (window.location.protocol !== 'https:') return false;
     if (!portalSettings?.local_portal_url || !statusSessionId) return false;
-    if (nextStatus?.network_presence?.connected_to_3j_ap === true) return false;
+    const presence = nextStatus?.network_presence || {};
+    const hasCurrentProof = Boolean(
+      presence.current_request_detected
+      || presence.detection_reason === 'current_gateway_context'
+      || presence.detection_reason === 'current_portal_context'
+      || presence.detection_reason === 'current_client_ip_station_subnet'
+      || presence.detection_reason === 'current_request_ip_station_subnet'
+      || presence.detection_reason === 'local_presence_probe'
+    );
+    if (presence.connected_to_3j_ap === true && hasCurrentProof) return false;
     if (localPresenceProbeInFlightRef.current) return false;
     const now = Date.now();
     const minAgeMs = options.forceLocalPresenceProbe ? 0 : 25000;
@@ -3278,7 +3295,9 @@ function PortalApp() {
     localPresenceProbeInFlightRef.current = true;
     lastLocalPresenceProbeAtRef.current = Date.now();
     try {
-      return await probeLocalPortalPresence(portalSettings, statusSessionId);
+      const detected = await probeLocalPortalPresence(portalSettings, statusSessionId);
+      setLocalPresenceDetected(detected);
+      return detected;
     } finally {
       localPresenceProbeInFlightRef.current = false;
     }
@@ -3330,12 +3349,6 @@ function PortalApp() {
   }
 
   function iptvWatchRoutePreference() {
-    const presence = status?.network_presence || {};
-    if (outsideNetworkConfirmed && portalStatusLooksOutside(status)) return 'PUBLIC';
-    if (portalHostLooksLocalNetwork()) return 'AUTO';
-    if (deviceDetected || presence.current_request_detected) return 'AUTO';
-    if (presence.current_status === 'CURRENTLY_OUTSIDE_3J_NETWORK') return 'PUBLIC';
-    if (presence.detection_reason === 'live_omada_client' || presence.live_omada_client_detected) return 'PUBLIC';
     return 'PUBLIC';
   }
 
@@ -3907,9 +3920,11 @@ function PortalApp() {
     }
     if (shouldProbeLocalPresence(nextStatus, { ...requestOptions, portalSettings: portalSettingsForProbe, portalSessionId: statusSessionId })) {
       const localPresenceDetected = await refreshLocalPresenceProof(statusSessionId, portalSettingsForProbe);
-      if (localPresenceDetected) {
-        nextStatus = await publicRequest(portalStatusPath(statusSessionId, { ...requestOptions, quiet: true }));
-      }
+      nextStatus = await publicRequest(portalStatusPath(statusSessionId, {
+        ...requestOptions,
+        quiet: true,
+        localPresenceDetected,
+      }));
     }
     setStatus(nextStatus);
     if (nextStatus.profile) setProfile(nextStatus.profile);

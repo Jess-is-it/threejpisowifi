@@ -659,6 +659,7 @@ class PortalSessionRequest(BaseModel):
     portal_session_id: Optional[str] = None
     device_token: Optional[str] = None
     handoff: Optional[str] = None
+    local_presence_detected: Optional[bool] = None
     mac: Optional[str] = None
     ip: Optional[str] = None
     client_mac: Optional[str] = None
@@ -4425,8 +4426,12 @@ def iptv_local_route_omada_fresh_seconds() -> int:
 
 def iptv_presence_supports_local_route(network_presence: Optional[dict] = None) -> bool:
     presence = network_presence or {}
+    if presence.get("local_presence_detected") is False:
+        return False
     if presence.get("connected_to_3j_ap") is not True:
         return False
+    if presence.get("local_presence_detected") is True:
+        return True
     if presence.get("current_request_detected"):
         return True
     if presence.get("detection_reason") in {
@@ -4441,24 +4446,21 @@ def iptv_presence_supports_local_route(network_presence: Optional[dict] = None) 
             age = float(presence.get("live_omada_last_seen_age_seconds"))
         except (TypeError, ValueError):
             age = None
-        if age is not None and age <= iptv_local_route_omada_fresh_seconds():
+        if age is None or age <= iptv_local_route_omada_fresh_seconds():
+            return True
+        if presence.get("live_omada_client_active") is True:
             return True
     return False
 
 
 def iptv_watch_base_url_for_presence(store: dict, network_presence: Optional[dict] = None, route_preference: Optional[str] = None) -> tuple[str, str]:
-    presence = network_presence or {}
     preference = iptv_route_preference(route_preference)
     local_url = normalize_iptv_url(store.get("internal_web_url"), IPTV_DEFAULT_SETTINGS["internal_web_url"], required=False)
     public_url = normalize_iptv_url(store.get("public_url"), IPTV_DEFAULT_SETTINGS["public_url"], required=False)
-    if preference == "PUBLIC" and public_url:
-        return public_url, "PUBLIC_HTTPS_REQUESTED"
+    if public_url:
+        return public_url, "PUBLIC_HTTPS_REQUESTED" if preference == "PUBLIC" else "PUBLIC_HTTPS"
     if preference == "LOCAL" and local_url:
         return local_url, "LOCAL_REQUESTED"
-    if iptv_presence_supports_local_route(presence) and local_url:
-        return local_url, "LOCAL_3J_NETWORK"
-    if public_url:
-        return public_url, "PUBLIC_HTTPS"
     return local_url or IPTV_DEFAULT_SETTINGS["internal_web_url"], "LOCAL_FALLBACK"
 
 
@@ -4494,18 +4496,11 @@ def create_iptv_watch_token(cur, session: dict, bag_item: dict, account: dict, n
     )
     token_row = cur.fetchone()
     watch_base_url, route_mode = iptv_watch_base_url_for_presence(store, network_presence, route_preference)
-    public_base_url = normalize_iptv_url(store.get("public_url"), IPTV_DEFAULT_SETTINGS["public_url"], required=False)
-    local_base_url = normalize_iptv_url(store.get("internal_web_url"), IPTV_DEFAULT_SETTINGS["internal_web_url"], required=False)
-    fallback_watch_url = None
-    if route_mode == "LOCAL_3J_NETWORK" and public_base_url:
-        fallback_watch_url = iptv_watch_url_from_base(public_base_url, token)
-    elif route_mode.startswith("PUBLIC_HTTPS") and local_base_url:
-        fallback_watch_url = iptv_watch_url_from_base(local_base_url, token)
     return {
         "token": token,
         "expires_at": token_row["expires_at"],
         "watch_url": iptv_watch_url_from_base(watch_base_url, token),
-        "fallback_watch_url": fallback_watch_url,
+        "fallback_watch_url": None,
         "ttl_minutes": ttl_minutes,
         "route_mode": route_mode,
     }
@@ -11338,6 +11333,19 @@ def raw_query_value(raw: dict, *names: str):
     return None
 
 
+def parse_portal_optional_bool(value) -> Optional[bool]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
 def looks_like_omada_site_id(value: Optional[str]) -> bool:
     return bool(re.fullmatch(r"[A-Fa-f0-9]{16,64}", str(value or "").strip()))
 
@@ -11376,6 +11384,11 @@ def portal_context(payload: PortalSessionRequest) -> dict:
         "mikrotik_chap_id": payload.chap_id or raw_query_value(raw, "chap-id", "chap_id"),
         "mikrotik_chap_challenge": payload.chap_challenge or raw_query_value(raw, "chap-challenge", "chap_challenge"),
         "auth_token": payload.authToken or payload.token or raw_query_value(raw, "authToken", "token", "t"),
+        "local_presence_detected": parse_portal_optional_bool(
+            payload.local_presence_detected
+            if payload.local_presence_detected is not None
+            else raw_query_value(raw, "local_presence_detected", "localPresenceDetected")
+        ),
         "raw_query_params": raw,
     }
 
@@ -14592,6 +14605,7 @@ def portal_network_presence(session: Optional[dict], request: Optional[Request] 
     request_station = station_for_client_ip(request_ip)
     context_station = station_for_client_ip(ctx.get("client_ip"))
     saved_session_station = station_for_client_ip(str(session.get("client_ip"))) if session_has_omada_context else None
+    explicit_local_presence = ctx.get("local_presence_detected")
     raw_context = ctx.get("raw_query_params") or {}
     live_portal_context = str(raw_context.get("portal_context_present") or "").strip().lower() in {"1", "true", "yes"}
     has_gateway_context = bool(
@@ -14606,7 +14620,14 @@ def portal_network_presence(session: Optional[dict], request: Optional[Request] 
         or ctx.get("mikrotik_server_name")
         or (ctx.get("client_mac") and (ctx.get("ssid") or ctx.get("radio_id")))
     )
-    current_request_detected = bool(request_station or context_station or has_gateway_context or live_portal_context)
+    explicit_outside_current_request = bool(
+        explicit_local_presence is False
+        and not request_station
+        and not context_station
+        and not has_gateway_context
+        and not live_portal_context
+    )
+    current_request_detected = bool(request_station or context_station or has_gateway_context or live_portal_context or explicit_local_presence is True)
     live_omada_client = None
     live_omada_lookup_attempted = False
     if session_is_omada and session_has_omada_context and not current_request_detected:
@@ -14629,9 +14650,13 @@ def portal_network_presence(session: Optional[dict], request: Optional[Request] 
     recent_station_event = recent_portal_station_event(session.get("id")) if session.get("id") else None
     recent_station = (recent_station_event or {}).get("station")
     current_station = request_station or context_station or live_omada_station or recent_station
-    connected_to_3j = bool(current_request_detected or live_omada_client or recent_station_event)
+    connected_to_3j = False if explicit_outside_current_request else bool(current_request_detected or live_omada_client or recent_station_event)
     detection_reason = "none"
-    if has_gateway_context:
+    if explicit_outside_current_request:
+        detection_reason = "local_presence_probe_failed"
+    elif explicit_local_presence is True:
+        detection_reason = "local_presence_probe"
+    elif has_gateway_context:
         detection_reason = "current_gateway_context"
     elif live_portal_context:
         detection_reason = "current_portal_context"
@@ -14651,8 +14676,10 @@ def portal_network_presence(session: Optional[dict], request: Optional[Request] 
         "current_network_detected": connected_to_3j,
         "current_request_ip": request_ip,
         "detection_reason": detection_reason,
+        "local_presence_detected": explicit_local_presence,
         "live_omada_lookup_attempted": live_omada_lookup_attempted,
         "live_omada_client_detected": bool(live_omada_client),
+        "live_omada_client_active": bool((live_omada_client or {}).get("active")),
         "live_omada_station_detected": bool(live_omada_station),
         "live_omada_last_seen_age_seconds": live_omada_last_seen_age,
         "recent_local_station_event_detected": bool(recent_station_event),
@@ -18642,17 +18669,47 @@ def station_portal_whitelist_address_list(vlan_id: int) -> str:
     return f"3J-STATION-V{int(vlan_id)}-PORTAL-WHITELIST"
 
 
+def station_iptv_public_whitelist_entries() -> list[str]:
+    try:
+        store = iptv_store()
+    except Exception:
+        store = IPTV_DEFAULT_SETTINGS
+    entries = []
+    for value in (
+        (store or {}).get("public_url") or IPTV_DEFAULT_SETTINGS["public_url"],
+        (store or {}).get("public_hostname") or IPTV_DEFAULT_SETTINGS["public_hostname"],
+    ):
+        parsed = urlparse(value if "://" in str(value or "") else f"https://{value or ''}")
+        host = (parsed.hostname or str(value or "")).strip()
+        if not host:
+            continue
+        try:
+            address = str(ip_address(host))
+            if "." not in address:
+                continue
+            entry = address
+        except ValueError:
+            entry = host
+        if entry.lower() not in [item.lower() for item in entries]:
+            entries.append(entry)
+    return entries
+
+
 def station_portal_whitelist_entries(portal_url: Optional[str]) -> list[str]:
     host = station_portal_host(portal_url)
+    entries = []
     if not host:
-        return []
+        return station_iptv_public_whitelist_entries()
     try:
         address = str(ip_address(host))
         if "." in address:
-            return [address]
+            entries.append(address)
     except ValueError:
-        return [host]
-    return []
+        entries.append(host)
+    for entry in station_iptv_public_whitelist_entries():
+        if entry.lower() not in [item.lower() for item in entries]:
+            entries.append(entry)
+    return entries
 
 
 def station_iptv_local_web_host_ip() -> Optional[str]:
@@ -18718,7 +18775,7 @@ def station_router_ip_for_direct_host(router_id: Optional[str], host_ip: Optiona
 
 def station_portal_access_ports(portal_url: Optional[str]) -> str:
     parsed = urlparse(portal_url if "://" in str(portal_url or "") else f"http://{portal_url or ''}")
-    ports = {80, 8080}
+    ports = {80, 443, 8080}
     if parsed.port:
         ports.add(int(parsed.port))
     if (parsed.scheme or "").lower() == "https":
@@ -39479,7 +39536,7 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                         {
                             "list": portal_whitelist_name,
                             "address": entry,
-                            "comment": f"3J Station - VLAN {vlan_id} portal whitelist",
+                            "comment": f"3J Station - VLAN {vlan_id} portal/IPTV whitelist",
                         },
                         existing_query={"list": portal_whitelist_name, "address": entry},
                     )
@@ -39487,7 +39544,7 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                 ]),
                 *([
                     station_routeros_add_command(
-                        "Allow VLAN clients to 3J portal whitelist",
+                        "Allow VLAN clients to 3J portal/IPTV whitelist",
                         "/ip/firewall/filter/add",
                         {
                             "chain": "forward",
