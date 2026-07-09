@@ -834,7 +834,9 @@ Long-term network direction:
 - CRS/switch/trunk/transport routers must only carry the VLAN and may expose a VLAN monitoring interface for visibility; they must not own DHCP/HotSpot for the station.
 - Station plans now include a unique station code, customer VLAN, client subnet, HotSpot DNS/server planning fields, and portal URL.
 - Active station plans must not reuse the same station code, customer VLAN, or client subnet.
-- Saving a station validates selected router bridge/tagged ports against latest successful MikroTik preflight scan data, rejects PPPoE-related interfaces, and checks VLAN/subnet/pool conflicts before the RouterOS implementation modal is used.
+- Saving a station validates selected router bridge/tagged ports against latest successful MikroTik preflight scan data or live RouterOS interface detection, rejects actual PPPoE interfaces/sessions, and checks VLAN/subnet/pool conflicts before the RouterOS implementation modal is used. A normal bridge whose name contains `PPPOE`, such as `BR_PPPOE`, is allowed when it is the real OLT/AP bridge.
+- For substation-local gateway designs, the station router chain must contain only the customer VLAN path from the substation gateway toward OLT/APs. Do not add the central/core router just because the station needs to reach Omada/system through it.
+- `CCR1009-Centro` is the validated local-station example: station gateway mode is `LOCAL_STATION_GATEWAY`; saved chain is only `CCR1009-Centro` as `ROOT_GATEWAY`; root bridge is `BR_PPPOE`; tagged port is `ether5`; VLAN `78`, DHCP, NAT, queues, and station firewall rules belong on `CCR1009-Centro`. `CCR2116-Roma/Batu/GK` is central/core reachability only and must not receive VLAN `78` creation commands for this station.
 
 ## Station Backup Reachability / WireGuard Model
 
@@ -862,6 +864,14 @@ Validated station pattern from `CCR1009-Centro` failover testing on 2026-07-02:
 - Validation after cutting the mainline must include: WireGuard server can ping station tunnel IP; hotspot host and API container can ping station tunnel IP; TCP `8291` Winbox and RouterOS API port, currently `1219`, are open on station tunnel IP; `Settings -> WireGuard` reports `HANDSHAKE_OK`.
 - If `Settings -> WireGuard` reports `Station interface check failed: timed out; tunnel fallback <station tunnel IP> failed: timed out`, first check central LAN return routes to the dedicated WireGuard server before changing peer keys, endpoint DNS, or station firewall rules.
 - Future WireGuard page work should manage these central return routes per station so new substations do not require manual CCR route additions.
+
+## MikroTik RouterOS API Session Handling — 2026-07-04
+
+- RouterOS native API calls must reuse authenticated API sessions per router/port/TLS/username/password tuple instead of opening and closing a new socket for each small query.
+- The backend keeps RouterOS API sessions serialized per router with a lock, closes them on protocol/network errors, and also closes idle sessions after the configured idle timeout.
+- This avoids flooding MikroTik logs with repeated login/logout entries from status polling such as Network -> MikroTik configuration progress, WireGuard live checks, AP management checks, queue updates, and read-only scans.
+- Do not bypass the shared RouterOS API session helper when adding new MikroTik read/write helpers. Use the session helper unless the task is a plain TCP reachability check with no login.
+- Use only the saved dedicated MikroTik API account for automation. If a router needs more privileges, ask the owner to elevate the saved `threejhotspot` account for that router; do not switch to another account.
 
 ## Station Implementation History + Remove Config
 
@@ -1152,6 +1162,8 @@ Safety:
 - AP management config is not pushed automatically. It uses the same step-by-step RouterOS push pattern as Station Push Config: detect existing matching objects, show every command, push one command at a time, and stop on the first error.
 - AP Management Push Config now detects broad active raw `notrack` rules and, when present, adds managed raw accept exceptions for source/destination AP management subnet traffic before the broad `notrack`. This allows AP GUI/control traffic such as `10.88.0.10` to remain connection-tracked without disabling the operator's existing raw rule.
 - AP Management Push Config no longer creates office-to-AP GUI masquerade/NAT. AP management transport should focus on VLAN interface, DHCP, Omada discovery/control reachability, and raw tracking exceptions only.
+- AP Management topology is now a fan-out model, not a single linear chain. The central gateway, for example `CCR2116-Roma/Batu/GK`, owns the AP management subnet/DHCP/Option 138/Omada allow rules. The core/CRS trunk, for example `CRS317`, carries the AP management VLAN. Each substation, for example `CCR1009-Centro`, is added as a `Substation Branch` that only trunks the AP management VLAN between its CRS-facing uplink and OLT/AP-facing ports. Substation branch routers must not create another AP management gateway, DHCP server, or pool.
+- Station Push Config remains separate from AP Management. A station plan can use only the local station router chain for customer/captive VLANs, while AP Management separately displays the central gateway -> CRS/core trunk -> substation branches topology.
 
 ## Phase 5.16 — Tested MikroTik HotSpot Pattern Alignment
 
@@ -1284,7 +1296,7 @@ Safety:
 - When a saved Station or AP Management plan is changed after a previous plan may have been pushed, the system stores a pending cleanup plan for the old system-managed RouterOS objects.
 - If an AP Management edit happened before cleanup tracking existed, the system can infer older AP Management cleanup from successful AP Management command history, so old pushed VLANs such as VLAN `111` still appear as remove steps before the current plan is pushed.
 - Push Config now shows old cleanup steps first, removes old managed objects one by one, and then pushes the updated config one by one. The modal must show cleanup/apply phases, progress, and stop on first error.
-- Central AP Management uses the root gateway for IP-layer objects: VLAN interface IP, DHCP pool, DHCP server, DHCP network, option 138, and LOCAL membership. Downstream CRS/trunk routers only carry the AP management VLAN tag and optional monitoring VLAN interface. If the subnet changes but the VLAN ID remains the same, the CRS should still show that VLAN after the updated config is pushed.
+- Central AP Management uses the central gateway for IP-layer objects: VLAN interface IP, DHCP pool, DHCP server, DHCP network, option 138, and LOCAL membership. CRS/core trunks and substation branch routers only carry the AP management VLAN tag and optional monitoring VLAN interface. If the subnet changes but the VLAN ID remains the same, trunk/branch routers should still show that VLAN after the updated config is pushed.
 - Configuration cards must show a visible cleanup-pending state after Station or AP Management edits, so operators know the next Push Config will remove old managed objects before applying the new plan.
 - Cleanup must only target 3JCentralPisowifi-managed names/comments/objects. The system must not remove unmanaged MikroTik configuration.
 
@@ -1467,3 +1479,17 @@ Safety:
 - One monthly contact number equals one allowed device. If the same contact is already bound to another device, the portal rejects login until an admin resets the binding from `Monthly Subscribers`.
 - Monthly subscriber access displays as unlimited to the customer, but Omada still receives a rolling authorization duration configured in Monthly Subscribers settings.
 - Monthly subscriber login must still use Omada captive portal authorization. The frontend cannot grant access by itself.
+
+## 2026-07-09 — Station Portal FQDN Whitelist
+
+- Substation MikroTik station plans must whitelist the configured captive portal hostname for the station client VLAN, not grant the client as an Omada Authentication-Free Client just so the browser can open `net.3jhotspot.com`.
+- The station generator creates `/ip firewall address-list` `3J-STATION-V<VLAN>-PORTAL-WHITELIST` with the portal hostname, then allows the station client subnet to that address-list on portal ports `80,443,8080` before the station forward drop/TTL guard rules.
+- For FQDN portals, add only the hostname to the MikroTik address-list. RouterOS creates dynamic resolved IP rows automatically; adding resolved Cloudflare A records as static entries can collide with those dynamic rows.
+- This whitelist pattern is permanent for future substations, including CCR1009-Centro-style station-root designs where VLAN/DHCP live on the substation router.
+
+## 2026-07-09 — Cross-Station Active Pass Mobility
+
+- When a phone moves between station sites, the current Omada redirect context must win over saved portal session context for site, MAC, IP, SSID, token, and Barangay decisions. Do not authorize against the old station just because the active pass was bought there.
+- The portal may reuse an active session across stations only when Omada shows the current client as active and its non-generic device name uniquely matches exactly one active access session. If multiple active sessions share the same Omada device name, do not guess.
+- Omada external portal authorization requires the fresh token from the current captive redirect. If an old active session is reused and the current redirect does not provide a token, clear stale tokens when MAC/site changes instead of retrying with the old station token.
+- Browser-only visits to `net.3jhotspot.com` can show remaining time, but they cannot grant a new Omada station MAC without the current captive redirect token. The captive popup/sign-in flow must provide `site`, `clientMac`, `clientIp`, `apMac`, `ssidName`, `radioId`, `redirectUrl`, and `token`/`t` for deterministic re-authorization.

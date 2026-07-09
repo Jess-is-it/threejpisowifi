@@ -1184,15 +1184,33 @@ function fmt(value) {
   return String(value);
 }
 
+function parseDateTimeValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value === 'number' || (typeof value === 'string' && /^\d+(\.\d+)?$/.test(value.trim()))) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    const millis = numeric > 100000000000 ? numeric : numeric * 1000;
+    const date = new Date(millis);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function compactDateTime(value) {
   if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return fmt(value);
+  const date = parseDateTimeValue(value);
+  if (!date) return fmt(value);
   let hours = date.getHours();
   const minutes = String(date.getMinutes()).padStart(2, '0');
   const suffix = hours >= 12 ? 'PM' : 'AM';
   hours = hours % 12 || 12;
   return `${hours}:${minutes}${suffix},${date.getMonth() + 1}/${date.getDate()}/${String(date.getFullYear()).slice(-2)}`;
+}
+
+function compactDateTimeOrDash(value) {
+  return compactDateTime(value) || 'n/a';
 }
 
 function formatCentavos(value, currency = 'PHP') {
@@ -1360,6 +1378,7 @@ function adminNotificationIcon(item) {
   if (item?.category === 'IPTV_LOGIN_FAILED') return IconPlayerPlay;
   if (item?.category === 'STORE_CASH_COLLECTION') return IconBuildingStore;
   if (item?.category === 'PAYMONGO_ALERT') return IconCash;
+  if (item?.category === 'OMADA_CONTROLLER_HEALTH') return IconServer;
   if (item?.severity === 'DANGER' || item?.severity === 'WARNING') return IconAlertTriangle;
   return IconBell;
 }
@@ -1371,6 +1390,7 @@ function adminNotificationTone(item) {
   if (item?.category === 'IPTV_LOGIN_FAILED') return 'purple';
   if (item?.category === 'STORE_CASH_COLLECTION') return item?.severity === 'WARNING' ? 'yellow' : 'green';
   if (item?.category === 'PAYMONGO_ALERT') return 'green';
+  if (item?.category === 'OMADA_CONTROLLER_HEALTH') return item?.severity === 'SUCCESS' ? 'green' : 'cyan';
   if (item?.severity === 'SUCCESS') return 'green';
   return 'blue';
 }
@@ -10612,9 +10632,9 @@ function UsersPage({ refresh }) {
 }
 
 function CustomerDevicesPage() {
-  const [data, setData] = useState({ summary: {}, customers: [], without_profiles: [], active: [], inactive: [], active_access: [], with_vouchers: [], blocked: [], time_adjustment_history: [] });
+  const [data, setData] = useState({ summary: {}, customers: [], without_profiles: [], active: [], inactive: [], admin_access: [], active_access: [], with_vouchers: [], blocked: [], time_adjustment_history: [] });
   const [tab, setTab] = useState('customers');
-  const [query, setQuery] = useState('');
+  const [tabFilters, setTabFilters] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -10632,10 +10652,22 @@ function CustomerDevicesPage() {
     ['customers', 'Profiled Customers', data.summary?.customers || 0, 'green'],
     ['without_profiles', 'No Profile Yet', data.summary?.without_profiles || 0, 'yellow'],
     ['active', 'Active Devices', data.summary?.active || 0, 'blue'],
+    ['admin_access', 'Admin Access', data.summary?.admin_access || 0, 'cyan'],
     ['active_access', 'Active Access', data.summary?.active_access || 0, 'purple'],
     ['blocked', 'Blocked Devices', data.summary?.blocked || 0, 'red'],
     ['time_adjustment_history', 'Time History', data.summary?.time_adjustments || 0, 'cyan']
   ];
+  const defaultTabFilter = { query: '', site: '', source: '', status: '', page: 1, pageSize: 20, filtersOpen: false };
+  function currentTabFilter(key = tab) {
+    return { ...defaultTabFilter, ...(tabFilters[key] || {}) };
+  }
+  function updateTabFilter(patch, key = tab) {
+    setTabFilters((current) => {
+      const next = { ...defaultTabFilter, ...(current[key] || {}), ...patch };
+      if (!Object.prototype.hasOwnProperty.call(patch, 'page')) next.page = 1;
+      return { ...current, [key]: next };
+    });
+  }
   async function load() {
     setLoading(true);
     setError('');
@@ -10657,10 +10689,61 @@ function CustomerDevicesPage() {
     }
   }, [deviceDetailsTarget?.user_id]);
   const rows = data[tab] || [];
-  const filtered = rows.filter((row) => {
-    const text = JSON.stringify(row || {}).toLowerCase();
-    return !query.trim() || text.includes(query.trim().toLowerCase());
-  });
+  const filterState = currentTabFilter(tab);
+  function rowSiteValues(row = {}) {
+    const values = [];
+    if (row.site) values.push(row.site);
+    if (row.activated_site) values.push(row.activated_site);
+    (row.devices || []).forEach((device) => {
+      if (device.site) values.push(device.site);
+      (device.sessions || []).forEach((session) => {
+        if (session.site) values.push(session.site);
+      });
+    });
+    return Array.from(new Set(values.filter(Boolean).map(String)));
+  }
+  function rowSourceValues(row = {}) {
+    return Array.from(new Set([
+      row.access_source,
+      row.source,
+      row.portal_source,
+      row.item_source,
+      row.reference,
+      row.admin_username ? 'Admin' : '',
+    ].filter(Boolean).map(String)));
+  }
+  function rowStatusValues(row = {}) {
+    const values = [row.status, row.session_status, row.item_status, row.raw_status];
+    if (row.has_profile === true) values.push('Profile set');
+    if (row.has_profile === false) values.push('No profile');
+    if (row.active || Number(row.active_device_count || 0) > 0) values.push('Active');
+    if (row.active === false || row.active_device_count === 0) values.push('Inactive');
+    return Array.from(new Set(values.filter(Boolean).map(String)));
+  }
+  function optionValues(sourceRows, getter) {
+    return Array.from(new Set((sourceRows || []).flatMap((row) => getter(row)).filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b));
+  }
+  function rowMatchesTabFilters(row = {}) {
+    const queryText = filterState.query.trim().toLowerCase();
+    const searchText = JSON.stringify(row || {}).toLowerCase();
+    const matchesSearch = !queryText || searchText.includes(queryText);
+    const matchesSite = !filterState.site || rowSiteValues(row).includes(filterState.site);
+    const matchesSource = !filterState.source || rowSourceValues(row).includes(filterState.source);
+    const matchesStatus = !filterState.status || rowStatusValues(row).includes(filterState.status);
+    return matchesSearch && matchesSite && matchesSource && matchesStatus;
+  }
+  const filtered = rows.filter(rowMatchesTabFilters);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / Number(filterState.pageSize || 20)));
+  const safePage = Math.min(Math.max(1, Number(filterState.page || 1)), totalPages);
+  const pageSize = Number(filterState.pageSize || 20);
+  const visibleRows = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const startEntry = filtered.length ? ((safePage - 1) * pageSize) + 1 : 0;
+  const endEntry = Math.min(safePage * pageSize, filtered.length);
+  const siteOptions = optionValues(rows, rowSiteValues);
+  const sourceOptions = optionValues(rows, rowSourceValues);
+  const statusOptions = optionValues(rows, rowStatusValues);
+  const activeFilterCount = ['site', 'source', 'status'].filter((key) => filterState[key]).length;
   const customerTabs = ['customers', 'without_profiles'];
   const deviceName = (device) => device?.device_name || device?.hostname || device?.username || device?.client_mac || device?.client_ip || 'Unknown device';
   function SsidValue({ device }) {
@@ -10697,6 +10780,21 @@ function CustomerDevicesPage() {
       </ActionBadgeGroup>
     );
   }
+  function renderActiveDeviceActions(device = {}) {
+    return (
+      <ActionBadgeGroup className="justify-content-end">
+        <ActionBadgeButton
+          icon={IconClock}
+          label="Add time"
+          tone="blue"
+          onClick={() => {
+            setTimeTarget({ ...device, product_name: device.product_name || device.voucher_code || 'Active device access' });
+            setTimeForm({ mode: 'add', amount: 5, unit: 'minutes', note: '' });
+          }}
+        />
+      </ActionBadgeGroup>
+    );
+  }
   function toggleActiveAccessGroup(groupKey) {
     setExpandedActiveAccessGroups((current) => ({ ...current, [groupKey]: !current[groupKey] }));
   }
@@ -10718,6 +10816,15 @@ function CustomerDevicesPage() {
       return groups;
     }, {})).map((group) => ({ ...group, sources: Array.from(group.sources) }))
     : [];
+  const activeAccessTotalPages = Math.max(1, Math.ceil(activeAccessGroups.length / pageSize));
+  const activeAccessSafePage = Math.min(safePage, activeAccessTotalPages);
+  const visibleActiveAccessGroups = activeAccessGroups.slice((activeAccessSafePage - 1) * pageSize, activeAccessSafePage * pageSize);
+  const displayedTotal = tab === 'active_access' ? activeAccessGroups.length : filtered.length;
+  const displayedPage = tab === 'active_access' ? activeAccessSafePage : safePage;
+  const displayedTotalPages = tab === 'active_access' ? activeAccessTotalPages : totalPages;
+  const displayedStartEntry = displayedTotal ? ((displayedPage - 1) * pageSize) + 1 : 0;
+  const displayedEndEntry = Math.min(displayedPage * pageSize, displayedTotal);
+  const connectedDeviceColSpan = tab === 'admin_access' ? 12 : tab === 'active' ? 11 : 10;
   function timeAmountSeconds() {
     const amount = Math.max(0, Number(timeForm.amount) || 0);
     const multiplier = timeForm.unit === 'days' ? 86400 : timeForm.unit === 'hours' ? 3600 : 60;
@@ -10811,10 +10918,33 @@ function CustomerDevicesPage() {
   }
   async function manageTime(e) {
     e.preventDefault();
-    if (!timeTarget?.portal_session_id) return;
     setError('');
     try {
-      await request(`/connected-devices/${timeTarget.portal_session_id}/time-adjust`, { method: 'POST', body: JSON.stringify({ amount_seconds: timeAmountSeconds(), note: timeForm.note || null, bag_item_id: timeTarget.bag_item_id || null }) });
+      const amountSeconds = timeAmountSeconds();
+      if (timeTarget?.portal_session_id) {
+        await request(`/connected-devices/${timeTarget.portal_session_id}/time-adjust`, { method: 'POST', body: JSON.stringify({ amount_seconds: amountSeconds, note: timeForm.note || null, bag_item_id: timeTarget.bag_item_id || null }) });
+      } else {
+        if (amountSeconds <= 0) {
+          setError('Only adding time is supported from Active Devices when no portal session exists yet.');
+          return;
+        }
+        await request('/customer-devices/active-device/time-adjust', {
+          method: 'POST',
+          body: JSON.stringify({
+            amount_seconds: amountSeconds,
+            note: timeForm.note || null,
+            client_mac: timeTarget.client_mac || null,
+            client_ip: timeTarget.client_ip || null,
+            ap_mac: timeTarget.ap_mac || null,
+            ap_name: timeTarget.ap_name || null,
+            ssid: timeTarget.ssid || null,
+            site: timeTarget.site || null,
+            site_id: timeTarget.site_id || null,
+            source: timeTarget.source || null,
+            device_name: timeTarget.device_name || timeTarget.hostname || null,
+          }),
+        });
+      }
       setTimeTarget(null);
       setMessage('Device time updated.');
       await load();
@@ -10862,6 +10992,19 @@ function CustomerDevicesPage() {
       await load();
     } catch (err) {
       setError(err.message || 'Could not unblock device.');
+    }
+  }
+  async function clearAdminAccess() {
+    const count = Number(data.summary?.admin_access || 0);
+    if (!count) return;
+    if (!window.confirm(`Clear all ${count} Admin Access device${count === 1 ? '' : 's'}? Their manually added testing time will be removed immediately.`)) return;
+    setError('');
+    try {
+      const result = await request('/customer-devices/admin-access', { method: 'DELETE' });
+      setMessage(result.message || 'Admin Access devices cleared.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'Could not clear Admin Access devices.');
     }
   }
   async function resetProfile() {
@@ -10918,7 +11061,7 @@ function CustomerDevicesPage() {
                       {session.voucher_code && <span className="badge bg-purple-lt text-purple">{session.voucher_code}</span>}
                     </div>
                     <div className="text-muted small">
-                      {[session.client_mac, session.client_ip, fmt(session.last_seen)].filter(Boolean).join(' · ') || 'No session details'}
+                      {[session.client_mac, session.client_ip, compactDateTime(session.last_seen)].filter(Boolean).join(' · ') || 'No session details'}
                     </div>
                   </div>
                 ))}
@@ -11171,7 +11314,7 @@ function CustomerDevicesPage() {
                 <td>{customer.email || <span className="text-muted">No email</span>}</td>
                 <td><CustomerDeviceSummary customer={customer} /></td>
                 <td>{customer.remaining_time_seconds > 0 ? <span className="badge bg-green-lt text-green">{formatSeconds(customer.remaining_time_seconds)}</span> : <span className="text-muted">No active time</span>}</td>
-                <td>{fmt(customer.latest_seen)}</td>
+                <td>{compactDateTimeOrDash(customer.latest_seen)}</td>
                 <td className="text-end text-nowrap">
                   {profileRequired ? (
                     <ActionBadgeGroup className="justify-content-end">
@@ -11202,6 +11345,7 @@ function CustomerDevicesPage() {
       <KpiCard icon={IconUsers} label="Profiled Customers" value={data.summary?.customers || 0} tone="green" />
       <KpiCard icon={IconUser} label="No Profile Yet" value={data.summary?.without_profiles || 0} tone="yellow" />
       <KpiCard icon={IconWifi} label="Active Devices" value={data.summary?.active || 0} tone="green" />
+      <KpiCard icon={IconClock} label="Admin Access" value={data.summary?.admin_access || 0} tone="cyan" />
       <KpiCard icon={IconKey} label="Active Access" value={data.summary?.active_access || 0} tone="purple" />
       <KpiCard icon={IconBan} label="Blocked Devices" value={data.summary?.blocked || 0} tone="red" />
       {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
@@ -11214,12 +11358,17 @@ function CustomerDevicesPage() {
               <div className="text-muted small">Customer rows show verified contact details first, then every device and MAC address detected under that customer.</div>
             </div>
             <div className="card-actions">
+              {tab === 'admin_access' && (
+                <button className="btn btn-outline-danger" type="button" onClick={clearAdminAccess} disabled={loading || !Number(data.summary?.admin_access || 0)}>
+                  <IconTrash size={18} className="me-2" />Clear Admin Access
+                </button>
+              )}
               <button className="btn btn-outline-primary" type="button" onClick={load} disabled={loading}><IconRefresh size={18} className="me-2" />Refresh</button>
             </div>
           </div>
           {data.summary?.omada_error && <div className="alert alert-warning m-3 mb-0">Omada client list is not available from the API yet: {data.summary.omada_error}. Showing local detected sessions instead.</div>}
           <div className="card-body border-bottom py-2">
-            <div className="d-flex flex-wrap align-items-center justify-content-between gap-2">
+            <div className="d-flex flex-wrap align-items-center gap-2">
               <ul className="nav nav-tabs" role="tablist">
                 {tabs.map(([key, label, count, tone]) => (
                   <li className="nav-item" role="presentation" key={key}>
@@ -11229,14 +11378,64 @@ function CustomerDevicesPage() {
                   </li>
                 ))}
               </ul>
+            </div>
+            <div className="customer-devices-tab-toolbar mt-3">
               <div className="input-icon customer-devices-search">
-                <input className="form-control form-control-sm" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search customers, devices, MAC, contact" />
+                <input
+                  className="form-control form-control-sm"
+                  value={filterState.query}
+                  onChange={(e) => updateTabFilter({ query: e.target.value })}
+                  placeholder="Search this tab"
+                />
                 <span className="input-icon-addon"><IconSearch size={16} /></span>
               </div>
+              <button className="btn btn-outline-secondary btn-sm" type="button" onClick={() => updateTabFilter({ filtersOpen: !filterState.filtersOpen, page: safePage })}>
+                <IconFilter size={16} className="me-1" />Filter
+                {activeFilterCount > 0 && <span className="badge bg-blue-lt ms-2">{activeFilterCount}</span>}
+              </button>
+              <div className="d-flex align-items-center gap-2">
+                <span className="text-muted small text-nowrap">Show</span>
+                <select className="form-select form-select-sm customer-devices-page-size" value={filterState.pageSize} onChange={(e) => updateTabFilter({ pageSize: Number(e.target.value) })}>
+                  {[10, 20, 50, 100].map((size) => <option key={size} value={size}>{size}</option>)}
+                </select>
+              </div>
+              {(filterState.query || activeFilterCount > 0) && (
+                <button className="btn btn-outline-secondary btn-sm" type="button" onClick={() => updateTabFilter({ query: '', site: '', source: '', status: '' })}>
+                  <IconX size={15} className="me-1" />Clear
+                </button>
+              )}
             </div>
-          </div>
+            {filterState.filtersOpen && (
+              <div className="customer-devices-filter-panel mt-3">
+                <div>
+                  <label className="form-label">Site</label>
+                  <select className="form-select form-select-sm" value={filterState.site} onChange={(e) => updateTabFilter({ site: e.target.value })}>
+                    <option value="">All sites</option>
+                    {siteOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label">Source / Type</label>
+                  <select className="form-select form-select-sm" value={filterState.source} onChange={(e) => updateTabFilter({ source: e.target.value })}>
+                    <option value="">All sources</option>
+                    {sourceOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="form-label">Status</label>
+                  <select className="form-select form-select-sm" value={filterState.status} onChange={(e) => updateTabFilter({ status: e.target.value })}>
+                    <option value="">All statuses</option>
+                    {statusOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+                  </select>
+                </div>
+                <div className="customer-devices-filter-summary text-muted small">
+                  Showing {displayedTotal} of {rows.length} row{rows.length === 1 ? '' : 's'} in this tab.
+                </div>
+              </div>
+            )}
+            </div>
           {customerTabs.includes(tab) ? (
-            <CustomerRows rows={filtered} profileRequired={tab === 'customers'} />
+            <CustomerRows rows={visibleRows} profileRequired={tab === 'customers'} />
           ) : tab === 'blocked' ? (
           <div className="table-responsive">
             <table className="table card-table table-vcenter">
@@ -11252,14 +11451,14 @@ function CustomerDevicesPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((device) => (
+                {visibleRows.map((device) => (
                   <tr key={device.id}>
                     <td><div className="fw-semibold">{device.device_name || 'Blocked device'}</div></td>
                     <td><code>{device.client_mac || 'n/a'}</code></td>
                     <td>{device.client_ip || 'n/a'}</td>
                     <td>{device.reason || <span className="text-muted">No reason recorded</span>}</td>
                     <td>{device.blocked_by_username || <span className="text-muted">Unknown admin</span>}</td>
-                    <td>{fmt(device.created_at)}</td>
+                    <td>{compactDateTimeOrDash(device.created_at)}</td>
                     <td className="text-end text-nowrap">
                       <ActionBadgeGroup className="justify-content-end">
                         <ActionBadgeButton icon={IconRefresh} label="Unblock device" tone="green" onClick={() => unblockDevice(device)} />
@@ -11267,7 +11466,7 @@ function CustomerDevicesPage() {
                     </td>
                   </tr>
                 ))}
-                {!filtered.length && <tr><td colSpan="7" className="text-muted p-4">No blocked devices.</td></tr>}
+                {!visibleRows.length && <tr><td colSpan="7" className="text-muted p-4">No blocked devices.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -11286,7 +11485,7 @@ function CustomerDevicesPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((entry) => (
+                {visibleRows.map((entry) => (
                   <tr key={entry.id}>
                     <td>
                       <div className="fw-semibold">{entry.customer_name || entry.account_username || 'Customer'}</div>
@@ -11297,10 +11496,10 @@ function CustomerDevicesPage() {
                     <td>{entry.reference ? <code>{entry.reference}</code> : <span className="text-muted">n/a</span>}</td>
                     <td>{entry.note || <span className="text-muted">No note</span>}</td>
                     <td>{entry.admin_username || <span className="text-muted">System/admin</span>}</td>
-                    <td>{fmt(entry.created_at)}</td>
+                    <td>{compactDateTimeOrDash(entry.created_at)}</td>
                   </tr>
                 ))}
-                {!filtered.length && <tr><td colSpan="7" className="text-muted p-4">No time adjustments recorded yet.</td></tr>}
+                {!visibleRows.length && <tr><td colSpan="7" className="text-muted p-4">No time adjustments recorded yet.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -11316,13 +11515,14 @@ function CustomerDevicesPage() {
                   <th>Access</th>
                   <th>Source</th>
                   <th>SSID</th>
-                  <th>Site</th>
+                  <th>Current Site</th>
+                  <th>Activated Site</th>
                   <th>Remaining Time</th>
                   <th className="text-end">Actions</th>
                 </tr>
               </thead>
 	              <tbody>
-	                {activeAccessGroups.map((group) => {
+	                {visibleActiveAccessGroups.map((group) => {
 	                  const device = group.primary;
 	                  const passCount = group.passes.length;
 	                  const expanded = Boolean(expandedActiveAccessGroups[group.key]);
@@ -11363,6 +11563,11 @@ function CustomerDevicesPage() {
 	                        </td>
 	                        <td><SsidValue device={device} /></td>
 	                        <td>{device.site || 'n/a'}</td>
+	                        <td>
+	                          <div className="fw-semibold">{firstPass.activated_site || firstPass.site || 'n/a'}</div>
+	                          {firstPass.activated_at && <div className="text-muted small">{compactDateTime(firstPass.activated_at)}</div>}
+	                          {firstPass.activated_ssid && <div className="text-muted small">{firstPass.activated_ssid}</div>}
+	                        </td>
 	                        <td><span className="badge bg-green-lt text-green">{passCount > 1 ? `Longest ${formatSeconds(group.maxRemaining)}` : formatSeconds(firstPass.remaining_time_seconds)}</span></td>
 	                        <td className="text-end text-nowrap">
 	                          {passCount > 1 ? (
@@ -11382,7 +11587,7 @@ function CustomerDevicesPage() {
 	                      </tr>
 	                      {passCount > 1 && expanded && (
 	                        <tr>
-	                          <td colSpan="10" className="bg-muted-lt p-0">
+	                          <td colSpan="11" className="bg-muted-lt p-0">
 	                            <div className="p-3">
 	                              <div className="table-responsive">
 	                                <table className="table table-sm table-vcenter mb-0">
@@ -11391,6 +11596,7 @@ function CustomerDevicesPage() {
 	                                      <th>Pass</th>
 	                                      <th>Source</th>
 	                                      <th>Owner / Voucher</th>
+	                                      <th>Activated Site</th>
 	                                      <th>Remaining</th>
 	                                      <th className="text-end">Actions</th>
 	                                    </tr>
@@ -11410,6 +11616,10 @@ function CustomerDevicesPage() {
 	                                            <span className="text-muted">Customer-owned pass</span>
 	                                          )}
 	                                        </td>
+	                                        <td>
+	                                          <div>{pass.activated_site || pass.site || 'n/a'}</div>
+	                                          {pass.activated_at && <div className="text-muted small">{compactDateTime(pass.activated_at)}</div>}
+	                                        </td>
 	                                        <td><span className="badge bg-green-lt text-green">{formatSeconds(pass.remaining_time_seconds)}</span></td>
 	                                        <td className="text-end">{renderActiveAccessActions(pass)}</td>
 	                                      </tr>
@@ -11424,7 +11634,7 @@ function CustomerDevicesPage() {
 	                    </React.Fragment>
 	                  );
 	                })}
-	                {!activeAccessGroups.length && <tr><td colSpan="10" className="text-muted p-4">No active product or voucher access detected yet.</td></tr>}
+	                {!visibleActiveAccessGroups.length && <tr><td colSpan="11" className="text-muted p-4">No active product or voucher access detected yet.</td></tr>}
 	              </tbody>
             </table>
           </div>
@@ -11443,10 +11653,12 @@ function CustomerDevicesPage() {
                   <th>Source</th>
                   <th>Last Seen</th>
                   <th>Status</th>
+                  {tab === 'admin_access' && <th>Admin Access Time</th>}
+                  {(tab === 'active' || tab === 'admin_access') && <th className="text-end">Actions</th>}
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((device, index) => (
+                {visibleRows.map((device, index) => (
                   <tr key={`${device.client_mac || device.id || index}-${device.source || ''}`}>
                     <td>
                       <div className="fw-semibold">{device.customer_name || 'Profile not set'}</div>
@@ -11461,16 +11673,39 @@ function CustomerDevicesPage() {
                     <td>{device.ap_name || device.ap_ip || device.ap_mac || 'n/a'}</td>
                     <td><SsidValue device={device} /></td>
                     <td>{device.site || 'n/a'}</td>
-                    <td><span className="badge bg-blue-lt">{device.source || 'LOCAL'}</span></td>
-                    <td>{fmt(device.last_seen || device.connected_since)}</td>
+                    <td><span className={`badge ${tab === 'admin_access' ? 'bg-cyan-lt text-cyan' : 'bg-blue-lt'}`}>{tab === 'admin_access' ? 'ADMIN' : (device.source || 'LOCAL')}</span></td>
+                    <td>{compactDateTimeOrDash(device.last_seen || device.connected_since)}</td>
                     <td><span className={`badge ${device.active ? 'bg-green-lt' : 'bg-secondary-lt'}`}>{device.status || (device.active ? 'ACTIVE' : 'INACTIVE')}</span></td>
+                    {tab === 'admin_access' && <td><span className="badge bg-cyan-lt text-cyan">{formatSeconds(device.remaining_time_seconds || 0)}</span></td>}
+                    {(tab === 'active' || tab === 'admin_access') && (
+                      <td className="text-end text-nowrap">
+                        {tab === 'admin_access' ? renderActiveAccessActions(device) : renderActiveDeviceActions(device)}
+                      </td>
+                    )}
                   </tr>
                 ))}
-                {!filtered.length && <tr><td colSpan="10" className="text-muted p-4">No {tab} devices detected yet.</td></tr>}
+                {!visibleRows.length && <tr><td colSpan={connectedDeviceColSpan} className="text-muted p-4">No {tab.replace('_', ' ')} devices detected yet.</td></tr>}
               </tbody>
             </table>
           </div>
           )}
+          <div className="customer-devices-pagination">
+            <div className="text-muted small">
+              Showing {displayedStartEntry}-{displayedEndEntry} of {displayedTotal}
+              {filtered.length !== rows.length && <span> filtered from {rows.length}</span>}
+            </div>
+            <div className="d-flex align-items-center gap-2">
+              <span className="text-muted small">Page {displayedPage} of {displayedTotalPages}</span>
+              <ul className="pagination pagination-sm mb-0">
+                <li className={`page-item ${displayedPage <= 1 ? 'disabled' : ''}`}>
+                  <button className="page-link" type="button" onClick={() => updateTabFilter({ page: Math.max(1, displayedPage - 1) })}>Prev</button>
+                </li>
+                <li className={`page-item ${displayedPage >= displayedTotalPages ? 'disabled' : ''}`}>
+                  <button className="page-link" type="button" onClick={() => updateTabFilter({ page: Math.min(displayedTotalPages, displayedPage + 1) })}>Next</button>
+                </li>
+              </ul>
+            </div>
+          </div>
         </div>
       </div>
 	      {timeTarget && (
@@ -11481,7 +11716,7 @@ function CustomerDevicesPage() {
 	                <label className="form-label">Action</label>
 	                <select className="form-select" value={timeForm.mode} onChange={(e) => setTimeForm({ ...timeForm, mode: e.target.value })}>
 	                  <option value="add">Add time</option>
-	                  <option value="deduct">Deduct time</option>
+	                  {timeTarget.portal_session_id && <option value="deduct">Deduct time</option>}
 	                </select>
 	              </div>
 	              <div className="col-md-6">
@@ -11495,13 +11730,21 @@ function CustomerDevicesPage() {
 	                  </select>
 	                </div>
 	              </div>
-	              <div className="col-12">
-	                <div className={`alert ${timeForm.mode === 'deduct' ? 'alert-warning' : 'alert-info'} mb-0`}>
-	                  This will apply <strong>{timeAdjustmentLabel(timeAmountSeconds())}</strong> to {timeTarget.product_name || timeTarget.display_voucher_code || 'this active access'}.
-	                </div>
-	              </div>
-	              <div className="col-12"><label className="form-label">Note</label><input className="form-control" value={timeForm.note} onChange={(e) => setTimeForm({ ...timeForm, note: e.target.value })} /></div>
-	            </div>
+		              <div className="col-12">
+		                <div className={`alert ${timeForm.mode === 'deduct' ? 'alert-warning' : 'alert-info'} mb-0`}>
+		                  This will apply <strong>{timeAdjustmentLabel(timeAmountSeconds())}</strong> to {timeTarget.product_name || timeTarget.display_voucher_code || 'this active access'}.
+		                </div>
+		              </div>
+		              {!timeTarget.customer_profile_id && !timeTarget.user_id && timeForm.mode === 'add' && (
+		                <div className="col-12">
+		                  <div className="alert alert-warning mb-0">
+		                    <div className="fw-semibold">No customer profile is linked to this device.</div>
+		                    <div className="small">Added time will be tied only to this current portal session/device. If the phone changes random MAC, switches browser, or reconnects differently, the customer may lose this time and it cannot be recovered by contact number.</div>
+		                  </div>
+		                </div>
+		              )}
+		              <div className="col-12"><label className="form-label">Note</label><input className="form-control" value={timeForm.note} onChange={(e) => setTimeForm({ ...timeForm, note: e.target.value })} /></div>
+		            </div>
             <div className="modal-footer px-0 pb-0"><button className="btn" type="button" onClick={() => setTimeTarget(null)}>Cancel</button><button className="btn btn-primary">Save Time</button></div>
           </form>
         </Modal>
@@ -13106,9 +13349,8 @@ function SitesDeploymentsPage() {
 
 function formatOmadaTimestamp(value) {
   if (value === null || value === undefined || value === '') return 'n/a';
-  if (typeof value === 'number') return new Date(value).toLocaleString();
-  const numeric = Number(value);
-  if (Number.isFinite(numeric) && numeric > 1000000000) return new Date(numeric).toLocaleString();
+  const formatted = compactDateTime(value);
+  if (formatted) return formatted;
   return fmt(value);
 }
 
@@ -16157,6 +16399,27 @@ function PortalStoreMapPage() {
 }
 
 function PhysicalStoresPage() {
+  function defaultStoreCommissionTiers() {
+    return [
+      { threshold_amount: '1000', rate_percent: '10' },
+      { threshold_amount: '2000', rate_percent: '12' },
+      { threshold_amount: '3000', rate_percent: '15' },
+      { threshold_amount: '5000', rate_percent: '18' },
+      { threshold_amount: '10000', rate_percent: '22' },
+    ];
+  }
+
+  function normalizeStoreCommissionTiersForForm(tiers) {
+    const source = Array.isArray(tiers) && tiers.length ? tiers : defaultStoreCommissionTiers();
+    return source.map((tier) => {
+      const thresholdAmount = tier.threshold_amount ?? (tier.threshold_centavos !== undefined && tier.threshold_centavos !== null ? Number(tier.threshold_centavos) / 100 : '');
+      return {
+        threshold_amount: thresholdAmount === '' || thresholdAmount === null || thresholdAmount === undefined ? '' : String(thresholdAmount),
+        rate_percent: tier.rate_percent === null || tier.rate_percent === undefined ? '' : String(tier.rate_percent),
+      };
+    });
+  }
+
   const emptyForm = {
     store_name: '',
     location_id: '',
@@ -16171,6 +16434,7 @@ function PhysicalStoresPage() {
     owner_notes: '',
     commission_type: 'PERCENT_OF_SALES',
     commission_value: '0',
+    commission_tiers: defaultStoreCommissionTiers(),
     item_ids: [],
     site_ids: [],
     status: 'SETUP'
@@ -16331,10 +16595,66 @@ function PhysicalStoresPage() {
 
   function storeCommissionSummary(store) {
     if (!store) return 'Not set';
+    if (store.commission_type === 'PROGRESSIVE_PERCENT') {
+      const tiers = Array.isArray(store.commission_tiers) ? store.commission_tiers : [];
+      return tiers.length ? `Progressive tiers · ${tiers.length} goal${tiers.length === 1 ? '' : 's'}` : 'Progressive tiers';
+    }
     const value = store.commission_value_display || (store.commission_type === 'FIXED_MONTHLY'
       ? `PHP ${Number(store.commission_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
       : `${store.commission_value || 0}%`);
     return store.commission_type === 'FIXED_MONTHLY' ? `${value} monthly` : `${value} of sales`;
+  }
+
+  function storeCommissionBadgeTone(type) {
+    if (type === 'FIXED_MONTHLY') return 'bg-purple-lt text-purple';
+    if (type === 'PROGRESSIVE_PERCENT') return 'bg-yellow-lt text-yellow';
+    return 'bg-green-lt text-green';
+  }
+
+  function sortedStoreCommissionTiers(tiers = form.commission_tiers) {
+    return (tiers || [])
+      .map((tier) => ({
+        threshold_amount: Number(tier.threshold_amount || 0),
+        rate_percent: Number(tier.rate_percent || 0),
+      }))
+      .filter((tier) => Number.isFinite(tier.threshold_amount) && tier.threshold_amount > 0 && Number.isFinite(tier.rate_percent) && tier.rate_percent >= 0)
+      .sort((a, b) => a.threshold_amount - b.threshold_amount);
+  }
+
+  function updateStoreCommissionTier(index, patch) {
+    setForm((current) => ({
+      ...current,
+      commission_tiers: (current.commission_tiers || defaultStoreCommissionTiers()).map((tier, tierIndex) => (
+        tierIndex === index ? { ...tier, ...patch } : tier
+      )),
+    }));
+  }
+
+  function addStoreCommissionTier() {
+    setForm((current) => ({
+      ...current,
+      commission_tiers: [
+        ...(current.commission_tiers || defaultStoreCommissionTiers()),
+        { threshold_amount: '', rate_percent: '' },
+      ],
+    }));
+  }
+
+  function removeStoreCommissionTier(index) {
+    setForm((current) => {
+      const next = (current.commission_tiers || []).filter((_, tierIndex) => tierIndex !== index);
+      return { ...current, commission_tiers: next.length ? next : defaultStoreCommissionTiers() };
+    });
+  }
+
+  function sortStoreCommissionTiersInForm() {
+    setForm((current) => ({
+      ...current,
+      commission_tiers: sortedStoreCommissionTiers(current.commission_tiers).map((tier) => ({
+        threshold_amount: String(tier.threshold_amount),
+        rate_percent: String(tier.rate_percent),
+      })),
+    }));
   }
 
   function FieldLabel({ children, info }) {
@@ -16389,7 +16709,7 @@ function PhysicalStoresPage() {
     setError('');
     setMessage('');
     setSelectedStore(null);
-    setForm(emptyForm);
+    setForm({ ...emptyForm, commission_tiers: defaultStoreCommissionTiers() });
     setLocationSearchText('');
     setSiteSearchText('');
     setStoreFormTab('LOCATION');
@@ -16415,6 +16735,7 @@ function PhysicalStoresPage() {
       owner_notes: store.owner?.owner_notes || store.notes || '',
       commission_type: store.commission_type || 'PERCENT_OF_SALES',
       commission_value: store.commission_value === null || store.commission_value === undefined ? '0' : String(store.commission_value),
+      commission_tiers: normalizeStoreCommissionTiersForForm(store.commission_tiers),
       item_ids: store.item_ids || [],
       site_ids: store.site_ids || [],
       status: store.status || 'SETUP'
@@ -16438,7 +16759,8 @@ function PhysicalStoresPage() {
       latitude: form.latitude === '' ? null : Number(form.latitude),
       longitude: form.longitude === '' ? null : Number(form.longitude),
       commission_type: form.commission_type || 'PERCENT_OF_SALES',
-      commission_value: Number(form.commission_value || 0),
+      commission_value: form.commission_type === 'PROGRESSIVE_PERCENT' ? 0 : Number(form.commission_value || 0),
+      commission_tiers: sortedStoreCommissionTiers(),
       site_ids: form.site_ids || [],
       item_ids: form.item_ids || [],
       status: form.status,
@@ -16499,17 +16821,40 @@ function PhysicalStoresPage() {
       if (!nextPayload.store_name) throw new Error('Store name is required.');
       if (!nextPayload.location_id) throw new Error('Select a saved Location record for this store.');
       if (!nextPayload.site_ids.length) throw new Error('Select at least one site where this store is available.');
-      if (!['PERCENT_OF_SALES', 'FIXED_MONTHLY'].includes(nextPayload.commission_type)) {
+      if (!['PERCENT_OF_SALES', 'FIXED_MONTHLY', 'PROGRESSIVE_PERCENT'].includes(nextPayload.commission_type)) {
         setStoreFormTab('COMMISSION');
         throw new Error('Choose a store commission type.');
       }
-      if (!Number.isFinite(nextPayload.commission_value) || nextPayload.commission_value < 0) {
+      if (nextPayload.commission_type !== 'PROGRESSIVE_PERCENT' && (!Number.isFinite(nextPayload.commission_value) || nextPayload.commission_value < 0)) {
         setStoreFormTab('COMMISSION');
         throw new Error('Enter a valid store commission value.');
       }
       if (nextPayload.commission_type === 'PERCENT_OF_SALES' && nextPayload.commission_value > 100) {
         setStoreFormTab('COMMISSION');
         throw new Error('Percent commission cannot be higher than 100%.');
+      }
+      if (nextPayload.commission_type === 'PROGRESSIVE_PERCENT') {
+        const tiers = nextPayload.commission_tiers || [];
+        if (!tiers.length) {
+          setStoreFormTab('COMMISSION');
+          throw new Error('Add at least one progressive commission tier.');
+        }
+        const thresholds = new Set();
+        for (const tier of tiers) {
+          if (!Number.isFinite(tier.threshold_amount) || tier.threshold_amount <= 0) {
+            setStoreFormTab('COMMISSION');
+            throw new Error('Each progressive tier needs a valid sales goal amount.');
+          }
+          if (!Number.isFinite(tier.rate_percent) || tier.rate_percent < 0 || tier.rate_percent > 100) {
+            setStoreFormTab('COMMISSION');
+            throw new Error('Each progressive tier rate must be from 0% to 100%.');
+          }
+          if (thresholds.has(tier.threshold_amount)) {
+            setStoreFormTab('COMMISSION');
+            throw new Error('Progressive tier sales goals must be unique.');
+          }
+          thresholds.add(tier.threshold_amount);
+        }
       }
       const ownerMissing = missingOwnerDetails();
       if (nextPayload.status === 'ACTIVE' && ownerMissing.length) {
@@ -16834,7 +17179,7 @@ function PhysicalStoresPage() {
                       </div>
                     </td>
                     <td>
-                      <span className={`badge ${store.commission_type === 'FIXED_MONTHLY' ? 'bg-purple-lt text-purple' : 'bg-green-lt text-green'}`}>
+                      <span className={`badge ${storeCommissionBadgeTone(store.commission_type)}`}>
                         {store.commission_type_label || (store.commission_type === 'FIXED_MONTHLY' ? 'Fixed Monthly' : 'Percent of Sales')}
                       </span>
                       <div className="text-muted small mt-1">{storeCommissionSummary(store)}</div>
@@ -17322,24 +17667,32 @@ function PhysicalStoresPage() {
                           <div className="fw-semibold">Store Commission</div>
                           <div className="text-muted small">Required. This is the store commission deducted from gross physical-store sales for net income reporting.</div>
                         </div>
-                        <span className="badge bg-purple-lt text-purple">{form.commission_type === 'FIXED_MONTHLY' ? 'Monthly fee' : 'Sales percent'}</span>
+                        <span className={`badge ${storeCommissionBadgeTone(form.commission_type)}`}>
+                          {form.commission_type === 'FIXED_MONTHLY' ? 'Monthly fee' : form.commission_type === 'PROGRESSIVE_PERCENT' ? 'Progressive tiers' : 'Sales percent'}
+                        </span>
                       </div>
                       <div className="row g-3">
                         <div className="col-12">
-                          <FieldLabel info="Percent of Sales calculates commission from approved store purchases. Fixed Monthly counts once per store per month when that store has approved sales.">Commission Type</FieldLabel>
+                          <FieldLabel info="Percent of Sales is one fixed percentage. Fixed Monthly is one fixed monthly amount. Progressive Percent changes the rate when the store reaches configured monthly sales goals.">Commission Type</FieldLabel>
                           <div className="row g-2">
                             {[
                               { key: 'PERCENT_OF_SALES', title: 'Percent of Sales', subtitle: 'Commission is a percentage of approved store sales.', icon: IconCash },
                               { key: 'FIXED_MONTHLY', title: 'Fixed Monthly', subtitle: 'Commission is a fixed monthly amount for the store.', icon: IconCalendarStats },
+                              { key: 'PROGRESSIVE_PERCENT', title: 'Progressive Percent', subtitle: 'Commission rate follows monthly sales goal tiers.', icon: IconTrophy },
                             ].map((option) => {
                               const OptionIcon = option.icon;
                               return (
-                                <div className="col-md-6" key={option.key}>
+                                <div className="col-md-4" key={option.key}>
                                   <label className={`physical-store-option-card ${form.commission_type === option.key ? 'is-selected' : ''}`}>
                                     <input
                                       type="radio"
                                       checked={form.commission_type === option.key}
-                                      onChange={() => setForm({ ...form, commission_type: option.key })}
+                                      onChange={() => setForm({
+                                        ...form,
+                                        commission_type: option.key,
+                                        commission_value: option.key === 'PROGRESSIVE_PERCENT' ? '0' : form.commission_value,
+                                        commission_tiers: form.commission_tiers?.length ? form.commission_tiers : defaultStoreCommissionTiers(),
+                                      })}
                                       required
                                     />
                                     <OptionIcon size={18} />
@@ -17353,35 +17706,106 @@ function PhysicalStoresPage() {
                             })}
                           </div>
                         </div>
-                        <div className="col-md-6">
-                          <FieldLabel info={form.commission_type === 'FIXED_MONTHLY' ? 'Monthly peso amount paid or deducted as store commission.' : 'Percentage of approved store sales. Maximum is 100%.'}>
-                            Commission Value
-                          </FieldLabel>
-                          <div className="input-group">
-                            {form.commission_type === 'FIXED_MONTHLY' && <span className="input-group-text">PHP</span>}
-                            <input
-                              className="form-control"
-                              type="number"
-                              step="0.01"
-                              min="0"
-                              max={form.commission_type === 'PERCENT_OF_SALES' ? '100' : undefined}
-                              value={form.commission_value}
-                              onChange={(e) => setForm({ ...form, commission_value: e.target.value })}
-                              required
-                            />
-                            {form.commission_type === 'PERCENT_OF_SALES' && <span className="input-group-text">%</span>}
-                            {form.commission_type === 'FIXED_MONTHLY' && <span className="input-group-text">monthly</span>}
+                        {form.commission_type !== 'PROGRESSIVE_PERCENT' && (
+                          <div className="col-md-6">
+                            <FieldLabel info={form.commission_type === 'FIXED_MONTHLY' ? 'Monthly peso amount paid or deducted as store commission.' : 'Percentage of approved store sales. Maximum is 100%.'}>
+                              Commission Value
+                            </FieldLabel>
+                            <div className="input-group">
+                              {form.commission_type === 'FIXED_MONTHLY' && <span className="input-group-text">PHP</span>}
+                              <input
+                                className="form-control"
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                max={form.commission_type === 'PERCENT_OF_SALES' ? '100' : undefined}
+                                value={form.commission_value}
+                                onChange={(e) => setForm({ ...form, commission_value: e.target.value })}
+                                required
+                              />
+                              {form.commission_type === 'PERCENT_OF_SALES' && <span className="input-group-text">%</span>}
+                              {form.commission_type === 'FIXED_MONTHLY' && <span className="input-group-text">monthly</span>}
+                            </div>
                           </div>
-                        </div>
-                        <div className="col-md-6">
+                        )}
+                        {form.commission_type === 'PROGRESSIVE_PERCENT' && (
+                          <div className="col-12">
+                            <div className="physical-store-commission-tier-panel">
+                              <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+                                <FieldLabel info="These tiers power the store portal monthly sales chart. The store uses the highest reached tier for the current month.">
+                                  Progressive Goal Tiers
+                                </FieldLabel>
+                                <button className="btn btn-sm btn-outline-primary" type="button" onClick={addStoreCommissionTier}>
+                                  <IconPlus size={15} className="me-1" />Add tier
+                                </button>
+                              </div>
+                              <div className="vstack gap-2">
+                                {(form.commission_tiers || defaultStoreCommissionTiers()).map((tier, index) => (
+                                  <div className="row g-2 align-items-end" key={`store-commission-tier-${index}`}>
+                                    <div className="col-md-6">
+                                      <label className="form-label">Monthly Sales Goal</label>
+                                      <div className="input-group">
+                                        <span className="input-group-text">PHP</span>
+                                        <input
+                                          className="form-control"
+                                          type="number"
+                                          min="0"
+                                          step="0.01"
+                                          value={tier.threshold_amount}
+                                          onBlur={sortStoreCommissionTiersInForm}
+                                          onChange={(e) => updateStoreCommissionTier(index, { threshold_amount: e.target.value })}
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="col-md-4">
+                                      <label className="form-label">Commission Rate</label>
+                                      <div className="input-group">
+                                        <input
+                                          className="form-control"
+                                          type="number"
+                                          min="0"
+                                          max="100"
+                                          step="0.01"
+                                          value={tier.rate_percent}
+                                          onBlur={sortStoreCommissionTiersInForm}
+                                          onChange={(e) => updateStoreCommissionTier(index, { rate_percent: e.target.value })}
+                                        />
+                                        <span className="input-group-text">%</span>
+                                      </div>
+                                    </div>
+                                    <div className="col-md-2">
+                                      <button className="btn btn-outline-danger w-100" type="button" onClick={() => removeStoreCommissionTier(index)} title="Remove tier">
+                                        <IconTrash size={16} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        <div className="col-12">
                           <label className="form-label">Report Preview</label>
                           <div className="alert alert-light border mb-0">
-                            <div className="fw-semibold">{form.commission_type === 'FIXED_MONTHLY' ? 'Fixed monthly commission' : 'Percent commission'}</div>
+                            <div className="fw-semibold">
+                              {form.commission_type === 'FIXED_MONTHLY' ? 'Fixed monthly commission' : form.commission_type === 'PROGRESSIVE_PERCENT' ? 'Progressive monthly commission' : 'Percent commission'}
+                            </div>
                             <div className="small text-muted">
                               {form.commission_type === 'FIXED_MONTHLY'
                                 ? `Sales page net income subtracts PHP ${Number(form.commission_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} once per active sales month.`
-                                : `Sales page net income subtracts ${Number(form.commission_value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}% from this store's approved sales.`}
+                                : form.commission_type === 'PROGRESSIVE_PERCENT'
+                                  ? `Store portal progress uses ${sortedStoreCommissionTiers().length} monthly sales goal tier${sortedStoreCommissionTiers().length === 1 ? '' : 's'}; the highest reached tier becomes the store commission rate.`
+                                  : `Sales page net income subtracts ${Number(form.commission_value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}% from this store's approved sales.`}
                             </div>
+                            {form.commission_type === 'PROGRESSIVE_PERCENT' && (
+                              <div className="d-flex flex-wrap gap-2 mt-2">
+                                {sortedStoreCommissionTiers().map((tier, index) => (
+                                  <span className="badge bg-yellow-lt text-yellow" key={`tier-preview-${index}`}>
+                                    PHP {tier.threshold_amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} = {tier.rate_percent}%
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -17920,7 +18344,10 @@ function StoreOwnerPortalApp() {
   const [passwordForm, setPasswordForm] = useState({ verification_code: '', new_password: '', confirm_password: '' });
   const [passwordLoading, setPasswordLoading] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [profileRemittancePageOpen, setProfileRemittancePageOpen] = useState(false);
   const [profileTab, setProfileTab] = useState('DETAILS');
+  const [profileRemittanceSearch, setProfileRemittanceSearch] = useState('');
+  const [profileRemittanceFilter, setProfileRemittanceFilter] = useState('ALL');
   const [profileLoading, setProfileLoading] = useState(false);
   const [pinForm, setPinForm] = useState({ pin_code: '', pin_required_interval_minutes: '5', pin_reuse_enabled: true });
   const [pinChallenge, setPinChallenge] = useState(null);
@@ -17958,7 +18385,12 @@ function StoreOwnerPortalApp() {
   const [storeGoalFilterOpen, setStoreGoalFilterOpen] = useState(false);
   const [storeGoalSelectedPoint, setStoreGoalSelectedPoint] = useState(null);
   const [storeRemitModalOpen, setStoreRemitModalOpen] = useState(false);
+  const [storeRemitTarget, setStoreRemitTarget] = useState(null);
   const [storeRemitLoading, setStoreRemitLoading] = useState('');
+  const [storeRemitPinOpen, setStoreRemitPinOpen] = useState(false);
+  const [storeRemitPin, setStoreRemitPin] = useState('');
+  const [storeRemittanceQrDataUrl, setStoreRemittanceQrDataUrl] = useState('');
+  const [storeRemittanceQrPreviewOpen, setStoreRemittanceQrPreviewOpen] = useState(false);
   const qrVideoRef = useRef(null);
   const qrStreamRef = useRef(null);
   const qrScanTimerRef = useRef(null);
@@ -17976,10 +18408,48 @@ function StoreOwnerPortalApp() {
   const showStorePwaInstallPanel = Boolean(owner && storePwaInstallEnabled && !storePwaInstallPanelHidden && !storePwaInstalledKnown && !storePwaStandalone);
   const storeRequestAlertsActive = storeOwnerNotificationPermission === 'granted' && storeOwnerPushStatus === 'ACTIVE';
   const showStoreRequestAlertsPanel = Boolean(owner && !storeRequestAlertsActive && !storeRequestAlertsPanelHidden);
-  const storeCommissionGoal = summary?.commission_goal || {};
+  const storeUsesProgressiveCommission = summary?.commission_type === 'PROGRESSIVE_PERCENT';
+  const storeCommissionGoal = storeUsesProgressiveCommission ? (summary?.commission_goal || {}) : {};
   const storeRemittance = summary?.remittance || {};
   const storeRemittancePending = storeRemittance?.pending || null;
-  const storeRemitEligible = Boolean(storeRemittance?.eligible && Number(storeRemittance?.unremitted_sales_centavos || 0) > 0 && !storeRemittancePending);
+  const storeRemittanceCheckoutActive = Boolean(
+    storeRemittancePending?.checkout_url
+    && String(storeRemittancePending?.method || '').toUpperCase() === 'ONLINE'
+    && String(storeRemittancePending?.status || '').toUpperCase() === 'CHECKOUT_CREATED'
+  );
+  const storeRemittanceMonths = Array.isArray(storeRemittance.monthly_history) ? storeRemittance.monthly_history : [];
+  const storeCurrentRemittanceMonth = storeRemittanceMonths.find((month) => month.is_current_month) || null;
+  const storeUnremittedMonths = storeRemittanceMonths.filter((month) => Number(month.unremitted_sales_centavos || 0) > 0);
+  const storeHasRemitNow = Boolean(storeRemittance.has_remit_now || storeRemittanceMonths.some((month) => month.remit_now));
+  const storeRemitEligible = Boolean(storeRemitTarget?.eligible || storeRemittance?.eligible);
+  const storeRemittanceSearchValue = profileRemittanceSearch.trim().toLowerCase();
+  const filteredStoreRemittanceMonths = storeRemittanceMonths.filter((month) => {
+    const remittanceText = (month.remittances || []).map((remit) => [
+      remit.public_id,
+      remit.status,
+      remit.status_label,
+      remit.amount_display,
+      remit.created_at ? formatPortalDateTime(remit.created_at) : '',
+    ].filter(Boolean).join(' ')).join(' ');
+    const haystack = [
+      month.label,
+      month.month_start,
+      month.sales_display,
+      month.unremitted_sales_display,
+      month.disabled_reason,
+      remittanceText,
+    ].filter(Boolean).join(' ').toLowerCase();
+    const matchesSearch = !storeRemittanceSearchValue || haystack.includes(storeRemittanceSearchValue);
+    const unremitted = Number(month.unremitted_sales_centavos || 0);
+    const remitCount = (month.remittances || []).length;
+    let matchesFilter = true;
+    if (profileRemittanceFilter === 'READY') matchesFilter = Boolean(month.eligible || month.remit_now);
+    if (profileRemittanceFilter === 'UNREMITTED') matchesFilter = unremitted > 0;
+    if (profileRemittanceFilter === 'REMITTED') matchesFilter = remitCount > 0;
+    if (profileRemittanceFilter === 'CURRENT') matchesFilter = Boolean(month.is_current_month);
+    if (profileRemittanceFilter === 'FINISHED') matchesFilter = !month.is_current_month;
+    return matchesSearch && matchesFilter;
+  });
   const storeCommissionGoalProgress = Math.max(0, Math.min(100, Number(storeCommissionGoal.progress_percent || 0)));
   const storeCurrentGoalTier = storeCommissionGoal.current_tier || null;
   const storeGoalRateCopy = storeCurrentGoalTier?.rate_display || '0%';
@@ -18022,6 +18492,206 @@ function StoreOwnerPortalApp() {
   });
   const storeGoalChartPath = storeGoalChartPoints.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`).join(' ');
   const storeGoalSelectedChartPoint = storeGoalSelectedPoint || null;
+  const storeCommissionRuleCopy = summary?.commission_type === 'FIXED_MONTHLY'
+    ? `${summary.commission_value_display || 'PHP 0.00'} fixed monthly commission.`
+    : `${summary?.commission_value_display || '0%'} commission from approved store sales.`;
+
+  function storeOwnerCommissionSummary(store) {
+    if (!store) return 'Not set';
+    if (store.commission_type === 'PROGRESSIVE_PERCENT') {
+      const tiers = Array.isArray(store.commission_tiers) ? store.commission_tiers : [];
+      return tiers.length ? `Progressive tiers · ${tiers.length} goal${tiers.length === 1 ? '' : 's'}` : 'Progressive tiers';
+    }
+    const value = store.commission_value_display || (store.commission_type === 'FIXED_MONTHLY'
+      ? `PHP ${Number(store.commission_value || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+      : `${store.commission_value || 0}%`);
+    return store.commission_type === 'FIXED_MONTHLY' ? `${value} monthly` : `${value} of sales`;
+  }
+
+  function openStoreRemittance(month) {
+    setStoreRemitTarget(month || storeCurrentRemittanceMonth || null);
+    setStoreRemitModalOpen(true);
+  }
+
+  function renderStoreRemittanceProfile() {
+    const pendingOnlineCheckout = storeRemittancePending
+      && String(storeRemittancePending.method || '').toUpperCase() === 'ONLINE'
+      && String(storeRemittancePending.status || '').toUpperCase() === 'CHECKOUT_CREATED'
+      && storeRemittancePending.checkout_url;
+    const pendingScheduledPickup = storeRemittancePending
+      && String(storeRemittancePending.status || '').toUpperCase() === 'CASH_PICKUP_SCHEDULED';
+    const pendingCheckoutSeconds = pendingOnlineCheckout ? storeRemittanceCheckoutRemainingSeconds(storeRemittancePending) : 0;
+    const pendingCheckoutProgress = pendingOnlineCheckout ? storeRemittanceCheckoutProgress(storeRemittancePending) : 0;
+    return (
+      <div className="store-owner-remittance-profile">
+        <div className="store-owner-remittance-profile-head">
+          <div>
+            <div className="fw-semibold">Store Sales Remittance</div>
+            <div className="text-muted small">Remittance is available only for finished months. For example, July can remit the full June sales.</div>
+          </div>
+          {storeHasRemitNow && <span className="badge bg-red-lt text-red">Remit now</span>}
+        </div>
+        {storeRemittancePending && (
+          <div className="alert alert-warning d-flex gap-2 mb-3">
+            <IconClock size={18} className="flex-shrink-0" />
+            <div>
+              <strong>{storeRemittancePending.status_label || 'Remittance pending'}</strong>
+              <div className="small">{storeRemittancePending.amount_display || 'PHP 0.00'} is already in progress. Finish or resolve this request before creating another remittance.</div>
+              {pendingOnlineCheckout && (
+                <div className="store-owner-remittance-checkout-panel mt-3">
+                  <div className="store-owner-remittance-checkout-head">
+                    <div>
+                      <strong>Online remittance checkout is open</strong>
+                      <span>{pendingCheckoutSeconds > 0 ? `Payment window expires in ${formatCountdown(pendingCheckoutSeconds)}.` : 'Payment window expired. Contact admin or wait for the request to be resolved.'}</span>
+                    </div>
+                    <button
+                      className="btn btn-sm btn-primary"
+                      type="button"
+                      disabled={pendingCheckoutSeconds <= 0}
+                      onClick={() => openStoreRemittanceCheckout(storeRemittancePending)}
+                    >
+                      <IconExternalLink size={15} className="me-1" />Open PayMongo checkout
+                    </button>
+                  </div>
+                  <div className="store-owner-remittance-checkout-progress" aria-hidden="true">
+                    <span style={{ width: `${pendingCheckoutProgress}%` }} />
+                  </div>
+                </div>
+              )}
+              {pendingScheduledPickup && (
+                <div className="store-owner-remittance-qr-panel mt-3">
+                  <div>
+                    <strong>Cash pickup scheduled</strong>
+                    <span>
+                      {storeRemittancePending.pickup_scheduled_at
+                        ? `Pickup schedule: ${formatPortalDateTime(storeRemittancePending.pickup_scheduled_at)}.`
+                        : 'Admin has scheduled this cash pickup.'}
+                    </span>
+                    <small>Show this QR to admin during collection. Admin scans it to mark the remittance successfully collected.</small>
+                  </div>
+                  {storeRemittanceQrDataUrl ? (
+                    <button
+                      className="store-owner-remittance-qr-button"
+                      type="button"
+                      onClick={() => setStoreRemittanceQrPreviewOpen(true)}
+                      aria-label="Open larger remittance QR"
+                    >
+                      <img src={storeRemittanceQrDataUrl} alt="Cash pickup remittance QR" />
+                    </button>
+                  ) : (
+                    <span className="store-owner-remittance-qr-placeholder"><IconQrcode size={42} /></span>
+                  )}
+                </div>
+              )}
+              {storeRemittancePending.cancelable && (
+                <button
+                  className="btn btn-sm btn-outline-danger mt-2"
+                  type="button"
+                  disabled={storeRemitLoading === `CANCEL-${storeRemittancePending.public_id}`}
+                  onClick={() => cancelStoreRemittance(storeRemittancePending)}
+                >
+                  <IconX size={15} className="me-1" />{storeRemitLoading === `CANCEL-${storeRemittancePending.public_id}` ? 'Cancelling...' : storeRemittanceCancelLabel(storeRemittancePending)}
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+        <div className="store-owner-remittance-tools">
+          <div className="input-icon">
+            <span className="input-icon-addon"><IconSearch size={16} /></span>
+            <input
+              className="form-control"
+              value={profileRemittanceSearch}
+              onChange={(event) => setProfileRemittanceSearch(event.target.value)}
+              placeholder="Search month, remittance, status..."
+            />
+            {profileRemittanceSearch ? (
+              <button className="btn btn-icon input-icon-addon" type="button" onClick={() => setProfileRemittanceSearch('')} aria-label="Clear search">
+                <IconX size={15} />
+              </button>
+            ) : null}
+          </div>
+          <select
+            className="form-select"
+            value={profileRemittanceFilter}
+            onChange={(event) => setProfileRemittanceFilter(event.target.value)}
+            aria-label="Filter remittance months"
+          >
+            <option value="ALL">All months</option>
+            <option value="READY">Ready to remit</option>
+            <option value="UNREMITTED">With unremitted sales</option>
+            <option value="REMITTED">With remittance history</option>
+            <option value="CURRENT">Current month</option>
+            <option value="FINISHED">Finished months</option>
+          </select>
+        </div>
+        <div className="store-owner-remittance-month-list">
+          {filteredStoreRemittanceMonths.map((month) => (
+            <div className={`store-owner-remittance-month-card ${month.remit_now ? 'is-ready' : ''}`} key={month.month_start}>
+              <div className="store-owner-remittance-month-main">
+                <div>
+                  <div className="fw-bold">{month.label}</div>
+                  <div className="text-muted small">{month.request_count || 0} approved sale(s) · {month.unremitted_request_count || 0} unremitted</div>
+                </div>
+                <div className="store-owner-remittance-month-amount">
+                  <span>Total sales</span>
+                  <strong>{month.sales_display || 'PHP 0.00'}</strong>
+                </div>
+              </div>
+              <div className="store-owner-remittance-month-grid">
+                <span><small>Unremitted</small><strong>{month.unremitted_sales_display || 'PHP 0.00'}</strong></span>
+                <span><small>Remittances</small><strong>{(month.remittances || []).length}</strong></span>
+                <span><small>Status</small><strong>{month.remit_now ? 'Ready to remit' : month.disabled_reason || 'Recorded'}</strong></span>
+              </div>
+              {(month.remittances || []).length > 0 && (
+                <div className="store-owner-remittance-history-list">
+                  {(month.remittances || []).map((remit) => (
+                    <div key={remit.id || remit.public_id}>
+                      <span>{remit.public_id || 'Remittance'}</span>
+                      <strong>{remit.amount_display || 'PHP 0.00'}</strong>
+                      <em>{remit.method_label || remit.method || 'Remittance'} · {remit.status_label || remit.status || 'Recorded'} · {remit.created_at ? formatPortalDateTime(remit.created_at) : 'Date unavailable'}</em>
+                      {remit.cancelable && (
+                        <button
+                          className="btn btn-sm btn-outline-danger"
+                          type="button"
+                          disabled={storeRemitLoading === `CANCEL-${remit.public_id}`}
+                          onClick={() => cancelStoreRemittance(remit)}
+                        >
+                          <IconX size={15} className="me-1" />{storeRemitLoading === `CANCEL-${remit.public_id}` ? 'Cancelling...' : storeRemittanceCancelLabel(remit)}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="store-owner-remittance-month-actions">
+                <button
+                  className="btn btn-success"
+                  type="button"
+                  disabled={!month.eligible || Boolean(storeRemitLoading)}
+                  onClick={() => openStoreRemittance(month)}
+                >
+                  <IconCash size={17} className="me-1" />Remit Sales
+                </button>
+              </div>
+            </div>
+          ))}
+          {!storeRemittanceMonths.length && (
+            <div className="empty py-4">
+              <IconCash size={30} />
+              <p className="mb-0">No approved store sales yet.</p>
+            </div>
+          )}
+          {storeRemittanceMonths.length > 0 && !filteredStoreRemittanceMonths.length && (
+            <div className="empty py-4">
+              <IconSearch size={30} />
+              <p className="mb-0">No remittance months match the current search or filter.</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   function recentLoginVerificationActive(nextOwner = owner) {
     const expiresAt = nextOwner?.recent_login_verification?.expires_at;
@@ -18050,6 +18720,38 @@ function StoreOwnerPortalApp() {
       return `PIN was successfully used, pin approval is paused: ${formatSeconds(remaining)}`;
     }
     return '';
+  }
+
+  function storeRemittanceCheckoutExpiresAtMs(remittance = storeRemittancePending) {
+    const value = remittance?.checkout_expires_at;
+    if (!value) return 0;
+    const time = new Date(value).getTime();
+    return Number.isFinite(time) ? time : 0;
+  }
+
+  function storeRemittanceCheckoutRemainingSeconds(remittance = storeRemittancePending) {
+    const expiresAt = storeRemittanceCheckoutExpiresAtMs(remittance);
+    if (!expiresAt) return Math.max(0, Number(remittance?.checkout_remaining_seconds || 0));
+    return Math.max(0, Math.ceil((expiresAt - storeOwnerRequestClock) / 1000));
+  }
+
+  function storeRemittanceCheckoutProgress(remittance = storeRemittancePending) {
+    const total = Math.max(1, Number(remittance?.checkout_window_seconds || 1));
+    const remaining = storeRemittanceCheckoutRemainingSeconds(remittance);
+    return Math.max(0, Math.min(100, (remaining / total) * 100));
+  }
+
+  function openStoreRemittanceCheckout(remittance = storeRemittancePending) {
+    const url = remittance?.checkout_url;
+    if (!url) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  function storeRemittanceCancelLabel(remittance) {
+    const method = String(remittance?.method || '').toUpperCase();
+    if (method === 'ONLINE') return 'Cancel checkout';
+    if (String(remittance?.status || '').toUpperCase() === 'CASH_PICKUP_REQUESTED') return 'Cancel cash pickup';
+    return 'Cancel remittance';
   }
 
   function markStorePwaInstalled() {
@@ -18304,16 +19006,53 @@ function StoreOwnerPortalApp() {
     return data;
   }
 
-  async function submitStoreRemittance(kind) {
+  async function requestStoreCashPickupRemittance() {
+    if (owner?.must_change_password) {
+      setPasswordModalOpen(true);
+      setError('Change your temporary password before requesting cash pickup.');
+      return;
+    }
+    if (!owner?.pin?.configured) {
+      setProfileTab('PIN');
+      setProfileModalOpen(true);
+      setError('Set a 4-digit approval PIN before requesting cash pickup.');
+      return;
+    }
+    if (!ownerPinVerifiedActive(owner)) {
+      setStoreRemitPin('');
+      setStoreRemitPinOpen(true);
+      return;
+    }
+    await submitStoreRemittance('CASH_PICKUP');
+  }
+
+  async function submitStoreRemittance(kind, pinCode = '') {
     const endpoint = kind === 'ONLINE' ? '/store-portal/remittances/online' : '/store-portal/remittances/cash-pickup';
     setStoreRemitLoading(kind);
     setError('');
     try {
       const data = await storeOwnerRequest(endpoint, {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify({
+          sales_period_start: storeRemitTarget?.month_start || null,
+          pin_code: kind === 'CASH_PICKUP' ? (pinCode || undefined) : undefined,
+        }),
       });
+      if (data.owner) setOwner(data.owner);
+      if (data.remittance) {
+        setSummary((current) => ({
+          ...(current || {}),
+          remittance: {
+            ...((current || {}).remittance || {}),
+            pending: data.remittance,
+            latest: data.remittance,
+          },
+        }));
+      }
       setStoreRemitModalOpen(false);
+      setStoreRemitPinOpen(false);
+      setStoreRemitPin('');
+      setStoreRemitTarget(null);
       setStoreOwnerToast({
         key: `remit-${kind}-${Date.now()}`,
         tone: 'success',
@@ -18326,6 +19065,28 @@ function StoreOwnerPortalApp() {
       await loadStorePortal(statusFilter, { background: true });
     } catch (err) {
       setError(err.message || 'Could not create remittance request.');
+    } finally {
+      setStoreRemitLoading('');
+    }
+  }
+
+  async function cancelStoreRemittance(remittance) {
+    if (!remittance?.public_id) return;
+    setStoreRemitLoading(`CANCEL-${remittance.public_id}`);
+    setError('');
+    try {
+      const data = await storeOwnerRequest(`/store-portal/remittances/${encodeURIComponent(remittance.public_id)}/cancel`, {
+        method: 'POST',
+      });
+      setStoreOwnerToast({
+        key: `cancel-remit-${remittance.public_id}-${Date.now()}`,
+        tone: 'success',
+        title: 'Remittance cancelled',
+        message: data.message || 'Remittance request was cancelled.',
+      });
+      await loadStorePortal(statusFilter, { background: true });
+    } catch (err) {
+      setError(err.message || 'Could not cancel remittance request.');
     } finally {
       setStoreRemitLoading('');
     }
@@ -18445,11 +19206,30 @@ function StoreOwnerPortalApp() {
   }, [owner?.pin?.verified_until, owner?.pin?.reuse_enabled]);
 
   useEffect(() => {
+    const payload = storeRemittancePending?.qr_payload;
+    let cancelled = false;
+    if (!payload) {
+      setStoreRemittanceQrDataUrl('');
+      return undefined;
+    }
+    QRCode.toDataURL(payload, { margin: 1, width: 420 })
+      .then((url) => {
+        if (!cancelled) setStoreRemittanceQrDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setStoreRemittanceQrDataUrl('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [storeRemittancePending?.qr_payload]);
+
+  useEffect(() => {
     const hasPending = (requests || []).some((requestRow) => String(requestRow.status || '').toUpperCase() === 'PENDING');
-    if (!hasPending) return undefined;
+    if (!hasPending && !storeRemittanceCheckoutActive) return undefined;
     const timerId = window.setInterval(() => setStoreOwnerRequestClock(Date.now()), 1000);
     return () => window.clearInterval(timerId);
-  }, [requests]);
+  }, [requests, storeRemittanceCheckoutActive]);
 
   useEffect(() => {
     if (!owner) return;
@@ -19060,7 +19840,18 @@ function StoreOwnerPortalApp() {
       <form onSubmit={changePassword}>
         {!passwordChallenge && !recentLoginVerificationActive(owner) ? (
           <div className="d-grid gap-3">
-            <div className="alert alert-info mb-0">{owner.must_change_password ? 'Before you continue, set your own password. ' : ''}A verification code will be sent to {owner.contact_hint || 'your registered contact'}.</div>
+            <div className="alert alert-info d-flex gap-2 mb-0">
+              <IconShieldLock size={19} className="flex-shrink-0" />
+              <div>
+                <div className="fw-bold">Secure password change</div>
+                <div className="small">
+                  {owner.must_change_password
+                    ? 'Before you continue, replace the temporary password with your own password.'
+                    : 'To protect your store account, we verify the registered owner before changing the password.'}
+                </div>
+                <div className="small mt-1">An SMS verification code will be sent to {owner.contact_hint || 'your registered contact'}.</div>
+              </div>
+            </div>
             <button className="btn btn-primary" type="button" disabled={passwordLoading} onClick={sendPasswordCode}>
               {passwordLoading ? 'Sending...' : 'Send SMS Code'}
             </button>
@@ -19599,23 +20390,120 @@ function StoreOwnerPortalApp() {
             <span className="portal-sticky-brand-text">Store</span>
           </button>
           <div className="portal-top-actions">
-            <button
-              className="portal-profile-tag store-owner-profile-tag"
-              type="button"
-              onClick={() => {
-                setProfileTab('DETAILS');
-                setProfileModalOpen(true);
-              }}
-            >
-              <span className="portal-profile-tag-icon is-ready">
-                <IconUserCog size={16} />
-              </span>
+	            <button
+		              className="portal-profile-tag store-owner-profile-tag"
+			              type="button"
+			              onClick={() => {
+			                setProfileRemittancePageOpen(false);
+			                setProfileTab('DETAILS');
+			                setProfileModalOpen(true);
+			              }}
+	            >
+	              {storeHasRemitNow && <span className="store-owner-profile-remit-badge">Remit now</span>}
+	              <span className="portal-profile-tag-icon is-ready">
+	                <IconUserCog size={16} />
+	              </span>
               <span className="portal-profile-tag-text">{owner.display_name || owner.username || 'Store Owner'}</span>
             </button>
           </div>
         </div>
       </header>
-      <div className="store-owner-shell">
+	      {profileRemittancePageOpen ? (
+	        <main className="store-owner-remittance-page">
+	          <div className="store-owner-profile-page-header">
+	            <button
+	              className="btn btn-outline-secondary store-owner-profile-back-button"
+	              type="button"
+	              onClick={() => {
+	                setProfileRemittancePageOpen(false);
+	                setProfileTab('DETAILS');
+	                setProfileModalOpen(true);
+	              }}
+	            >
+	              <IconChevronLeft size={17} className="me-1" />Back to profile
+	            </button>
+	            <div>
+	              <div className="text-muted small fw-semibold text-uppercase">Store Profile</div>
+	              <h2>Remittance</h2>
+	            </div>
+	          </div>
+	          <div className="store-owner-profile-page-body">
+	            {renderStoreRemittanceProfile()}
+	          </div>
+	          {storeRemitModalOpen && (
+	            <Modal title="Remit Store Sales" onClose={() => { setStoreRemitModalOpen(false); setStoreRemitTarget(null); }} size="md">
+	              <div className="store-owner-remit-modal">
+	                <div className="store-owner-remit-modal-summary">
+	                  <span className="store-owner-remit-modal-icon"><IconCash size={24} /></span>
+	                  <div>
+	                    <strong>{storeRemitTarget?.unremitted_sales_display || storeRemittance.unremitted_sales_display || 'PHP 0.00'} ready for remittance</strong>
+	                    <span>{storeRemitTarget?.label || storeRemittance.current_month_label || 'Selected month'} approved sales will be submitted to 3J.</span>
+	                  </div>
+	                </div>
+	                <div className="store-owner-remit-options">
+	                  <button
+	                    className="store-owner-remit-option"
+	                    type="button"
+	                    disabled={Boolean(storeRemitLoading)}
+	                    onClick={() => submitStoreRemittance('ONLINE')}
+	                  >
+	                    <span className="badge bg-green-lt text-green"><IconCash size={20} /></span>
+	                    <strong>Pay online</strong>
+	                    <small>Open a secure PayMongo checkout and remit now.</small>
+	                    <em>{storeRemitLoading === 'ONLINE' ? 'Opening checkout...' : 'Use PayMongo'}</em>
+	                  </button>
+	                  <button
+	                    className="store-owner-remit-option"
+	                    type="button"
+	                    disabled={Boolean(storeRemitLoading)}
+	                    onClick={requestStoreCashPickupRemittance}
+	                  >
+	                    <span className="badge bg-yellow-lt text-yellow"><IconBuildingStore size={20} /></span>
+	                    <strong>Cash pickup</strong>
+	                    <small>Notify admin that this store is ready for collection.</small>
+	                    <em>{storeRemitLoading === 'CASH_PICKUP' ? 'Sending request...' : 'Request pickup'}</em>
+	                  </button>
+	                </div>
+	              </div>
+	            </Modal>
+	          )}
+	          {storeRemitPinOpen && (
+	            <Modal title="Confirm Cash Pickup" onClose={() => { setStoreRemitPinOpen(false); setStoreRemitPin(''); }} size="sm">
+	              <form
+	                className="d-grid gap-3"
+	                onSubmit={(event) => {
+	                  event.preventDefault();
+	                  if (!/^\d{4}$/.test(storeRemitPin)) {
+	                    setError('Enter your 4-digit approval PIN.');
+	                    return;
+	                  }
+	                  submitStoreRemittance('CASH_PICKUP', storeRemitPin);
+	                }}
+	              >
+	                <div className="text-center">
+	                  <span className="store-owner-pin-icon"><IconShieldLock size={28} /></span>
+	                  <div className="fw-bold mt-2">Enter approval PIN</div>
+	                  <div className="text-muted small">Requesting cash pickup for {storeRemitTarget?.unremitted_sales_display || 'this remittance'}.</div>
+	                </div>
+	                <input
+	                  className="form-control text-center fs-1 fw-bold"
+	                  value={storeRemitPin}
+	                  onChange={(event) => setStoreRemitPin(event.target.value.replace(/\D/g, '').slice(0, 4))}
+	                  inputMode="numeric"
+	                  autoComplete="off"
+	                  placeholder="0000"
+	                  autoFocus
+	                />
+	                <button className="btn btn-warning" type="submit" disabled={storeRemitLoading === 'CASH_PICKUP'}>
+	                  <IconBuildingStore size={17} className="me-1" />{storeRemitLoading === 'CASH_PICKUP' ? 'Requesting...' : 'Confirm cash pickup'}
+	                </button>
+	              </form>
+	            </Modal>
+	          )}
+	        </main>
+	      ) : (
+	      <>
+	      <div className="store-owner-shell">
         <header className="store-owner-hero">
           {owner.store?.image_url ? (
             <img className="store-owner-hero-image" src={cacheBustedUploadUrl(owner.store.image_url, owner.updated_at)} alt="" />
@@ -19662,176 +20550,193 @@ function StoreOwnerPortalApp() {
               </div>
             )}
           </div>
-        </header>
-        <section className={`store-owner-goal-panel ${storeGoalCollapsed ? 'is-collapsed' : ''}`}>
           <button
-            className="store-owner-goal-summary"
+            className="store-owner-goal-summary store-owner-hero-sales-card"
             type="button"
             onClick={() => setStoreGoalCollapsed((collapsed) => !collapsed)}
             aria-expanded={!storeGoalCollapsed}
           >
             <span className="store-owner-goal-summary-icon"><IconTrophy size={22} /></span>
             <span className="store-owner-goal-summary-main">
-              <small>Monthly sales</small>
-              <strong>Total Sales: {summary.sales_month_display || 'PHP 0.00'}</strong>
+              <small>{summary.current_month_label || storeRemittance.current_month_label || 'Current Month Sales'}</small>
+              <strong>{summary.sales_month_display || 'PHP 0.00'}</strong>
             </span>
             <span className="store-owner-goal-collapse-icon">
               {storeGoalCollapsed ? <IconChevronDown size={18} /> : <IconChevronUp size={18} />}
             </span>
           </button>
-          {!storeGoalCollapsed && (
-            <div className="store-owner-goal-body">
-              <div className="store-owner-goal-copy">
-                <strong>{storeGoalRateCopy} current commission tier</strong>
-                <span>{storeCommissionGoal.headline || 'Approve more requests this month to unlock higher store commission tiers.'}</span>
-              </div>
-              <div className="store-owner-goal-track" aria-label={`Goal progress ${storeCommissionGoalProgress}%`}>
-                <span style={{ width: `${storeCommissionGoalProgress}%` }} />
-              </div>
-              <div className="store-owner-goal-content">
-                <div className="store-owner-goal-chart-card">
-                  <div className="store-owner-goal-chart-header">
-                    <div>
-                      <small>Goal progress chart</small>
-                      <strong>Goal % by date</strong>
-                    </div>
-                    <div className="store-owner-goal-filter">
-                      <button
-                        className="store-owner-goal-filter-button"
-                        type="button"
-                        onClick={() => setStoreGoalFilterOpen((open) => !open)}
-                        aria-label="Filter goal chart"
-                      >
-                        <IconFilter size={17} />
-                      </button>
-                      {storeGoalFilterOpen && (
-                        <div className="store-owner-goal-filter-menu">
-                          {storeGoalChartFilters.map((item) => (
-                            <button
-                              className={storeGoalChartFilter === item.key ? 'active' : ''}
-                              key={item.key}
-                              type="button"
-                              onClick={() => {
-                                setStoreGoalChartFilter(item.key);
-                                setStoreGoalSelectedPoint(null);
-                                setStoreGoalFilterOpen(false);
-                              }}
-                            >
-                              {item.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="store-owner-goal-chart-wrap">
-                    <svg viewBox={`0 0 ${storeGoalChartSize.width} ${storeGoalChartSize.height}`} role="img" aria-label="Goal percentage by date line chart">
-                      {[0, 50, 100].map((tick) => {
-                        const y = storeGoalChartSize.top + (((100 - tick) / 100) * storeGoalChartInnerHeight);
-                        return (
-                          <g key={tick}>
-                            <line className="store-owner-goal-chart-grid" x1={storeGoalChartSize.left} x2={storeGoalChartSize.width - storeGoalChartSize.right} y1={y} y2={y} />
-                            <text className="store-owner-goal-chart-axis" x={storeGoalChartSize.left - 10} y={y + 4} textAnchor="end">{tick}%</text>
-                          </g>
-                        );
-                      })}
-                      {storeGoalTierLines.map((tier) => {
-                        const y = storeGoalChartSize.top + (((100 - tier.goal_percent) / 100) * storeGoalChartInnerHeight);
-                        return (
-                          <g key={`tier-${tier.index}`}>
-                            <line className="store-owner-goal-chart-tier-line" x1={storeGoalChartSize.left} x2={storeGoalChartSize.width - storeGoalChartSize.right} y1={y} y2={y} />
-                            <text className="store-owner-goal-chart-tier-label" x={storeGoalChartSize.width - storeGoalChartSize.right - 4} y={y - 5} textAnchor="end">
-                              {tier.rate_display} · {tier.threshold_display}
-                            </text>
-                          </g>
-                        );
-                      })}
-                      <line className="store-owner-goal-chart-axis-line" x1={storeGoalChartSize.left} x2={storeGoalChartSize.left} y1={storeGoalChartSize.top} y2={storeGoalChartSize.height - storeGoalChartSize.bottom} />
-                      <line className="store-owner-goal-chart-axis-line" x1={storeGoalChartSize.left} x2={storeGoalChartSize.width - storeGoalChartSize.right} y1={storeGoalChartSize.height - storeGoalChartSize.bottom} y2={storeGoalChartSize.height - storeGoalChartSize.bottom} />
-                      {storeGoalChartPath && <path className="store-owner-goal-chart-line" d={storeGoalChartPath} />}
-                      {storeGoalChartPoints.map((point, index) => {
-                        const showDate = index === 0 || index === storeGoalChartPoints.length - 1 || index % Math.max(1, Math.ceil(storeGoalChartPoints.length / 4)) === 0;
-                        const selected = storeGoalSelectedChartPoint?.date === point.date;
-                        return (
-                          <g key={`${point.date}-${index}`}>
-                            <circle
-                              className={`store-owner-goal-chart-point ${selected ? 'active' : ''}`}
-                              cx={point.x}
-                              cy={point.y}
-                              r={selected ? 6.5 : 5}
-                              role="button"
-                              tabIndex="0"
-                              aria-label={`Show ${point.label} goal data`}
-                              onClick={() => setStoreGoalSelectedPoint(point)}
-                              onKeyDown={(event) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.preventDefault();
-                                  setStoreGoalSelectedPoint(point);
-                                }
-                              }}
-                            />
-                            {showDate && <text className="store-owner-goal-chart-axis" x={point.x} y={storeGoalChartSize.height - 12} textAnchor="middle">{point.label}</text>}
-                          </g>
-                        );
-                      })}
-                    </svg>
-                  </div>
-                  {storeGoalSelectedPoint && (
-                    <div className="store-owner-goal-chart-selected">
-                      <span>Goal Details · {storeGoalSelectedChartPoint.label}</span>
-                      <strong>{storeGoalSelectedChartPoint.goal_percent}% goal</strong>
-                      <em>{storeGoalSelectedChartPoint.sales_display} sales · {storeGoalSelectedChartPoint.goals_reached || 0} goal(s) reached</em>
-                    </div>
-                  )}
-                </div>
-                <div className="store-owner-goal-kpis">
-                  {[
-                    { icon: IconCash, label: 'Sales today', value: summary.sales_today_display || 'PHP 0.00' },
-                    { icon: IconCalendarStats, label: 'Monthly sales', value: summary.sales_month_display || 'PHP 0.00' },
-                    { icon: IconWallet, label: 'Estimated commission', value: storeCommissionGoal.estimated_commission_display || summary.commission_month_display || 'PHP 0.00' },
-                  ].map((item) => {
-                    const HeroIcon = item.icon;
-                    return (
-                      <span className="store-owner-goal-kpi" key={item.label}>
-                        <HeroIcon size={17} />
-                        <small>{item.label}</small>
-                        <strong>{item.value}</strong>
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-              <div className="store-owner-remit-panel">
-                <div>
-                  <strong>Sales remittance</strong>
-                  <span>
-                    {storeRemittancePending
-                      ? `${storeRemittancePending.status_label || 'Remittance pending'} · ${storeRemittancePending.amount_display || storeRemittance.unremitted_sales_display || 'PHP 0.00'}`
-                      : storeRemitEligible
-                        ? `${storeRemittance.unremitted_sales_display || 'PHP 0.00'} ready to remit`
-                        : `Remit unlocks after ${storeRemittance.minimum_goal_display || 'the first goal'} monthly sales.`}
-                  </span>
-                </div>
-                <button
-                  className="btn btn-success"
-                  type="button"
-                  disabled={!storeRemitEligible}
-                  onClick={() => setStoreRemitModalOpen(true)}
-                >
-                  <IconCash size={17} className="me-1" />Remit Sales
-                </button>
-              </div>
+        </header>
+        {!storeGoalCollapsed && (
+        <section className="store-owner-goal-panel store-owner-goal-details-panel">
+	            <div className="store-owner-goal-body">
+	              {storeUsesProgressiveCommission ? (
+	                <>
+	                  <div className="store-owner-goal-copy">
+	                    <strong>{storeGoalRateCopy} current commission tier</strong>
+	                    <span>{storeCommissionGoal.headline || 'Approve more requests this month to unlock higher store commission tiers.'}</span>
+	                  </div>
+	                  <div className="store-owner-goal-track" aria-label={`Goal progress ${storeCommissionGoalProgress}%`}>
+	                    <span style={{ width: `${storeCommissionGoalProgress}%` }} />
+	                  </div>
+	                  <div className="store-owner-goal-content">
+	                    <div className="store-owner-goal-chart-card">
+	                      <div className="store-owner-goal-chart-header">
+	                        <div>
+	                          <small>Goal progress chart</small>
+	                          <strong>Goal % by date</strong>
+	                        </div>
+	                        <div className="store-owner-goal-filter">
+	                          <button
+	                            className="store-owner-goal-filter-button"
+	                            type="button"
+	                            onClick={() => setStoreGoalFilterOpen((open) => !open)}
+	                            aria-label="Filter goal chart"
+	                          >
+	                            <IconFilter size={17} />
+	                          </button>
+	                          {storeGoalFilterOpen && (
+	                            <div className="store-owner-goal-filter-menu">
+	                              {storeGoalChartFilters.map((item) => (
+	                                <button
+	                                  className={storeGoalChartFilter === item.key ? 'active' : ''}
+	                                  key={item.key}
+	                                  type="button"
+	                                  onClick={() => {
+	                                    setStoreGoalChartFilter(item.key);
+	                                    setStoreGoalSelectedPoint(null);
+	                                    setStoreGoalFilterOpen(false);
+	                                  }}
+	                                >
+	                                  {item.label}
+	                                </button>
+	                              ))}
+	                            </div>
+	                          )}
+	                        </div>
+	                      </div>
+	                      <div className="store-owner-goal-chart-wrap">
+	                        <svg viewBox={`0 0 ${storeGoalChartSize.width} ${storeGoalChartSize.height}`} role="img" aria-label="Goal percentage by date line chart">
+	                          {[0, 50, 100].map((tick) => {
+	                            const y = storeGoalChartSize.top + (((100 - tick) / 100) * storeGoalChartInnerHeight);
+	                            return (
+	                              <g key={tick}>
+	                                <line className="store-owner-goal-chart-grid" x1={storeGoalChartSize.left} x2={storeGoalChartSize.width - storeGoalChartSize.right} y1={y} y2={y} />
+	                                <text className="store-owner-goal-chart-axis" x={storeGoalChartSize.left - 10} y={y + 4} textAnchor="end">{tick}%</text>
+	                              </g>
+	                            );
+	                          })}
+	                          {storeGoalTierLines.map((tier) => {
+	                            const y = storeGoalChartSize.top + (((100 - tier.goal_percent) / 100) * storeGoalChartInnerHeight);
+	                            return (
+	                              <g key={`tier-${tier.index}`}>
+	                                <line className="store-owner-goal-chart-tier-line" x1={storeGoalChartSize.left} x2={storeGoalChartSize.width - storeGoalChartSize.right} y1={y} y2={y} />
+	                                <text className="store-owner-goal-chart-tier-label" x={storeGoalChartSize.width - storeGoalChartSize.right - 4} y={y - 5} textAnchor="end">
+	                                  {tier.rate_display} · {tier.threshold_display}
+	                                </text>
+	                              </g>
+	                            );
+	                          })}
+	                          <line className="store-owner-goal-chart-axis-line" x1={storeGoalChartSize.left} x2={storeGoalChartSize.left} y1={storeGoalChartSize.top} y2={storeGoalChartSize.height - storeGoalChartSize.bottom} />
+	                          <line className="store-owner-goal-chart-axis-line" x1={storeGoalChartSize.left} x2={storeGoalChartSize.width - storeGoalChartSize.right} y1={storeGoalChartSize.height - storeGoalChartSize.bottom} y2={storeGoalChartSize.height - storeGoalChartSize.bottom} />
+	                          {storeGoalChartPath && <path className="store-owner-goal-chart-line" d={storeGoalChartPath} />}
+	                          {storeGoalChartPoints.map((point, index) => {
+	                            const showDate = index === 0 || index === storeGoalChartPoints.length - 1 || index % Math.max(1, Math.ceil(storeGoalChartPoints.length / 4)) === 0;
+	                            const selected = storeGoalSelectedChartPoint?.date === point.date;
+	                            return (
+	                              <g key={`${point.date}-${index}`}>
+	                                <circle
+	                                  className={`store-owner-goal-chart-point ${selected ? 'active' : ''}`}
+	                                  cx={point.x}
+	                                  cy={point.y}
+	                                  r={selected ? 6.5 : 5}
+	                                  role="button"
+	                                  tabIndex="0"
+	                                  aria-label={`Show ${point.label} goal data`}
+	                                  onClick={() => setStoreGoalSelectedPoint(point)}
+	                                  onKeyDown={(event) => {
+	                                    if (event.key === 'Enter' || event.key === ' ') {
+	                                      event.preventDefault();
+	                                      setStoreGoalSelectedPoint(point);
+	                                    }
+	                                  }}
+	                                />
+	                                {showDate && <text className="store-owner-goal-chart-axis" x={point.x} y={storeGoalChartSize.height - 12} textAnchor="middle">{point.label}</text>}
+	                              </g>
+	                            );
+	                          })}
+	                        </svg>
+	                      </div>
+	                      {storeGoalSelectedPoint && (
+	                        <div className="store-owner-goal-chart-selected">
+	                          <span>Goal Details · {storeGoalSelectedChartPoint.label}</span>
+	                          <strong>{storeGoalSelectedChartPoint.goal_percent}% goal</strong>
+	                          <em>{storeGoalSelectedChartPoint.sales_display} sales · {storeGoalSelectedChartPoint.goals_reached || 0} goal(s) reached</em>
+	                        </div>
+	                      )}
+	                    </div>
+	                    <div className="store-owner-goal-kpis">
+	                      {[
+	                        { icon: IconCash, label: 'Sales today', value: summary.sales_today_display || 'PHP 0.00' },
+	                        { icon: IconWallet, label: 'Estimated commission', value: storeCommissionGoal.estimated_commission_display || summary.commission_month_display || 'PHP 0.00' },
+	                      ].map((item) => {
+	                        const HeroIcon = item.icon;
+	                        return (
+	                          <span className="store-owner-goal-kpi" key={item.label}>
+	                            <HeroIcon size={17} />
+	                            <small>{item.label}</small>
+	                            <strong>{item.value}</strong>
+	                          </span>
+	                        );
+	                      })}
+	                    </div>
+	                  </div>
+	                </>
+	              ) : (
+	                <>
+	                  <div className="store-owner-goal-copy">
+	                    <strong>{summary.commission_type_label || 'Store commission'}</strong>
+	                    <span>{storeCommissionRuleCopy}</span>
+	                  </div>
+	                  <div className="store-owner-goal-kpis">
+	                    {[
+	                      { icon: IconCash, label: 'Sales today', value: summary.sales_today_display || 'PHP 0.00' },
+	                      { icon: IconWallet, label: 'Commission this month', value: summary.commission_month_display || 'PHP 0.00' },
+	                    ].map((item) => {
+	                      const HeroIcon = item.icon;
+	                      return (
+	                        <span className="store-owner-goal-kpi" key={item.label}>
+	                          <HeroIcon size={17} />
+	                          <small>{item.label}</small>
+	                          <strong>{item.value}</strong>
+	                        </span>
+	                      );
+	                    })}
+	                  </div>
+	                </>
+	              )}
+	              <div className="store-owner-remit-panel">
+	                <div>
+	                  <strong>Sales remittance</strong>
+	                  <span>
+		                    {storeRemittancePending
+		                      ? `${storeRemittancePending.status_label || 'Remittance pending'} · ${storeRemittancePending.amount_display || storeRemittance.unremitted_sales_display || 'PHP 0.00'}`
+		                      : storeHasRemitNow
+		                        ? `${storeRemittance.eligible_month_count || 1} month${Number(storeRemittance.eligible_month_count || 1) === 1 ? '' : 's'} ready in Store Profile`
+		                        : 'Remittance becomes available after each month ends.'}
+	                  </span>
+	                </div>
+	              </div>
             </div>
-          )}
         </section>
+        )}
         {storeRemitModalOpen && (
-          <Modal title="Remit Monthly Sales" onClose={() => setStoreRemitModalOpen(false)} size="md">
+          <Modal title="Remit Store Sales" onClose={() => { setStoreRemitModalOpen(false); setStoreRemitTarget(null); }} size="md">
             <div className="store-owner-remit-modal">
               <div className="store-owner-remit-modal-summary">
                 <span className="store-owner-remit-modal-icon"><IconCash size={24} /></span>
                 <div>
-                  <strong>{storeRemittance.unremitted_sales_display || 'PHP 0.00'} ready for remittance</strong>
-                  <span>Choose how this store will remit approved current-month sales to 3J.</span>
+                  <strong>{storeRemitTarget?.unremitted_sales_display || storeRemittance.unremitted_sales_display || 'PHP 0.00'} ready for remittance</strong>
+                  <span>{storeRemitTarget?.label || storeRemittance.current_month_label || 'Selected month'} approved sales will be submitted to 3J.</span>
                 </div>
               </div>
               <div className="store-owner-remit-options">
@@ -19850,7 +20755,7 @@ function StoreOwnerPortalApp() {
                   className="store-owner-remit-option"
                   type="button"
                   disabled={Boolean(storeRemitLoading)}
-                  onClick={() => submitStoreRemittance('CASH_PICKUP')}
+                  onClick={requestStoreCashPickupRemittance}
                 >
                   <span className="badge bg-yellow-lt text-yellow"><IconBuildingStore size={20} /></span>
                   <strong>Cash pickup</strong>
@@ -19991,17 +20896,19 @@ function StoreOwnerPortalApp() {
           </div>
         </div>
       </div>
-      <div className="store-owner-floating-actions">
-        <button className="store-owner-floating-action is-primary" type="button" onClick={openQrScanner}>
-          <IconQrcode size={20} />
-          <span>QR</span>
-        </button>
-        <button className="store-owner-floating-action" type="button" onClick={() => setCodeLookupModalOpen(true)}>
-          <IconKey size={20} />
-          <span>Code</span>
-        </button>
-      </div>
-      {supportModalOpen && (
+	      <div className="store-owner-floating-actions">
+	        <button className="store-owner-floating-action is-primary" type="button" onClick={openQrScanner}>
+	          <IconQrcode size={20} />
+	          <span>QR</span>
+	        </button>
+	        <button className="store-owner-floating-action" type="button" onClick={() => setCodeLookupModalOpen(true)}>
+	          <IconKey size={20} />
+	          <span>Code</span>
+	        </button>
+	      </div>
+	      </>
+	      )}
+	      {supportModalOpen && (
         <Modal title="Chat with Admin" onClose={() => setSupportModalOpen(false)} size="md">
           <div className="store-owner-support-modal">
             <div className="portal-chat-thread store-owner-chat-thread">
@@ -20035,19 +20942,33 @@ function StoreOwnerPortalApp() {
       {profileModalOpen && (
         <Modal title="Store Profile" onClose={() => setProfileModalOpen(false)} size="lg">
           <div className="store-owner-profile-modal">
-            <ul className="nav nav-tabs mb-3">
-              {[
-                { key: 'DETAILS', label: 'Store Details', icon: IconBuildingStore },
-                { key: 'PIN', label: 'PIN Code', icon: IconShieldLock },
-                { key: 'PASSWORD', label: 'Password', icon: IconKey },
-              ].map((tab) => {
+	            <ul className="nav nav-tabs mb-3">
+	              {[
+	                { key: 'DETAILS', label: 'Store', icon: IconBuildingStore },
+	                { key: 'REMITTANCE', label: 'Remittance', icon: IconCash, count: storeHasRemitNow ? (storeRemittance.eligible_month_count || 1) : 0 },
+	                { key: 'PIN', label: 'PIN', icon: IconShieldLock },
+	                { key: 'PASSWORD', label: 'Password', icon: IconKey },
+	              ].map((tab) => {
                 const TabIcon = tab.icon;
                 return (
-                  <li className="nav-item" key={tab.key}>
-                    <button className={`nav-link ${profileTab === tab.key ? 'active' : ''}`} type="button" onClick={() => setProfileTab(tab.key)}>
-                      <TabIcon size={16} className="me-1" />{tab.label}
-                    </button>
-                  </li>
+	                  <li className="nav-item" key={tab.key}>
+	                    <button
+	                      className={`nav-link ${profileTab === tab.key ? 'active' : ''}`}
+	                      type="button"
+	                      onClick={() => {
+	                        if (tab.key === 'REMITTANCE') {
+	                          setProfileModalOpen(false);
+	                          setProfileTab('REMITTANCE');
+	                          setProfileRemittancePageOpen(true);
+	                          return;
+	                        }
+	                        setProfileTab(tab.key);
+	                      }}
+	                    >
+	                      <TabIcon size={16} className="me-1" />{tab.label}
+	                      {tab.count ? <span className="badge bg-red-lt text-red ms-2">{tab.count}</span> : null}
+	                    </button>
+	                  </li>
                 );
               })}
             </ul>
@@ -20082,14 +21003,14 @@ function StoreOwnerPortalApp() {
                     </div>
                     <div className="list-group-item px-0">
                       <div className="text-muted small">Commission</div>
-                      <div>{owner.store?.commission_type === 'FIXED_MONTHLY' ? `${owner.store?.commission_value_display || 'PHP 0.00'} monthly` : `${owner.store?.commission_value_display || '0%'} of sales`}</div>
+                      <div>{storeOwnerCommissionSummary(owner.store)}</div>
                     </div>
                   </div>
                 </div>
-              </div>
-	            )}
-	            {profileTab === 'PIN' && (
-	              <form onSubmit={saveStoreProfile} className="row g-3">
+	              </div>
+		            )}
+			            {profileTab === 'PIN' && (
+		              <form onSubmit={saveStoreProfile} className="row g-3">
 	                <div className="col-12">
 	                  <div className="alert alert-info d-flex gap-2 mb-0">
 	                    <IconLock size={19} className="flex-shrink-0" />
@@ -20183,10 +21104,35 @@ function StoreOwnerPortalApp() {
                 {passwordChangeFormContent()}
               </div>
             )}
-          </div>
-        </Modal>
-      )}
-      {approvalPinModal && (
+	          </div>
+	        </Modal>
+	      )}
+	      {storeRemittanceQrPreviewOpen && (
+	        <Modal
+	          title="Cash Pickup QR"
+	          onClose={() => setStoreRemittanceQrPreviewOpen(false)}
+	          size="md"
+	          bodyClassName="store-owner-remittance-qr-preview-body"
+	        >
+	          <div className="store-owner-remittance-qr-preview">
+	            <div>
+	              <div className="fw-bold">{storeRemittancePending?.public_id || 'Remittance QR'}</div>
+	              <div className="text-muted small">
+	                Show this larger QR to the admin during cash collection.
+	              </div>
+	            </div>
+	            {storeRemittanceQrDataUrl ? (
+	              <img src={storeRemittanceQrDataUrl} alt="Large cash pickup remittance QR" />
+	            ) : (
+	              <span className="store-owner-remittance-qr-placeholder"><IconQrcode size={52} /></span>
+	            )}
+	            <button className="btn btn-primary w-100" type="button" onClick={() => setStoreRemittanceQrPreviewOpen(false)}>
+	              Done
+	            </button>
+	          </div>
+	        </Modal>
+	      )}
+	      {approvalPinModal && (
         <Modal title="Approve Store Sale" onClose={() => { setApprovalPinModal(null); setApprovalPin(''); }} size="sm">
           <form
             className="d-grid gap-3"
@@ -21731,8 +22677,10 @@ function SalesBreakdownList({ rows = [], title }) {
   );
 }
 
-function SalesPage() {
+function SalesPage({ onNavigate }) {
   const [rangeDays, setRangeDays] = useState(30);
+  const [datePreset, setDatePreset] = useState('30');
+  const [dateRange, setDateRange] = useState({ start_date: '', end_date: '' });
   const [chartMode, setChartMode] = useState('total');
   const [data, setData] = useState({ kpis: {}, daily_sales: [], sales_by_site: [], sales_by_barangay: [], sales_by_store: [], daily_sales_by_site: [], daily_sales_by_barangay: [], daily_sales_by_store: [], orders: [] });
   const [loading, setLoading] = useState(false);
@@ -21762,7 +22710,10 @@ function SalesPage() {
     setLoading(true);
     setError('');
     try {
-      const result = await request(`/sales?range_days=${encodeURIComponent(nextRange)}`);
+      const params = new URLSearchParams({ range_days: String(nextRange) });
+      if (dateRange.start_date) params.set('start_date', dateRange.start_date);
+      if (dateRange.end_date) params.set('end_date', dateRange.end_date);
+      const result = await request(`/sales?${params.toString()}`);
       setData(result);
     } catch (err) {
       setError(err.message);
@@ -21771,7 +22722,10 @@ function SalesPage() {
     }
   }
 
-  useEffect(() => { load().catch(() => {}); }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => { load().catch(() => {}); }, 250);
+    return () => window.clearTimeout(timer);
+  }, [rangeDays, dateRange.start_date, dateRange.end_date]);
 
   async function loadSalesSettings() {
     const settings = await request('/sales/settings');
@@ -21781,7 +22735,18 @@ function SalesPage() {
   function changeRange(value) {
     const next = Number(value || 30);
     setRangeDays(next);
-    load(next).catch(() => {});
+    setDateRange({ start_date: '', end_date: '' });
+    setDatePreset(String(next));
+  }
+
+  function updateDatePreset(value) {
+    setDatePreset(value);
+    if (value !== 'custom') changeRange(value);
+  }
+
+  function updateDateRange(key, value) {
+    setDatePreset('custom');
+    setDateRange((current) => ({ ...current, [key]: value }));
   }
 
   function openSalesSettings(tab = 'telegram') {
@@ -21917,6 +22882,24 @@ function SalesPage() {
   const pagedOrders = filteredOrders.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const startEntry = filteredOrders.length ? ((currentPage - 1) * pageSize) + 1 : 0;
   const endEntry = Math.min(currentPage * pageSize, filteredOrders.length);
+  const navigateSalesTarget = (pageName) => {
+    if (!pageName) return;
+    if (onNavigate) onNavigate(pageName);
+    else {
+      window.history.pushState({ page: pageName }, '', routeForPage(pageName));
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+  };
+  const overviewKpis = [
+    { icon: IconCash, label: 'Gross Sales', value: kpis.gross_sales_display || 'PHP 0.00', tone: 'green' },
+    { icon: IconCash, label: 'PayMongo Sales', value: kpis.paymongo_sales_display || 'PHP 0.00', tone: 'green', target: 'PayMongo Sales', detail: `${kpis.paymongo_orders || 0} paid checkout(s)` },
+    { icon: IconBuildingStore, label: 'Store Sales', value: kpis.store_sales_display || 'PHP 0.00', tone: 'orange', target: 'Stores', detail: `${kpis.store_orders || 0} approved store sale(s)` },
+    { icon: IconWallet, label: 'Unremitted Stores', value: kpis.unremitted_store_sales_display || 'PHP 0.00', tone: 'yellow', target: 'Stores', detail: `${kpis.unremitted_store_order_count || 0} sale(s) awaiting remittance` },
+    { icon: IconCash, label: 'Net Income', value: kpis.net_income_display || 'PHP 0.00', tone: 'blue' },
+    { icon: IconListDetails, label: 'Paid Orders', value: kpis.paid_orders || 0, tone: 'blue' },
+    { icon: IconClock, label: 'Today', value: kpis.today_sales_display || 'PHP 0.00', tone: 'purple' },
+    { icon: IconCalendarStats, label: 'This Month', value: kpis.month_sales_display || 'PHP 0.00', tone: 'azure' },
+  ];
 
   return (
     <div className="row row-cards">
@@ -21926,13 +22909,28 @@ function SalesPage() {
             <h2 className="page-title mb-1">Sales</h2>
 	            <div className="text-muted">Track online and physical store WiFi pass sales across sites and barangays.</div>
           </div>
-          <div className="d-flex align-items-center gap-2">
-            <select className="form-select" value={rangeDays} onChange={(e) => changeRange(e.target.value)}>
+          <div className="paymongo-sales-toolbar">
+            <select className="form-select paymongo-sales-toolbar-control" value={datePreset} onChange={(e) => updateDatePreset(e.target.value)} aria-label="Sales overview date filter">
               <option value={7}>Last 7 days</option>
               <option value={30}>Last 30 days</option>
               <option value={90}>Last 90 days</option>
               <option value={365}>Last 365 days</option>
+              <option value="custom">Custom dates</option>
             </select>
+            <input
+              className="form-control paymongo-sales-date-input"
+              type="date"
+              value={dateRange.start_date}
+              onChange={(e) => updateDateRange('start_date', e.target.value)}
+              aria-label="Sales overview start date"
+            />
+            <input
+              className="form-control paymongo-sales-date-input"
+              type="date"
+              value={dateRange.end_date}
+              onChange={(e) => updateDateRange('end_date', e.target.value)}
+              aria-label="Sales overview end date"
+            />
             <button className="btn btn-outline-primary" type="button" disabled={loading} onClick={() => load()}><IconRefresh size={18} className="me-2" />Refresh</button>
             <button className="btn btn-outline-secondary" type="button" onClick={() => openSalesSettings()}><IconSettings size={18} className="me-2" />Settings</button>
           </div>
@@ -21940,165 +22938,35 @@ function SalesPage() {
       </div>
       {message && <div className="col-12"><AutoDismissAlert message={message} onDismiss={() => setMessage('')} /></div>}
       {error && <div className="col-12"><div className="alert alert-danger mb-0">{error}</div></div>}
-      <KpiCard icon={IconCash} label="Gross Sales" value={kpis.gross_sales_display || 'PHP 0.00'} tone="green" />
-      <KpiCard icon={IconWallet} label="Commission" value={kpis.commission_display || 'PHP 0.00'} tone="orange" />
-      <KpiCard icon={IconCash} label="Net Income" value={kpis.net_income_display || 'PHP 0.00'} tone="blue" />
-      <KpiCard icon={IconListDetails} label="Paid Orders" value={kpis.paid_orders || 0} tone="blue" />
-      <KpiCard icon={IconCircleCheck} label="Fulfilled" value={kpis.fulfilled_orders || 0} tone="green" />
-      <KpiCard icon={IconActivity} label="Avg Order" value={kpis.average_order_display || 'PHP 0.00'} tone="yellow" />
-      <KpiCard icon={IconClock} label="Today" value={kpis.today_sales_display || 'PHP 0.00'} tone="purple" />
-      <KpiCard icon={IconCalendarStats} label="This Month" value={kpis.month_sales_display || 'PHP 0.00'} tone="azure" />
-      <KpiCard icon={IconMapPin} label="Sites With Sales" value={(data.sales_by_site || []).length} tone="cyan" />
-      <KpiCard icon={IconMapPin} label="Barangays With Sales" value={(data.sales_by_barangay || []).length} tone="orange" />
+      {overviewKpis.map((item) => {
+        const KpiIcon = item.icon;
+        const content = (
+          <div className="card-body">
+            <div className="d-flex align-items-center">
+              <span className={`badge bg-${item.tone}-lt text-${item.tone} me-3 header-icon-badge`}><KpiIcon size={20} /></span>
+              <div>
+                <div className="text-muted small">{item.label}</div>
+                <div className="h2 mb-0">{item.value}</div>
+                {item.detail && <div className="text-muted small mt-1">{item.detail}</div>}
+              </div>
+            </div>
+          </div>
+        );
+        return (
+          <div className="col-sm-6 col-lg-3" key={item.label}>
+            {item.target ? (
+              <button className="card sales-overview-kpi-button w-100 text-start" type="button" onClick={() => navigateSalesTarget(item.target)}>
+                {content}
+              </button>
+            ) : (
+              <div className="card">{content}</div>
+            )}
+          </div>
+        );
+      })}
 
       <div className="col-12">
         <SalesTrendPanel data={data} mode={chartMode} setMode={setChartMode} />
-      </div>
-      <div className="col-12">
-	        <Card title="Sales Table" subtitle="Latest online checkouts and approved physical store purchases.">
-          <div className="sales-table-tab-strip mb-3">
-            <ul className="nav nav-tabs flex-nowrap">
-              {salesTableTabs.map((tab) => {
-                const TabIcon = tab.icon;
-                return (
-                  <li className="nav-item" key={tab.key}>
-                    <button
-                      className={`nav-link ${salesTableTab === tab.key ? 'active' : ''}`}
-                      type="button"
-                      title={tab.amount_display ? `${tab.label}: ${tab.amount_display}` : tab.label}
-                      onClick={() => {
-                        setSalesTableTab(tab.key);
-                        setPageNo(1);
-                      }}
-                    >
-                      <TabIcon size={16} className="me-1" />
-                      <span>{tab.label}</span>
-                      <span className="badge bg-secondary-lt text-secondary ms-2">{tab.count}</span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-          <div className="row g-2 align-items-end mb-3">
-            <div className="col-md-4">
-              <label className="form-label">Search</label>
-              <div className="input-icon">
-                <span className="input-icon-addon"><IconSearch size={18} /></span>
-                <input className="form-control" value={tableFilters.search} onChange={(e) => updateTableFilter('search', e.target.value)} placeholder="Search order, product, customer, site..." />
-              </div>
-            </div>
-	            <div className="col-md-2">
-	              <label className="form-label">Status</label>
-	              <select className="form-select" value={tableFilters.fulfillment} onChange={(e) => updateTableFilter('fulfillment', e.target.value)}>
-	                <option value="">All</option>
-	                <option value="FULFILLED">Fulfilled</option>
-	                <option value="FAILED">Failed</option>
-	                <option value="PENDING">Pending</option>
-	              </select>
-	            </div>
-	            <div className="col-md-2">
-	              <label className="form-label">Site</label>
-	              <select className="form-select" value={tableFilters.site} onChange={(e) => updateTableFilter('site', e.target.value)}>
-	                <option value="">All sites</option>
-	                {siteOptions.map((site) => <option key={site} value={site}>{site}</option>)}
-	              </select>
-	            </div>
-	            <div className="col-md-2">
-	              <label className="form-label">Barangay</label>
-              <select className="form-select" value={tableFilters.barangay} onChange={(e) => updateTableFilter('barangay', e.target.value)}>
-                <option value="">All barangays</option>
-                {barangayOptions.map((barangay) => <option key={barangay} value={barangay}>{barangay}</option>)}
-              </select>
-            </div>
-	            <div className="col-md-2">
-	              <label className="form-label">Show entries</label>
-	              <select className="form-select" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPageNo(1); }}>
-                <option value={10}>10</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
-            </div>
-          </div>
-          <div className="table-responsive">
-            <table className="table table-vcenter card-table">
-              <thead>
-                <tr>
-		                  <th>Order</th>
-		                  <th>Channel</th>
-		                  <th>Product</th>
-		                  <th>Profile</th>
-	                  <th>Customer</th>
-	                  <th>Site</th>
-                  <th>Barangay</th>
-                  <th>Gross</th>
-                  <th>Commission</th>
-                  <th>Net</th>
-                  <th>Status</th>
-                  <th>Paid At</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pagedOrders.length ? pagedOrders.map((order) => {
-                  const customerName = order.customer_display_name || order.customer_name || order.device_name || order.client_mac || 'Unprofiled device';
-                  return (
-	                  <tr key={order.id}>
-	                    <td><code>{order.public_order_id}</code></td>
-	                    <td>
-	                      <span className={`badge ${order.sale_channel === 'PHYSICAL_STORE' ? 'bg-orange-lt text-orange' : 'bg-blue-lt text-blue'}`}>
-	                        {order.sale_channel === 'PHYSICAL_STORE' ? <IconBuildingStore size={14} className="me-1" /> : <IconCash size={14} className="me-1" />}
-	                        {order.sale_channel_label || (order.sale_channel === 'PHYSICAL_STORE' ? 'Physical Store' : 'Online')}
-	                      </span>
-	                      {order.physical_store_name && <div className="text-muted small mt-1">{order.physical_store_name}</div>}
-	                    </td>
-		                    <td>
-	                      <div className="fw-semibold">{order.product_name}</div>
-		                    </td>
-	                    <td>
-	                      {order.customer_profile_id ? (
-	                        <>
-	                          <div className="fw-semibold">{order.profile_display_name || order.customer_name || 'Customer profile'}</div>
-	                          {order.profile_contact_number && <div className="text-muted small">{order.profile_contact_number}</div>}
-	                          {order.profile_email && <div className="text-muted small">{order.profile_email}</div>}
-	                        </>
-	                      ) : (
-	                        <span className="badge bg-secondary-lt text-secondary">No profile at purchase</span>
-	                      )}
-	                    </td>
-	                    <td>
-	                      <div className="fw-semibold">{customerName}</div>
-	                      {order.customer_contact_number && <div className="text-muted small">{order.customer_contact_number}</div>}
-	                      {!order.customer_name && order.device_name && <div className="text-muted small">Phone name</div>}
-                    </td>
-                    <td>{order.site_name || 'Unknown Site'}</td>
-                    <td>{order.barangay || 'Unknown Barangay'}</td>
-                    <td className="fw-semibold">{order.gross_amount_display || order.amount_display}</td>
-                    <td>
-                      <div className="fw-semibold">{order.commission_display || 'PHP 0.00'}</div>
-                      {order.sale_channel === 'PHYSICAL_STORE' && order.commission_type === 'FIXED_MONTHLY' && <div className="text-muted small">Monthly commission counted in KPI</div>}
-                      {order.sale_channel === 'PHYSICAL_STORE' && order.commission_type === 'PERCENT_OF_SALES' && <div className="text-muted small">{order.commission_value || 0}% of sales</div>}
-                    </td>
-                    <td className="fw-semibold">{order.net_amount_display || order.amount_display}</td>
-                    <td><span className={`badge ${order.fulfillment_status === 'FULFILLED' ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{order.fulfillment_status}</span></td>
-                    <td>{compactDateTime(order.sale_at)}</td>
-                  </tr>
-                  );
-                }) : (
-		                  <tr><td colSpan={12} className="text-center text-muted py-4">No paid sales yet.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap mt-3">
-            <div className="text-muted small">Showing {startEntry} to {endEntry} of {filteredOrders.length} entr{filteredOrders.length === 1 ? 'y' : 'ies'}</div>
-            <div className="btn-list">
-              <button className="btn btn-sm" type="button" disabled={currentPage <= 1} onClick={() => setPageNo(currentPage - 1)}>Previous</button>
-              <span className="btn btn-sm disabled">Page {currentPage} of {totalPages}</span>
-              <button className="btn btn-sm" type="button" disabled={currentPage >= totalPages} onClick={() => setPageNo(currentPage + 1)}>Next</button>
-            </div>
-          </div>
-        </Card>
       </div>
       {settingsOpen && (
         <Modal title="Sales Settings" onClose={() => setSettingsOpen(false)}>
@@ -22238,6 +23106,8 @@ function PayMongoBreakdownCard({ title, icon: Icon, rows = [] }) {
 
 function PayMongoSalesPage() {
   const [rangeDays, setRangeDays] = useState(30);
+  const [datePreset, setDatePreset] = useState('30');
+  const [dateRange, setDateRange] = useState({ start_date: '', end_date: '' });
   const [filters, setFilters] = useState({ search: '', fulfillment: '', payment_method: '', provider_mode: '' });
   const [pageSize, setPageSize] = useState(20);
   const [pageNo, setPageNo] = useState(1);
@@ -22254,6 +23124,8 @@ function PayMongoSalesPage() {
         page: String(pageNo),
         page_size: String(pageSize),
       });
+      if (dateRange.start_date) params.set('start_date', dateRange.start_date);
+      if (dateRange.end_date) params.set('end_date', dateRange.end_date);
       Object.entries(filters).forEach(([key, value]) => {
         if (value) params.set(key, value);
       });
@@ -22269,10 +23141,25 @@ function PayMongoSalesPage() {
   useEffect(() => {
     const timer = window.setTimeout(() => { load().catch(() => {}); }, 250);
     return () => window.clearTimeout(timer);
-  }, [rangeDays, pageNo, pageSize, filters.search, filters.fulfillment, filters.payment_method, filters.provider_mode]);
+  }, [rangeDays, dateRange.start_date, dateRange.end_date, pageNo, pageSize, filters.search, filters.fulfillment, filters.payment_method, filters.provider_mode]);
 
   function updateFilter(key, value) {
     setFilters((current) => ({ ...current, [key]: value }));
+    setPageNo(1);
+  }
+
+  function updateDatePreset(value) {
+    setDatePreset(value);
+    setPageNo(1);
+    if (value !== 'custom') {
+      setRangeDays(Number(value));
+      setDateRange({ start_date: '', end_date: '' });
+    }
+  }
+
+  function updateDateRange(key, value) {
+    setDatePreset('custom');
+    setDateRange((current) => ({ ...current, [key]: value }));
     setPageNo(1);
   }
 
@@ -22337,13 +23224,28 @@ function PayMongoSalesPage() {
             <h2 className="page-title mb-1">PayMongo</h2>
             <div className="text-muted">Online checkout earnings, fulfillment health, and PayMongo payment records.</div>
           </div>
-          <div className="d-flex align-items-center gap-2 flex-wrap">
-            <select className="form-select" value={rangeDays} onChange={(e) => { setRangeDays(Number(e.target.value)); setPageNo(1); }}>
+          <div className="paymongo-sales-toolbar">
+            <select className="form-select paymongo-sales-toolbar-control" value={datePreset} onChange={(e) => updateDatePreset(e.target.value)} aria-label="PayMongo sales date filter">
               <option value={7}>Last 7 days</option>
               <option value={30}>Last 30 days</option>
               <option value={90}>Last 90 days</option>
               <option value={365}>Last 365 days</option>
+              <option value="custom">Custom dates</option>
             </select>
+            <input
+              className="form-control paymongo-sales-date-input"
+              type="date"
+              value={dateRange.start_date}
+              onChange={(e) => updateDateRange('start_date', e.target.value)}
+              aria-label="PayMongo sales start date"
+            />
+            <input
+              className="form-control paymongo-sales-date-input"
+              type="date"
+              value={dateRange.end_date}
+              onChange={(e) => updateDateRange('end_date', e.target.value)}
+              aria-label="PayMongo sales end date"
+            />
             <button className="btn btn-outline-secondary" type="button" disabled={loading} onClick={() => load()}>
               <IconRefresh size={18} className="me-2" />Refresh
             </button>
@@ -22939,6 +23841,7 @@ function CaptivePortalPage({ mode = 'full' }) {
   const [apManagementActiveRouterIndex, setApManagementActiveRouterIndex] = useState(0);
   const [apManagementPortSearch, setApManagementPortSearch] = useState({});
   const [apManagementDragIndex, setApManagementDragIndex] = useState(null);
+  const [apManagementTopologyZoom, setApManagementTopologyZoom] = useState(1);
   const [officeApPathConfig, setOfficeApPathConfig] = useState(null);
   const [officeApPathModalOpen, setOfficeApPathModalOpen] = useState(false);
   const [officeApPathSaving, setOfficeApPathSaving] = useState(false);
@@ -23000,7 +23903,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     station_name: '',
     station_code: '',
     description: '',
-    gateway_mode: 'CENTRAL_ROOT_GATEWAY',
+    gateway_mode: 'LOCAL_STATION_GATEWAY',
     vlan_id: '77',
     vlan_interface_name: 'VLAN77-3J-CLIENTS',
     client_network_cidr: '10.77.0.0/24',
@@ -23246,11 +24149,55 @@ function CaptivePortalPage({ mode = 'full' }) {
       ? { status: 'match', label: `Site VLAN ${site.vlan_tag} matches`, className: 'bg-green-lt text-green' }
       : { status: 'mismatch', label: `Site VLAN ${site.vlan_tag} does not match VLAN ${vlanId || '-'}`, className: 'bg-red-lt text-red' };
   }
-  function apManagementRouterTemplate(router = null) {
+  const AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY = 'CENTRAL_GATEWAY';
+  const AP_MANAGEMENT_ROLE_CORE_TRUNK = 'CORE_TRUNK';
+  const AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH = 'SUBSTATION_BRANCH';
+  const AP_MANAGEMENT_ROLE_OPTIONS = [
+    { value: AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY, label: 'Central Gateway', detail: 'Creates VLAN interface, gateway, DHCP, option 138, and Omada allow rules.' },
+    { value: AP_MANAGEMENT_ROLE_CORE_TRUNK, label: 'Core / CRS Trunk', detail: 'Carries VLAN 88 from the central gateway toward substation uplinks.' },
+    { value: AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH, label: 'Substation Branch', detail: 'Carries VLAN 88 only inside a substation toward OLT/AP ports.' }
+  ];
+  function normalizeApManagementTopologyRole(value, index = 0) {
+    const normalized = String(value || '').trim().toUpperCase();
+    if (['CENTRAL_GATEWAY', 'ROOT_GATEWAY', 'ROOT', 'AP_MGMT_ROOT'].includes(normalized)) return AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY;
+    if (['CORE_TRUNK', 'TRUNK_HELPER', 'CORE', 'TRUNK'].includes(normalized)) return AP_MANAGEMENT_ROLE_CORE_TRUNK;
+    if (['SUBSTATION_BRANCH', 'SUBSTATION', 'BRANCH'].includes(normalized)) return AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH;
+    if (index === 0) return AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY;
+    if (index === 1) return AP_MANAGEMENT_ROLE_CORE_TRUNK;
+    return AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH;
+  }
+  function apManagementRoleLabel(role) {
+    return AP_MANAGEMENT_ROLE_OPTIONS.find((item) => item.value === role)?.label || 'Substation Branch';
+  }
+  function apManagementRoleBadgeClass(role) {
+    if (role === AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY) return 'bg-green-lt text-green';
+    if (role === AP_MANAGEMENT_ROLE_CORE_TRUNK) return 'bg-blue-lt text-blue';
+    return 'bg-purple-lt text-purple';
+  }
+  function apManagementRoleForRow(row, index = 0) {
+    return normalizeApManagementTopologyRole(row?.topology_role || row?.router_role, index);
+  }
+  function apManagementDefaultParentRouterId(routers = []) {
+    const core = routers.find((row, index) => apManagementRoleForRow(row, index) === AP_MANAGEMENT_ROLE_CORE_TRUNK);
+    return core?.router_id || '';
+  }
+  function apManagementNextRole(routers = []) {
+    if (!routers.some((row, index) => apManagementRoleForRow(row, index) === AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY)) return AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY;
+    if (!routers.some((row, index) => apManagementRoleForRow(row, index) === AP_MANAGEMENT_ROLE_CORE_TRUNK)) return AP_MANAGEMENT_ROLE_CORE_TRUNK;
+    return AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH;
+  }
+  function apManagementRouterTemplate(router = null, role = AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH, parentRouterId = '') {
     return {
       router_id: router?.id || '',
+      topology_role: role,
+      parent_router_id: parentRouterId,
+      branch_label: router?.router_name || '',
+      station_id: '',
       bridge_name: '',
       tagged_ports: '',
+      upstream_ports: '',
+      ap_path_bridge_name: '',
+      ap_path_ports: '',
       notes: ''
     };
   }
@@ -23287,8 +24234,15 @@ function CaptivePortalPage({ mode = 'full' }) {
       local_interface_list: config.local_interface_list || 'LOCAL',
       routers: (config.routers || []).map((router) => ({
         router_id: router.router_id || '',
+        topology_role: apManagementRoleForRow(router, router.sequence_order ?? 0),
+        parent_router_id: router.parent_router_id || '',
+        branch_label: router.branch_label || '',
+        station_id: router.station_id || '',
         bridge_name: router.bridge_name || '',
         tagged_ports: router.tagged_ports || '',
+        upstream_ports: router.upstream_ports || '',
+        ap_path_bridge_name: router.ap_path_bridge_name || '',
+        ap_path_ports: router.ap_path_ports || '',
         notes: router.notes || ''
       }))
     };
@@ -23387,7 +24341,7 @@ function CaptivePortalPage({ mode = 'full' }) {
       station_name: '',
       station_code: '',
       description: '',
-      gateway_mode: 'CENTRAL_ROOT_GATEWAY',
+      gateway_mode: 'LOCAL_STATION_GATEWAY',
       vlan_id: vlanDefaults.vlan_id,
       vlan_interface_name: vlanDefaults.vlan_interface_name,
       client_network_cidr: vlanDefaults.client_network_cidr,
@@ -23682,13 +24636,52 @@ function CaptivePortalPage({ mode = 'full' }) {
   function updateApManagementRouter(index, patch) {
     setApManagementForm((current) => ({
       ...current,
-      routers: current.routers.map((router, routerIndex) => routerIndex === index ? { ...router, ...patch } : router)
+      routers: current.routers.map((router, routerIndex) => {
+        if (routerIndex !== index) return router;
+        const next = { ...router, ...patch };
+        const role = normalizeApManagementTopologyRole(next.topology_role, routerIndex);
+        next.topology_role = role;
+        if (role === AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY) next.parent_router_id = '';
+        if (role === AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH && !next.parent_router_id) {
+          next.parent_router_id = apManagementDefaultParentRouterId(current.routers);
+        }
+        return next;
+      })
     }));
   }
   function addApManagementRouter() {
     setApManagementForm((current) => {
+      const role = apManagementNextRole(current.routers);
+      const parentRouterId = role === AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH ? apManagementDefaultParentRouterId(current.routers) : '';
       setApManagementActiveRouterIndex(current.routers.length);
-      return { ...current, routers: [...current.routers, apManagementRouterTemplate()] };
+      return { ...current, routers: [...current.routers, apManagementRouterTemplate(null, role, parentRouterId)] };
+    });
+  }
+  function importApManagementSubstations() {
+    setApManagementForm((current) => {
+      const existingRouterIds = new Set((current.routers || []).map((row) => row.router_id).filter(Boolean));
+      const parentRouterId = apManagementDefaultParentRouterId(current.routers);
+      const additions = [];
+      (mikrotikStations || []).forEach((station) => {
+        const root = (station.routers || []).find((router) => router.router_role === 'ROOT_GATEWAY' || Number(router.sequence_order || 0) === 0) || (station.routers || [])[0];
+        if (!root?.router_id || existingRouterIds.has(root.router_id)) return;
+        existingRouterIds.add(root.router_id);
+        additions.push({
+          ...apManagementRouterTemplate(null, AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH, parentRouterId),
+          router_id: root.router_id,
+          branch_label: station.station_name || root.router_name || 'Substation',
+          station_id: station.id || '',
+          bridge_name: root.bridge_name || '',
+          tagged_ports: root.tagged_ports || ''
+        });
+      });
+      if (!additions.length) {
+        setActionResult({ status: 'SUCCESS', message: 'No new station root routers were available to import into AP Management.' });
+        return current;
+      }
+      setApManagementActiveRouterIndex(current.routers.length);
+      setActionResult({ status: 'SUCCESS', message: `Imported ${additions.length} substation branch${additions.length === 1 ? '' : 'es'} into AP Management.` });
+      return { ...current, routers: [...current.routers, ...additions] };
     });
   }
   function removeApManagementRouter(index) {
@@ -23718,6 +24711,19 @@ function CaptivePortalPage({ mode = 'full' }) {
           ? Array.from(new Set([...existing, portName]))
           : existing.filter((item) => item !== portName);
         return { ...router, tagged_ports: next.join(',') };
+      })
+    }));
+  }
+  function toggleApManagementFieldPort(index, fieldName, portName, checked) {
+    setApManagementForm((current) => ({
+      ...current,
+      routers: current.routers.map((router, routerIndex) => {
+        if (routerIndex !== index) return router;
+        const existing = String(router[fieldName] || '').split(',').map((item) => item.trim()).filter(Boolean);
+        const next = checked
+          ? Array.from(new Set([...existing, portName]))
+          : existing.filter((item) => item !== portName);
+        return { ...router, [fieldName]: next.join(',') };
       })
     }));
   }
@@ -25099,92 +26105,134 @@ function CaptivePortalPage({ mode = 'full' }) {
   function renderApManagementChainPath(config) {
     const routers = config?.routers || [];
     if (!routers.length) return <span className="text-muted small">No routers</span>;
-    return (
-      <div className="station-table-chain" aria-label={`${config.config_name || 'AP Management'} router chain`}>
-        {routers.map((router, index) => (
-          <React.Fragment key={router.id || `${config.id || 'ap-management'}-${router.router_id}-${index}`}>
-            <div className="station-table-chain-item" aria-label={apManagementRouterDisplay(router, index)}>
-              <span className={`station-chain-node station-table-chain-node ${index === 0 ? 'root' : ''}`}><IconRouter size={16} /></span>
-              <span className="station-table-chain-text">
-                <strong>{router.router_name || apManagementRouterDisplay(router, index)}</strong>
-                <small>{index === 0 ? 'Root' : `Hop ${index + 1}`} · {router.bridge_name || 'No bridge'}</small>
-              </span>
-              <div className="station-router-popover">
-                <div className="station-chain-popover-header">
-                  <IconRouter size={16} />
-                  <span>{router.router_name || apManagementRouterDisplay(router, index)}</span>
-                </div>
-                <div className="station-chain-popover-section">
-                  <div className="station-chain-popover-label"><IconActivity size={14} /> Router details</div>
-                  <div className="station-chain-popover-badges">
-                    <span className={`badge ${index === 0 ? 'bg-green-lt text-green' : 'bg-cyan-lt text-cyan'}`}>{index === 0 ? 'Root gateway' : `Hop ${index + 1}`}</span>
-                    <span className="badge bg-secondary-lt text-secondary">{index === 0 ? 'AP_MGMT_ROOT' : 'AP_MGMT_TRUNK'}</span>
-                    {router.api_status && <span className={`badge ${router.api_status === 'REACHABLE' ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{router.api_status}</span>}
-                  </div>
-                  <div className="station-chain-popover-meta">
-                    {router.host && <span><IconServer size={13} /> {router.host}{router.api_port ? `:${router.api_port}` : ''}</span>}
-                    <span><IconWifi size={13} /> {index === 0 ? `Creates AP management VLAN ${config.vlan_id}` : `Carries AP management VLAN ${config.vlan_id}`}</span>
-                  </div>
-                </div>
-                <div className="station-chain-popover-section mb-0">
-                  <div className="station-chain-popover-label"><IconRouter size={14} /> Selected bridge and AP management ports</div>
-                  <div className="station-chain-popover-route">
-                    <span className="badge bg-secondary-lt text-secondary">{router.bridge_name || 'No bridge/interface'}</span>
-                    {stationPortBadges(router.tagged_ports, `${config.id || 'ap-management'}-${router.router_id}-router`)}
-                  </div>
-                </div>
-              </div>
+    const central = routers.find((router, index) => apManagementRoleForRow(router, index) === AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY) || routers[0];
+    const coreRouters = routers.filter((router, index) => apManagementRoleForRow(router, index) === AP_MANAGEMENT_ROLE_CORE_TRUNK);
+    const branchRouters = routers.filter((router, index) => apManagementRoleForRow(router, index) === AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH);
+    const centralPath = [central, ...coreRouters].filter(Boolean);
+    const nodeWidth = 226;
+    const nodeHeight = 78;
+    const leftPadding = 28;
+    const topPadding = 28;
+    const trunkGap = 350;
+    const branchGap = 106;
+    const zoom = apManagementTopologyZoom || 1;
+    const zoomPercent = Math.round(zoom * 100);
+    const branchCount = Math.max(branchRouters.length, 1);
+    const canvasHeight = Math.max(242, topPadding * 2 + branchCount * nodeHeight + Math.max(0, branchCount - 1) * (branchGap - nodeHeight));
+    const trunkY = Math.round((canvasHeight - nodeHeight) / 2);
+    const trunkNodes = centralPath.map((router, index) => ({
+      router,
+      index,
+      role: apManagementRoleForRow(router, index),
+      x: leftPadding + index * trunkGap,
+      y: trunkY
+    }));
+    const branchStartX = leftPadding + Math.max(centralPath.length, 1) * trunkGap;
+    const branchTop = branchCount === 1 ? Math.round((canvasHeight - nodeHeight) / 2) : topPadding;
+    const branchNodes = branchRouters.map((router, index) => ({
+      router,
+      index: index + centralPath.length,
+      role: AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH,
+      x: branchStartX,
+      y: branchTop + index * branchGap
+    }));
+    const allNodes = [...trunkNodes, ...branchNodes];
+    const canvasWidth = Math.max(820, branchStartX + nodeWidth + 32);
+    const sourceNode = trunkNodes[trunkNodes.length - 1] || trunkNodes[0];
+    const trunkEdges = trunkNodes.slice(0, -1).map((item, index) => ({
+      id: `trunk-${index}`,
+      from: item,
+      to: trunkNodes[index + 1],
+      label: index === 0 ? `VLAN ${config.vlan_id}` : 'Core trunk',
+      tone: 'core'
+    }));
+    const branchEdges = branchNodes.map((item, index) => ({
+      id: `branch-${item.router.router_id || index}`,
+      from: sourceNode,
+      to: item,
+      label: item.router.branch_label || item.router.router_name || 'Substation',
+      tone: 'branch'
+    }));
+    const linkPath = (fromNode, toNode) => {
+      const startX = fromNode.x + nodeWidth;
+      const startY = fromNode.y + nodeHeight / 2;
+      const endX = toNode.x;
+      const endY = toNode.y + nodeHeight / 2;
+      const curve = Math.max(60, Math.min(140, (endX - startX) * 0.42));
+      return `M ${startX} ${startY} C ${startX + curve} ${startY}, ${endX - curve} ${endY}, ${endX} ${endY}`;
+    };
+    const adjustZoom = (delta) => {
+      setApManagementTopologyZoom((current) => Math.max(0.6, Math.min(1.5, Number(((current || 1) + delta).toFixed(2)))));
+    };
+    const renderNode = (item) => {
+      const { router, index, role, x, y } = item;
+      return (
+        <div
+          className={`ap-management-fanout-node ${role === AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY ? 'central' : role === AP_MANAGEMENT_ROLE_CORE_TRUNK ? 'core' : 'branch'}`}
+          key={`ap-management-node-${router.router_id || index}`}
+          style={{ left: `${x}px`, top: `${y}px`, width: `${nodeWidth}px`, minHeight: `${nodeHeight}px` }}
+        >
+          <span className={`station-chain-node ${role === AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY ? 'root' : ''}`}><IconRouter size={17} /></span>
+          <div className="min-w-0">
+            <div className="fw-semibold">{router.router_name || apManagementRouterDisplay(router, index)}</div>
+            <div className="text-muted small">{apManagementRoleLabel(role)} · {router.bridge_name || 'No bridge'}</div>
+            <div className="d-flex flex-wrap gap-1 mt-1">
+              <span className={`badge ${apManagementRoleBadgeClass(role)}`}>{role === AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH ? (router.branch_label || 'Substation') : apManagementRoleLabel(role)}</span>
+              {router.api_status && <span className={`badge ${router.api_status === 'REACHABLE' ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{router.api_status}</span>}
             </div>
-            {index < routers.length - 1 && (
-              <div className="station-table-chain-link">
-                <span className="station-table-chain-rail"><span /></span>
-                <button
-                  className="station-table-chain-dot"
-                  type="button"
-                  aria-label={`View AP management VLAN path between ${router.router_name || 'router'} and ${routers[index + 1]?.router_name || 'next router'}`}
-                />
-                <div className="station-chain-popover">
-                  <div className="station-chain-popover-header">
-                    <IconRouter size={16} />
-                    <span>{router.router_name || 'Router'} to {routers[index + 1]?.router_name || 'Next router'}</span>
-                  </div>
-                  <div className="station-chain-popover-section">
-                    <div className="station-chain-popover-label"><IconWifi size={14} /> Central AP Management VLAN</div>
-                    <div className="station-chain-popover-badges">
-                      <span className="badge bg-green-lt text-green">VLAN {config.vlan_id}</span>
-                      {config.vlan_interface_name && <span className="badge bg-cyan-lt text-cyan">{config.vlan_interface_name}</span>}
-                      <span className="badge bg-purple-lt text-purple">{config.network_cidr}</span>
-                    </div>
-	                    <div className="station-chain-popover-meta">
-	                      <span><IconServer size={13} /> Gateway {config.gateway_ip}</span>
-	                      <span><IconDatabase size={13} /> Pool {config.pool_start_ip}-{config.pool_end_ip}</span>
-	                      {config.plan?.omada_controller_discovery_ip && <span><IconWifi size={13} /> Omada option 138 {config.plan.omada_controller_discovery_ip}</span>}
-	                    </div>
-                    <div className="text-muted small mt-2">
-                      Subnet/DHCP is root-only. Tagged ports carry VLAN {config.vlan_id} between routers. APs must have the management VLAN configured before deployment.
-                    </div>
-                  </div>
-                  <div className="station-chain-popover-section">
-                    <div className="station-chain-popover-label"><IconRouter size={14} /> From router ports</div>
-                    <div className="station-chain-popover-route">
-                      <span className="badge bg-secondary-lt text-secondary">{router.bridge_name || 'No bridge/interface'}</span>
-                      <span className="badge bg-blue-lt text-blue">Tagged</span>
-                      {stationPortBadges(router.tagged_ports, `${config.id || 'ap-management'}-${router.router_id}-from`)}
-                    </div>
-                  </div>
-                  <div className="station-chain-popover-section mb-0">
-                    <div className="station-chain-popover-label"><IconRouter size={14} /> To router ports</div>
-                    <div className="station-chain-popover-route">
-                      <span className="badge bg-secondary-lt text-secondary">{routers[index + 1]?.bridge_name || 'No bridge/interface'}</span>
-                      <span className="badge bg-blue-lt text-blue">Tagged</span>
-                      {stationPortBadges(routers[index + 1]?.tagged_ports, `${config.id || 'ap-management'}-${routers[index + 1]?.router_id}-to`)}
-                    </div>
-                  </div>
+          </div>
+        </div>
+      );
+    };
+    return (
+      <div className="ap-management-topology" aria-label={`${config.config_name || 'AP Management'} fan-out topology`}>
+        <div className="ap-management-topology-header">
+          <div className="ap-management-topology-summary">
+            <span className="badge bg-blue-lt text-blue">VLAN {config.vlan_id}</span>
+            <span className="badge bg-purple-lt text-purple">{config.network_cidr}</span>
+            <span className="badge bg-secondary-lt text-secondary">Gateway {config.gateway_ip}</span>
+            {config.plan?.omada_controller_discovery_ip && <span className="badge bg-green-lt text-green">Omada {config.plan.omada_controller_discovery_ip}</span>}
+          </div>
+          <div className="ap-management-canvas-controls" aria-label="AP Management canvas zoom controls">
+            <button className="btn btn-icon btn-sm btn-outline-secondary" type="button" onClick={() => adjustZoom(-0.1)} disabled={zoom <= 0.6} aria-label="Zoom out">
+              <IconMinus size={15} />
+            </button>
+            <span className="ap-management-canvas-zoom">{zoomPercent}%</span>
+            <button className="btn btn-icon btn-sm btn-outline-secondary" type="button" onClick={() => adjustZoom(0.1)} disabled={zoom >= 1.5} aria-label="Zoom in">
+              <IconPlus size={15} />
+            </button>
+            <button className="btn btn-sm btn-outline-secondary" type="button" onClick={() => setApManagementTopologyZoom(1)} disabled={zoom === 1}>
+              Reset
+            </button>
+          </div>
+        </div>
+        <div className="ap-management-fanout-shell">
+          <div className="ap-management-fanout-viewport" style={{ width: `${canvasWidth * zoom}px`, height: `${canvasHeight * zoom}px` }}>
+            <div className="ap-management-fanout-canvas" style={{ width: `${canvasWidth}px`, height: `${canvasHeight}px`, transform: `scale(${zoom})` }}>
+              <svg className="ap-management-fanout-lines" viewBox={`0 0 ${canvasWidth} ${canvasHeight}`} width={canvasWidth} height={canvasHeight} aria-hidden="true">
+                {[...trunkEdges, ...branchEdges].map((edge) => {
+                  const d = linkPath(edge.from, edge.to);
+                  const midX = (edge.from.x + nodeWidth + edge.to.x) / 2;
+                  const midY = ((edge.from.y + nodeHeight / 2) + (edge.to.y + nodeHeight / 2)) / 2;
+                  return (
+                    <g className={`ap-management-fanout-edge ${edge.tone}`} key={edge.id}>
+                      <path className="ap-management-fanout-edge-shadow" d={d} />
+                      <path className="ap-management-fanout-edge-line" d={d} />
+                      <circle className="ap-management-fanout-edge-dot" cx={edge.to.x} cy={edge.to.y + nodeHeight / 2} r="5" />
+                      <text className="ap-management-fanout-edge-label" x={midX} y={midY - 10} textAnchor="middle">{edge.label}</text>
+                    </g>
+                  );
+                })}
+              </svg>
+              {allNodes.map(renderNode)}
+              {!branchRouters.length && (
+                <div className="ap-management-fanout-empty" style={{ left: `${branchStartX}px`, top: `${trunkY + 8}px`, width: `${nodeWidth}px` }}>
+                  Add substation branches here.
                 </div>
-              </div>
-            )}
-          </React.Fragment>
-        ))}
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -26623,17 +27671,17 @@ function CaptivePortalPage({ mode = 'full' }) {
   const stationFieldHints = {
     stationName: 'Friendly name for this deployment path. Example: CCR2116-Roma to CRS317 or Roma/Batu/GK customer VLAN.',
     stationCode: 'Short unique code for this substation/station. It helps keep VLAN, logs, and future reports tied to one location.',
-    stationDescription: 'Optional note describing where the VLAN travels, for example root gateway to CRS, OLT, ONU, and APs.',
-    routerChain: 'Add routers in the exact order customer VLAN traffic travels. The first router is the root gateway; following routers only carry the same VLAN downstream.',
+    stationDescription: 'Optional note describing where the station VLAN travels, for example substation gateway to OLT, ONU, and APs.',
+    routerChain: 'Add only routers that physically carry this station customer VLAN toward OLT/APs. The first router owns VLAN/DHCP/NAT/queues. Do not add the central core unless this customer VLAN really passes through it.',
     mikrotikRouter: 'Choose one of the MikroTik routers already saved in the system. The system uses read-only scan/API data to list its ports and bridges.',
-    rootBridge: 'This is the bridge/interface on the root gateway where the VLAN interface is created. In your working example this is SwAC. PPPoE interfaces are hidden because this must not be a customer PPPoE session.',
+    rootBridge: 'This is the bridge/interface on the station gateway where the VLAN interface is created. For CCR1009-Centro this is BR_PPPOE because ether5/OLT is inside that bridge.',
     downstreamBridge: 'This is the downstream router bridge where the same VLAN should be carried. In your CRS317 example this is SwBridge.',
     transportMode: 'Bridge Trunk is the normal router/switch trunk path. VLAN Handoff / Xconnect is only for downstream access-concentrator designs where the upstream trunk bridge and downstream OLT/PPPoE bridge are different bridges on the same MikroTik.',
     xconnectUpstreamBridge: 'The bridge/interface where the station VLAN arrives from the previous router. In the CCR1009-Centro example this is SwBridge from CRS317.',
     xconnectUpstreamPorts: 'Ports on the upstream bridge that carry the station VLAN from the previous router. In the CCR1009-Centro example this is sfp-sfpplus1.',
     xconnectDownstreamBridge: 'The downstream bridge that leads to the OLT/AP path. This can intentionally be a PPPoE access bridge when VLAN Handoff / Xconnect is selected, for example BR_PPPOE.',
     xconnectDownstreamPorts: 'Ports inside the downstream/OLT bridge that must carry the same station VLAN toward OLT/ONU/APs. In the CCR1009-Centro example this is ether5.',
-    taggedPortsRoot: 'Select the root bridge itself plus the trunk port going to the next router. In your working example this was SwAC and sfp-sfpplus3. PPPoE interfaces are hidden here.',
+    taggedPortsRoot: 'Select the OLT/AP-facing tagged port(s) from the station gateway. The system includes the selected bridge automatically; for CCR1009-Centro use ether5.',
     taggedPortsDownstream: 'Select the port from the previous router and the ports going toward OLTs/APs. In your CRS317 example these were sfp-sfpplus2, sfp-sfpplus3, and the OLT/AP-facing ports. PPPoE interfaces are hidden here.',
     vlanId: 'Customer VLAN used by the open captive portal SSID. In your tested setup this is VLAN 77.',
     vlanInterfaceName: 'RouterOS VLAN interface name created on the root gateway. Example: VLAN77-3J-CLIENTS.',
@@ -26658,7 +27706,7 @@ function CaptivePortalPage({ mode = 'full' }) {
     apManagementPoolName: 'RouterOS IP pool name for AP management leases.',
     apManagementDhcpServerName: 'RouterOS DHCP server name for AP management. This is root-gateway-only.',
     apManagementDnsServers: 'DNS servers handed to APs on the management VLAN. AP adoption should still use the Omada controller IP or inform URL.',
-    gatewayMode: 'Central root means the first/root router in the chain owns the station VLAN from the core. Local station gateway means this station router owns its customer subnet and can fail over to its local ISP.',
+    gatewayMode: 'Central root means a core MikroTik owns the station VLAN and downstream routers only carry it. Local station gateway means the substation MikroTik owns VLAN/DHCP/NAT/queues locally, while central/Omada reachability uses normal routing or WireGuard backup.',
     wireguardEnabled: 'Enable this when the station must keep Omada/controller reachability through main fiber or local ISP backup.',
     wireguardInterface: 'RouterOS WireGuard interface created on the station root gateway. RouterOS generates the private key; the system does not expose it.',
     wireguardStationAddress: 'Station tunnel IP, for example 10.250.78.2/32. It must be unique per station.',
@@ -28036,10 +29084,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                 {apManagementConfig?.id ? (
                   <div className="station-card-list">
                     <div className="alert alert-info mb-3">
-                      <div className="fw-semibold mb-1">AP management subnet lives only on the root gateway</div>
+                      <div className="fw-semibold mb-1">AP management subnet lives only on the central gateway</div>
                       <div className="small">
-                        If you change only the subnet, the root CCR removes and recreates the IP address, pool, DHCP server, and DHCP network.
-                        CRS/trunk routers do not store that subnet; they carry only the AP management VLAN tag. If the VLAN ID remains {apManagementConfig.vlan_id}, CRS should still show VLAN {apManagementConfig.vlan_id} after Push Config succeeds.
+                        If you change only the subnet, the central CCR removes and recreates the IP address, pool, DHCP server, and DHCP network.
+                        CRS/core and substation routers do not store that subnet; they carry only the AP management VLAN tag toward OLT/AP paths.
                       </div>
                     </div>
                     <div className="station-plan-card">
@@ -28057,7 +29105,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                           <span className="station-chain-node root"><IconRouter size={18} /></span>
                           <div>
                             <div className="fw-semibold">{apManagementConfig.config_name || 'Central AP Management'}</div>
-                            <div className="text-muted small">Root gateway owns the AP management subnet/DHCP. Downstream CRS/trunk routers only carry the AP management VLAN tag.</div>
+                            <div className="text-muted small">Central gateway owns the AP management subnet/DHCP. CRS/core trunk fans VLAN {apManagementConfig.vlan_id} out to substation OLT/AP branches.</div>
                             {(apManagementConfig.has_pending_cleanup || apManagementConfig.plan?.has_pending_cleanup) && (
                               <div className="text-orange small mt-1">
                                 <IconAlertTriangle size={14} className="me-1" />Edited plan: Push Config removes old managed AP management objects before applying the updated config.
@@ -28204,7 +29252,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <form onSubmit={saveApManagement}>
                       <div className="alert alert-info">
                         <div className="fw-semibold mb-1">Central AP management plan only</div>
-                        <div>This saves the AP management VLAN/subnet and router path. It does not configure MikroTik until you use Push AP Management Config.</div>
+                        <div>This saves the AP management VLAN/subnet and central-to-substation fan-out topology. It does not configure MikroTik until you use Push AP Management Config.</div>
                       </div>
                       {apManagementSaveSuccess && (
                         <AutoDismissAlert
@@ -28283,12 +29331,17 @@ function CaptivePortalPage({ mode = 'full' }) {
                       <div className="border rounded p-3 mt-3">
                         <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                           <div>
-                            <div className="fw-semibold">Router Chain</div>
-                            <div className="text-muted small">Add the root gateway first, then CRS/switch/transport routers in the order the AP management VLAN travels toward OLTs and APs.</div>
+                            <div className="fw-semibold">AP Management Topology</div>
+                            <div className="text-muted small">Keep the central gateway and CRS/core trunk first, then add each substation as a branch that only carries the AP management VLAN toward OLT/AP ports.</div>
                           </div>
-                          <button className="btn btn-outline-primary btn-sm" type="button" onClick={addApManagementRouter}>
-                            <IconRouter size={16} className="me-1" />Add Router to Chain
-                          </button>
+                          <div className="btn-list justify-content-end">
+                            <button className="btn btn-outline-secondary btn-sm" type="button" onClick={importApManagementSubstations}>
+                              <IconDownload size={16} className="me-1" />Import Station Branches
+                            </button>
+                            <button className="btn btn-outline-primary btn-sm" type="button" onClick={addApManagementRouter}>
+                              <IconRouter size={16} className="me-1" />Add Router
+                            </button>
+                          </div>
                         </div>
                         {apManagementForm.routers.length ? (
                           <div className="station-chain-builder">
@@ -28311,10 +29364,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                                   }}
                                   key={`ap-management-router-tab-${index}`}
                                 >
-                                  <span className={`station-chain-node ${index === 0 ? 'root' : ''}`}><IconRouter size={18} /></span>
+                                  <span className={`station-chain-node ${apManagementRoleForRow(row, index) === AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY ? 'root' : ''}`}><IconRouter size={18} /></span>
                                   <span className="station-chain-tab-text">
                                     <span className="fw-semibold">{apManagementRouterDisplay(row, index)}</span>
-                                    <span className="text-muted small">{index === 0 ? 'Root gateway' : `Hop ${index + 1}`}</span>
+                                    <span className="text-muted small">{apManagementRoleLabel(apManagementRoleForRow(row, index))}</span>
                                   </span>
                                   <span className="station-chain-drag-indicator" title="Drag to reorder">::</span>
                                 </button>
@@ -28323,6 +29376,10 @@ function CaptivePortalPage({ mode = 'full' }) {
                             {(() => {
                               const activeIndex = Math.min(apManagementActiveRouterIndex, apManagementForm.routers.length - 1);
                               const row = apManagementForm.routers[activeIndex];
+                              const topologyRole = apManagementRoleForRow(row, activeIndex);
+                              const isCentralGateway = topologyRole === AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY;
+                              const isSubstationBranch = topologyRole === AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH;
+                              const coreParentOptions = apManagementForm.routers.filter((candidate, candidateIndex) => candidateIndex !== activeIndex && apManagementRoleForRow(candidate, candidateIndex) === AP_MANAGEMENT_ROLE_CORE_TRUNK && candidate.router_id);
                               const routerOptions = row?.router_id ? (mikrotikOptions[row.router_id] || {}) : {};
                               const routerOptionsLoading = Boolean(row?.router_id && mikrotikOptionsLoading[row.router_id]);
                               const routerInterfaces = routerOptions.interfaces || [];
@@ -28330,24 +29387,39 @@ function CaptivePortalPage({ mode = 'full' }) {
                               const bridgeInterfaceChoices = bridgeInterfaceChoicesFromOptions(routerOptions);
                               const selectedTaggedPorts = String(row?.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
                               const selectedTaggedPortSet = new Set(selectedTaggedPorts);
+                              const selectedUpstreamPorts = String(row?.upstream_ports || row?.tagged_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+                              const selectedUpstreamPortSet = new Set(selectedUpstreamPorts);
+                              const selectedApPathPorts = String(row?.ap_path_ports || '').split(',').map((item) => item.trim()).filter(Boolean);
+                              const selectedApPathPortSet = new Set(selectedApPathPorts);
                               const portSearchKey = row?.router_id || `ap-management-index-${activeIndex}`;
+                              const apPathPortSearchKey = `${portSearchKey}-ap-path`;
                               const portSearchText = apManagementPortSearch[portSearchKey] || '';
+                              const apPathPortSearchText = apManagementPortSearch[apPathPortSearchKey] || '';
                               const bridgeMemberInterfaces = row?.bridge_name
                                 ? safeInterfaces.filter((iface) => iface.name !== row.bridge_name && iface.bridge === row.bridge_name)
+                                : [];
+                              const apPathBridgeMemberInterfaces = row?.ap_path_bridge_name
+                                ? safeInterfaces.filter((iface) => iface.name !== row.ap_path_bridge_name && iface.bridge === row.ap_path_bridge_name)
                                 : [];
                               const visibleTaggedInterfaces = bridgeMemberInterfaces.filter((iface) => {
                                 const haystack = [iface.name, iface.type, iface.bridge, iface.comment].map((value) => String(value || '').toLowerCase()).join(' ');
                                 return !portSearchText.trim() || haystack.includes(portSearchText.trim().toLowerCase());
                               });
+                              const visibleApPathInterfaces = apPathBridgeMemberInterfaces.filter((iface) => {
+                                const haystack = [iface.name, iface.type, iface.bridge, iface.comment].map((value) => String(value || '').toLowerCase()).join(' ');
+                                return !apPathPortSearchText.trim() || haystack.includes(apPathPortSearchText.trim().toLowerCase());
+                              });
                               return (
                                 <div className="station-router-panel">
                                   <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                                     <div>
-                                      <div className="fw-semibold">{activeIndex === 0 ? 'Root Gateway AP Management Setup' : `AP Management Trunk Setup - Hop ${activeIndex + 1}`}</div>
+                                      <div className="fw-semibold">{apManagementRoleLabel(topologyRole)} Setup</div>
                                       <div className="text-muted small">
-                                        {activeIndex === 0
-                                          ? 'This router creates the AP management VLAN interface, gateway IP, DHCP pool/server, and tagged trunk.'
-                                          : 'This router carries the same AP management VLAN through its bridge/tagged ports toward OLTs and APs.'}
+                                        {isCentralGateway
+                                          ? 'This router creates the AP management VLAN interface, gateway IP, DHCP pool/server, DHCP option 138, and Omada allow rules.'
+                                          : isSubstationBranch
+                                            ? 'This router only carries the existing AP management VLAN from the CRS/core trunk toward this substation OLT/AP path.'
+                                            : 'This CRS/core router carries the AP management VLAN from the central gateway toward substation uplinks.'}
                                       </div>
                                     </div>
                                     <button className="btn btn-outline-danger btn-sm" type="button" onClick={() => removeApManagementRouter(activeIndex)}>
@@ -28365,7 +29437,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                               className="form-select"
                                               value={row.router_id}
                                               onChange={(e) => {
-                                                updateApManagementRouter(activeIndex, { router_id: e.target.value, bridge_name: '', tagged_ports: '' });
+                                                updateApManagementRouter(activeIndex, { router_id: e.target.value, bridge_name: '', tagged_ports: '', upstream_ports: '', ap_path_bridge_name: '', ap_path_ports: '' });
                                                 if (e.target.value) loadMikrotikRouterOptions(e.target.value);
                                               }}
                                               required
@@ -28376,6 +29448,37 @@ function CaptivePortalPage({ mode = 'full' }) {
                                             {routerOptions.error && <div className="text-danger small mt-1">{routerOptions.error}</div>}
                                             {routerOptionsLoading && <div className="text-muted small mt-1">Fetching ports from RouterOS...</div>}
                                           </div>
+                                          <div className="col-md-6">
+                                            <StationLabel hint="Central gateway owns subnet/DHCP. Core trunk carries the tag to substations. Substation branch carries the tag only inside that station.">Topology Role</StationLabel>
+                                            <select
+                                              className="form-select"
+                                              value={topologyRole}
+                                              onChange={(e) => updateApManagementRouter(activeIndex, { topology_role: e.target.value })}
+                                              required
+                                            >
+                                              {AP_MANAGEMENT_ROLE_OPTIONS.map((option) => (
+                                                <option value={option.value} key={`ap-management-role-${option.value}`}>{option.label}</option>
+                                              ))}
+                                            </select>
+                                            <div className="text-muted small mt-1">{AP_MANAGEMENT_ROLE_OPTIONS.find((option) => option.value === topologyRole)?.detail}</div>
+                                          </div>
+                                          {isSubstationBranch && (
+                                            <>
+                                              <div className="col-md-6">
+                                                <StationLabel hint="Parent core/CRS router that feeds this substation branch with the AP management VLAN tag.">Parent Core / CRS Router</StationLabel>
+                                                <select className="form-select" value={row.parent_router_id || ''} onChange={(e) => updateApManagementRouter(activeIndex, { parent_router_id: e.target.value })}>
+                                                  <option value="">{coreParentOptions.length ? 'Use first core/CRS trunk' : 'Add a core/CRS trunk first'}</option>
+                                                  {coreParentOptions.map((candidate, candidateIndex) => (
+                                                    <option value={candidate.router_id} key={`ap-management-parent-${candidate.router_id || candidateIndex}`}>{apManagementRouterDisplay(candidate, candidateIndex)}</option>
+                                                  ))}
+                                                </select>
+                                              </div>
+                                              <div className="col-md-6">
+                                                <StationLabel hint="Friendly branch label shown in AP Management topology, usually station or barangay group name.">Branch Label</StationLabel>
+                                                <input className="form-control" value={row.branch_label || ''} onChange={(e) => updateApManagementRouter(activeIndex, { branch_label: e.target.value })} placeholder="CCR1009-Centro / Centro substations" />
+                                              </div>
+                                            </>
+                                          )}
                                         </div>
                                       </div>
                                     </div>
@@ -28383,8 +29486,8 @@ function CaptivePortalPage({ mode = 'full' }) {
                                       <div className="station-subpanel">
                                         <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                                           <div>
-                                            <div className="station-subpanel-title mb-1">{activeIndex === 0 ? 'Step 2: Select Root Bridge and AP Management Ports' : 'Step 2: Select Bridge and AP Management Ports'}</div>
-                                            <div className="text-muted small">Tagged ports carry AP management VLAN {apManagementForm.vlan_id || 'x'} through the router chain toward OLTs and APs. Factory-reset APs should have their management VLAN configured manually before deployment for now.</div>
+                                            <div className="station-subpanel-title mb-1">{isCentralGateway ? 'Step 2: Select Central Bridge and AP Management Ports' : isSubstationBranch ? 'Step 2: Select Substation Bridge and OLT/AP Ports' : 'Step 2: Select Core Bridge and Substation Uplink Ports'}</div>
+                                            <div className="text-muted small">Tagged ports carry AP management VLAN {apManagementForm.vlan_id || 'x'}. Central/core rows feed the VLAN toward substations; branch rows carry it only inside the selected substation path.</div>
                                           </div>
                                           <button className="btn btn-outline-primary btn-sm" type="button" onClick={() => row.router_id && loadMikrotikRouterOptions(row.router_id)} disabled={!row.router_id || routerOptionsLoading}>
                                             {routerOptionsLoading ? <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true" /> : <IconRefresh size={15} className="me-1" />}
@@ -28393,8 +29496,8 @@ function CaptivePortalPage({ mode = 'full' }) {
                                         </div>
                                         <div className="row g-3">
                                           <div className="col-md-6">
-                                            <StationLabel hint="Bridge/interface where AP management VLAN traffic is carried. PPPoE interfaces are hidden.">{activeIndex === 0 ? 'Root Bridge / Interface' : 'Bridge / Interface'}</StationLabel>
-                                            <select className="form-select" value={row.bridge_name} onChange={(e) => updateApManagementRouter(activeIndex, { bridge_name: e.target.value })} disabled={!row.router_id || routerOptionsLoading} required>
+                                            <StationLabel hint={isSubstationBranch ? 'Bridge/interface where AP management VLAN 88 arrives from the CRS/core trunk. For CCR1009-Centro this is SwBridge.' : 'Bridge/interface where AP management VLAN traffic is carried. PPPoE interfaces are hidden.'}>{isCentralGateway ? 'Central Bridge / Interface' : isSubstationBranch ? 'Upstream CRS Bridge / Interface' : 'Bridge / Interface'}</StationLabel>
+                                            <select className="form-select" value={row.bridge_name} onChange={(e) => updateApManagementRouter(activeIndex, { bridge_name: e.target.value, tagged_ports: '', upstream_ports: '' })} disabled={!row.router_id || routerOptionsLoading} required>
                                               <option value="">{row.router_id ? (routerOptionsLoading ? 'Detecting bridge/interface list...' : 'Choose detected bridge/interface') : 'Choose router first'}</option>
                                               {bridgeInterfaceChoices.map((iface) => <option value={iface.name} key={`ap-management-bridge-${activeIndex}-${iface.name}`}>{interfaceOptionLabel(iface)}</option>)}
                                             </select>
@@ -28403,8 +29506,18 @@ function CaptivePortalPage({ mode = 'full' }) {
                                               <div className="text-success small mt-1">Detected {safeInterfaces.length} usable non-PPPoE interface{safeInterfaces.length === 1 ? '' : 's'}.</div>
                                             )}
                                           </div>
+                                          {isSubstationBranch && (
+                                            <div className="col-md-6">
+                                              <StationLabel hint="Downstream bridge that leads to the OLT/AP path. For CCR1009-Centro this is BR_PPPOE, because ether5 OLT is inside that bridge.">Downstream OLT/AP Bridge</StationLabel>
+                                              <select className="form-select" value={row.ap_path_bridge_name || ''} onChange={(e) => updateApManagementRouter(activeIndex, { ap_path_bridge_name: e.target.value, ap_path_ports: '' })} disabled={!row.router_id || routerOptionsLoading} required>
+                                                <option value="">{row.router_id ? (routerOptionsLoading ? 'Detecting bridge/interface list...' : 'Choose downstream bridge/interface') : 'Choose router first'}</option>
+                                                {row.ap_path_bridge_name && !bridgeInterfaceChoices.some((iface) => iface.name === row.ap_path_bridge_name) && <option value={row.ap_path_bridge_name}>{row.ap_path_bridge_name} (current)</option>}
+                                                {bridgeInterfaceChoices.map((iface) => <option value={iface.name} key={`ap-management-ap-path-bridge-${activeIndex}-${iface.name}`}>{interfaceOptionLabel(iface)}</option>)}
+                                              </select>
+                                            </div>
+                                          )}
                                           <div className="col-12">
-                                            <StationLabel hint="Check every detected RouterOS interface that should carry the centralized AP management VLAN on this router.">Tagged Ports</StationLabel>
+                                            <StationLabel hint={isSubstationBranch ? 'Check the upstream CRS-facing port(s) where AP management VLAN arrives. For CCR1009-Centro this is sfp-sfpplus1.' : 'Check every detected RouterOS interface that should carry the centralized AP management VLAN on this router.'}>{isSubstationBranch ? 'Upstream CRS Tagged Ports' : 'Tagged Ports'}</StationLabel>
                                             <div className="station-port-picker">
                                               <div className="input-group station-port-search-group">
                                                 <input
@@ -28426,42 +29539,45 @@ function CaptivePortalPage({ mode = 'full' }) {
                                                 </button>
                                               </div>
                                               <div className="station-port-checkbox-list">
-                                                {visibleTaggedInterfaces.map((iface) => (
-                                                  <label className={`station-port-checkbox-item ${selectedTaggedPortSet.has(iface.name) ? 'selected' : ''}`} key={`ap-management-port-${activeIndex}-${iface.name}`}>
-                                                    <input
-                                                      className="form-check-input"
-                                                      type="checkbox"
-                                                      checked={selectedTaggedPortSet.has(iface.name)}
-                                                      onChange={(e) => toggleApManagementTaggedPort(activeIndex, iface.name, e.target.checked)}
-                                                      disabled={!row.router_id || routerOptionsLoading}
-                                                    />
-                                                    <span className="station-port-checkbox-text">
-                                                      <strong>{iface.name}</strong>
-                                                      <small>
-                                                        {[
-                                                          iface.type,
-                                                          iface.bridge ? `in ${iface.bridge}` : '',
-                                                          iface.disabled ? 'disabled' : '',
-                                                          iface.running ? 'running' : ''
-                                                        ].filter(Boolean).join(' · ') || 'interface'}
-                                                      </small>
-                                                    </span>
-                                                  </label>
-                                                ))}
+                                                {visibleTaggedInterfaces.map((iface) => {
+                                                  const checked = isSubstationBranch ? selectedUpstreamPortSet.has(iface.name) : selectedTaggedPortSet.has(iface.name);
+                                                  return (
+                                                    <label className={`station-port-checkbox-item ${checked ? 'selected' : ''}`} key={`ap-management-port-${activeIndex}-${iface.name}`}>
+                                                      <input
+                                                        className="form-check-input"
+                                                        type="checkbox"
+                                                        checked={checked}
+                                                        onChange={(e) => isSubstationBranch ? toggleApManagementFieldPort(activeIndex, 'upstream_ports', iface.name, e.target.checked) : toggleApManagementTaggedPort(activeIndex, iface.name, e.target.checked)}
+                                                        disabled={!row.router_id || routerOptionsLoading}
+                                                      />
+                                                      <span className="station-port-checkbox-text">
+                                                        <strong>{iface.name}</strong>
+                                                        <small>
+                                                          {[
+                                                            iface.type,
+                                                            iface.bridge ? `in ${iface.bridge}` : '',
+                                                            iface.disabled ? 'disabled' : '',
+                                                            iface.running ? 'running' : ''
+                                                          ].filter(Boolean).join(' · ') || 'interface'}
+                                                        </small>
+                                                      </span>
+                                                    </label>
+                                                  );
+                                                })}
                                                 {!visibleTaggedInterfaces.length && (
                                                   <div className="text-muted small p-3">
-                                                    {routerOptionsLoading ? 'Fetching ports from RouterOS...' : row.router_id ? 'No matching non-PPPoE ports found.' : 'Choose a router first.'}
+                                                    {routerOptionsLoading ? 'Fetching ports from RouterOS...' : row.router_id ? `No matching ports found inside ${row.bridge_name || 'the selected bridge'}.` : 'Choose a router first.'}
                                                   </div>
                                                 )}
                                               </div>
                                             </div>
-                                            <div className="text-muted small">Check detected ports inside {row.bridge_name || 'the selected bridge'} that should carry VLAN {apManagementForm.vlan_id || 'x'} on this router. PPPoE ports and ports from other bridges are hidden.</div>
-                                            {!!selectedTaggedPorts.length && (
+                                            <div className="text-muted small">Check detected ports inside {row.bridge_name || 'the selected bridge'} that should carry VLAN {apManagementForm.vlan_id || 'x'} on this router.</div>
+                                            {!!(isSubstationBranch ? selectedUpstreamPorts : selectedTaggedPorts).length && (
                                               <div className="d-flex flex-wrap gap-1 mt-2">
-                                                {selectedTaggedPorts.map((port) => (
+                                                {(isSubstationBranch ? selectedUpstreamPorts : selectedTaggedPorts).map((port) => (
                                                   <span className="badge bg-blue-lt text-blue station-selected-port-badge" key={`ap-management-selected-port-${activeIndex}-${port}`}>
                                                     <span>{port}</span>
-                                                    <button className="station-selected-port-remove" type="button" onClick={() => toggleApManagementTaggedPort(activeIndex, port, false)} title={`Remove ${port}`} aria-label={`Remove ${port}`}>
+                                                    <button className="station-selected-port-remove" type="button" onClick={() => isSubstationBranch ? toggleApManagementFieldPort(activeIndex, 'upstream_ports', port, false) : toggleApManagementTaggedPort(activeIndex, port, false)} title={`Remove ${port}`} aria-label={`Remove ${port}`}>
                                                       <IconX size={12} />
                                                     </button>
                                                   </span>
@@ -28469,6 +29585,73 @@ function CaptivePortalPage({ mode = 'full' }) {
                                               </div>
                                             )}
                                           </div>
+                                          {isSubstationBranch && (
+                                            <div className="col-12">
+                                              <StationLabel hint="Check the downstream OLT/AP port(s) where AP management VLAN leaves the substation router. For CCR1009-Centro this is ether5.">Downstream OLT/AP Tagged Ports</StationLabel>
+                                              <div className="station-port-picker">
+                                                <div className="input-group station-port-search-group">
+                                                  <input
+                                                    className="form-control station-port-search"
+                                                    value={apPathPortSearchText}
+                                                    onChange={(e) => setApManagementPortSearch((current) => ({ ...current, [apPathPortSearchKey]: e.target.value }))}
+                                                    placeholder="Search downstream OLT/AP port, bridge, type, or comment"
+                                                    disabled={!row.router_id || routerOptionsLoading}
+                                                  />
+                                                  <button
+                                                    className="btn btn-outline-secondary station-port-search-clear"
+                                                    type="button"
+                                                    onClick={() => setApManagementPortSearch((current) => ({ ...current, [apPathPortSearchKey]: '' }))}
+                                                    disabled={!row.router_id || !apPathPortSearchText}
+                                                    title="Clear downstream port search"
+                                                    aria-label="Clear downstream port search"
+                                                  >
+                                                    <IconX size={15} />
+                                                  </button>
+                                                </div>
+                                                <div className="station-port-checkbox-list">
+                                                  {visibleApPathInterfaces.map((iface) => (
+                                                    <label className={`station-port-checkbox-item ${selectedApPathPortSet.has(iface.name) ? 'selected' : ''}`} key={`ap-management-ap-path-port-${activeIndex}-${iface.name}`}>
+                                                      <input
+                                                        className="form-check-input"
+                                                        type="checkbox"
+                                                        checked={selectedApPathPortSet.has(iface.name)}
+                                                        onChange={(e) => toggleApManagementFieldPort(activeIndex, 'ap_path_ports', iface.name, e.target.checked)}
+                                                        disabled={!row.router_id || routerOptionsLoading}
+                                                      />
+                                                      <span className="station-port-checkbox-text">
+                                                        <strong>{iface.name}</strong>
+                                                        <small>
+                                                          {[
+                                                            iface.type,
+                                                            iface.bridge ? `in ${iface.bridge}` : '',
+                                                            iface.disabled ? 'disabled' : '',
+                                                            iface.running ? 'running' : ''
+                                                          ].filter(Boolean).join(' · ') || 'interface'}
+                                                        </small>
+                                                      </span>
+                                                    </label>
+                                                  ))}
+                                                  {!visibleApPathInterfaces.length && (
+                                                    <div className="text-muted small p-3">
+                                                      {routerOptionsLoading ? 'Fetching ports from RouterOS...' : row.router_id ? (row.ap_path_bridge_name ? `No matching ports found inside ${row.ap_path_bridge_name}.` : 'Choose a downstream OLT/AP bridge first.') : 'Choose a router first.'}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+                                              {!!selectedApPathPorts.length && (
+                                                <div className="d-flex flex-wrap gap-1 mt-2">
+                                                  {selectedApPathPorts.map((port) => (
+                                                    <span className="badge bg-purple-lt text-purple station-selected-port-badge" key={`ap-management-selected-ap-path-port-${activeIndex}-${port}`}>
+                                                      <span>{port}</span>
+                                                      <button className="station-selected-port-remove" type="button" onClick={() => toggleApManagementFieldPort(activeIndex, 'ap_path_ports', port, false)} title={`Remove ${port}`} aria-label={`Remove ${port}`}>
+                                                        <IconX size={12} />
+                                                      </button>
+                                                    </span>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          )}
                                         </div>
                                       </div>
                                     </div>
@@ -28480,8 +29663,8 @@ function CaptivePortalPage({ mode = 'full' }) {
                         ) : (
                           <div className="empty py-4">
                             <div className="empty-icon"><IconRouter size={32} /></div>
-                            <p className="empty-title">Add the root AP management router</p>
-                            <p className="empty-subtitle text-muted">Start with the root gateway, then add CRS/transport routers in the same order AP management VLAN traffic travels toward OLTs/APs.</p>
+                            <p className="empty-title">Add the central AP management gateway</p>
+                            <p className="empty-subtitle text-muted">Start with the CCR that owns VLAN {apManagementForm.vlan_id || 'x'} gateway/DHCP, then add CRS/core trunk and substation branch routers.</p>
                             <button className="btn btn-primary" type="button" onClick={addApManagementRouter}><IconRouter size={18} className="me-2" />Add Router</button>
                           </div>
                         )}
@@ -29101,7 +30284,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                     <form onSubmit={saveStation}>
 	                      <div className="alert alert-info">
 	                        <div className="fw-semibold mb-1">Station plan only</div>
-	                        <div>This does not configure MikroTik yet. It saves the root-to-downstream router chain and generates the same pattern as your tested VLAN 77 setup for customer VLAN traffic. Central AP management is handled from the AP Management tab.</div>
+	                        <div>This does not configure MikroTik yet. It saves the station gateway-to-OLT/AP path for customer VLAN traffic. Central/core reachability to Omada and the system is handled by normal routing or WireGuard backup, not by making the central core the VLAN root.</div>
 	                      </div>
 	                      {stationError && <div className="alert alert-danger">{stationError}</div>}
 	                      <div className="station-process-steps mb-3">
@@ -29241,7 +30424,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                         <div className="d-flex align-items-start justify-content-between gap-3 mb-3">
                           <div>
                             <div className="fw-semibold d-flex align-items-center gap-1">Router Chain <FieldHint text={stationFieldHints.routerChain} /></div>
-                            <div className="text-muted small">Add routers in the same order as the network path. The first router is the root gateway; each next router carries the VLAN downstream.</div>
+                            <div className="text-muted small">Add only the routers that carry this customer VLAN toward OLT/APs. The first router owns VLAN/DHCP/NAT/queues; central core routers are not added unless the VLAN physically traverses them.</div>
                           </div>
                           <button className="btn btn-outline-primary btn-sm" type="button" onClick={addStationRouter}>
                             <IconRouter size={15} className="me-1" />Add Router to Chain
@@ -29313,7 +30496,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                       <div className="fw-semibold">{activeIndex === 0 ? 'Root Gateway Setup' : `Downstream Router Setup - Hop ${activeIndex + 1}`}</div>
                                       <div className="text-muted small">
                                         {activeIndex === 0
-                                          ? 'This router creates the VLAN interface, gateway IP, DHCP pool, and first tagged trunk.'
+                                            ? 'This station router creates the VLAN interface, gateway IP, DHCP pool, NAT, queues, and OLT/AP-facing tagged trunk.'
                                           : isXconnect
                                             ? 'This router bridges the station VLAN between an upstream trunk bridge and a downstream OLT/PPPoE bridge without moving existing ports.'
                                             : 'This router carries the same customer VLAN through its bridge/tagged ports toward OLTs and APs.'}
@@ -29652,7 +30835,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                                                 </>
                                               )}
                                               <div className="col-12">
-                                                <div className="text-muted small">DHCP is created only on the first/root gateway. Downstream CRS/trunk routers only carry VLAN {stationForm.vlan_id || '-'}.</div>
+                                                <div className="text-muted small">DHCP is created only on the first/station gateway. Downstream CRS/trunk routers only carry VLAN {stationForm.vlan_id || '-'}.</div>
                                               </div>
                                             </div>
                                           </div>
@@ -29766,7 +30949,7 @@ function CaptivePortalPage({ mode = 'full' }) {
                           <div className="empty py-4">
                             <div className="empty-icon"><IconRouter size={32} /></div>
                             <p className="empty-title">Add the first router in the chain</p>
-                            <p className="empty-subtitle text-muted">Start with the root gateway, for example CCR2116-Roma/Batu/GK. Then add CRS/transport routers in the order the VLAN travels toward OLTs and APs.</p>
+                            <p className="empty-subtitle text-muted">Start with the station gateway that owns the customer subnet, for example CCR1009-Centro. Add only downstream CRS/transport routers if the VLAN travels through them toward OLTs/APs.</p>
                             <button className="btn btn-primary" type="button" onClick={addStationRouter}><IconRouter size={18} className="me-2" />Add Router to Chain</button>
                           </div>
                         )}
@@ -30817,7 +32000,7 @@ function CaptivePortalPage({ mode = 'full' }) {
             </div>
           </div>
 	        </div>
-	      </>}
+		      </>}
 		      {activeTab === 'PWA' && (
 		        <div className="col-12">
 		          <PwaSettingsTab />
@@ -34771,15 +35954,15 @@ function PwaSettingsTab() {
         </>
       )}
 
-      {sectionTab === 'settings' && (
-        <>
+	      {sectionTab === 'settings' ? (
+        <div className="col-12">
+          <div className="row g-3">
 	      <div className="col-12">
 	        <div className="alert alert-info mb-0">
 	          A PWA is still the portal website. Customers normally receive new web app changes on the next reload/open. Phones may cache the launcher icon and app name, so icon/name changes can require reinstalling the Home Screen app on some devices.
 	        </div>
 	      </div>
-
-	      <div className="col-12">
+		      <div className="col-12">
 	        <ul className="nav nav-tabs mb-3" role="tablist">
 	          {[
 	            { key: 'customers', label: 'PWA Customers', icon: IconUsers },
@@ -35026,10 +36209,10 @@ function PwaSettingsTab() {
 	          </Card>
 	        </div>
 	      </>}
+          </div>
+        </div>) : null}
 
-	        </>
-      )}
-    </div>
+	    </div>
   );
 }
 
@@ -36117,14 +37300,39 @@ function paymongoStatusBadge(status) {
 function PayMongoOverviewTab() {
   const [overview, setOverview] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [remoteLoading, setRemoteLoading] = useState(false);
   const [error, setError] = useState('');
+  const [remoteError, setRemoteError] = useState('');
+  const [tableTab, setTableTab] = useState('remote');
+  const [tablePages, setTablePages] = useState({ remote: 1, failures: 1, webhookErrors: 1 });
+  const [tablePageSizes, setTablePageSizes] = useState({ remote: 10, failures: 10, webhookErrors: 10 });
 
-  async function loadOverview() {
+  async function loadRemoteWebhooks() {
+    setRemoteLoading(true);
+    try {
+      const data = await request('/paymongo/remote-webhooks');
+      setOverview((current) => current ? { ...current, remote_webhooks: data.remote_webhooks, remote_webhooks_checked_at: data.checked_at } : current);
+      setRemoteError('');
+    } catch (err) {
+      setRemoteError(err.message || 'Unable to load PayMongo remote webhook status.');
+    } finally {
+      setRemoteLoading(false);
+    }
+  }
+
+  async function loadOverview(includeRemote = true) {
     setLoading(true);
     try {
       const data = await request('/paymongo/overview');
-      setOverview(data);
+      setOverview((current) => current?.remote_webhooks
+        ? {
+            ...data,
+            remote_webhooks: current.remote_webhooks,
+            remote_webhooks_checked_at: current.remote_webhooks_checked_at,
+          }
+        : data);
       setError('');
+      if (includeRemote) loadRemoteWebhooks();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -36134,8 +37342,12 @@ function PayMongoOverviewTab() {
 
   useEffect(() => {
     loadOverview();
-    const timer = window.setInterval(loadOverview, 30000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => loadOverview(false), 30000);
+    const remoteTimer = window.setInterval(loadRemoteWebhooks, 120000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearInterval(remoteTimer);
+    };
   }, []);
 
   if (!overview && loading) return <div className="empty">Loading PayMongo status...</div>;
@@ -36146,11 +37358,38 @@ function PayMongoOverviewTab() {
   const remoteWebhooks = remoteModes.flatMap((mode) => (mode.webhooks || []).map((hook) => ({ ...hook, mode: hook.mode || mode.mode })));
   const activeRemoteMode = remoteModes.find((mode) => mode.mode === settings.mode) || {};
   const activeWebhookDisabled = (activeRemoteMode.webhooks || []).some((hook) => String(hook.status || '').toLowerCase() === 'disabled');
+  const remoteLoaded = overview?.remote_webhooks?.loaded !== false && remoteModes.some((mode) => !['NOT_LOADED', 'MISSING_SECRET_KEY'].includes(String(mode.status || '').toUpperCase()) || (mode.webhooks || []).length);
+  const remoteWebhookHealth = remoteLoading && !remoteLoaded ? 'Checking...' : activeWebhookDisabled ? 'Disabled' : (webhookStats.last_webhook_at ? 'Receiving' : 'No events');
+  const tableRows = {
+    remote: remoteWebhooks,
+    failures: overview?.recent_failed_orders || [],
+    webhookErrors: overview?.recent_webhook_errors || [],
+  };
+  const tableTabs = [
+    { key: 'remote', label: 'Remote Webhooks', icon: IconBell, count: tableRows.remote.length },
+    { key: 'failures', label: 'Failed Orders', icon: IconAlertTriangle, count: tableRows.failures.length },
+    { key: 'webhookErrors', label: 'Webhook Errors', icon: IconActivity, count: tableRows.webhookErrors.length },
+  ];
+  const activeTableRows = tableRows[tableTab] || [];
+  const activePageSize = tablePageSizes[tableTab] || 10;
+  const activeTotalPages = Math.max(1, Math.ceil(activeTableRows.length / activePageSize));
+  const activePage = Math.min(Math.max(1, tablePages[tableTab] || 1), activeTotalPages);
+  const activeStart = activeTableRows.length ? ((activePage - 1) * activePageSize) + 1 : 0;
+  const activeEnd = Math.min(activePage * activePageSize, activeTableRows.length);
+  const activePagedRows = activeTableRows.slice((activePage - 1) * activePageSize, activePage * activePageSize);
+  const activeTabMeta = tableTabs.find((item) => item.key === tableTab) || tableTabs[0];
+  function setPaymongoTablePage(key, page) {
+    setTablePages((current) => ({ ...current, [key]: Math.max(1, page) }));
+  }
+  function setPaymongoTablePageSize(key, pageSize) {
+    setTablePageSizes((current) => ({ ...current, [key]: pageSize }));
+    setPaymongoTablePage(key, 1);
+  }
   const kpis = [
     { label: 'Active Mode', value: settings.mode || 'TEST', icon: IconShieldLock, tone: settings.mode === 'LIVE' ? 'green' : 'blue', detail: settings.ready_for_gcash ? 'Checkout ready' : 'Needs setup' },
     { label: 'Paid Sales', value: formatCentavos(orderStats.paid_centavos || 0), icon: IconCash, tone: 'green', detail: `${orderStats.paid_orders || 0} paid order(s)` },
     { label: 'Failed Orders', value: orderStats.failed_orders || 0, icon: IconAlertTriangle, tone: Number(orderStats.failed_orders || 0) ? 'red' : 'secondary', detail: 'Payment or fulfillment failures' },
-    { label: 'Webhook Health', value: activeWebhookDisabled ? 'Disabled' : (webhookStats.last_webhook_at ? 'Receiving' : 'No events'), icon: IconBell, tone: activeWebhookDisabled ? 'red' : webhookStats.last_webhook_at ? 'green' : 'yellow', detail: `${webhookStats.processed_webhooks || 0} processed · ${webhookStats.failed_webhooks || 0} failed` },
+    { label: 'Webhook Health', value: remoteWebhookHealth, icon: IconBell, tone: activeWebhookDisabled ? 'red' : webhookStats.last_webhook_at ? 'green' : 'yellow', detail: `${webhookStats.processed_webhooks || 0} processed · ${webhookStats.failed_webhooks || 0} failed` },
   ];
 
   return (
@@ -36162,10 +37401,11 @@ function PayMongoOverviewTab() {
             <h2 className="page-title mb-1">PayMongo Overview</h2>
             <div className="text-muted">Readiness, webhook status, and recent payment failures before live checkout testing.</div>
           </div>
-          <button className="btn btn-outline-secondary" type="button" onClick={loadOverview} disabled={loading}><IconRefresh size={17} className="me-2" />Refresh</button>
+          <button className="btn btn-outline-secondary" type="button" onClick={() => loadOverview()} disabled={loading}><IconRefresh size={17} className="me-2" />Refresh</button>
         </div>
       </div>
       {error && <div className="col-12"><div className="alert alert-danger">{error}</div></div>}
+      {remoteError && <div className="col-12"><div className="alert alert-warning mb-0">{remoteError}</div></div>}
       {kpis.map((kpi) => {
         const Icon = kpi.icon;
         return (
@@ -36184,70 +37424,127 @@ function PayMongoOverviewTab() {
         );
       })}
 
-      <div className="col-12 col-xl-5">
-        <Card title="Remote Webhooks" subtitle="Pulled from PayMongo using the saved secret keys.">
-          <div className="table-responsive">
-            <table className="table table-vcenter card-table">
-              <thead><tr><th>Mode</th><th>Status</th><th>URL</th><th>Events</th></tr></thead>
-              <tbody>
-                {remoteWebhooks.map((hook) => (
-                  <tr key={`${hook.mode}-${hook.id}`}>
-                    <td><span className="badge bg-secondary-lt text-secondary">{hook.mode}</span></td>
-                    <td>
-                      <span className={`badge ${paymongoStatusBadge(hook.status)}`}>{hook.status || 'unknown'}</span>
-                      {hook.disabled_reason && <div className="text-danger small mt-1">{hook.disabled_reason}</div>}
-                    </td>
-                    <td className="text-truncate" style={{ maxWidth: 280 }} title={hook.url || ''}>{hook.url || '-'}</td>
-                    <td className="small">{(hook.events || []).join(', ') || '-'}</td>
-                  </tr>
-                ))}
-                {!remoteWebhooks.length && <tr><td colSpan="4" className="text-center text-muted py-4">No PayMongo webhooks detected or secret key is not configured.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      </div>
-      <div className="col-12 col-xl-7">
-        <Card title="Recent PayMongo Failures" subtitle="Payment and fulfillment failures that need operator review.">
-          <div className="table-responsive">
-            <table className="table table-vcenter card-table">
-              <thead><tr><th>Order</th><th>Mode</th><th>Status</th><th>Product</th><th>Error</th><th>Updated</th></tr></thead>
-              <tbody>
-                {(overview?.recent_failed_orders || []).map((row) => (
-                  <tr key={row.public_order_id}>
-                    <td><code>{row.public_order_id}</code></td>
-                    <td><span className="badge bg-secondary-lt text-secondary">{row.provider_mode}</span></td>
-                    <td><span className={`badge ${paymongoStatusBadge(row.fulfillment_status === 'FAILED' ? 'FAILED' : row.status)}`}>{row.status}/{row.fulfillment_status}</span></td>
-                    <td>{row.product_name || '-'}</td>
-                    <td className="text-danger text-truncate" style={{ maxWidth: 320 }} title={row.last_error || ''}>{row.last_error || '-'}</td>
-                    <td className="text-muted">{compactDateTime(row.updated_at)}</td>
-                  </tr>
-                ))}
-                {!(overview?.recent_failed_orders || []).length && <tr><td colSpan="6" className="text-center text-muted py-4">No failed PayMongo orders recorded.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      </div>
       <div className="col-12">
-        <Card title="Webhook Processing Errors" subtitle="Local webhook records that were ignored or failed processing.">
+        <Card title="PayMongo Monitoring Tables" subtitle="Remote webhook checks, failed orders, and local webhook processing records grouped by tab.">
+          <ul className="nav nav-tabs mb-3" role="tablist">
+            {tableTabs.map((item) => {
+              const Icon = item.icon;
+              return (
+                <li className="nav-item" key={item.key} role="presentation">
+                  <button
+                    className={`nav-link ${tableTab === item.key ? 'active' : ''}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={tableTab === item.key}
+                    onClick={() => setTableTab(item.key)}
+                  >
+                    <Icon size={16} className="me-1" />{item.label}
+                    <span className="badge bg-secondary-lt ms-2">{item.count}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <div>
+              <div className="fw-semibold">{activeTabMeta.label}</div>
+              <div className="text-muted small">
+                {tableTab === 'remote'
+                  ? (remoteLoading ? 'Checking PayMongo webhooks...' : overview?.remote_webhooks_checked_at ? `Last checked ${compactDateTime(overview.remote_webhooks_checked_at)}` : 'Remote status not checked yet.')
+                  : tableTab === 'failures'
+                    ? 'Payment and fulfillment failures that need operator review.'
+                    : 'Local webhook records that were ignored or failed processing.'}
+              </div>
+            </div>
+            <div className="d-flex align-items-center flex-wrap gap-2">
+              {tableTab === 'remote' && (
+                <button className="btn btn-sm btn-outline-secondary" type="button" onClick={loadRemoteWebhooks} disabled={remoteLoading}>
+                  <IconRefresh size={15} className="me-1" />Check remote
+                </button>
+              )}
+              <label className="text-muted small mb-0" htmlFor="paymongo-overview-page-size">Show</label>
+              <select
+                id="paymongo-overview-page-size"
+                className="form-select form-select-sm"
+                style={{ width: 92 }}
+                value={activePageSize}
+                onChange={(event) => setPaymongoTablePageSize(tableTab, Number(event.target.value))}
+              >
+                {[10, 20, 50].map((size) => <option key={size} value={size}>{size}</option>)}
+              </select>
+            </div>
+          </div>
           <div className="table-responsive">
-            <table className="table table-vcenter card-table">
-              <thead><tr><th>Event</th><th>Mode</th><th>Type</th><th>Status</th><th>Error</th><th>Received</th></tr></thead>
-              <tbody>
-                {(overview?.recent_webhook_errors || []).map((row) => (
-                  <tr key={row.provider_event_id}>
-                    <td><code>{truncateWithEllipsis(row.provider_event_id, 18)}</code></td>
-                    <td><span className="badge bg-secondary-lt text-secondary">{row.provider_mode || 'n/a'}</span></td>
-                    <td>{row.event_type || '-'}</td>
-                    <td><span className={`badge ${paymongoStatusBadge(row.processing_status)}`}>{row.processing_status}</span></td>
-                    <td className="text-truncate" style={{ maxWidth: 480 }} title={row.error_message || ''}>{row.error_message || '-'}</td>
-                    <td className="text-muted">{compactDateTime(row.created_at)}</td>
-                  </tr>
-                ))}
-                {!(overview?.recent_webhook_errors || []).length && <tr><td colSpan="6" className="text-center text-muted py-4">No webhook processing errors recorded.</td></tr>}
-              </tbody>
-            </table>
+            {tableTab === 'remote' && (
+              <table className="table table-vcenter card-table">
+                <thead><tr><th>Mode</th><th>Status</th><th>URL</th><th>Events</th></tr></thead>
+                <tbody>
+                  {remoteLoading && !remoteWebhooks.length && <tr><td colSpan="4" className="text-center text-muted py-4">Checking PayMongo remote webhooks...</td></tr>}
+                  {activePagedRows.map((hook) => (
+                    <tr key={`${hook.mode}-${hook.id}`}>
+                      <td><span className="badge bg-secondary-lt text-secondary">{hook.mode}</span></td>
+                      <td>
+                        <span className={`badge ${paymongoStatusBadge(hook.status)}`}>{hook.status || 'unknown'}</span>
+                        {hook.disabled_reason && <div className="text-danger small mt-1">{hook.disabled_reason}</div>}
+                      </td>
+                      <td className="text-truncate" style={{ maxWidth: 420 }} title={hook.url || ''}>{hook.url || '-'}</td>
+                      <td className="small">{(hook.events || []).join(', ') || '-'}</td>
+                    </tr>
+                  ))}
+                  {!remoteLoading && !remoteWebhooks.length && <tr><td colSpan="4" className="text-center text-muted py-4">No PayMongo webhooks detected or secret key is not configured.</td></tr>}
+                </tbody>
+              </table>
+            )}
+            {tableTab === 'failures' && (
+              <table className="table table-vcenter card-table">
+                <thead><tr><th>Order</th><th>Mode</th><th>Status</th><th>Product</th><th>Error</th><th>Updated</th></tr></thead>
+                <tbody>
+                  {activePagedRows.map((row) => (
+                    <tr key={row.public_order_id}>
+                      <td><code>{row.public_order_id}</code></td>
+                      <td><span className="badge bg-secondary-lt text-secondary">{row.provider_mode}</span></td>
+                      <td><span className={`badge ${paymongoStatusBadge(row.fulfillment_status === 'FAILED' ? 'FAILED' : row.status)}`}>{row.status}/{row.fulfillment_status}</span></td>
+                      <td>{row.product_name || '-'}</td>
+                      <td className="text-danger text-truncate" style={{ maxWidth: 360 }} title={row.last_error || ''}>{row.last_error || '-'}</td>
+                      <td className="text-muted">{compactDateTime(row.updated_at)}</td>
+                    </tr>
+                  ))}
+                  {!activePagedRows.length && <tr><td colSpan="6" className="text-center text-muted py-4">No failed PayMongo orders recorded.</td></tr>}
+                </tbody>
+              </table>
+            )}
+            {tableTab === 'webhookErrors' && (
+              <table className="table table-vcenter card-table">
+                <thead><tr><th>Event</th><th>Mode</th><th>Type</th><th>Status</th><th>Error</th><th>Received</th></tr></thead>
+                <tbody>
+                  {activePagedRows.map((row) => (
+                    <tr key={row.provider_event_id}>
+                      <td><code>{truncateWithEllipsis(row.provider_event_id, 18)}</code></td>
+                      <td><span className="badge bg-secondary-lt text-secondary">{row.provider_mode || 'n/a'}</span></td>
+                      <td>{row.event_type || '-'}</td>
+                      <td><span className={`badge ${paymongoStatusBadge(row.processing_status)}`}>{row.processing_status}</span></td>
+                      <td className="text-truncate" style={{ maxWidth: 520 }} title={row.error_message || ''}>{row.error_message || '-'}</td>
+                      <td className="text-muted">{compactDateTime(row.created_at)}</td>
+                    </tr>
+                  ))}
+                  {!activePagedRows.length && <tr><td colSpan="6" className="text-center text-muted py-4">No webhook processing errors recorded.</td></tr>}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <div className="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-3">
+            <div className="text-muted small">Showing {activeStart}-{activeEnd} of {activeTableRows.length}</div>
+            <div className="d-flex align-items-center gap-2">
+              <span className="text-muted small">Page {activePage} of {activeTotalPages}</span>
+              <ul className="pagination pagination-sm mb-0">
+                <li className={`page-item ${activePage <= 1 ? 'disabled' : ''}`}>
+                  <button className="page-link" type="button" onClick={() => setPaymongoTablePage(tableTab, activePage - 1)}>Prev</button>
+                </li>
+                <li className={`page-item ${activePage >= activeTotalPages ? 'disabled' : ''}`}>
+                  <button className="page-link" type="button" onClick={() => setPaymongoTablePage(tableTab, activePage + 1)}>Next</button>
+                </li>
+              </ul>
+            </div>
           </div>
         </Card>
       </div>
@@ -38086,6 +39383,8 @@ function OmadaControllerPage({ refresh }) {
   const [installLog, setInstallLog] = useState(null);
   const [webResult, setWebResult] = useState(null);
   const [sshResult, setSshResult] = useState(null);
+  const [healthResult, setHealthResult] = useState(null);
+  const [healthError, setHealthError] = useState('');
   const [nasResult, setNasResult] = useState(null);
   const [apiSettings, setApiSettings] = useState(null);
   const [sites, setSites] = useState([]);
@@ -38140,6 +39439,28 @@ function OmadaControllerPage({ refresh }) {
     setAutomationLogs(await request('/omada/automation-logs'));
   }
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (tab !== 'Status' || !settings || !installed) return undefined;
+    let cancelled = false;
+    const refreshHealth = async () => {
+      try {
+        const data = await request('/omada/health');
+        if (!cancelled) {
+          setHealthResult(data);
+          setHealthError('');
+          if (data.settings) setSettings(data.settings);
+        }
+      } catch (err) {
+        if (!cancelled) setHealthError(err.message || 'Unable to load Omada health.');
+      }
+    };
+    refreshHealth();
+    const timer = window.setInterval(refreshHealth, 60000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [tab, settings?.id, installed]);
   useEffect(() => {
     if (!settings) return;
     const allowedTabs = settings.install_status === 'NOT_INSTALLED' ? ['Install'] : ['Status', 'Settings', 'Logs'];
@@ -38328,6 +39649,38 @@ function OmadaControllerPage({ refresh }) {
     }
   }
 
+  async function refreshOmadaHealth() {
+    setBusy('health');
+    setHealthError('');
+    try {
+      const data = await request('/omada/health');
+      setHealthResult(data);
+      if (data.settings) setSettings(data.settings);
+    } catch (err) {
+      setHealthError(err.message || 'Unable to refresh Omada health.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function cleanOmadaDisk() {
+    if (!window.confirm('Run safe Omada disk cleanup? This removes only unused Docker images/cache, apt cache, temp files, and old journal logs. Omada data volumes will not be removed.')) return;
+    setBusy('clean-disk');
+    setError('');
+    setMessage('');
+    setHealthError('');
+    try {
+      const data = await request('/omada/clean-disk', { method: 'POST' });
+      setHealthResult({ health: data.after, monitor: data.monitor, settings: data.settings || settings });
+      setMessage(data.message || 'Safe Omada disk cleanup completed.');
+      await load();
+    } catch (err) {
+      setError(err.message || 'Safe Omada disk cleanup failed.');
+    } finally {
+      setBusy('');
+    }
+  }
+
   async function createNas(e) {
     e.preventDefault();
     setError('');
@@ -38465,6 +39818,17 @@ function OmadaControllerPage({ refresh }) {
   const omadaProgressAction = visibleInstallLog?.action === 'UNINSTALL' ? 'Uninstall' : 'Install';
   const latestLog = logs[0];
   const radiusSecret = nasResult?.secret || nasForm.secret;
+  const health = healthResult?.health || null;
+  const healthChecks = health?.checks || {};
+  const healthSsh = healthChecks.ssh || {};
+  const healthStatus = health?.status || settings.install_status || 'UNKNOWN';
+  const healthTone = healthStatus === 'UP' || healthStatus === 'RUNNING' ? 'green' : healthStatus === 'DEGRADED' ? 'yellow' : 'red';
+  const diskUsed = healthChecks.disk_used_percent ?? healthSsh.disk_used_percent;
+  const diskTone = Number(diskUsed || 0) >= 95 ? 'red' : Number(diskUsed || 0) >= 90 ? 'yellow' : 'green';
+  const openApiStatus = healthChecks.openapi_backend?.ok ? `OK (${healthChecks.openapi_backend.status_code})` : (healthChecks.openapi_backend?.error || healthChecks.openapi_backend?.status_code || 'Not checked');
+  const webShellStatus = healthChecks.web_shell?.ok ? `OK (${healthChecks.web_shell.status_code})` : (healthChecks.web_shell?.error || healthChecks.web_shell?.status_code || 'Not checked');
+  const containerStatus = [healthSsh.container_status, healthSsh.container_health].filter(Boolean).join(' / ') || (healthSsh.available === false ? 'SSH detail unavailable' : 'Not checked');
+  const healthIssues = [...(health?.reasons || []), ...(health?.warnings || [])];
 
   return (
     <div className="row row-cards">
@@ -38545,6 +39909,70 @@ function OmadaControllerPage({ refresh }) {
             </div>
           )}
           {settings.last_error && <div className="alert alert-warning mt-3 mb-0">{settings.last_error}</div>}
+        </Card>
+      </div>}
+
+      {tab === 'Status' && <div className="col-12">
+        <Card title="Omada Health" subtitle="Checks the controller web shell, Omada API backend, Docker container health, and server disk pressure.">
+          <div className="row g-3">
+            <div className="col-sm-6 col-xl-3">
+              <div className="border rounded p-3 h-100">
+                <div className="d-flex align-items-center gap-2 mb-2">
+                  <span className={`badge bg-${healthTone}-lt text-${healthTone} header-icon-badge`}><IconServer size={18} /></span>
+                  <div className="text-muted small">Controller Health</div>
+                </div>
+                <div className="h2 mb-0"><span className={`text-${healthTone}`}>{healthStatus}</span></div>
+                <div className="text-muted small mt-1">{health?.checked_at || settings.last_status_check_at || 'Not checked yet'}</div>
+              </div>
+            </div>
+            <div className="col-sm-6 col-xl-3">
+              <div className="border rounded p-3 h-100">
+                <div className="d-flex align-items-center gap-2 mb-2">
+                  <span className={`badge bg-${diskTone}-lt text-${diskTone} header-icon-badge`}><IconDatabase size={18} /></span>
+                  <div className="text-muted small">Server Disk</div>
+                </div>
+                <div className="h2 mb-0">{diskUsed === undefined || diskUsed === null ? '-' : `${diskUsed}%`}</div>
+                <div className="text-muted small mt-1">{healthSsh.disk_available_kb ? `${Math.round(Number(healthSsh.disk_available_kb) / 1024)} MB free` : 'SSH disk detail required'}</div>
+              </div>
+            </div>
+            <div className="col-sm-6 col-xl-3">
+              <div className="border rounded p-3 h-100">
+                <div className="d-flex align-items-center gap-2 mb-2">
+                  <span className="badge bg-blue-lt text-blue header-icon-badge"><IconCpu size={18} /></span>
+                  <div className="text-muted small">Omada Container</div>
+                </div>
+                <div className="h3 mb-0 text-capitalize">{containerStatus}</div>
+                <div className="text-muted small mt-1">{healthSsh.restart_count !== undefined ? `${healthSsh.restart_count} restart(s)` : 'Docker health check'}</div>
+              </div>
+            </div>
+            <div className="col-sm-6 col-xl-3">
+              <div className="border rounded p-3 h-100">
+                <div className="d-flex align-items-center gap-2 mb-2">
+                  <span className="badge bg-cyan-lt text-cyan header-icon-badge"><IconActivity size={18} /></span>
+                  <div className="text-muted small">Web / API</div>
+                </div>
+                <div className="small"><span className="text-muted">Web:</span> {webShellStatus}</div>
+                <div className="small mt-1"><span className="text-muted">API:</span> {openApiStatus}</div>
+              </div>
+            </div>
+          </div>
+          {healthIssues.length > 0 && (
+            <div className="alert alert-warning mt-3 mb-0">
+              {healthIssues.map((item, index) => <div key={`${item}-${index}`}>{item}</div>)}
+            </div>
+          )}
+          {healthError && <div className="alert alert-danger mt-3 mb-0">{healthError}</div>}
+          <div className="d-flex gap-2 flex-wrap mt-3">
+            <button className="btn" type="button" disabled={!!busy} onClick={refreshOmadaHealth}>
+              <IconRefresh size={18} className="me-2" />Refresh Health
+            </button>
+            <button className="btn btn-warning" type="button" disabled={!!busy || !settings.ssh_username} onClick={cleanOmadaDisk}>
+              <IconTrash size={18} className="me-2" />Clean Safe Unused Disk Data
+            </button>
+          </div>
+          <div className="text-muted small mt-2">
+            Safe cleanup removes unused Docker images/cache, apt cache, temp files, and old journal logs only. It does not remove Omada Docker volumes or controller data.
+          </div>
         </Card>
       </div>}
 
@@ -39093,12 +40521,13 @@ const nav = [
     ]
   },
   { page: 'Vouchers', icon: IconKey, tone: 'yellow' },
-  { page: 'Online Store', icon: IconListDetails, tone: 'green' },
   {
-    page: 'Physical Stores',
+    page: 'Store Management',
+    label: 'Stores',
     icon: IconBuildingStore,
     tone: 'orange',
     children: [
+      { page: 'Online Store', icon: IconListDetails, tone: 'green' },
       { page: 'Physical Stores', icon: IconBuildingStore, tone: 'orange' },
       { page: 'Store Map', icon: IconMapPin, tone: 'green' }
     ]
@@ -39380,9 +40809,41 @@ function CashCollectionPage() {
   const [data, setData] = useState(null);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [storeSalesSearch, setStoreSalesSearch] = useState('');
+  const [storeSalesFilter, setStoreSalesFilter] = useState('ALL');
+  const [storeSalesPageSize, setStoreSalesPageSize] = useState(20);
+  const [storeSalesPageNo, setStoreSalesPageNo] = useState(1);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [pickupModalStore, setPickupModalStore] = useState(null);
+  const [pickupForm, setPickupForm] = useState({ pickup_scheduled_at: '', notes: '' });
+  const [remitQrModalOpen, setRemitQrModalOpen] = useState(false);
+  const [remitQrCode, setRemitQrCode] = useState('');
+  const [remitQrError, setRemitQrError] = useState('');
+  const [remitQrCameraActive, setRemitQrCameraActive] = useState(false);
+  const [remitQrBox, setRemitQrBox] = useState(null);
+  const remitQrVideoRef = useRef(null);
+  const remitQrStreamRef = useRef(null);
+  const remitQrScanTimerRef = useRef(null);
+  const remitQrScanningActiveRef = useRef(false);
+
+  function localDateTimeValue(value = new Date()) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+    return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+  }
+
+  function openPickupModal(store) {
+    setPickupModalStore(store);
+    setPickupForm({
+      pickup_scheduled_at: localDateTimeValue(new Date(Date.now() + 30 * 60 * 1000)),
+      notes: 'Manual pickup scheduled from Stores page.',
+    });
+    setError('');
+    setMessage('');
+  }
 
   async function loadCashCollection() {
     try {
@@ -39400,22 +40861,147 @@ function CashCollectionPage() {
     return () => window.clearInterval(timer);
   }, []);
 
-  async function schedulePickup(store) {
-    setBusy(store.id);
+  useEffect(() => () => stopRemitQrScanner(), []);
+
+  async function schedulePickup(e) {
+    e.preventDefault();
+    const store = pickupModalStore;
+    if (!store?.id) return;
+    if (!pickupForm.pickup_scheduled_at) {
+      setError('Choose a cash pickup date and time.');
+      return;
+    }
+    setBusy(`pickup-${store.id}`);
     setError('');
     setMessage('');
     try {
       const result = await request(`/cash-collection/stores/${encodeURIComponent(store.id)}/pickup`, {
         method: 'POST',
-        body: JSON.stringify({ notes: 'Manual pickup scheduled from Stores page.' }),
+        body: JSON.stringify({
+          pickup_scheduled_at: new Date(pickupForm.pickup_scheduled_at).toISOString(),
+          notes: pickupForm.notes || 'Manual pickup scheduled from Stores page.',
+        }),
       });
       setMessage(result.message || 'Cash pickup scheduled.');
+      setPickupModalStore(null);
       window.dispatchEvent(new CustomEvent('admin-notification-refresh'));
       await loadCashCollection();
     } catch (err) {
       setError(err.message || 'Could not schedule cash pickup.');
     } finally {
       setBusy('');
+    }
+  }
+
+  function stopRemitQrScanner() {
+    remitQrScanningActiveRef.current = false;
+    if (remitQrScanTimerRef.current) {
+      window.clearTimeout(remitQrScanTimerRef.current);
+      remitQrScanTimerRef.current = null;
+    }
+    if (remitQrStreamRef.current) {
+      remitQrStreamRef.current.getTracks().forEach((track) => track.stop());
+      remitQrStreamRef.current = null;
+    }
+    setRemitQrCameraActive(false);
+    setRemitQrBox(null);
+  }
+
+  function updateRemitQrTrackingBox(barcode) {
+    const video = remitQrVideoRef.current;
+    const box = barcode?.boundingBox;
+    if (!video || !box || !video.videoWidth || !video.videoHeight) {
+      setRemitQrBox(null);
+      return;
+    }
+    const rect = video.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      setRemitQrBox(null);
+      return;
+    }
+    const scale = Math.max(rect.width / video.videoWidth, rect.height / video.videoHeight);
+    const renderedWidth = video.videoWidth * scale;
+    const renderedHeight = video.videoHeight * scale;
+    const offsetX = (rect.width - renderedWidth) / 2;
+    const offsetY = (rect.height - renderedHeight) / 2;
+    setRemitQrBox({
+      left: Math.max(0, Math.min(rect.width, offsetX + box.x * scale)),
+      top: Math.max(0, Math.min(rect.height, offsetY + box.y * scale)),
+      width: Math.max(18, Math.min(rect.width, box.width * scale)),
+      height: Math.max(18, Math.min(rect.height, box.height * scale)),
+    });
+  }
+
+  async function completeRemittanceQr(codeValue) {
+    const code = String(codeValue || '').trim();
+    if (!code) {
+      setRemitQrError('Enter or scan a remittance QR/code.');
+      return;
+    }
+    setBusy('collect-remittance');
+    setError('');
+    setRemitQrError('');
+    try {
+      const result = await request(`/cash-collection/remittances/${encodeURIComponent(code)}/collect`, { method: 'POST' });
+      setMessage(result.message || 'Cash pickup remittance marked collected.');
+      setRemitQrModalOpen(false);
+      setRemitQrCode('');
+      stopRemitQrScanner();
+      window.dispatchEvent(new CustomEvent('admin-notification-refresh'));
+      await loadCashCollection();
+    } catch (err) {
+      setRemitQrError(err.message || 'Could not complete remittance.');
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function openRemitQrScanner() {
+    setRemitQrModalOpen(true);
+    setRemitQrError('');
+    stopRemitQrScanner();
+    if (!navigator.mediaDevices?.getUserMedia || !('BarcodeDetector' in window)) {
+      setRemitQrError('Camera QR scanning is not supported in this browser. Enter the remittance code manually.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      remitQrStreamRef.current = stream;
+      remitQrScanningActiveRef.current = true;
+      setRemitQrCameraActive(true);
+      window.setTimeout(async () => {
+        const video = remitQrVideoRef.current;
+        if (!video || !remitQrScanningActiveRef.current) return;
+        video.srcObject = stream;
+        await video.play().catch(() => {});
+        const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+        const scanFrame = async () => {
+          if (!remitQrScanningActiveRef.current || !remitQrVideoRef.current) return;
+          try {
+            const codes = await detector.detect(remitQrVideoRef.current);
+            const detectedCode = codes?.[0] || null;
+            const rawValue = detectedCode?.rawValue || '';
+            if (detectedCode) updateRemitQrTrackingBox(detectedCode);
+            else setRemitQrBox(null);
+            if (rawValue) {
+              remitQrScanningActiveRef.current = false;
+              setRemitQrError('QR detected. Completing remittance...');
+              window.setTimeout(async () => {
+                stopRemitQrScanner();
+                await completeRemittanceQr(rawValue);
+              }, 350);
+              return;
+            }
+          } catch (_err) {
+            setRemitQrError('QR scanner could not read the camera frame. Enter the code manually if this continues.');
+          }
+          remitQrScanTimerRef.current = window.setTimeout(scanFrame, 450);
+        };
+        scanFrame();
+      }, 150);
+    } catch (_err) {
+      stopRemitQrScanner();
+      setRemitQrError('Camera permission was denied or no camera is available. Enter the remittance code manually.');
     }
   }
 
@@ -39436,12 +41022,58 @@ function CashCollectionPage() {
     return true;
   });
   const summary = data?.summary || {};
+  const storeSales = data?.store_sales || [];
+  const filteredStoreSales = storeSales.filter((sale) => {
+    const term = storeSalesSearch.trim().toLowerCase();
+    const matchesSearch = !term || [
+      sale.public_order_id,
+      sale.physical_store_name,
+      sale.product_name,
+      sale.customer_display_name,
+      sale.customer_contact_number,
+      sale.profile_display_name,
+      sale.profile_contact_number,
+      sale.client_mac,
+      sale.client_ip,
+      sale.site_name,
+      sale.barangay,
+      sale.amount_display,
+      sale.remittance_status_label,
+    ].some((value) => String(value || '').toLowerCase().includes(term));
+    if (!matchesSearch) return false;
+    if (storeSalesFilter === 'UNREMITTED') return Boolean(sale.unremitted);
+    if (storeSalesFilter === 'REMITTED') return !sale.unremitted;
+    if (storeSalesFilter === 'FULFILLED') return sale.fulfillment_status === 'FULFILLED';
+    if (storeSalesFilter === 'PENDING') return sale.fulfillment_status === 'PENDING';
+    return true;
+  });
+  const storeSalesTotalPages = Math.max(1, Math.ceil(filteredStoreSales.length / storeSalesPageSize));
+  const storeSalesCurrentPage = Math.min(storeSalesPageNo, storeSalesTotalPages);
+  const storeSalesPaged = filteredStoreSales.slice((storeSalesCurrentPage - 1) * storeSalesPageSize, storeSalesCurrentPage * storeSalesPageSize);
+  const storeSalesStartEntry = filteredStoreSales.length ? ((storeSalesCurrentPage - 1) * storeSalesPageSize) + 1 : 0;
+  const storeSalesEndEntry = Math.min(storeSalesCurrentPage * storeSalesPageSize, filteredStoreSales.length);
   const kpis = [
     { label: 'Monthly Sales', value: summary.sales_month_display || 'PHP 0.00', icon: IconCalendarStats, tone: 'green' },
     { label: 'Unremitted Sales', value: summary.unremitted_sales_display || 'PHP 0.00', icon: IconCash, tone: 'yellow' },
     { label: 'Goal Stores', value: summary.goal_reached_count || 0, icon: IconTrophy, tone: 'orange' },
     { label: 'Pickup Pending', value: summary.pickup_pending_count || 0, icon: IconBuildingStore, tone: 'blue' },
   ];
+
+  function cashPickupAmountDisplay(store) {
+    return store?.active_remittance?.amount_display || store?.unremitted_sales_display || 'PHP 0.00';
+  }
+
+  function cashPickupPeriodDisplay(store) {
+    const start = store?.active_remittance?.sales_period_start;
+    const end = store?.active_remittance?.sales_period_end;
+    if (!start) return '';
+    const startDate = new Date(start);
+    const endDate = end ? new Date(end) : null;
+    if (Number.isNaN(startDate.getTime())) return '';
+    const month = startDate.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    if (!endDate || Number.isNaN(endDate.getTime())) return month;
+    return `${month} · through ${endDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`;
+  }
 
   function remittanceBadge(store) {
     const active = store.active_remittance;
@@ -39469,9 +41101,14 @@ function CashCollectionPage() {
             <div className="text-muted">Track store sales, goal tier status, and cash pickup scheduling.</div>
           </div>
           <div className="col-auto ms-auto">
-            <button className="btn btn-outline-secondary" type="button" onClick={loadCashCollection}>
-              <IconRefresh size={17} className="me-2" />Refresh
-            </button>
+            <div className="btn-list">
+              <button className="btn btn-outline-primary" type="button" onClick={openRemitQrScanner}>
+                <IconQrcode size={17} className="me-2" />Scan Remit QR
+              </button>
+              <button className="btn btn-outline-secondary" type="button" onClick={loadCashCollection}>
+                <IconRefresh size={17} className="me-2" />Refresh
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -39570,10 +41207,10 @@ function CashCollectionPage() {
                         className="btn btn-icon btn-outline-primary"
                         type="button"
                         title={button.label}
-                        disabled={button.disabled || busy === store.id}
-                        onClick={() => schedulePickup(store)}
+                        disabled={button.disabled || busy === `pickup-${store.id}`}
+                        onClick={() => openPickupModal(store)}
                       >
-                        {busy === store.id ? <span className="spinner-border spinner-border-sm" /> : <IconCash size={17} />}
+                        {busy === `pickup-${store.id}` ? <span className="spinner-border spinner-border-sm" /> : <IconCash size={17} />}
                       </button>
                     </td>
                   </tr>
@@ -39586,6 +41223,204 @@ function CashCollectionPage() {
           </table>
         </div>
       </Card>
+      <Card title="Store Sales Table" subtitle="Approved physical-store purchases only. Remittance status is tracked separately from current-month sales.">
+        <div className="row g-2 align-items-end mb-3">
+          <div className="col-md-5">
+            <label className="form-label">Search</label>
+            <div className="input-icon">
+              <span className="input-icon-addon"><IconSearch size={18} /></span>
+              <input
+                className="form-control"
+                value={storeSalesSearch}
+                onChange={(event) => {
+                  setStoreSalesSearch(event.target.value);
+                  setStoreSalesPageNo(1);
+                }}
+                placeholder="Search store, customer, order, barangay..."
+              />
+              {storeSalesSearch && (
+                <button className="btn btn-icon input-icon-addon" type="button" onClick={() => { setStoreSalesSearch(''); setStoreSalesPageNo(1); }} aria-label="Clear search"><IconX size={16} /></button>
+              )}
+            </div>
+          </div>
+          <div className="col-md-3">
+            <label className="form-label">Filter</label>
+            <select
+              className="form-select"
+              value={storeSalesFilter}
+              onChange={(event) => {
+                setStoreSalesFilter(event.target.value);
+                setStoreSalesPageNo(1);
+              }}
+            >
+              <option value="ALL">All store sales</option>
+              <option value="UNREMITTED">Unremitted</option>
+              <option value="REMITTED">Remitted</option>
+              <option value="FULFILLED">Fulfilled</option>
+              <option value="PENDING">Pending fulfillment</option>
+            </select>
+          </div>
+          <div className="col-md-2">
+            <label className="form-label">Show entries</label>
+            <select
+              className="form-select"
+              value={storeSalesPageSize}
+              onChange={(event) => {
+                setStoreSalesPageSize(Number(event.target.value));
+                setStoreSalesPageNo(1);
+              }}
+            >
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={500}>500</option>
+            </select>
+          </div>
+        </div>
+        <div className="table-responsive">
+          <table className="table table-vcenter card-table">
+            <thead>
+              <tr>
+                <th>Order</th>
+                <th>Store</th>
+                <th>Product</th>
+                <th>Customer</th>
+                <th>Site</th>
+                <th>Amount</th>
+                <th>Fulfillment</th>
+                <th>Remittance</th>
+                <th>Approved At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {storeSalesPaged.map((sale) => (
+                <tr key={sale.id}>
+                  <td><code>{sale.public_order_id}</code></td>
+                  <td>
+                    <div className="fw-semibold">{sale.physical_store_name || 'Unknown Store'}</div>
+                    <div className="text-muted small">{sale.barangay || 'Unknown Barangay'}</div>
+                  </td>
+                  <td>
+                    <div className="fw-semibold">{sale.product_name || 'Store Purchase'}</div>
+                    <div className="text-muted small">{formatSeconds(sale.duration_seconds || 0)} · Qty {sale.purchase_quantity || 1}</div>
+                  </td>
+                  <td>
+                    <div className="fw-semibold">{sale.customer_display_name || sale.device_name || 'Unprofiled device'}</div>
+                    {(sale.customer_contact_number || sale.profile_contact_number) && <div className="text-muted small">{sale.customer_contact_number || sale.profile_contact_number}</div>}
+                    {sale.client_mac && <div className="text-muted small">{sale.client_mac}</div>}
+                  </td>
+                  <td>{sale.site_name || 'Unknown Site'}</td>
+                  <td className="fw-semibold">{sale.amount_display || sale.gross_amount_display || 'PHP 0.00'}</td>
+                  <td>
+                    <span className={`badge ${sale.fulfillment_status === 'FULFILLED' ? 'bg-green-lt text-green' : 'bg-yellow-lt text-yellow'}`}>{sale.fulfillment_status || 'PENDING'}</span>
+                  </td>
+                  <td>
+                    <span className={`badge ${sale.unremitted ? 'bg-yellow-lt text-yellow' : 'bg-green-lt text-green'}`}>
+                      {sale.unremitted ? 'Unremitted' : 'Remitted'}
+                    </span>
+                    {sale.remittance_public_id && <div className="text-muted small mt-1">{sale.remittance_public_id}</div>}
+                  </td>
+                  <td>{compactDateTime(sale.approved_at || sale.sale_at)}</td>
+                </tr>
+              ))}
+              {!storeSalesPaged.length && (
+                <tr><td colSpan="9" className="text-center text-muted py-5">{data ? 'No store sales match the selected filters.' : 'Loading store sales...'}</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap mt-3">
+          <div className="text-muted small">Showing {storeSalesStartEntry} to {storeSalesEndEntry} of {filteredStoreSales.length} entr{filteredStoreSales.length === 1 ? 'y' : 'ies'}</div>
+          <div className="btn-list">
+            <button className="btn btn-sm" type="button" disabled={storeSalesCurrentPage <= 1} onClick={() => setStoreSalesPageNo(storeSalesCurrentPage - 1)}>Previous</button>
+            <span className="btn btn-sm disabled">Page {storeSalesCurrentPage} of {storeSalesTotalPages}</span>
+            <button className="btn btn-sm" type="button" disabled={storeSalesCurrentPage >= storeSalesTotalPages} onClick={() => setStoreSalesPageNo(storeSalesCurrentPage + 1)}>Next</button>
+          </div>
+        </div>
+      </Card>
+      {pickupModalStore && (
+        <Modal title="Schedule Cash Pickup" onClose={() => setPickupModalStore(null)} size="md">
+          <form className="d-grid gap-3" onSubmit={schedulePickup}>
+            <div className="alert alert-info d-flex gap-2 mb-0">
+              <IconBuildingStore size={20} className="flex-shrink-0" />
+              <div>
+                <div className="fw-semibold">{pickupModalStore.store_name}</div>
+                <div className="small">Schedule pickup for {cashPickupAmountDisplay(pickupModalStore)} unremitted store sales.</div>
+                {cashPickupPeriodDisplay(pickupModalStore) && (
+                  <div className="small text-muted">Sales period: {cashPickupPeriodDisplay(pickupModalStore)}</div>
+                )}
+              </div>
+            </div>
+            <div>
+              <label className="form-label">Pickup date and time</label>
+              <input
+                className="form-control"
+                type="datetime-local"
+                value={pickupForm.pickup_scheduled_at}
+                onChange={(event) => setPickupForm((current) => ({ ...current, pickup_scheduled_at: event.target.value }))}
+                required
+              />
+            </div>
+            <div>
+              <label className="form-label">Notes</label>
+              <textarea
+                className="form-control"
+                rows="3"
+                value={pickupForm.notes}
+                onChange={(event) => setPickupForm((current) => ({ ...current, notes: event.target.value }))}
+                placeholder="Optional collection notes"
+              />
+            </div>
+            <div className="modal-footer px-0 pb-0">
+              <button className="btn btn-outline-secondary" type="button" onClick={() => setPickupModalStore(null)}>Cancel</button>
+              <button className="btn btn-primary" type="submit" disabled={busy === `pickup-${pickupModalStore.id}`}>
+                {busy === `pickup-${pickupModalStore.id}` ? <span className="spinner-border spinner-border-sm me-2" /> : <IconCalendarStats size={17} className="me-1" />}
+                Schedule pickup
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {remitQrModalOpen && (
+        <Modal title="Scan Remittance QR" onClose={() => { stopRemitQrScanner(); setRemitQrModalOpen(false); }} size="md">
+          <div className="d-grid gap-3">
+            <div className="store-owner-qr-scanner">
+              <video ref={remitQrVideoRef} playsInline muted />
+              {remitQrBox && (
+                <span
+                  className="store-owner-qr-tracking-box"
+                  style={{
+                    left: `${remitQrBox.left}px`,
+                    top: `${remitQrBox.top}px`,
+                    width: `${remitQrBox.width}px`,
+                    height: `${remitQrBox.height}px`,
+                  }}
+                />
+              )}
+              {!remitQrCameraActive && <div className="store-owner-qr-placeholder"><IconQrcode size={42} /></div>}
+            </div>
+            {remitQrError && <div className="alert alert-warning mb-0">{remitQrError}</div>}
+            <form
+              className="d-flex gap-2"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                stopRemitQrScanner();
+                await completeRemittanceQr(remitQrCode);
+              }}
+            >
+              <input
+                className="form-control"
+                value={remitQrCode}
+                onChange={(event) => setRemitQrCode(event.target.value.toUpperCase())}
+                placeholder="Enter remittance code manually"
+              />
+              <button className="btn btn-primary" type="submit" disabled={busy === 'collect-remittance'}>
+                {busy === 'collect-remittance' ? <span className="spinner-border spinner-border-sm" /> : <IconCircleCheck size={17} />}
+              </button>
+            </form>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -39594,17 +41429,25 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnread
   const [open, setOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [openGroups, setOpenGroups] = useState({});
-  const setActivePage = (nextPage) => {
+  const profileFocused = !collapsed && profileOpen;
+  const setActivePage = (nextPage, focusedGroup = '') => {
     setPage(nextPage);
     setOpen(false);
+    setOpenGroups(focusedGroup ? { [focusedGroup]: true } : {});
     setProfileOpen(false);
   };
   const toggleGroup = (item) => {
     if (collapsed && item.children?.length) {
-      setActivePage(item.children[0].page);
+      setActivePage(item.children[0].page, item.page);
       return;
     }
-    setOpenGroups((current) => ({ ...current, [item.page]: !current[item.page] }));
+    setOpenGroups((current) => (current[item.page] ? {} : { [item.page]: true }));
+    setProfileOpen(false);
+  };
+  const toggleProfileMenu = () => {
+    if (collapsed) return;
+    setOpenGroups({});
+    setProfileOpen((current) => !current);
   };
   return (
     <aside className="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
@@ -39621,13 +41464,16 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnread
               const Icon = item.icon;
               const hasChildren = Boolean(item.children?.length);
               const groupActive = hasChildren && item.children.some((child) => child.page === page);
+              const hasManuallyOpenedGroup = Object.values(openGroups).some(Boolean);
+              const suppressAutoGroup = profileFocused || hasManuallyOpenedGroup;
               if (hasChildren) {
-                const expanded = Boolean(openGroups[item.page] || (item.page !== 'APs Deployment' && groupActive));
+                const expanded = Boolean(openGroups[item.page] || (!suppressAutoGroup && item.page !== 'APs Deployment' && groupActive));
+                const mainNavActive = Boolean(profileFocused ? false : hasManuallyOpenedGroup ? openGroups[item.page] : groupActive);
                 return (
-                  <li className={`nav-item nav-group ${groupActive ? 'active' : ''}`} key={item.page}>
-                    <button className={`nav-link nav-group-toggle ${groupActive ? 'active' : ''}`} type="button" onClick={() => toggleGroup(item)} aria-expanded={expanded}>
+                  <li className={`nav-item nav-group ${mainNavActive ? 'active' : ''}`} key={item.page}>
+                    <button className={`nav-link nav-group-toggle ${mainNavActive ? 'active' : ''}`} type="button" onClick={() => toggleGroup(item)} aria-expanded={expanded}>
                       <IconWrap><Icon size={20} /></IconWrap>
-                      <span className="nav-link-title">{item.page}</span>
+                      <span className="nav-link-title">{item.label || item.page}</span>
                       <span className="nav-group-chevron">{expanded ? <IconChevronDown size={16} /> : <IconChevronUp size={16} />}</span>
                     </button>
                     {!collapsed && expanded && (
@@ -39636,7 +41482,7 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnread
                           const ChildIcon = child.icon;
                           return (
                             <li className="nav-item" key={child.page}>
-                              <button className={`nav-link nav-sub-link ${page === child.page ? 'active' : ''}`} onClick={() => setActivePage(child.page)}>
+                              <button className={`nav-link nav-sub-link ${page === child.page ? 'active' : ''}`} onClick={() => setActivePage(child.page, item.page)}>
                                 <IconWrap><ChildIcon size={18} /></IconWrap>
                                 <span className="nav-link-title">{child.label || child.page}</span>
                                 {child.page === 'Payment Access' && paymentAccessGrantedCount > 0 && (
@@ -39653,9 +41499,9 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnread
               }
               return (
                 <li className="nav-item" key={item.page}>
-                  <button className={`nav-link ${page === item.page ? 'active' : ''}`} onClick={() => setActivePage(item.page)}>
+                  <button className={`nav-link ${!profileFocused && page === item.page ? 'active' : ''}`} onClick={() => setActivePage(item.page)}>
 	                    <IconWrap><Icon size={20} /></IconWrap>
-	                    <span className="nav-link-title">{item.page}</span>
+	                    <span className="nav-link-title">{item.label || item.page}</span>
 	                    {item.page === 'Support Inbox' && supportUnreadCount > 0 && (
 	                      <span className="nav-unread-badge">{supportUnreadCount > 99 ? '99+' : supportUnreadCount}</span>
 	                    )}
@@ -39667,9 +41513,9 @@ function Sidebar({ page, setPage, me, logout, branding, collapsed, supportUnread
               );
             })}
           </ul>
-          <div className="sidebar-user mt-auto">
+          <div className={`sidebar-user mt-auto ${profileFocused ? 'is-active' : ''}`}>
             <div className="dropdown">
-              <button className="sidebar-user-trigger" type="button" aria-expanded={!collapsed && profileOpen} onClick={() => !collapsed && setProfileOpen(!profileOpen)}>
+              <button className={`sidebar-user-trigger ${profileFocused ? 'is-active' : ''}`} type="button" aria-expanded={profileFocused} onClick={toggleProfileMenu}>
                 <span className="avatar avatar-sm bg-blue-lt text-blue"><IconUser size={18} /></span>
                 <span className="sidebar-user-text">
                   <span className="sidebar-user-name">{me?.full_name || me?.username || 'Admin'}</span>
@@ -39698,9 +41544,6 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [a2pFailureCount, setA2PFailureCount] = useState(0);
-  const [iptvFailureCount, setIptvFailureCount] = useState(0);
-  const [paymongoFailureCount, setPaymongoFailureCount] = useState(0);
   const [supportCount, setSupportCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -39711,9 +41554,6 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
       const data = await request('/admin/notifications');
       setItems(data.items || []);
       setUnreadCount(Number(data.unread_count || 0));
-      setA2PFailureCount(Number(data.a2p_failure_unread_count || 0));
-      setIptvFailureCount(Number(data.iptv_failure_unread_count || 0));
-      setPaymongoFailureCount(Number(data.paymongo_failure_unread_count || 0));
       setSupportCount(Number(data.support_unread_count || 0));
       onSupportCountChange?.(Number(data.support_unread_count || 0));
       setError('');
@@ -39749,6 +41589,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
     if (item.category === 'IPTV_LOGIN_FAILED') return IconPlayerPlay;
     if (item.category === 'STORE_CASH_COLLECTION') return IconBuildingStore;
     if (item.category === 'PAYMONGO_ALERT') return IconCash;
+    if (item.category === 'OMADA_CONTROLLER_HEALTH') return IconServer;
     if (item.severity === 'DANGER' || item.severity === 'WARNING') return IconAlertTriangle;
     return IconBell;
   }
@@ -39760,6 +41601,7 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
     if (item.category === 'IPTV_LOGIN_FAILED') return 'purple';
     if (item.category === 'STORE_CASH_COLLECTION') return item.severity === 'WARNING' ? 'yellow' : 'green';
     if (item.category === 'PAYMONGO_ALERT') return 'green';
+    if (item.category === 'OMADA_CONTROLLER_HEALTH') return item.severity === 'SUCCESS' ? 'green' : 'cyan';
     if (item.severity === 'SUCCESS') return 'green';
     return 'blue';
   }
@@ -39794,42 +41636,17 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
         <IconBell size={20} />
         {unreadCount > 0 && <span className="admin-notification-count">{unreadCount > 99 ? '99+' : unreadCount}</span>}
       </button>
-      {open && (
-        <div className="admin-notification-overlay" onMouseDown={() => setOpen(false)}>
-          <aside className="admin-notification-drawer" onMouseDown={(event) => event.stopPropagation()}>
+      {open && createPortal(
+          <aside className="admin-notification-drawer">
             <div className="admin-notification-header">
-              <div>
-                <div className="h3 mb-1">Notifications</div>
-                <div className="text-muted small">System alerts, IPTV login failures, SMS failures, and customer messages.</div>
+              <div className="admin-notification-heading">
+                <span className="admin-notification-heading-icon">
+                  <IconBell size={20} />
+                  {unreadCount > 0 && <span className="admin-notification-heading-count">{unreadCount > 99 ? '99+' : unreadCount}</span>}
+                </span>
+                <div className="h3 mb-0">Notifications</div>
               </div>
               <button className="btn btn-icon" type="button" onClick={() => setOpen(false)} aria-label="Close notifications"><IconX size={18} /></button>
-            </div>
-            <div className="admin-notification-kpis">
-              <div className="admin-notification-kpi">
-                <IconBell size={18} />
-                <span>Unread</span>
-                <strong>{unreadCount}</strong>
-              </div>
-              <div className="admin-notification-kpi">
-                <IconPlayerPlay size={18} />
-                <span>IPTV Failed</span>
-                <strong>{iptvFailureCount}</strong>
-              </div>
-              <div className="admin-notification-kpi">
-                <IconCash size={18} />
-                <span>PayMongo</span>
-                <strong>{paymongoFailureCount}</strong>
-              </div>
-              <div className="admin-notification-kpi">
-                <IconSend size={18} />
-                <span>SMS Failed</span>
-                <strong>{a2pFailureCount}</strong>
-              </div>
-              <div className="admin-notification-kpi">
-                <IconMessageCircle size={18} />
-                <span>Messages</span>
-                <strong>{supportCount}</strong>
-              </div>
             </div>
             <div className="d-flex align-items-center justify-content-between gap-2 px-3 py-2 border-bottom">
               <button className="btn btn-sm btn-outline-secondary" type="button" onClick={loadNotifications} disabled={loading}><IconRefresh size={16} className="me-1" />Refresh</button>
@@ -39860,8 +41677,8 @@ function AdminNotificationBell({ onNavigate, onSupportCountChange }) {
               {!items.length && !loading && <div className="empty py-5">No notifications yet.</div>}
               {loading && !items.length && <div className="empty py-5">Loading notifications...</div>}
             </div>
-          </aside>
-        </div>
+          </aside>,
+          document.body
       )}
     </div>
   );
@@ -40063,7 +41880,7 @@ function App() {
             {page === 'Vouchers' && <VouchersPage />}
             {(page === 'Online Store' || page === 'Product Items') && <ProductItemsPage />}
 	            {page === 'Physical Stores' && <PhysicalStoresPage />}
-	            {page === 'Sales' && <SalesPage />}
+	            {page === 'Sales' && <SalesPage onNavigate={navigatePage} />}
 	            {(page === 'Stores' || page === 'Cash Collection') && <CashCollectionPage />}
 	            {page === 'PayMongo Sales' && <PayMongoSalesPage />}
 	            {page === 'PayMongo' && <PayMongoPage />}

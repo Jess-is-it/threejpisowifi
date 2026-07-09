@@ -51,6 +51,7 @@ from .security import create_token, current_admin, hash_password, verify_passwor
 app = FastAPI(title="3JCentralPisowifi API", version="0.1.0")
 BAG_AUTO_ACTIVATION_THREAD_STARTED = False
 PAYMONGO_RECONCILIATION_THREAD_STARTED = False
+OMADA_HEALTH_MONITOR_THREAD_STARTED = False
 store_owner_bearer = HTTPBearer(auto_error=False)
 app.add_middleware(
     CORSMiddleware,
@@ -499,6 +500,12 @@ class PhysicalStoreOwnerPayload(BaseModel):
     owner_notes: Optional[str] = Field(default=None, max_length=2000)
 
 
+class PhysicalStoreCommissionTierPayload(BaseModel):
+    threshold_amount: Optional[float] = Field(default=None, ge=0, le=1_000_000)
+    threshold_centavos: Optional[int] = Field(default=None, ge=0, le=100_000_000)
+    rate_percent: float = Field(default=0, ge=0, le=100)
+
+
 class PhysicalStorePayload(BaseModel):
     store_name: str = Field(min_length=1, max_length=160)
     location_id: Optional[str] = None
@@ -513,6 +520,7 @@ class PhysicalStorePayload(BaseModel):
     contact_phone: Optional[str] = Field(default=None, max_length=80)
     commission_type: str = Field(default="PERCENT_OF_SALES", max_length=40)
     commission_value: float = Field(default=0, ge=0, le=1_000_000)
+    commission_tiers: list[PhysicalStoreCommissionTierPayload] = Field(default_factory=list)
     site_ids: list[str] = Field(default_factory=list)
     item_ids: list[str] = Field(default_factory=list)
     status: str = Field(default="SETUP", max_length=20)
@@ -589,6 +597,9 @@ class StorePortalCustomerBuyRequest(BaseModel):
 
 class StoreRemittancePickupRequest(BaseModel):
     notes: Optional[str] = Field(default=None, max_length=1000)
+    sales_period_start: Optional[str] = Field(default=None, max_length=20)
+    pickup_scheduled_at: Optional[datetime] = None
+    pin_code: Optional[str] = Field(default=None, max_length=4)
 
 
 class StorePortalProfileUpdateRequest(BaseModel):
@@ -617,6 +628,19 @@ class PortalTimeAdjustRequest(BaseModel):
     amount_seconds: int
     note: Optional[str] = None
     bag_item_id: Optional[str] = None
+
+
+class ActiveDeviceTimeAdjustRequest(PortalTimeAdjustRequest):
+    client_mac: Optional[str] = Field(default=None, max_length=80)
+    client_ip: Optional[str] = Field(default=None, max_length=80)
+    ap_mac: Optional[str] = Field(default=None, max_length=80)
+    ap_name: Optional[str] = Field(default=None, max_length=160)
+    ssid: Optional[str] = Field(default=None, max_length=160)
+    site: Optional[str] = Field(default=None, max_length=160)
+    site_id: Optional[str] = Field(default=None, max_length=160)
+    source: Optional[str] = Field(default=None, max_length=80)
+    device_name: Optional[str] = Field(default=None, max_length=180)
+    gateway_mac: Optional[str] = Field(default=None, max_length=80)
 
 
 class AdminCustomerBagItemRequest(BaseModel):
@@ -1059,8 +1083,15 @@ class MikrotikStationOmadaBindingUpdate(BaseModel):
 
 class MikrotikApManagementRouterPayload(BaseModel):
     router_id: str
+    topology_role: Optional[str] = Field(default=None, max_length=80)
+    parent_router_id: Optional[str] = Field(default=None, max_length=80)
+    branch_label: Optional[str] = Field(default=None, max_length=160)
+    station_id: Optional[str] = Field(default=None, max_length=80)
     bridge_name: Optional[str] = Field(default=None, max_length=200)
     tagged_ports: Optional[str] = Field(default=None, max_length=1200)
+    upstream_ports: Optional[str] = Field(default=None, max_length=1200)
+    ap_path_bridge_name: Optional[str] = Field(default=None, max_length=200)
+    ap_path_ports: Optional[str] = Field(default=None, max_length=1200)
     notes: Optional[str] = Field(default=None, max_length=1200)
 
 
@@ -4629,6 +4660,10 @@ def start_saved_public_endpoint_connector():
     except Exception:
         pass
     try:
+        start_omada_health_monitor_worker()
+    except Exception:
+        pass
+    try:
         store = public_endpoint_store()
         if store.get("enabled") and decrypt_secret(store.get("tunnel_token_encrypted")):
             start_cloudflared_connector()
@@ -4995,7 +5030,7 @@ def paymongo_api_url(store: dict, path: str) -> str:
     return f"{base_url}/{path.lstrip('/')}"
 
 
-def paymongo_request(store: dict, secret_key: str, method: str, path: str, payload: Optional[dict] = None) -> dict:
+def paymongo_request(store: dict, secret_key: str, method: str, path: str, payload: Optional[dict] = None, timeout: float = 25) -> dict:
     if not secret_key:
         raise HTTPException(status_code=400, detail="PayMongo secret key is not configured for the active mode")
     try:
@@ -5005,7 +5040,7 @@ def paymongo_request(store: dict, secret_key: str, method: str, path: str, paylo
             auth=(secret_key, ""),
             headers={"accept": "application/json", "content-type": "application/json"},
             json=payload,
-            timeout=25,
+            timeout=timeout,
         )
         data = response.json() if response.content else {}
     except requests.RequestException as exc:
@@ -6678,10 +6713,10 @@ def omada_payment_auth_free_remote_snapshot(cur, active_grants: list[dict]) -> d
 def omada_payment_auth_free_identity(session: dict, user: Optional[dict] = None, profile: Optional[dict] = None, payload: Optional[PortalSessionRequest] = None, request: Optional[Request] = None) -> dict:
     ctx = portal_context(payload) if payload else {}
     client_mac = (
-        normalize_mac_if_valid(portal_effective_mac_from_session(session))
-        or normalize_mac_if_valid(ctx.get("client_mac"))
+        normalize_mac_if_valid(ctx.get("client_mac"))
+        or normalize_mac_if_valid(portal_effective_mac_from_session(session))
     )
-    client_ip = host_ip(session.get("client_ip") or ctx.get("client_ip") or (public_ip(request) if request else None))
+    client_ip = host_ip(ctx.get("client_ip") or session.get("client_ip") or (public_ip(request) if request else None))
     device_token_hash = session.get("device_token_hash") or (portal_device_token_hash(payload.device_token) if payload else None)
     return {
         "user_id": (user or {}).get("id") or session.get("user_id"),
@@ -7059,6 +7094,7 @@ def omada_payment_auth_free_abuse_status(cur, session: dict, user: dict, profile
             LEFT JOIN payment_orders po ON po.id = g.payment_order_id
             WHERE ({grant_where_clause})
               AND {unpaid_grant_clause}
+              AND NOT (g.status = 'ACTIVE' AND g.expires_at > now())
             ORDER BY g.created_at DESC
             LIMIT 1
             """,
@@ -7134,10 +7170,12 @@ def enforce_omada_payment_auth_free_abuse_limit(cur, session: dict, user: dict, 
     return status
 
 
-def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: dict, profile: Optional[dict], payload: PortalPaymentCheckoutRequest, request: Request) -> Optional[dict]:
+def create_omada_payment_auth_free_grant(cur, order: Optional[dict], session: dict, user: dict, profile: Optional[dict], payload: PortalSessionRequest, request: Request, reason: str = "PAYMONGO_CHECKOUT") -> Optional[dict]:
     store = omada_payment_auth_free_store()
     if not store.get("enabled"):
         return None
+    order = order or {}
+    reason = normalize_payment_text(reason, 80) or "PAYMONGO_CHECKOUT"
     cleanup_expired_omada_payment_auth_free_grants(cur, limit=20)
     identity = omada_payment_auth_free_identity(session, user, profile, payload, request)
     site_row = site_deployment_for_portal_context(session, payload)
@@ -7161,6 +7199,41 @@ def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: 
         identity,
     )
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=store["grant_timeout_seconds"])
+    reuse_clauses = []
+    reuse_params = [site_id]
+    if identity.get("client_mac"):
+        reuse_clauses.append("client_mac = %s")
+        reuse_params.append(identity["client_mac"])
+    if identity.get("client_ip"):
+        reuse_clauses.append("client_ip = NULLIF(%s, '')::inet")
+        reuse_params.append(identity["client_ip"])
+    if site_id and reuse_clauses:
+        cur.execute(
+            f"""
+            SELECT *
+            FROM omada_payment_auth_free_grants
+            WHERE site_id = %s
+              AND status = 'ACTIVE'
+              AND expires_at > now()
+              AND ({' OR '.join(reuse_clauses)})
+            ORDER BY expires_at DESC, created_at DESC
+            LIMIT 1
+            """,
+            tuple(reuse_params),
+        )
+        existing_active = cur.fetchone()
+        if existing_active:
+            cur.execute(
+                """
+                UPDATE omada_payment_auth_free_grants
+                SET expires_at = GREATEST(expires_at, %s),
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (expires_at, existing_active["id"]),
+            )
+            return cur.fetchone()
     public_grant_id = f"og_{secrets.token_urlsafe(16).replace('-', '').replace('_', '')[:24]}"
     status = "PENDING"
     last_error = None
@@ -7177,7 +7250,7 @@ def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: 
             client_mac, client_ip, device_token_hash, profile_name, profile_contact_number,
             status, reason, expires_at, last_error
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, 'PAYMONGO_CHECKOUT', %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, NULLIF(%s, '')::inet, %s, %s, %s, %s, %s, %s, %s)
         RETURNING *
         """,
         (
@@ -7193,6 +7266,7 @@ def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: 
             identity.get("profile_name"),
             identity.get("profile_contact_number"),
             status,
+            reason,
             expires_at,
             last_error,
         ),
@@ -7256,7 +7330,7 @@ def create_omada_payment_auth_free_grant(cur, order: dict, session: dict, user: 
 def remove_omada_payment_auth_free_grant(cur, grant: dict, final_status: str = "REMOVED") -> dict:
     if not grant or grant.get("status") not in {"ACTIVE", "PAID_GRACE", "PENDING", "FAILED", "REMOVE_FAILED"}:
         return grant
-    if grant.get("status") not in {"ACTIVE", "PAID_GRACE"}:
+    if grant.get("status") not in {"ACTIVE", "PAID_GRACE", "REMOVE_FAILED"}:
         cur.execute(
             """
             UPDATE omada_payment_auth_free_grants
@@ -7306,8 +7380,8 @@ def cleanup_expired_omada_payment_auth_free_grants(cur, limit: int = 50) -> list
         """
         SELECT *
         FROM omada_payment_auth_free_grants
-        WHERE status IN ('ACTIVE', 'PAID_GRACE')
-          AND expires_at <= now()
+        WHERE status IN ('ACTIVE', 'PAID_GRACE', 'REMOVE_FAILED')
+          AND (expires_at <= now() OR status = 'REMOVE_FAILED')
         ORDER BY expires_at ASC
         LIMIT %s
         FOR UPDATE SKIP LOCKED
@@ -7708,6 +7782,162 @@ def routeros_login_socket(sock, username: Optional[str], password: Optional[str]
     routeros_read_result(sock)
 
 
+ROUTEROS_API_SESSION_IDLE_SECONDS = int(os.getenv("ROUTEROS_API_SESSION_IDLE_SECONDS", "90"))
+ROUTEROS_API_SESSION_MAX_AGE_SECONDS = int(os.getenv("ROUTEROS_API_SESSION_MAX_AGE_SECONDS", "900"))
+ROUTEROS_API_SESSIONS = {}
+ROUTEROS_API_SESSIONS_LOCK = threading.Lock()
+
+
+def routeros_api_session_key(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool) -> tuple:
+    password_hash = sha256((password or "").encode()).hexdigest()
+    return (str(host or "").strip(), int(port or 8728), bool(use_tls), str(username or ""), password_hash)
+
+
+def routeros_connect_authenticated_socket(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, timeout: float):
+    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
+    sock = raw_sock
+    try:
+        if use_tls:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            sock = context.wrap_socket(raw_sock, server_hostname=host)
+        sock.settimeout(timeout)
+        routeros_login_socket(sock, username, password)
+        return sock, raw_sock
+    except Exception:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        if sock is not raw_sock:
+            try:
+                raw_sock.close()
+            except Exception:
+                pass
+        raise
+
+
+class RouterOSApiSession:
+    def __init__(self, host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool):
+        self.host = host
+        self.port = int(port or 8728)
+        self.username = username
+        self.password = password
+        self.use_tls = bool(use_tls)
+        self.lock = threading.RLock()
+        self.sock = None
+        self.raw_sock = None
+        self.created_at = 0.0
+        self.last_used = 0.0
+
+    def close_locked(self):
+        sock = self.sock
+        raw_sock = self.raw_sock
+        self.sock = None
+        self.raw_sock = None
+        self.created_at = 0.0
+        self.last_used = 0.0
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        if raw_sock is not None and raw_sock is not sock:
+            try:
+                raw_sock.close()
+            except Exception:
+                pass
+
+    def ensure_locked(self, timeout: float):
+        now = time.time()
+        if self.sock is not None:
+            idle_seconds = now - float(self.last_used or self.created_at or now)
+            age_seconds = now - float(self.created_at or now)
+            if idle_seconds > ROUTEROS_API_SESSION_IDLE_SECONDS or age_seconds > ROUTEROS_API_SESSION_MAX_AGE_SECONDS:
+                self.close_locked()
+        if self.sock is None:
+            self.sock, self.raw_sock = routeros_connect_authenticated_socket(
+                self.host,
+                self.port,
+                self.username,
+                self.password,
+                self.use_tls,
+                timeout,
+            )
+            self.created_at = time.time()
+        self.sock.settimeout(timeout)
+        self.last_used = time.time()
+        return self.sock
+
+
+class RouterOSApiSessionLease:
+    def __init__(self, session: RouterOSApiSession, timeout: float):
+        self.session = session
+        self.timeout = timeout
+        self.sock = None
+
+    def __enter__(self):
+        self.session.lock.acquire()
+        try:
+            self.sock = self.session.ensure_locked(self.timeout)
+            return self.sock
+        except Exception:
+            self.session.close_locked()
+            self.session.lock.release()
+            raise
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is not None:
+                self.session.close_locked()
+            else:
+                self.session.last_used = time.time()
+        finally:
+            self.session.lock.release()
+        return False
+
+
+def cleanup_routeros_api_sessions():
+    now = time.time()
+    stale_keys = []
+    with ROUTEROS_API_SESSIONS_LOCK:
+        for key, session in list(ROUTEROS_API_SESSIONS.items()):
+            with session.lock:
+                idle_seconds = now - float(session.last_used or session.created_at or now)
+                age_seconds = now - float(session.created_at or now)
+                if idle_seconds > ROUTEROS_API_SESSION_IDLE_SECONDS or age_seconds > ROUTEROS_API_SESSION_MAX_AGE_SECONDS:
+                    session.close_locked()
+                    stale_keys.append(key)
+        for key in stale_keys:
+            ROUTEROS_API_SESSIONS.pop(key, None)
+
+
+def routeros_api_socket(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, timeout: float = 8.0):
+    cleanup_routeros_api_sessions()
+    key = routeros_api_session_key(host, port, username, password, use_tls)
+    with ROUTEROS_API_SESSIONS_LOCK:
+        session = ROUTEROS_API_SESSIONS.get(key)
+        if session is None:
+            session = RouterOSApiSession(host, int(port or 8728), username, password, use_tls)
+            ROUTEROS_API_SESSIONS[key] = session
+    return RouterOSApiSessionLease(session, timeout)
+
+
+def close_all_routeros_api_sessions():
+    with ROUTEROS_API_SESSIONS_LOCK:
+        sessions = list(ROUTEROS_API_SESSIONS.values())
+        ROUTEROS_API_SESSIONS.clear()
+    for session in sessions:
+        with session.lock:
+            session.close_locked()
+
+
+@app.on_event("shutdown")
+def shutdown_routeros_api_sessions():
+    close_all_routeros_api_sessions()
+
+
 def routeros_cli_preview(path: str, params: dict):
     command = path.strip("/").replace("/", " ")
     parts = [f"/{command}"]
@@ -7843,16 +8073,7 @@ def routeros_condition_rows(sock, condition: Optional[dict]) -> list[dict]:
 
 
 def routeros_execute_commands(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, commands: list, timeout: float = 8.0):
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         results = []
         for command in commands:
             path = command.get("path")
@@ -8009,16 +8230,6 @@ def routeros_execute_commands(host: str, port: int, username: Optional[str], pas
             replies = routeros_read_result_after_send(sock, words)
             results.append({"label": label, "status": "SUCCESS", "message": "Command accepted by RouterOS.", "reply_count": len(replies)})
         return {"status": "SUCCESS", "message": "RouterOS commands completed.", "results": results}
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def routeros_duration_to_seconds(value: Optional[str]) -> int:
@@ -8063,16 +8274,7 @@ def routeros_authorize_hotspot_client(
     client_mac: Optional[str],
     timeout: float = 8.0,
 ):
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         requested_seconds = max(int(duration_seconds or 0), 60)
         existing_users = routeros_read_result_after_send(
             sock,
@@ -8141,16 +8343,6 @@ def routeros_authorize_hotspot_client(
             "reply_count": len(replies),
         })
         return {"status": "SUCCESS", "message": "RouterOS HotSpot authorization completed.", "results": results}
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def routeros_remove_hotspot_client_state(
@@ -8164,17 +8356,8 @@ def routeros_remove_hotspot_client_state(
 ) -> dict:
     if not client_mac:
         return {"status": "SKIPPED", "message": "No client MAC was available for HotSpot state cleanup.", "removed": []}
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
     removed = []
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         for print_path, remove_path in [
             ("/ip/hotspot/active/print", "/ip/hotspot/active/remove"),
             ("/ip/hotspot/host/print", "/ip/hotspot/host/remove"),
@@ -8190,29 +8373,10 @@ def routeros_remove_hotspot_client_state(
                 routeros_read_result_after_send(sock, [remove_path, f"=.id={item_id}"])
                 removed.append({"path": remove_path, "id": item_id, "address": row.get("address"), "to_address": row.get("to-address")})
         return {"status": "SUCCESS", "message": "HotSpot active/host state removed for this client.", "removed": removed}
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def routeros_execute_remove_commands(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, commands: list, timeout: float = 8.0):
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         results = []
         for command in commands:
             label = command.get("label") or command.get("print_path") or "Remove managed item"
@@ -8236,29 +8400,10 @@ def routeros_execute_remove_commands(host: str, port: int, username: Optional[st
                 removed_ids.append(item_id)
             results.append({"label": label, "status": "SUCCESS", "message": f"Removed {len(removed_ids)} managed item(s).", "removed_count": len(removed_ids)})
         return {"status": "SUCCESS", "message": "Managed MikroTik configuration removed.", "results": results}
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def routeros_detect_remove_targets(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, commands: list, timeout: float = 8.0):
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         items = []
         found_count = 0
         for index, command in enumerate(commands):
@@ -8303,29 +8448,10 @@ def routeros_detect_remove_targets(host: str, port: int, username: Optional[str]
             "found_count": found_count,
             "items": items,
         }
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def routeros_detect_station_apply_targets(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, commands: list, timeout: float = 8.0):
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         items = []
         found_count = 0
         for index, command in enumerate(commands):
@@ -8515,40 +8641,11 @@ def routeros_detect_station_apply_targets(host: str, port: int, username: Option
             "found_count": found_count,
             "items": items,
         }
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def routeros_readonly_query(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, words: list, timeout: float = 8.0):
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         return routeros_read_result_after_send(sock, words)
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def routeros_file_words(file_path: str) -> list[str]:
@@ -8603,16 +8700,7 @@ def routeros_upsert_simple_queue(
 ) -> dict:
     target = f"{host_ip(target_ip)}/32"
     max_limit = f"{routeros_speed_rate_value(upload_mbps)}/{routeros_speed_rate_value(download_mbps)}"
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         rows = routeros_read_result_after_send(
             sock,
             [
@@ -8653,16 +8741,6 @@ def routeros_upsert_simple_queue(
             "max_limit": max_limit,
             "queue": sanitize_summary(verified[0] if verified else {}),
         }
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def routeros_remove_simple_queue(
@@ -8675,16 +8753,7 @@ def routeros_remove_simple_queue(
     queue_name: str,
     timeout: float = 8.0,
 ) -> dict:
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         rows = routeros_read_result_after_send(
             sock,
             [
@@ -8701,29 +8770,10 @@ def routeros_remove_simple_queue(
             routeros_read_result_after_send(sock, ["/queue/simple/remove", f"=.id={item_id}"])
             removed += 1
         return {"status": "SUCCESS", "queue_name": queue_name, "removed_count": removed}
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def routeros_write_text_file(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, file_path: str, content: str, timeout: float = 10.0):
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         existing = routeros_read_result_after_send(sock, routeros_file_words(file_path))
         action = "add"
         if existing:
@@ -8761,16 +8811,6 @@ def routeros_write_text_file(host: str, port: int, username: Optional[str], pass
             "content_readback_truncated": returned_truncated,
             "file": sanitize_summary(verified[0]),
         }
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def routeros_hotspot_file_candidates(file_path: str) -> list[str]:
@@ -8974,16 +9014,7 @@ def sanitize_mikrotik_snapshot_old(value, parent_key: str = ""):
 
 
 def routeros_readonly_snapshot(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool, timeout: float = 8.0):
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    sock = raw_sock
-    try:
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        routeros_login_socket(sock, username, password)
+    with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
         paths = {}
         unsupported = []
         for item in MIKROTIK_PREFLIGHT_PATHS:
@@ -9009,16 +9040,6 @@ def routeros_readonly_snapshot(host: str, port: int, username: Optional[str], pa
                     "error": message,
                 }
         return {"paths": paths, "unsupported_paths": unsupported}
-    finally:
-        try:
-            sock.close()
-        except Exception:
-            pass
-        if sock is not raw_sock:
-            try:
-                raw_sock.close()
-            except Exception:
-                pass
 
 
 def mikrotik_snapshot_items(snapshot: dict, key: str) -> list:
@@ -9817,37 +9838,24 @@ def evaluate_and_store_mikrotik_policy(router: dict, scan_row=None):
 
 def test_mikrotik_api_login(host: str, port: int, username: Optional[str], password: Optional[str], use_tls: bool = False, timeout: float = 5.0):
     started = time.time()
-    raw_sock = socket.create_connection((host, int(port)), timeout=timeout)
-    try:
-        sock = raw_sock
-        if use_tls:
-            context = ssl.create_default_context()
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            sock = context.wrap_socket(raw_sock, server_hostname=host)
-        sock.settimeout(timeout)
-        if not username:
-            return {"status": "REACHABLE", "message": "MikroTik API port is reachable.", "latency_ms": int((time.time() - started) * 1000)}
-        routeros_send_sentence(sock, ["/login", f"=name={username}", f"=password={password or ''}"])
-        sentences = []
-        while True:
-            sentence = routeros_read_sentence(sock)
-            sentences.append(sentence)
-            if not sentence:
-                continue
-            marker = sentence[0]
-            if marker == "!done":
-                return {"status": "REACHABLE", "message": "MikroTik API login succeeded.", "latency_ms": int((time.time() - started) * 1000)}
-            if marker == "!trap":
-                message = next((word.split("=", 2)[2] for word in sentence if word.startswith("=message=")), "Authentication failed")
-                return {"status": "AUTH_FAILED", "message": message, "latency_ms": int((time.time() - started) * 1000)}
-            if len(sentences) > 10:
-                return {"status": "ERROR", "message": "Unexpected RouterOS API response.", "latency_ms": int((time.time() - started) * 1000)}
-    finally:
+    if not username:
         try:
-            raw_sock.close()
-        except Exception:
-            pass
+            with socket.create_connection((host, int(port)), timeout=timeout):
+                return {"status": "REACHABLE", "message": "MikroTik API port is reachable.", "latency_ms": int((time.time() - started) * 1000)}
+        except socket.timeout:
+            return {"status": "TIMEOUT", "message": "MikroTik API connection timed out.", "latency_ms": int((time.time() - started) * 1000)}
+        except Exception as exc:
+            return {"status": "ERROR", "message": sanitize_routeros_text(str(exc)), "latency_ms": int((time.time() - started) * 1000)}
+    try:
+        with routeros_api_socket(host, port, username, password, use_tls, timeout=timeout) as sock:
+            routeros_read_result_after_send(sock, ["/system/identity/print", "=.proplist=name"])
+            return {"status": "REACHABLE", "message": "MikroTik API port is reachable.", "latency_ms": int((time.time() - started) * 1000)}
+    except RuntimeError as exc:
+        return {"status": "AUTH_FAILED", "message": sanitize_routeros_text(str(exc)), "latency_ms": int((time.time() - started) * 1000)}
+    except socket.timeout:
+        return {"status": "TIMEOUT", "message": "MikroTik API connection timed out.", "latency_ms": int((time.time() - started) * 1000)}
+    except Exception as exc:
+        return {"status": "ERROR", "message": sanitize_routeros_text(str(exc)), "latency_ms": int((time.time() - started) * 1000)}
 
 
 def create_omada_log(admin_id, action: str):
@@ -9914,6 +9922,355 @@ def update_omada_status(status: str, error: str = None, version: str = None):
                 """,
                 (status, error, version),
             )
+
+
+OMADA_HEALTH_MONITOR_DEFAULTS = {
+    "enabled": True,
+    "check_interval_seconds": 60,
+    "failure_threshold": 2,
+    "disk_warning_percent": 90,
+    "disk_critical_percent": 95,
+    "auto_cleanup_enabled": True,
+    "auto_cleanup_cooldown_minutes": 360,
+    "last_status": "",
+    "last_status_at": "",
+    "consecutive_failures": 0,
+    "last_auto_cleanup_at": "",
+    "last_error": "",
+}
+
+
+def omada_health_monitor_store() -> dict:
+    row = fetch_one("SELECT value FROM app_settings WHERE key = 'omada_health_monitor'")
+    saved = row["value"] if row and isinstance(row.get("value"), dict) else {}
+    return {**OMADA_HEALTH_MONITOR_DEFAULTS, **saved}
+
+
+def save_omada_health_monitor_store(store: dict) -> dict:
+    clean = {**OMADA_HEALTH_MONITOR_DEFAULTS, **(store or {})}
+    for key in ("check_interval_seconds", "failure_threshold", "disk_warning_percent", "disk_critical_percent", "auto_cleanup_cooldown_minutes"):
+        try:
+            clean[key] = int(clean.get(key) or OMADA_HEALTH_MONITOR_DEFAULTS[key])
+        except (TypeError, ValueError):
+            clean[key] = OMADA_HEALTH_MONITOR_DEFAULTS[key]
+    clean["check_interval_seconds"] = max(30, min(3600, clean["check_interval_seconds"]))
+    clean["failure_threshold"] = max(1, min(10, clean["failure_threshold"]))
+    clean["disk_warning_percent"] = max(50, min(99, clean["disk_warning_percent"]))
+    clean["disk_critical_percent"] = max(clean["disk_warning_percent"], min(100, clean["disk_critical_percent"]))
+    clean["auto_cleanup_cooldown_minutes"] = max(30, min(10080, clean["auto_cleanup_cooldown_minutes"]))
+    clean["enabled"] = bool(clean.get("enabled"))
+    clean["auto_cleanup_enabled"] = bool(clean.get("auto_cleanup_enabled"))
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO app_settings(key, value, updated_at)
+                VALUES ('omada_health_monitor', %s, now())
+                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+                """,
+                (Json(clean),),
+            )
+    return clean
+
+
+def parse_omada_health_ts(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def create_omada_health_notification(
+    severity: str,
+    title: str,
+    message: str,
+    *,
+    related_id: str,
+    metadata: Optional[dict] = None,
+    dedupe_minutes: int = 30,
+) -> Optional[str]:
+    clean_related_id = normalize_payment_text(related_id or title, 120)
+    try:
+        existing = fetch_one(
+            """
+            SELECT id
+            FROM admin_notifications
+            WHERE category = 'OMADA_CONTROLLER_HEALTH'
+              AND related_id = %s
+              AND status = 'UNREAD'
+              AND created_at > now() - (%s::text || ' minutes')::interval
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (clean_related_id, int(dedupe_minutes or 30)),
+        )
+        if existing:
+            return str(existing["id"])
+    except Exception:
+        pass
+    return create_admin_notification(
+        "OMADA_CONTROLLER_HEALTH",
+        severity,
+        title,
+        message,
+        "Omada Controller",
+        "/admin/settings/omada-controller",
+        "omada_controller_settings",
+        clean_related_id,
+        metadata or {},
+    )
+
+
+def omada_request_check(url: str, expected_statuses: set[int], timeout: float = 8.0) -> dict:
+    started = time.time()
+    try:
+        response = requests.get(url, verify=False, timeout=timeout)
+        body_preview = response.text[:2000] if response.text else ""
+        return {
+            "ok": response.status_code in expected_statuses,
+            "status_code": response.status_code,
+            "latency_ms": int((time.time() - started) * 1000),
+            "body_preview": body_preview,
+        }
+    except requests.RequestException as exc:
+        return {
+            "ok": False,
+            "status_code": None,
+            "latency_ms": int((time.time() - started) * 1000),
+            "error": str(exc),
+        }
+
+
+def omada_health_ssh_snapshot(settings) -> dict:
+    if not settings.get("ssh_username") or not settings.get("ssh_password_encrypted") and settings.get("ssh_auth_type") != "PRIVATE_KEY":
+        return {"available": False, "error": "SSH credentials are not configured."}
+    sudo_password = decrypt_secret(settings.get("ssh_password_encrypted")) if settings.get("sudo_mode") == "SUDO_PASSWORD" else None
+    command = r"""
+set -o pipefail
+echo SECTION:DISK
+df -P / | awk 'NR==2 {gsub("%", "", $5); print "used_percent="$5; print "available_kb="$4; print "filesystem="$1}'
+echo SECTION:DOCKER
+docker inspect omada_controller-omada-controller-1 --format 'container_status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restart_count={{.RestartCount}} started_at={{.State.StartedAt}}' 2>/dev/null || true
+echo SECTION:COMPOSE
+test -d /opt/omada-controller && cd /opt/omada-controller && docker compose -p omada_controller ps --format json 2>/dev/null || true
+"""
+    try:
+        with omada_ssh_client(settings) as client:
+            code, output = run_ssh(
+                client,
+                command,
+                sudo_mode=settings.get("sudo_mode") or "PASSWORDLESS",
+                sudo_password=sudo_password,
+                timeout=45,
+            )
+        snapshot = {"available": code == 0, "exit_code": code, "output": output[-5000:]}
+        used_match = re.search(r"used_percent=(\d+)", output)
+        if used_match:
+            snapshot["disk_used_percent"] = int(used_match.group(1))
+        available_match = re.search(r"available_kb=(\d+)", output)
+        if available_match:
+            snapshot["disk_available_kb"] = int(available_match.group(1))
+        status_match = re.search(r"container_status=([^\s]+)\s+health=([^\s]+)\s+restart_count=(\d+)\s+started_at=([^\n]+)", output)
+        if status_match:
+            snapshot["container_status"] = status_match.group(1)
+            snapshot["container_health"] = status_match.group(2)
+            snapshot["restart_count"] = int(status_match.group(3))
+            snapshot["container_started_at"] = status_match.group(4)
+        return snapshot
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
+
+
+def run_omada_safe_disk_cleanup(settings) -> dict:
+    sudo_password = decrypt_secret(settings.get("ssh_password_encrypted")) if settings.get("sudo_mode") == "SUDO_PASSWORD" else None
+    command = r"""
+set -o pipefail
+echo BEFORE
+df -h /
+docker image prune -a -f
+apt-get clean || true
+rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* || true
+journalctl --vacuum-size=50M || true
+echo AFTER
+df -h /
+"""
+    with omada_ssh_client(settings) as client:
+        code, output = run_ssh(
+            client,
+            command,
+            sudo_mode=settings.get("sudo_mode") or "PASSWORDLESS",
+            sudo_password=sudo_password,
+            timeout=300,
+        )
+    return {"success": code == 0, "exit_code": code, "output": output[-8000:]}
+
+
+def omada_controller_health_probe(settings=None, *, include_ssh: bool = True) -> dict:
+    settings = settings or ensure_omada_settings()
+    host = settings.get("host") or settings.get("ssh_host") or "192.168.50.71"
+    https_port = int(settings.get("https_port") or 8043)
+    base_url = f"https://{host}:{https_port}"
+    checks = {
+        "web_shell": omada_request_check(f"{base_url}/", {200}),
+        "openapi_backend": omada_request_check(f"{base_url}/openapi/v1/system/info", {200, 401}),
+    }
+    reasons = []
+    warnings = []
+    if not checks["web_shell"].get("ok"):
+        reasons.append(f"Omada web shell check failed: {checks['web_shell'].get('error') or checks['web_shell'].get('status_code')}")
+    if not checks["openapi_backend"].get("ok"):
+        reasons.append(f"Omada OpenAPI backend check failed: {checks['openapi_backend'].get('error') or checks['openapi_backend'].get('status_code')}")
+    ssh_snapshot = {}
+    if include_ssh:
+        ssh_snapshot = omada_health_ssh_snapshot(settings)
+        checks["ssh"] = ssh_snapshot
+        disk_used = ssh_snapshot.get("disk_used_percent")
+        if disk_used is not None:
+            checks["disk_used_percent"] = disk_used
+        container_status = str(ssh_snapshot.get("container_status") or "").lower()
+        container_health = str(ssh_snapshot.get("container_health") or "").lower()
+        if container_status and container_status != "running":
+            reasons.append(f"Omada container status is {container_status}.")
+        if container_health and container_health not in {"healthy", "none"}:
+            warnings.append(f"Omada container health is {container_health}.")
+        if ssh_snapshot.get("available") is False and ssh_snapshot.get("error"):
+            warnings.append(f"Omada SSH health detail unavailable: {ssh_snapshot['error']}")
+    status = "UP"
+    if reasons:
+        status = "DOWN"
+    elif warnings:
+        status = "DEGRADED"
+    return {
+        "status": status,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "base_url": base_url,
+        "checks": checks,
+        "reasons": reasons,
+        "warnings": warnings,
+    }
+
+
+def process_omada_health_once() -> dict:
+    monitor = omada_health_monitor_store()
+    settings = ensure_omada_settings()
+    result = omada_controller_health_probe(settings, include_ssh=True)
+    disk_used = result.get("checks", {}).get("disk_used_percent")
+    now = datetime.now(timezone.utc)
+    cleanup_result = None
+    if (
+        disk_used is not None
+        and disk_used >= int(monitor.get("disk_critical_percent") or 95)
+        and monitor.get("auto_cleanup_enabled")
+        and settings.get("ssh_username")
+    ):
+        last_cleanup = parse_omada_health_ts(monitor.get("last_auto_cleanup_at"))
+        cooldown = timedelta(minutes=int(monitor.get("auto_cleanup_cooldown_minutes") or 360))
+        if not last_cleanup or now - last_cleanup >= cooldown:
+            try:
+                cleanup_result = run_omada_safe_disk_cleanup(settings)
+                monitor["last_auto_cleanup_at"] = now.isoformat()
+                create_omada_health_notification(
+                    "WARNING",
+                    "Omada disk auto-cleanup ran",
+                    f"Omada server disk reached {disk_used}% usage. The system removed unused Docker images/cache and OS package cache.",
+                    related_id="OMADA_DISK_AUTO_CLEANUP",
+                    metadata={"before_disk_used_percent": disk_used, "cleanup": sanitize_summary(cleanup_result)},
+                    dedupe_minutes=360,
+                )
+                result = omada_controller_health_probe(settings, include_ssh=True)
+                disk_used = result.get("checks", {}).get("disk_used_percent")
+            except Exception as exc:
+                create_omada_health_notification(
+                    "DANGER",
+                    "Omada disk auto-cleanup failed",
+                    f"Omada server disk reached {disk_used}% usage, but automatic cleanup failed: {exc}",
+                    related_id="OMADA_DISK_AUTO_CLEANUP_FAILED",
+                    metadata={"disk_used_percent": disk_used, "error": str(exc)},
+                    dedupe_minutes=120,
+                )
+    status = result.get("status") or "DOWN"
+    if disk_used is not None:
+        if disk_used >= int(monitor.get("disk_critical_percent") or 95):
+            status = "DEGRADED" if status == "UP" else status
+            create_omada_health_notification(
+                "DANGER",
+                "Omada server disk is critical",
+                f"Omada server disk usage is {disk_used}%. Controller can fail when the disk is full.",
+                related_id="OMADA_DISK_CRITICAL",
+                metadata=result,
+                dedupe_minutes=120,
+            )
+        elif disk_used >= int(monitor.get("disk_warning_percent") or 90):
+            status = "DEGRADED" if status == "UP" else status
+            create_omada_health_notification(
+                "WARNING",
+                "Omada server disk is getting full",
+                f"Omada server disk usage is {disk_used}%. Clean up or expand disk before it reaches 100%.",
+                related_id="OMADA_DISK_WARNING",
+                metadata=result,
+                dedupe_minutes=360,
+            )
+    consecutive_failures = int(monitor.get("consecutive_failures") or 0)
+    if status == "DOWN":
+        consecutive_failures += 1
+        if consecutive_failures >= int(monitor.get("failure_threshold") or 2):
+            create_omada_health_notification(
+                "DANGER",
+                "Omada Controller is not healthy",
+                "; ".join(result.get("reasons") or ["Omada Controller health checks failed."]),
+                related_id="OMADA_CONTROLLER_DOWN",
+                metadata=result,
+                dedupe_minutes=30,
+            )
+        update_omada_status("ERROR", "; ".join(result.get("reasons") or ["Omada health check failed."]))
+    else:
+        if monitor.get("last_status") == "DOWN":
+            create_omada_health_notification(
+                "SUCCESS",
+                "Omada Controller recovered",
+                "Omada Controller health checks are passing again.",
+                related_id="OMADA_CONTROLLER_RECOVERED",
+                metadata=result,
+                dedupe_minutes=30,
+            )
+        consecutive_failures = 0
+        update_omada_status("RUNNING", "; ".join(result.get("warnings") or []) or None)
+    monitor.update(
+        {
+            "last_status": status,
+            "last_status_at": now.isoformat(),
+            "last_error": "; ".join(result.get("reasons") or result.get("warnings") or []),
+            "consecutive_failures": consecutive_failures,
+        }
+    )
+    if cleanup_result is not None:
+        monitor["last_cleanup_result"] = sanitize_summary(cleanup_result)
+    save_omada_health_monitor_store(monitor)
+    return result
+
+
+def start_omada_health_monitor_worker():
+    global OMADA_HEALTH_MONITOR_THREAD_STARTED
+    if OMADA_HEALTH_MONITOR_THREAD_STARTED:
+        return
+    OMADA_HEALTH_MONITOR_THREAD_STARTED = True
+
+    def worker():
+        time.sleep(15)
+        while True:
+            interval = 60
+            try:
+                monitor = omada_health_monitor_store()
+                interval = int(monitor.get("check_interval_seconds") or 60)
+                if monitor.get("enabled"):
+                    process_omada_health_once()
+            except Exception as exc:
+                print(f"Omada health monitor failed: {exc}")
+            time.sleep(max(30, min(3600, interval)))
+
+    threading.Thread(target=worker, daemon=True, name="omada-health-monitor").start()
 
 
 def omada_ssh_client(settings):
@@ -11064,16 +11421,18 @@ def find_site_deployment_by_ssid_name(ssid_name: Optional[str]) -> Optional[dict
 def site_deployment_for_portal_context(session: Optional[dict] = None, payload: Optional[PortalSessionRequest] = None) -> Optional[dict]:
     ctx = portal_context(payload) if payload else {}
     session = session or {}
+    ctx_has_site = bool(ctx.get("site_id") or ctx.get("site_name") or ctx.get("site") or ctx.get("ssid"))
     site_id = (
-        (session.get("omada_site_id") or "").strip()
-        or (ctx.get("site_id") or "").strip()
+        ((ctx.get("site_id") or "").strip() if ctx_has_site else "")
+        or (session.get("omada_site_id") or "").strip()
+        or ((ctx.get("site_id") or "").strip() if not ctx_has_site else "")
         or None
     )
     site_name = (
-        (session.get("omada_site_name") or "").strip()
+        (((ctx.get("site_name") or "").strip() or (ctx.get("site") or "").strip()) if ctx_has_site else "")
+        or (session.get("omada_site_name") or "").strip()
         or (session.get("site") or "").strip()
-        or (ctx.get("site_name") or "").strip()
-        or (ctx.get("site") or "").strip()
+        or (((ctx.get("site_name") or "").strip() or (ctx.get("site") or "").strip()) if not ctx_has_site else "")
         or None
     )
     if site_name and looks_like_omada_site_id(site_name):
@@ -11082,7 +11441,7 @@ def site_deployment_for_portal_context(session: Optional[dict] = None, payload: 
     site_row = find_site_deployment_by_omada(site_id, site_name)
     if site_row:
         return site_row
-    ssid_name = (session.get("ssid") or ctx.get("ssid") or "").strip()
+    ssid_name = ((ctx.get("ssid") or "").strip() if ctx_has_site else "") or (session.get("ssid") or "").strip() or (ctx.get("ssid") or "").strip()
     if ssid_name:
         return find_site_deployment_by_ssid_name(ssid_name)
     return None
@@ -11365,11 +11724,12 @@ def find_unique_recent_gateway_session_for_request(cur, request: Request) -> Opt
 
 
 def find_current_gateway_session_for_omada_device_name(cur, ctx: dict, request: Request) -> Optional[dict]:
-    """Carry active access across 2G/5G randomized MACs when Omada proves the same device name.
+    """Carry active access when Omada proves the same device name.
 
     Captive portal popups do not always preserve browser cookies or localStorage between
-    SSIDs. This fallback is intentionally narrow: same Omada site, same non-generic
-    Omada hostname, active gateway time, and exactly one matching active session.
+    SSIDs or stations. This fallback is intentionally narrow: current live Omada client,
+    same non-generic Omada hostname, active gateway time, and exactly one matching active
+    session. If two active customers have the same Omada device name, it refuses to guess.
     """
     if not portal_effective_mac_from_context(ctx):
         return None
@@ -11379,7 +11739,7 @@ def find_current_gateway_session_for_omada_device_name(cur, ctx: dict, request: 
         snapshots = fetch_omada_client_snapshot_map(force=True)
         current_snapshot = omada_snapshot_for_mac(portal_effective_mac_from_context(ctx), snapshots)
     current_name_key = omada_device_name_key((current_snapshot or {}).get("device_name") or (current_snapshot or {}).get("hostname"))
-    if not current_name_key:
+    if not current_name_key or not (current_snapshot or {}).get("active"):
         return None
     cur.execute(
         """
@@ -11406,8 +11766,6 @@ def find_current_gateway_session_for_omada_device_name(cur, ctx: dict, request: 
     )
     matches = []
     for row in cur.fetchall():
-        if not omada_site_matches_context(row, ctx, current_snapshot):
-            continue
         candidate_macs = portal_device_mac_values(
             row.get("omada_client_mac"),
             row.get("mikrotik_client_mac"),
@@ -11415,10 +11773,10 @@ def find_current_gateway_session_for_omada_device_name(cur, ctx: dict, request: 
             row.get("latest_auth_client_mac"),
             row.get("previous_client_macs") or [],
         )
-        candidate_name_keys = {
-            omada_device_name_key((omada_snapshot_for_mac(mac, snapshots) or {}).get("device_name") or (omada_snapshot_for_mac(mac, snapshots) or {}).get("hostname"))
-            for mac in candidate_macs
-        }
+        candidate_name_keys = set()
+        for mac in candidate_macs:
+            snapshot = omada_snapshot_for_mac(mac, snapshots)
+            candidate_name_keys.add(omada_device_name_key((snapshot or {}).get("device_name") or (snapshot or {}).get("hostname")))
         if current_name_key in candidate_name_keys:
             matches.append(row)
     return matches[0] if len(matches) == 1 else None
@@ -11569,6 +11927,7 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             ctx["site_name"] = ssid_site.get("site_name")
             ctx["site"] = ssid_site.get("omada_site_id") or ssid_site.get("site_name")
     omada_site_id, omada_site_name = resolve_omada_site_from_context(ctx)
+    ctx_site_value = ctx["site"] or ctx["site_id"] or ctx["site_name"]
     current_gateway_session = find_current_gateway_session_for_context(cur, ctx, request)
     omada_device_gateway_session = None
     if source == "OMADA" and not current_gateway_session:
@@ -11685,7 +12044,24 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             omada_client_mac = COALESCE(EXCLUDED.omada_client_mac, portal_sessions.omada_client_mac),
             omada_ap_mac = COALESCE(EXCLUDED.omada_ap_mac, portal_sessions.omada_ap_mac),
             omada_gateway_mac = COALESCE(EXCLUDED.omada_gateway_mac, portal_sessions.omada_gateway_mac),
-            omada_token_encrypted = COALESCE(EXCLUDED.omada_token_encrypted, portal_sessions.omada_token_encrypted),
+            omada_token_encrypted = CASE
+                WHEN EXCLUDED.omada_token_encrypted IS NOT NULL THEN EXCLUDED.omada_token_encrypted
+                WHEN EXCLUDED.source = 'OMADA'
+                     AND (
+                        (
+                            EXCLUDED.omada_client_mac IS NOT NULL
+                            AND portal_sessions.omada_client_mac IS NOT NULL
+                            AND regexp_replace(lower(EXCLUDED.omada_client_mac::text), '[^a-f0-9]', '', 'g') <> regexp_replace(lower(portal_sessions.omada_client_mac::text), '[^a-f0-9]', '', 'g')
+                        )
+                        OR (
+                            EXCLUDED.omada_site_id IS NOT NULL
+                            AND portal_sessions.omada_site_id IS NOT NULL
+                            AND EXCLUDED.omada_site_id <> portal_sessions.omada_site_id
+                        )
+                     )
+                THEN NULL
+                ELSE portal_sessions.omada_token_encrypted
+            END,
             omada_redirect_url = COALESCE(EXCLUDED.omada_redirect_url, portal_sessions.omada_redirect_url),
             mikrotik_client_mac = COALESCE(EXCLUDED.mikrotik_client_mac, portal_sessions.mikrotik_client_mac),
             mikrotik_client_ip = COALESCE(EXCLUDED.mikrotik_client_ip, portal_sessions.mikrotik_client_ip),
@@ -11721,7 +12097,7 @@ def ensure_portal_session(cur, payload: PortalSessionRequest, request: Request):
             ctx["client_ip"] or "",
             ctx["ap_mac"],
             ctx["ssid"],
-            ctx["site"],
+            ctx_site_value,
             ctx["gateway"],
             ctx["nas_id"],
             ctx["redirect_url"],
@@ -12696,6 +13072,19 @@ def normalize_store_purchase_lookup_code(value: str) -> str:
     return normalize_payment_text(raw_text, 160).upper().replace(" ", "").replace("-", "")
 
 
+def normalize_store_remittance_lookup_code(value: str) -> str:
+    raw_text = str(value or "").strip()
+    if not raw_text:
+        return ""
+    parsed = urlparse(raw_text)
+    if parsed.scheme and parsed.netloc:
+        query = {key.lower(): val for key, val in parse_qsl(parsed.query, keep_blank_values=True)}
+        raw_text = query.get("remittance_id") or query.get("code") or query.get("public_id") or raw_text
+    if raw_text.upper().startswith("3JREMIT:"):
+        raw_text = raw_text.split(":", 1)[1]
+    return normalize_payment_text(raw_text, 160).upper().replace(" ", "").replace("-", "")
+
+
 def store_portal_url(params: Optional[dict] = None) -> str:
     return append_url_params("https://net.3jhotspot.com/store", params or {})
 
@@ -12718,6 +13107,10 @@ STORE_REMITTANCE_ACTIVE_STATUSES = {
     "CASH_PICKUP_REQUESTED",
     "CASH_PICKUP_SCHEDULED",
 }
+STORE_REMITTANCE_SUCCESS_STATUSES = {"PAID", "COLLECTED"}
+
+STORE_OWNER_SESSION_SECONDS = max(3600, int(os.getenv("STORE_OWNER_SESSION_SECONDS", str(24 * 60 * 60))))
+STORE_REMITTANCE_CHECKOUT_WINDOW_SECONDS = max(300, int(os.getenv("STORE_REMITTANCE_CHECKOUT_WINDOW_SECONDS", str(30 * 60))))
 
 
 def generate_store_remittance_public_id() -> str:
@@ -12733,14 +13126,89 @@ def store_remittance_minimum_goal_centavos() -> int:
     return int(STORE_PROGRESSIVE_COMMISSION_TIERS[0]["threshold_centavos"])
 
 
+def store_month_start(value: Optional[str | date] = None) -> date:
+    if isinstance(value, date):
+        return value.replace(day=1)
+    text = str(value or "").strip()
+    if text:
+        try:
+            return date.fromisoformat(text[:10]).replace(day=1)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Selected remittance month is invalid.") from exc
+    return datetime.now(timezone.utc).date().replace(day=1)
+
+
+def store_next_month_start(month_start: date) -> date:
+    if month_start.month == 12:
+        return date(month_start.year + 1, 1, 1)
+    return date(month_start.year, month_start.month + 1, 1)
+
+
+def store_month_end(month_start: date) -> date:
+    return store_next_month_start(month_start) - timedelta(days=1)
+
+
+def store_sales_month_label(month_start: date, current: bool = False) -> str:
+    if current:
+        return f"{calendar.month_name[month_start.month]} Sales"
+    return f"{calendar.month_name[month_start.month]} {month_start.year} Sales"
+
+
+def store_remittance_checkout_expiry(row: Optional[dict]) -> Optional[datetime]:
+    if not row or row.get("method") != "ONLINE" or row.get("status") != "CHECKOUT_CREATED":
+        return None
+    created_at = aware_utc(row.get("created_at"))
+    if not created_at:
+        return None
+    return created_at + timedelta(seconds=STORE_REMITTANCE_CHECKOUT_WINDOW_SECONDS)
+
+
+def expire_store_remittance_checkouts(cur, store_id=None):
+    params = [STORE_REMITTANCE_CHECKOUT_WINDOW_SECONDS]
+    store_clause = ""
+    if store_id:
+        store_clause = "AND store_id = %s"
+        params.append(store_id)
+    cur.execute(
+        f"""
+        UPDATE store_remittances
+        SET status = 'EXPIRED',
+            last_error = 'Online checkout expired before payment was completed.',
+            updated_at = now()
+        WHERE method = 'ONLINE'
+          AND status = 'CHECKOUT_CREATED'
+          AND created_at <= now() - (%s || ' seconds')::interval
+          {store_clause}
+        RETURNING id
+        """,
+        tuple(params),
+    )
+    expired_ids = [row["id"] for row in (cur.fetchall() or [])]
+    if expired_ids:
+        cur.execute(
+            """
+            UPDATE store_purchase_requests
+            SET remittance_id = NULL,
+                updated_at = now()
+            WHERE remittance_id = ANY(%s::uuid[])
+            """,
+            (expired_ids,),
+        )
+    return expired_ids
+
+
 def serialize_store_remittance(row: Optional[dict]) -> dict:
     if not row:
         return {}
     status = row.get("status") or "REQUESTED"
     method = row.get("method") or "CASH_PICKUP"
+    cancelable = (method == "CASH_PICKUP" and status == "CASH_PICKUP_REQUESTED") or (method == "ONLINE" and status == "CHECKOUT_CREATED")
+    checkout_expires_at = store_remittance_checkout_expiry(row)
+    checkout_remaining_seconds = max(0, int((checkout_expires_at - datetime.now(timezone.utc)).total_seconds())) if checkout_expires_at else 0
+    public_id = row.get("public_id") or ""
     return {
         "id": str(row["id"]),
-        "public_id": row.get("public_id") or "",
+        "public_id": public_id,
         "store_id": str(row["store_id"]) if row.get("store_id") else None,
         "owner_id": str(row["owner_id"]) if row.get("owner_id") else None,
         "provider": row.get("provider") or "PAYMONGO",
@@ -12753,6 +13221,7 @@ def serialize_store_remittance(row: Optional[dict]) -> dict:
         }.get(method, method.replace("_", " ").title()),
         "status": status,
         "status_label": status.replace("_", " ").title(),
+        "cancelable": cancelable,
         "gross_sales_centavos": int(row.get("gross_sales_centavos") or 0),
         "gross_sales_display": money_display_from_centavos(row.get("gross_sales_centavos") or 0),
         "amount_centavos": int(row.get("amount_centavos") or 0),
@@ -12762,56 +13231,71 @@ def serialize_store_remittance(row: Optional[dict]) -> dict:
         "sales_period_end": row.get("sales_period_end"),
         "checkout_session_id": row.get("checkout_session_id") or "",
         "checkout_url": row.get("checkout_url") or "",
+        "checkout_expires_at": checkout_expires_at,
+        "checkout_remaining_seconds": checkout_remaining_seconds,
+        "checkout_window_seconds": STORE_REMITTANCE_CHECKOUT_WINDOW_SECONDS if checkout_expires_at else 0,
+        "checkout_expired": bool(checkout_expires_at and checkout_remaining_seconds <= 0),
         "pickup_requested_at": row.get("pickup_requested_at"),
         "pickup_scheduled_at": row.get("pickup_scheduled_at"),
         "pickup_completed_at": row.get("pickup_completed_at"),
         "paid_at": row.get("paid_at"),
         "last_error": row.get("last_error") or "",
         "notes": row.get("notes") or "",
+        "qr_payload": f"3JREMIT:{public_id}" if public_id and status == "CASH_PICKUP_SCHEDULED" else "",
         "created_at": row.get("created_at"),
         "updated_at": row.get("updated_at"),
     }
 
 
-def store_unremitted_sales_summary(cur, store_id) -> dict:
+def store_unremitted_sales_summary(cur, store_id, period_start: Optional[date] = None) -> dict:
+    month_start = store_month_start(period_start)
+    next_month = store_next_month_start(month_start)
     cur.execute(
         """
         SELECT
           COUNT(*)::int AS request_count,
-          COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
-        FROM store_purchase_requests
-        WHERE store_id = %s
-          AND status = 'APPROVED'
-          AND approved_at >= date_trunc('month', now())
-          AND remittance_id IS NULL
+          COALESCE(SUM(spr.amount_centavos), 0)::bigint AS amount_centavos
+        FROM store_purchase_requests spr
+        LEFT JOIN store_remittances sr ON sr.id = spr.remittance_id
+        WHERE spr.store_id = %s
+          AND spr.status = 'APPROVED'
+          AND spr.approved_at >= %s::date
+          AND spr.approved_at < %s::date
+          AND (spr.remittance_id IS NULL OR COALESCE(sr.status, '') <> ALL(%s::text[]))
         """,
-        (store_id,),
+        (store_id, month_start, next_month, list(STORE_REMITTANCE_SUCCESS_STATUSES)),
     )
     row = cur.fetchone() or {}
     amount = int(row.get("amount_centavos") or 0)
     return {
+        "period_start": month_start,
+        "period_end": min(datetime.now(timezone.utc).date(), store_month_end(month_start)) if month_start == store_month_start() else store_month_end(month_start),
         "request_count": int(row.get("request_count") or 0),
         "amount_centavos": amount,
         "amount_display": money_display_from_centavos(amount),
     }
 
 
-def store_monthly_sales_centavos(cur, store_id) -> int:
+def store_monthly_sales_centavos(cur, store_id, period_start: Optional[date] = None) -> int:
+    month_start = store_month_start(period_start)
+    next_month = store_next_month_start(month_start)
     cur.execute(
         """
         SELECT COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
         FROM store_purchase_requests
         WHERE store_id = %s
           AND status = 'APPROVED'
-          AND approved_at >= date_trunc('month', now())
+          AND approved_at >= %s::date
+          AND approved_at < %s::date
         """,
-        (store_id,),
+        (store_id, month_start, next_month),
     )
     row = cur.fetchone() or {}
     return int(row.get("amount_centavos") or 0)
 
 
 def store_latest_active_remittance(cur, store_id) -> Optional[dict]:
+    expire_store_remittance_checkouts(cur, store_id)
     cur.execute(
         """
         SELECT *
@@ -12832,12 +13316,105 @@ def store_latest_remittance(cur, store_id) -> Optional[dict]:
         SELECT *
         FROM store_remittances
         WHERE store_id = %s
+          AND status = ANY(%s::text[])
         ORDER BY created_at DESC
         LIMIT 1
         """,
-        (store_id,),
+        (store_id, list(STORE_REMITTANCE_SUCCESS_STATUSES)),
     )
     return cur.fetchone()
+
+
+def store_monthly_remittance_history(cur, store_id, limit: int = 18) -> list[dict]:
+    current_month = store_month_start()
+    active = store_latest_active_remittance(cur, store_id)
+    cur.execute(
+        """
+        SELECT
+          date_trunc('month', spr.approved_at)::date AS month_start,
+          COUNT(*)::int AS request_count,
+          COALESCE(SUM(spr.amount_centavos), 0)::bigint AS sales_centavos,
+          COUNT(*) FILTER (WHERE spr.remittance_id IS NULL OR COALESCE(sr.status, '') <> ALL(%s::text[]))::int AS unremitted_request_count,
+          COALESCE(SUM(spr.amount_centavos) FILTER (WHERE spr.remittance_id IS NULL OR COALESCE(sr.status, '') <> ALL(%s::text[])), 0)::bigint AS unremitted_centavos
+        FROM store_purchase_requests spr
+        LEFT JOIN store_remittances sr ON sr.id = spr.remittance_id
+        WHERE spr.store_id = %s
+          AND spr.status = 'APPROVED'
+          AND spr.approved_at IS NOT NULL
+        GROUP BY date_trunc('month', spr.approved_at)::date
+        ORDER BY month_start DESC
+        LIMIT %s
+        """,
+        (list(STORE_REMITTANCE_SUCCESS_STATUSES), list(STORE_REMITTANCE_SUCCESS_STATUSES), store_id, max(1, min(int(limit or 18), 60))),
+    )
+    sales_rows = cur.fetchall() or []
+    cur.execute(
+        """
+        SELECT *
+        FROM store_remittances
+        WHERE store_id = %s
+          AND status = ANY(%s::text[])
+        ORDER BY sales_period_start DESC, created_at DESC
+        LIMIT 200
+        """,
+        (store_id, list(STORE_REMITTANCE_SUCCESS_STATUSES)),
+    )
+    remittance_rows = cur.fetchall() or []
+    month_map: dict[date, dict] = {}
+    for row in sales_rows:
+        month_start = store_month_start(row.get("month_start"))
+        month_map[month_start] = {
+            "month_start": month_start,
+            "request_count": int(row.get("request_count") or 0),
+            "sales_centavos": int(row.get("sales_centavos") or 0),
+            "unremitted_request_count": int(row.get("unremitted_request_count") or 0),
+            "unremitted_centavos": int(row.get("unremitted_centavos") or 0),
+            "remittances": [],
+        }
+    for row in remittance_rows:
+        month_start = store_month_start(row.get("sales_period_start"))
+        month_map.setdefault(month_start, {
+            "month_start": month_start,
+            "request_count": 0,
+            "sales_centavos": 0,
+            "unremitted_request_count": 0,
+            "unremitted_centavos": 0,
+            "remittances": [],
+        })
+        month_map[month_start]["remittances"].append(serialize_store_remittance(row))
+    months = []
+    for month_start in sorted(month_map.keys(), reverse=True):
+        row = month_map[month_start]
+        unremitted = int(row.get("unremitted_centavos") or 0)
+        is_current = month_start == current_month
+        is_finished_month = month_start < current_month
+        has_active = bool(active)
+        eligible = unremitted > 0 and not has_active and is_finished_month
+        disabled_reason = ""
+        if has_active and unremitted > 0:
+            disabled_reason = "Resolve the active remittance first."
+        elif unremitted > 0 and not is_finished_month:
+            disabled_reason = "Current month can be remitted after the month ends."
+        elif unremitted > 0 and is_finished_month:
+            disabled_reason = "Finished month can be remitted."
+        months.append({
+            "month_start": month_start.isoformat(),
+            "month_end": (min(datetime.now(timezone.utc).date(), store_month_end(month_start)) if is_current else store_month_end(month_start)).isoformat(),
+            "label": store_sales_month_label(month_start, current=is_current),
+            "is_current_month": is_current,
+            "is_finished_month": is_finished_month,
+            "request_count": int(row.get("request_count") or 0),
+            "sales_centavos": int(row.get("sales_centavos") or 0),
+            "sales_display": money_display_from_centavos(row.get("sales_centavos") or 0),
+            "unremitted_request_count": int(row.get("unremitted_request_count") or 0),
+            "unremitted_sales_centavos": unremitted,
+            "unremitted_sales_display": money_display_from_centavos(unremitted),
+            "remittances": row.get("remittances") or [],
+            "eligible": eligible,
+            "remit_now": eligible,
+            "disabled_reason": disabled_reason,
+        })
+    return months
 
 
 def store_remittance_summary(cur, store_id, sales_month_centavos: int) -> dict:
@@ -12845,13 +13422,20 @@ def store_remittance_summary(cur, store_id, sales_month_centavos: int) -> dict:
     active = store_latest_active_remittance(cur, store_id)
     latest = store_latest_remittance(cur, store_id)
     minimum = store_remittance_minimum_goal_centavos()
+    monthly_history = store_monthly_remittance_history(cur, store_id)
+    eligible_months = [month for month in monthly_history if month.get("eligible")]
     return {
-        "eligible": int(sales_month_centavos or 0) >= minimum,
+        "eligible": len(eligible_months) > 0,
         "minimum_goal_centavos": minimum,
         "minimum_goal_display": money_display_from_centavos(minimum),
+        "current_month_start": store_month_start().isoformat(),
+        "current_month_label": store_sales_month_label(store_month_start(), current=True),
         "unremitted_sales_centavos": unremitted["amount_centavos"],
         "unremitted_sales_display": unremitted["amount_display"],
         "unremitted_request_count": unremitted["request_count"],
+        "monthly_history": monthly_history,
+        "eligible_month_count": len(eligible_months),
+        "has_remit_now": len(eligible_months) > 0,
         "pending": serialize_store_remittance(active) if active else None,
         "latest": serialize_store_remittance(latest) if latest else None,
     }
@@ -12867,20 +13451,25 @@ def create_store_remittance(
     requested_by_owner_id=None,
     scheduled_by_admin_id=None,
     notes: Optional[str] = None,
+    sales_period_start: Optional[str | date] = None,
+    pickup_scheduled_at: Optional[datetime] = None,
     require_goal: bool = True,
 ) -> dict:
+    period_start = store_month_start(sales_period_start)
+    next_period_start = store_next_month_start(period_start)
+    period_end = min(datetime.now(timezone.utc).date(), store_month_end(period_start)) if period_start == store_month_start() else store_month_end(period_start)
     active = store_latest_active_remittance(cur, store_id)
     if active:
         raise HTTPException(status_code=400, detail=f"Store already has an active remittance request: {active.get('public_id')}.")
-    unremitted = store_unremitted_sales_summary(cur, store_id)
+    unremitted = store_unremitted_sales_summary(cur, store_id, period_start)
     amount = int(unremitted.get("amount_centavos") or 0)
     if amount <= 0:
-        raise HTTPException(status_code=400, detail="No unremitted approved sales were found for this month.")
-    monthly_sales = store_monthly_sales_centavos(cur, store_id)
-    if require_goal and monthly_sales < store_remittance_minimum_goal_centavos():
-        raise HTTPException(status_code=400, detail=f"Remittance unlocks after the first monthly goal: {money_display_from_centavos(store_remittance_minimum_goal_centavos())}.")
-    period_start, period_end = store_remittance_period()
+        raise HTTPException(status_code=400, detail="No unremitted approved sales were found for the selected month.")
+    selected_month_finished = period_start < store_month_start()
+    if require_goal and not selected_month_finished:
+        raise HTTPException(status_code=400, detail="Current month sales can be remitted after the month ends.")
     public_id = generate_store_remittance_public_id()
+    scheduled_at = aware_utc(pickup_scheduled_at) if pickup_scheduled_at else datetime.now(timezone.utc)
     cur.execute("SELECT 1 FROM store_remittances WHERE public_id = %s", (public_id,))
     while cur.fetchone():
         public_id = generate_store_remittance_public_id()
@@ -12895,7 +13484,7 @@ def create_store_remittance(
         )
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
                 CASE WHEN %s IN ('CASH_PICKUP', 'MANUAL_CASH_PICKUP') THEN now() ELSE NULL END,
-                CASE WHEN %s = 'MANUAL_CASH_PICKUP' THEN now() ELSE NULL END,
+                CASE WHEN %s = 'MANUAL_CASH_PICKUP' THEN %s ELSE NULL END,
                 %s, %s, %s)
         RETURNING *
         """,
@@ -12911,6 +13500,7 @@ def create_store_remittance(
             period_end,
             method,
             method,
+            scheduled_at,
             requested_by_owner_id,
             scheduled_by_admin_id,
             normalize_payment_text(notes, 1000),
@@ -12924,10 +13514,11 @@ def create_store_remittance(
             updated_at = now()
         WHERE store_id = %s
           AND status = 'APPROVED'
-          AND approved_at >= date_trunc('month', now())
+          AND approved_at >= %s::date
+          AND approved_at < %s::date
           AND remittance_id IS NULL
         """,
-        (remittance["id"], store_id),
+        (remittance["id"], store_id, period_start, next_period_start),
     )
     return remittance
 
@@ -12978,6 +13569,7 @@ def serialize_store_owner(row: Optional[dict], include_store: bool = False) -> d
     if include_store:
         commission_type = normalize_physical_store_commission_type(row.get("commission_type"))
         commission_value = normalize_physical_store_commission_value(commission_type, row.get("commission_value"))
+        commission_tiers = serialize_store_progressive_commission_tiers(row.get("commission_tiers_json"))
         data["store_pwa"] = public_store_pwa_settings()
         data["store"] = {
             "id": str(row["store_id"]) if row.get("store_id") else None,
@@ -12990,6 +13582,7 @@ def serialize_store_owner(row: Optional[dict], include_store: bool = False) -> d
             "commission_type_label": store_commission_type_label(commission_type),
             "commission_value": float(commission_value),
             "commission_value_display": store_commission_value_display(commission_type, commission_value),
+            "commission_tiers": commission_tiers,
         }
     return data
 
@@ -12998,7 +13591,7 @@ def create_store_owner_session(cur, owner: dict, request: Request, device_token:
     token = generate_store_owner_session_token()
     token_hash = store_owner_token_hash(token)
     device_hash = portal_device_token_hash(device_token)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=4)
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=STORE_OWNER_SESSION_SECONDS)
     cur.execute(
         """
         INSERT INTO store_owner_sessions(owner_id, token_hash, device_token_hash, user_agent, ip_address, expires_at, last_seen_at)
@@ -13016,6 +13609,49 @@ def create_store_owner_session(cur, owner: dict, request: Request, device_token:
     )
     cur.execute("UPDATE physical_store_owners SET last_login_at = now(), updated_at = now() WHERE id = %s", (owner["id"],))
     return {"token": token, "expires_at": expires_at}
+
+
+def upsert_store_owner_trusted_device(cur, owner_id, device_hash: Optional[str], request: Request, label: str = "Verified store device"):
+    if not device_hash:
+        return None
+    cur.execute(
+        """
+        INSERT INTO store_owner_trusted_devices(owner_id, device_token_hash, device_label, user_agent, last_ip, last_seen_at)
+        VALUES (%s, %s, %s, %s, NULLIF(%s, '')::inet, now())
+        ON CONFLICT (owner_id, device_token_hash) DO UPDATE
+        SET status = 'ACTIVE',
+            device_label = COALESCE(NULLIF(EXCLUDED.device_label, ''), store_owner_trusted_devices.device_label),
+            user_agent = EXCLUDED.user_agent,
+            last_ip = EXCLUDED.last_ip,
+            last_seen_at = now(),
+            updated_at = now()
+        RETURNING *
+        """,
+        (
+            owner_id,
+            device_hash,
+            normalize_payment_text(label, 120),
+            normalize_payment_text(request.headers.get("user-agent"), 500),
+            request.client.host if request and request.client else "",
+        ),
+    )
+    return cur.fetchone()
+
+
+def store_owner_device_seen_before(cur, owner_id, device_hash: Optional[str]) -> bool:
+    if not device_hash:
+        return False
+    cur.execute(
+        """
+        SELECT 1
+        FROM store_owner_sessions
+        WHERE owner_id = %s
+          AND device_token_hash = %s
+        LIMIT 1
+        """,
+        (owner_id, device_hash),
+    )
+    return cur.fetchone() is not None
 
 
 def store_owner_push_notification_status(cur, owner: dict) -> dict:
@@ -13052,15 +13688,14 @@ def current_store_owner(request: Request, credentials: HTTPAuthorizationCredenti
             cur.execute(
                 """
                 SELECT so.*, ps.store_name, ps.image_url, ps.barangay, ps.municipality, ps.status AS store_status,
-                       ps.commission_type, ps.commission_value,
+                       ps.commission_type, ps.commission_value, ps.commission_tiers_json,
                        sos.id AS session_id, sos.device_token_hash AS session_device_token_hash, sos.expires_at,
                        sos.pin_verified_until
-                FROM store_owner_sessions sos
+	                FROM store_owner_sessions sos
                 JOIN physical_store_owners so ON so.id = sos.owner_id
                 JOIN physical_stores ps ON ps.id = so.store_id
 	                WHERE sos.token_hash = %s
 	                  AND sos.expires_at > now()
-	                  AND sos.created_at > now() - interval '4 hours'
 	                  AND so.status = 'ACTIVE'
                   AND ps.status = 'ACTIVE'
                 LIMIT 1
@@ -13075,15 +13710,19 @@ def current_store_owner(request: Request, credentials: HTTPAuthorizationCredenti
                 UPDATE store_owner_sessions
                 SET last_seen_at = now(),
                     ip_address = NULLIF(%s, '')::inet,
-                    user_agent = %s
+                    user_agent = %s,
+                    expires_at = GREATEST(expires_at, now() + (%s || ' seconds')::interval)
                 WHERE id = %s
                 """,
                 (
                     request.client.host if request and request.client else "",
                     normalize_payment_text(request.headers.get("user-agent"), 500),
+                    STORE_OWNER_SESSION_SECONDS,
                     owner["session_id"],
                 ),
             )
+            owner["expires_at"] = max(aware_utc(owner["expires_at"]), datetime.now(timezone.utc) + timedelta(seconds=STORE_OWNER_SESSION_SECONDS))
+            upsert_store_owner_trusted_device(cur, owner["id"], owner.get("session_device_token_hash"), request, label="Store portal device")
             return owner
 
 
@@ -13288,7 +13927,8 @@ def verify_store_owner_challenge(cur, challenge_id: str, code: str, purpose: str
                ps.municipality,
                ps.status AS store_status,
                ps.commission_type,
-               ps.commission_value
+               ps.commission_value,
+               ps.commission_tiers_json
         FROM store_owner_login_challenges c
                 JOIN physical_store_owners so ON so.id = c.owner_id
                 JOIN physical_stores ps ON ps.id = so.store_id
@@ -14881,14 +15521,17 @@ def omada_remote_authorization_covers_until(session: dict, target_until) -> dict
 def refresh_omada_session_identity_from_live_client(cur, session: dict, user: Optional[dict] = None, profile: Optional[dict] = None, payload: Optional[PortalSessionRequest] = None, request: Optional[Request] = None, reason: str = "ACTIVE_ITEM_ACTIVATION") -> dict:
     if not session or session.get("source") != "OMADA" or not session.get("id"):
         return {"status": "SKIPPED", "session": session, "reason": "not_omada"}
+    ctx = portal_context(payload) if payload else {}
     site_row = site_deployment_for_portal_context(session, payload)
     site_id = (
-        normalize_payment_text(session.get("omada_site_id"), 120)
+        normalize_payment_text(ctx.get("site_id"), 120)
         or normalize_payment_text((site_row or {}).get("omada_site_id"), 120)
+        or normalize_payment_text(session.get("omada_site_id"), 120)
     )
     site_name = (
-        normalize_payment_text(session.get("omada_site_name") or session.get("site"), 160)
+        normalize_payment_text(ctx.get("site_name") or ctx.get("site"), 160)
         or normalize_payment_text((site_row or {}).get("site_name"), 160)
+        or normalize_payment_text(session.get("omada_site_name") or session.get("site"), 160)
     )
     identity = omada_payment_auth_free_identity(session, user, profile, payload, request)
     resolved, resolution = resolve_omada_payment_auth_free_identity(
@@ -14984,7 +15627,7 @@ def refresh_omada_session_identity_from_live_client(cur, session: dict, user: Op
     return {"status": "UPDATED", "session": session, "resolution": sanitize_summary(resolution)}
 
 
-def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active_items: list[dict], request: Request = None, reason: str = "ACTIVE_ITEM_REFRESH") -> dict:
+def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active_items: list[dict], request: Request = None, reason: str = "ACTIVE_ITEM_REFRESH", payload: Optional[PortalSessionRequest] = None) -> dict:
     if not session or session.get("source") not in {"OMADA", "MIKROTIK"}:
         return {"status": "NOT_REQUIRED"}
     now = datetime.now(timezone.utc)
@@ -15002,7 +15645,7 @@ def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active
     if session.get("source") == "OMADA":
         try:
             profile = portal_profile_for_user(cur, target_item.get("user_id"))
-            identity_payload = PortalSessionRequest(
+            identity_payload = payload or PortalSessionRequest(
                 portal_session_id=session.get("public_session_id"),
                 raw_query_params=dict(request.query_params) if request else {},
             )
@@ -15049,6 +15692,23 @@ def ensure_gateway_authorization_for_active_bag_items(cur, session: dict, active
     voucher = ensure_bag_item_voucher(cur, target_item)
     duration_seconds = max(int((target_until - now).total_seconds()), 1)
     portal_payload = payment_fulfillment_payload_from_session(session, voucher["code"])
+    if payload:
+        ctx = portal_context(payload)
+        portal_payload = portal_payload.model_copy(update={
+            "client_mac": ctx.get("client_mac") or portal_payload.client_mac,
+            "client_ip": ctx.get("client_ip") or portal_payload.client_ip,
+            "ap_mac": ctx.get("ap_mac") or portal_payload.ap_mac,
+            "gateway_mac": ctx.get("gateway_mac") or portal_payload.gateway_mac,
+            "vlan_id": ctx.get("vlan_id") or portal_payload.vlan_id,
+            "ssid": ctx.get("ssid") or portal_payload.ssid,
+            "site": ctx.get("site") or ctx.get("site_name") or portal_payload.site,
+            "site_id": ctx.get("site_id") or portal_payload.site_id,
+            "redirect_url": ctx.get("redirect_url") or portal_payload.redirect_url,
+            "radioId": ctx.get("radio_id") or portal_payload.radioId,
+            "token": ctx.get("auth_token") or portal_payload.token,
+            "authToken": ctx.get("auth_token") or portal_payload.authToken,
+            "raw_query_params": ctx.get("raw_query_params") or portal_payload.raw_query_params,
+        })
     if session["source"] == "OMADA":
         authorization = attempt_omada_authorization(cur, session, voucher, {"id": target_item["user_id"]}, duration_seconds, target_until, portal_payload)
     else:
@@ -15715,13 +16375,13 @@ def activate_customer_bag_item(cur, item: dict, session: dict, request: Request,
     return {"status": "SUCCESS", "message": "Product item activated.", "item": active_item, "identity_refresh": sanitize_summary(identity_refresh), "authorization": sanitize_summary(authorization), "iptv": sanitize_summary(iptv_coverage), "speed_limit": sanitize_summary(speed_limit)}
 
 
-def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> dict:
+def refresh_customer_bag_for_session(cur, session: dict, request: Request, payload: Optional[PortalSessionRequest] = None) -> dict:
     if not session or not session.get("user_id"):
         return {"session": session, "bag": customer_bag_payload(cur, None), "activation": None}
     settings = ensure_customer_bag_settings(cur, session["user_id"])
     overlap = bag_overlap_seconds()
     activation = None
-    network_presence = portal_network_presence(session, request)
+    network_presence = portal_network_presence(session, request, payload)
     on_3j_network = network_presence.get("connected_to_3j_ap") is True
     cur.execute(
         """
@@ -15773,7 +16433,7 @@ def refresh_customer_bag_for_session(cur, session: dict, request: Request) -> di
                 break
 
     if internet_active_for_device and session.get("source") in {"OMADA", "MIKROTIK"} and on_3j_network:
-        gateway_sync = ensure_gateway_authorization_for_active_bag_items(cur, session, internet_active_for_device, request, "ACTIVE_ITEM_REFRESH")
+        gateway_sync = ensure_gateway_authorization_for_active_bag_items(cur, session, internet_active_for_device, request, "ACTIVE_ITEM_REFRESH", payload)
         if gateway_sync.get("status") == "SUCCESS":
             cur.execute("SELECT * FROM portal_sessions WHERE id = %s", (session["id"],))
             session = cur.fetchone()
@@ -17610,6 +18270,7 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
                 details = portal_client.external_portal_ssid_status_if_supported(site_id, desired_ssids)
                 status["details"] = sanitize_summary(details)
                 status["portal_enabled"] = bool(details.get("all_portal_enabled"))
+                status["guest_enabled"] = bool(details.get("all_guest_enabled"))
                 status["https_redirect_enabled"] = bool(details.get("all_https_redirect_enabled"))
                 if not details.get("all_present"):
                     missing = [item.get("ssid") for item in details.get("ssids", []) if not item.get("exists")]
@@ -17617,6 +18278,9 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
                 elif not details.get("all_portal_enabled"):
                     missing = [item.get("ssid") for item in details.get("ssids", []) if not item.get("portal_enabled")]
                     status["portal_error"] = f"SSID not attached to Omada portal: {', '.join(missing)}" if missing else "Desired SSIDs are not attached to an enabled external portal."
+                elif not details.get("all_guest_enabled"):
+                    missing = [item.get("ssid") for item in details.get("ssids", []) if item.get("guest_enabled") is not True]
+                    status["portal_error"] = f"SSID guest/captive mode is disabled: {', '.join(missing)}" if missing else "Omada guest/captive mode is disabled for one or more desired SSIDs."
                 try:
                     pre_auth = portal_client.pre_auth_access_status_if_supported(site_id, portal_url, extra_hosts=iptv_pre_auth_hosts())
                     status["pre_auth_access"] = sanitize_summary(pre_auth)
@@ -17644,6 +18308,7 @@ def omada_portal_ap_coverage(api_configured: bool, client: Optional[OmadaApiClie
             {"key": "portal_url_https", "label": "Portal URL uses HTTPS", "passed": portal_url_https, "message": portal_url if portal_url_https else f"Current portal URL is not HTTPS: {portal_url or '-'}"},
             {"key": "desired_ssids", "label": "Site SSIDs configured", "passed": bool(desired_ssids), "message": ", ".join(desired_ssids) if desired_ssids else "Configure the captive SSID names for this site."},
             {"key": "ssid_portal_binding", "label": "SSID attached to External Portal", "passed": True if status.get("live_check_skipped") else bool(status.get("portal_enabled")), "skipped": bool(status.get("live_check_skipped")), "message": status.get("readiness_note") or status.get("portal_error") or "Desired SSID(s) are attached to Omada External Portal."},
+            {"key": "ssid_guest_mode", "label": "SSID guest/captive mode enabled", "passed": True if status.get("live_check_skipped") else bool(status.get("guest_enabled")), "skipped": bool(status.get("live_check_skipped")), "message": status.get("readiness_note") or status.get("portal_error") or "Desired SSID(s) are marked as guest/captive in Omada."},
             {"key": "https_redirect_disabled", "label": "Omada HTTPS Redirect disabled", "passed": not bool(status.get("https_redirect_enabled")), "message": "Omada HTTPS Redirect is disabled to avoid TP-Link self-signed certificate warnings." if not status.get("https_redirect_enabled") else "Disable Omada HTTPS Redirect; keep the external portal URL on HTTPS instead."},
             {"key": "pre_auth_access", "label": "Pre-auth access allows portal/payment/IPTV hosts", "passed": True if status.get("live_check_skipped") else bool(status.get("pre_auth_ready")), "skipped": bool(status.get("live_check_skipped")), "message": status.get("readiness_note") or status.get("pre_auth_error") or "Pre-auth access includes portal, payment, and IPTV hosts."},
         ]
@@ -17955,15 +18620,39 @@ def station_portal_office_access_subnet() -> str:
         return "192.168.50.0/24"
 
 
-def station_portal_host_ip(portal_url: Optional[str]) -> Optional[str]:
+def station_portal_host(portal_url: Optional[str]) -> Optional[str]:
     parsed = urlparse(portal_url if "://" in str(portal_url or "") else f"http://{portal_url or ''}")
     host = parsed.hostname
+    if not host:
+        return None
+    return host.strip()
+
+
+def station_portal_host_ip(portal_url: Optional[str]) -> Optional[str]:
+    host = station_portal_host(portal_url)
     if not host:
         return None
     try:
         return str(ip_address(host))
     except ValueError:
         return None
+
+
+def station_portal_whitelist_address_list(vlan_id: int) -> str:
+    return f"3J-STATION-V{int(vlan_id)}-PORTAL-WHITELIST"
+
+
+def station_portal_whitelist_entries(portal_url: Optional[str]) -> list[str]:
+    host = station_portal_host(portal_url)
+    if not host:
+        return []
+    try:
+        address = str(ip_address(host))
+        if "." in address:
+            return [address]
+    except ValueError:
+        return [host]
+    return []
 
 
 def station_iptv_local_web_host_ip() -> Optional[str]:
@@ -18076,9 +18765,9 @@ def attempt_omada_authorization(cur, session, voucher, user, duration_seconds: i
     if session_site_name and looks_like_omada_site_id(session_site_name):
         session_site_id = session_site_id or session_site_name
         session_site_name = None
-    site_row = find_site_deployment_by_omada(session_site_id or ctx_site_id or global_site_id, session_site_name or ctx_site_name or global_site_name)
-    site_id = (site_row or {}).get("omada_site_id") or session_site_id or ctx_site_id or global_site_id
-    site_name = (site_row or {}).get("site_name") or session_site_name or ctx_site_name or global_site_name
+    site_row = find_site_deployment_by_omada(ctx_site_id or session_site_id or global_site_id, ctx_site_name or session_site_name or global_site_name)
+    site_id = (site_row or {}).get("omada_site_id") or ctx_site_id or session_site_id or global_site_id
+    site_name = (site_row or {}).get("site_name") or ctx_site_name or session_site_name or global_site_name
     client_mac = ctx["client_mac"] or session.get("omada_client_mac") or session.get("client_mac")
     ap_mac = ctx["ap_mac"] or session.get("omada_ap_mac") or session.get("ap_mac")
     gateway_mac = ctx["gateway_mac"] or session.get("omada_gateway_mac") or session.get("gateway_mac")
@@ -18787,6 +19476,7 @@ def create_or_update_portal_session(payload: PortalSessionRequest, request: Requ
                 portal_session_has_current_gateway_access(session)
                 or (local_bridge_request and network_presence.get("connected_to_3j_ap") is True)
             ) else None
+            pwa_install = public_portal_pwa_install_context(cur, session, profile)
     set_portal_session_cookies(response, session["public_session_id"], device_token)
     return {
         "portal_session_id": session["public_session_id"],
@@ -18803,7 +19493,7 @@ def create_or_update_portal_session(payload: PortalSessionRequest, request: Requ
         "network_presence": network_presence,
         "profile": public_portal_profile(profile),
         "monthly_subscriber": (monthly_access or {}).get("monthly_subscriber"),
-        "pwa_install": public_portal_pwa_install_context(cur, session, profile),
+        "pwa_install": pwa_install,
         "blocked_device": None,
     }
 
@@ -19099,6 +19789,7 @@ def save_portal_profile(payload: PortalProfileSaveRequest, request: Request, res
                 welcome_sms_result = send_portal_welcome_sms_if_enabled(cur, session, profile, request)
             device_token = ensure_portal_device_token(cur, session, payload.device_token)
             response_message = gift_settings["profile_saved_message"] if profile.get("welcome_gift_status") == "AVAILABLE" else "Profile saved."
+            pwa_install = public_portal_pwa_install_context(cur, session, profile)
     set_portal_session_cookies(response, session["public_session_id"], device_token)
     return {
         "status": "SUCCESS",
@@ -19106,7 +19797,7 @@ def save_portal_profile(payload: PortalProfileSaveRequest, request: Request, res
         "portal_session_id": session["public_session_id"],
         "device_token": device_token,
         "profile": public_portal_profile(profile),
-        "pwa_install": public_portal_pwa_install_context(cur, session, profile),
+        "pwa_install": pwa_install,
         "welcome_sms": sanitize_summary(welcome_sms_result or {}),
     }
 
@@ -19388,7 +20079,7 @@ def portal_push_greeting(payload: PortalSessionRequest, request: Request):
             if not subscriptions:
                 return {"status": "NO_SUBSCRIPTIONS", "sent": 0, "message": "No saved phone notification subscription yet."}
 
-            bag_refresh = refresh_customer_bag_for_session(cur, session, request)
+            bag_refresh = refresh_customer_bag_for_session(cur, session, request, payload)
             session = bag_refresh["session"]
             bag = bag_refresh["bag"]
             user_identity = portal_user_identity(cur, session)
@@ -20834,7 +21525,7 @@ def portal_status(portal_session_id: str, request: Request, quiet: bool = False)
                     "message": blocked_response["message"],
                     "blocked_device": blocked_response,
                 }
-            bag_refresh = refresh_customer_bag_for_session(cur, session, request)
+            bag_refresh = refresh_customer_bag_for_session(cur, session, request, current_context_payload)
             session = bag_refresh["session"]
             bag = bag_refresh["bag"]
             user_identity = portal_user_identity(cur, session)
@@ -20911,6 +21602,7 @@ def portal_status(portal_session_id: str, request: Request, quiet: bool = False)
                 bag = customer_bag_payload(cur, session.get("user_id"))
             network_presence = portal_network_presence(session, request, current_context_payload)
             portal_settings_row = public_captive_portal_settings()
+            pwa_install = public_portal_pwa_install_context(cur, session, profile)
     return {
         "status": session["status"],
         "portal_session_id": session["public_session_id"],
@@ -20940,7 +21632,7 @@ def portal_status(portal_session_id: str, request: Request, quiet: bool = False)
         "last_voucher_redemption": redemption,
         "profile": public_portal_profile(profile),
         "monthly_subscriber": access_view.get("monthly_subscriber"),
-        "pwa_install": public_portal_pwa_install_context(cur, session, profile),
+        "pwa_install": pwa_install,
         "message": session["last_error"] or access_view["message"],
         "blocked_device": None,
     }
@@ -22083,6 +22775,25 @@ def process_store_remittance_paymongo_webhook(cur, remittance: dict, payload: di
             (provider_payment_id, event_id, Json(sanitize_summary(payload)), remittance["id"]),
         )
         updated = cur.fetchone() or remittance
+        if updated.get("sales_period_start") and updated.get("sales_period_end"):
+            cur.execute(
+                """
+                UPDATE store_purchase_requests
+                SET remittance_id = %s,
+                    updated_at = now()
+                WHERE store_id = %s
+                  AND status = 'APPROVED'
+                  AND approved_at >= %s::date
+                  AND approved_at < (%s::date + interval '1 day')
+                  AND remittance_id IS NULL
+                """,
+                (
+                    updated["id"],
+                    updated["store_id"],
+                    updated["sales_period_start"],
+                    updated["sales_period_end"],
+                ),
+            )
         create_admin_notification(
             "STORE_CASH_COLLECTION",
             "SUCCESS",
@@ -22793,7 +23504,7 @@ PRODUCT_DISCOUNT_TYPES = {"PERCENT", "FIXED"}
 PRODUCT_CATEGORY_ACCESS_SCOPES = {"ALL_LOCATIONS", "BARANGAY_ONLY"}
 PRODUCT_CATEGORY_STATUSES = {"ACTIVE", "DISABLED"}
 PHYSICAL_STORE_STATUSES = {"SETUP", "ACTIVE", "DISABLED"}
-PHYSICAL_STORE_COMMISSION_TYPES = {"PERCENT_OF_SALES", "FIXED_MONTHLY"}
+PHYSICAL_STORE_COMMISSION_TYPES = {"PERCENT_OF_SALES", "FIXED_MONTHLY", "PROGRESSIVE_PERCENT"}
 ITEM_COLOR_PALETTE = [
     {"key": "coral", "label": "Coral", "hex": "#fb7185"},
     {"key": "orange", "label": "Orange", "hex": "#f97316"},
@@ -23073,13 +23784,17 @@ def normalize_physical_store_commission_type(value: Optional[str]) -> str:
         "PERCENT": "PERCENT_OF_SALES",
         "PERCENTAGE": "PERCENT_OF_SALES",
         "PERCENTAGE_OF_SALES": "PERCENT_OF_SALES",
+        "PROGRESSIVE": "PROGRESSIVE_PERCENT",
+        "PROGRESSIVE_COMMISSION": "PROGRESSIVE_PERCENT",
+        "PROGRESSIVE_PERCENTAGE": "PROGRESSIVE_PERCENT",
+        "PROGRESSIVE_PERCENT_OF_SALES": "PROGRESSIVE_PERCENT",
         "FIXED": "FIXED_MONTHLY",
         "FIXED_PRICE_MONTHLY": "FIXED_MONTHLY",
         "MONTHLY_FIXED": "FIXED_MONTHLY",
     }
     commission_type = aliases.get(commission_type, commission_type)
     if commission_type not in PHYSICAL_STORE_COMMISSION_TYPES:
-        raise HTTPException(status_code=400, detail="Store commission type must be Percent of Sales or Fixed Monthly.")
+        raise HTTPException(status_code=400, detail="Store commission type must be Percent of Sales, Fixed Monthly, or Progressive Percent.")
     return commission_type
 
 
@@ -23096,7 +23811,11 @@ def normalize_physical_store_commission_value(commission_type: str, value) -> De
 
 
 def store_commission_type_label(commission_type: Optional[str]) -> str:
-    return "Fixed Monthly" if commission_type == "FIXED_MONTHLY" else "Percent of Sales"
+    if commission_type == "FIXED_MONTHLY":
+        return "Fixed Monthly"
+    if commission_type == "PROGRESSIVE_PERCENT":
+        return "Progressive Percent"
+    return "Percent of Sales"
 
 
 def store_commission_value_display(commission_type: Optional[str], value) -> str:
@@ -23106,20 +23825,105 @@ def store_commission_value_display(commission_type: Optional[str], value) -> str
         amount = Decimal("0.00")
     if commission_type == "FIXED_MONTHLY":
         return money_display_from_centavos(int((amount * 100).to_integral_value(rounding=ROUND_HALF_UP)))
+    if commission_type == "PROGRESSIVE_PERCENT":
+        return "Progressive tiers"
     percent = f"{amount:.2f}".rstrip("0").rstrip(".")
     return f"{percent}%"
 
 
-def store_period_commission_centavos(gross_centavos: int, commission_type: Optional[str], commission_value) -> int:
+def normalize_store_progressive_commission_tiers(value=None) -> list[dict]:
+    raw_tiers = value
+    if raw_tiers in (None, ""):
+        raw_tiers = STORE_PROGRESSIVE_COMMISSION_TIERS
+    if isinstance(raw_tiers, str):
+        try:
+            raw_tiers = json.loads(raw_tiers)
+        except (TypeError, json.JSONDecodeError):
+            raw_tiers = []
+    if not isinstance(raw_tiers, list):
+        raw_tiers = []
+    normalized = []
+    seen_thresholds = set()
+    for tier in raw_tiers:
+        if not isinstance(tier, dict):
+            continue
+        try:
+            threshold_centavos = tier.get("threshold_centavos")
+            if threshold_centavos is None:
+                threshold_amount = Decimal(str(tier.get("threshold_amount") if tier.get("threshold_amount") is not None else "0"))
+                threshold_centavos = int((threshold_amount * 100).to_integral_value(rounding=ROUND_HALF_UP))
+            else:
+                threshold_centavos = int(threshold_centavos)
+            rate = Decimal(str(tier.get("rate_percent") if tier.get("rate_percent") is not None else "0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+        if threshold_centavos <= 0 or rate < 0 or rate > Decimal("100"):
+            continue
+        if threshold_centavos in seen_thresholds:
+            continue
+        seen_thresholds.add(threshold_centavos)
+        normalized.append({"threshold_centavos": threshold_centavos, "rate_percent": rate})
+    normalized.sort(key=lambda item: item["threshold_centavos"])
+    return normalized or [dict(tier) for tier in STORE_PROGRESSIVE_COMMISSION_TIERS]
+
+
+def serialize_store_progressive_commission_tiers(value=None) -> list[dict]:
+    tiers = normalize_store_progressive_commission_tiers(value)
+    serialized = []
+    for tier in tiers:
+        rate = Decimal(str(tier["rate_percent"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        rate_display = f"{rate:.2f}".rstrip("0").rstrip(".")
+        threshold = int(tier["threshold_centavos"])
+        serialized.append({
+            "threshold_centavos": threshold,
+            "threshold_amount": threshold / 100,
+            "threshold_display": money_display_from_centavos(threshold),
+            "rate_percent": float(rate),
+            "rate_display": f"{rate_display}%",
+        })
+    return serialized
+
+
+def physical_store_commission_tiers_for_db(value=None) -> list[dict]:
+    raw_tiers = []
+    for tier in value or []:
+        if hasattr(tier, "dict"):
+            raw_tiers.append(tier.dict())
+        else:
+            raw_tiers.append(tier)
+    return [
+        {
+            "threshold_centavos": int(tier["threshold_centavos"]),
+            "rate_percent": float(Decimal(str(tier["rate_percent"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)),
+        }
+        for tier in normalize_store_progressive_commission_tiers(raw_tiers)
+    ]
+
+
+def store_period_commission_centavos(gross_centavos: int, commission_type: Optional[str], commission_value, commission_tiers=None) -> int:
     gross = max(0, int(gross_centavos or 0))
     try:
         value = Decimal(str(commission_value if commission_value is not None else "0"))
     except (InvalidOperation, ValueError):
         value = Decimal("0")
-    if gross <= 0 or value <= 0:
+    if gross <= 0:
         return 0
     if commission_type == "FIXED_MONTHLY":
+        if value <= 0:
+            return 0
         return int((value * 100).to_integral_value(rounding=ROUND_HALF_UP))
+    if commission_type == "PROGRESSIVE_PERCENT":
+        active_rate = Decimal("0")
+        for tier in normalize_store_progressive_commission_tiers(commission_tiers):
+            if gross >= int(tier["threshold_centavos"]):
+                active_rate = Decimal(str(tier["rate_percent"]))
+            else:
+                break
+        if active_rate <= 0:
+            return 0
+        return int((Decimal(gross) * (active_rate / Decimal("100"))).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if value <= 0:
+        return 0
     return int((Decimal(gross) * (value / Decimal("100"))).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
@@ -23132,12 +23936,13 @@ STORE_PROGRESSIVE_COMMISSION_TIERS = [
 ]
 
 
-def store_progressive_commission_goal(gross_centavos: int, daily_rows: Optional[list] = None) -> dict:
+def store_progressive_commission_goal(gross_centavos: int, daily_rows: Optional[list] = None, commission_tiers=None) -> dict:
     gross = max(0, int(gross_centavos or 0))
+    configured_tiers = normalize_store_progressive_commission_tiers(commission_tiers)
     tiers = []
     current_tier = None
     next_tier = None
-    for index, tier in enumerate(STORE_PROGRESSIVE_COMMISSION_TIERS, start=1):
+    for index, tier in enumerate(configured_tiers, start=1):
         threshold = int(tier["threshold_centavos"])
         rate = Decimal(tier["rate_percent"])
         rate_display = f"{rate:.2f}".rstrip("0").rstrip(".")
@@ -23186,12 +23991,13 @@ def store_progressive_commission_goal(gross_centavos: int, daily_rows: Optional[
         "estimated_commission_centavos": estimated_commission,
         "estimated_commission_display": money_display_from_centavos(estimated_commission),
         "headline": headline,
-        "history": store_progressive_commission_goal_history(daily_rows or [], int(STORE_PROGRESSIVE_COMMISSION_TIERS[-1]["threshold_centavos"])),
+        "history": store_progressive_commission_goal_history(daily_rows or [], int(configured_tiers[-1]["threshold_centavos"]), configured_tiers),
     }
 
 
-def store_progressive_commission_goal_history(daily_rows: list, top_goal_centavos: int) -> list:
+def store_progressive_commission_goal_history(daily_rows: list, top_goal_centavos: int, commission_tiers=None) -> list:
     top_goal = max(1, int(top_goal_centavos or 1))
+    configured_tiers = normalize_store_progressive_commission_tiers(commission_tiers)
     today = datetime.now(timezone.utc).date()
     cursor_day = today.replace(day=1)
     amount_by_day = {}
@@ -23210,7 +24016,7 @@ def store_progressive_commission_goal_history(daily_rows: list, top_goal_centavo
         key = cursor_day.isoformat()
         running_total += amount_by_day.get(key, 0)
         goal_percent = min(100, round((running_total / top_goal) * 100, 2))
-        reached_count = len([tier for tier in STORE_PROGRESSIVE_COMMISSION_TIERS if running_total >= int(tier["threshold_centavos"])])
+        reached_count = len([tier for tier in configured_tiers if running_total >= int(tier["threshold_centavos"])])
         history.append({
             "date": key,
             "label": cursor_day.strftime("%b %-d") if os.name != "nt" else cursor_day.strftime("%b %#d"),
@@ -24039,6 +24845,7 @@ def serialize_physical_store(row, site_map: Optional[dict[str, list[dict]]] = No
     distance_meters = row.get("distance_meters") if isinstance(row, dict) else None
     commission_type = normalize_physical_store_commission_type(row.get("commission_type"))
     commission_value = normalize_physical_store_commission_value(commission_type, row.get("commission_value"))
+    commission_tiers = serialize_store_progressive_commission_tiers(row.get("commission_tiers_json"))
     return {
         "id": store_id,
         "store_name": row.get("store_name") or "",
@@ -24057,6 +24864,7 @@ def serialize_physical_store(row, site_map: Optional[dict[str, list[dict]]] = No
         "commission_type_label": store_commission_type_label(commission_type),
         "commission_value": float(commission_value),
         "commission_value_display": store_commission_value_display(commission_type, commission_value),
+        "commission_tiers": commission_tiers,
         "status": row.get("status") or "ACTIVE",
         "notes": row.get("notes") or "",
         "owner": {
@@ -25257,27 +26065,43 @@ def send_sales_telegram_report(store: dict, message: str):
     return sanitize_summary(response.json())
 
 
-def build_sales_payload(range_days: int = 30) -> dict:
+def build_sales_payload(range_days: int = 30, start_date: str = "", end_date: str = "") -> dict:
     days = max(1, min(int(range_days or 30), 365))
-    params = (days,)
+
+    def parse_filter_date(value: str) -> Optional[date]:
+        text = normalize_payment_text(value, 20)
+        if not text:
+            return None
+        try:
+            return date.fromisoformat(text[:10])
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Date filters must use YYYY-MM-DD format.") from exc
+
+    selected_start_date = parse_filter_date(start_date)
+    selected_end_date = parse_filter_date(end_date)
+    if selected_start_date and selected_end_date and selected_end_date < selected_start_date:
+        raise HTTPException(status_code=400, detail="End date cannot be earlier than start date.")
+
+    now_utc = datetime.now(timezone.utc)
+    range_start = datetime.combine(selected_start_date, datetime.min.time(), tzinfo=timezone.utc) if selected_start_date else now_utc - timedelta(days=days)
+    range_end = datetime.combine(selected_end_date + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc) if selected_end_date else now_utc + timedelta(seconds=1)
+    params = (range_start, range_end, list(STORE_REMITTANCE_SUCCESS_STATUSES))
+
     base_cte = """
         WITH sales_range AS (
-            SELECT %s::int AS days
+            SELECT %s::timestamptz AS start_at, %s::timestamptz AS end_at
         ),
-        store_item_summary AS (
+        store_item_summary AS MATERIALIZED (
             SELECT
                 request_id,
                 string_agg(
-                    CASE
-                        WHEN quantity > 1 THEN quantity::text || 'x ' || item_name
-                        ELSE item_name
-                    END,
+                    CASE WHEN quantity > 1 THEN quantity::text || 'x ' || item_name ELSE item_name END,
                     ', ' ORDER BY created_at ASC
                 ) AS item_names
             FROM store_purchase_request_items
             GROUP BY request_id
         ),
-        sale_rows AS (
+        online_sales AS (
             SELECT
                 po.id,
                 po.public_order_id,
@@ -25312,20 +26136,15 @@ def build_sales_payload(range_days: int = 30) -> dict:
                 p.display_name AS profile_display_name,
                 p.email AS profile_email,
                 p.contact_number AS profile_contact_number,
-                po.physical_store_id,
-                po_store.store_name AS physical_store_name,
-                po_store.commission_type,
-                COALESCE(po_store.commission_value, 0)::numeric AS commission_value,
-                CASE
-                    WHEN po_store.id IS NOT NULL AND po_store.commission_type = 'PERCENT_OF_SALES'
-                    THEN GREATEST(0, ROUND(po.amount_centavos * COALESCE(po_store.commission_value, 0) / 100.0)::bigint)
-                    ELSE 0
-                END AS commission_centavos,
-                CASE WHEN po.physical_store_id IS NOT NULL THEN 'PHYSICAL_STORE' ELSE 'ONLINE' END AS sale_channel
+                NULL::uuid AS physical_store_id,
+                NULL::text AS physical_store_name,
+                NULL::text AS commission_type,
+                0::numeric AS commission_value,
+                0::bigint AS commission_centavos,
+                'ONLINE'::text AS sale_channel
             FROM payment_orders po
             LEFT JOIN portal_sessions ps ON ps.id = po.portal_session_id
             LEFT JOIN portal_customer_profiles p ON p.user_id = po.user_id
-            LEFT JOIN physical_stores po_store ON po_store.id = po.physical_store_id
             LEFT JOIN LATERAL (
                 SELECT sd.*
                 FROM site_deployments sd
@@ -25340,9 +26159,13 @@ def build_sales_payload(range_days: int = 30) -> dict:
                 LIMIT 1
             ) sd ON true
             LEFT JOIN locations loc ON loc.id = sd.location_id
-            WHERE po.status = 'PAID'
-              AND COALESCE(po.paid_at, po.updated_at, po.created_at) >= now() - ((SELECT days FROM sales_range) * interval '1 day')
-            UNION ALL
+            WHERE po.provider = 'PAYMONGO'
+              AND po.physical_store_id IS NULL
+              AND po.status = 'PAID'
+              AND COALESCE(po.paid_at, po.updated_at, po.created_at) >= (SELECT start_at FROM sales_range)
+              AND COALESCE(po.paid_at, po.updated_at, po.created_at) < (SELECT end_at FROM sales_range)
+        ),
+        store_sales AS (
             SELECT
                 spr.id,
                 spr.public_id AS public_order_id,
@@ -25399,7 +26222,20 @@ def build_sales_payload(range_days: int = 30) -> dict:
             ) sd_store ON true
             LEFT JOIN locations loc_store ON loc_store.id = sd_store.location_id
             WHERE spr.status = 'APPROVED'
-              AND COALESCE(spr.approved_at, spr.updated_at, spr.created_at) >= now() - ((SELECT days FROM sales_range) * interval '1 day')
+              AND COALESCE(spr.approved_at, spr.updated_at, spr.created_at) >= (SELECT start_at FROM sales_range)
+              AND COALESCE(spr.approved_at, spr.updated_at, spr.created_at) < (SELECT end_at FROM sales_range)
+        ),
+        sale_rows AS MATERIALIZED (
+            SELECT * FROM online_sales
+            UNION ALL
+            SELECT * FROM store_sales
+        ),
+        unremitted_store_rows AS MATERIALIZED (
+            SELECT spr.id, spr.store_id, spr.amount_centavos
+            FROM store_purchase_requests spr
+            LEFT JOIN store_remittances sr ON sr.id = spr.remittance_id
+            WHERE spr.status = 'APPROVED'
+              AND (spr.remittance_id IS NULL OR COALESCE(sr.status, '') <> ALL(%s::text[]))
         ),
         fixed_commission_rows AS (
             SELECT
@@ -25413,143 +26249,140 @@ def build_sales_payload(range_days: int = 30) -> dict:
             GROUP BY physical_store_id, date_trunc('month', sale_at)
         )
     """
-    kpi_row = fetch_one(
+    report_row = fetch_one(
         base_cte
         + """
         SELECT
-            COALESCE(SUM(amount_centavos), 0)::bigint AS gross_sales_centavos,
-            COALESCE(SUM(commission_centavos), 0)::bigint AS percent_commission_centavos,
-            COALESCE((SELECT SUM(fixed_commission_centavos) FROM fixed_commission_rows), 0)::bigint AS fixed_commission_centavos,
-            COUNT(*)::int AS paid_orders,
-            COUNT(*) FILTER (WHERE fulfillment_status = 'FULFILLED')::int AS fulfilled_orders,
-            COUNT(*) FILTER (WHERE fulfillment_status = 'FAILED')::int AS failed_fulfillments,
-            COALESCE(ROUND(AVG(amount_centavos)), 0)::bigint AS average_order_centavos,
-            COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('day', now())), 0)::bigint AS today_sales_centavos,
-            COALESCE(SUM(commission_centavos) FILTER (WHERE sale_at >= date_trunc('day', now())), 0)::bigint AS today_percent_commission_centavos,
-            COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('month', now())), 0)::bigint AS month_sales_centavos,
-            COALESCE(SUM(commission_centavos) FILTER (WHERE sale_at >= date_trunc('month', now())), 0)::bigint AS month_percent_commission_centavos,
-            COALESCE((SELECT SUM(fixed_commission_centavos) FROM fixed_commission_rows WHERE month_start = date_trunc('month', now())), 0)::bigint AS month_fixed_commission_centavos
-        FROM sale_rows
+            COALESCE((
+                SELECT to_jsonb(kpis)
+                FROM (
+                    SELECT
+                        COALESCE(SUM(amount_centavos), 0)::bigint AS gross_sales_centavos,
+                        COALESCE(SUM(amount_centavos) FILTER (WHERE sale_channel = 'ONLINE'), 0)::bigint AS paymongo_sales_centavos,
+                        COALESCE(SUM(amount_centavos) FILTER (WHERE sale_channel = 'PHYSICAL_STORE'), 0)::bigint AS store_sales_centavos,
+                        COALESCE((SELECT SUM(amount_centavos) FROM unremitted_store_rows), 0)::bigint AS unremitted_store_sales_centavos,
+                        COALESCE(SUM(commission_centavos), 0)::bigint AS percent_commission_centavos,
+                        COALESCE((SELECT SUM(fixed_commission_centavos) FROM fixed_commission_rows), 0)::bigint AS fixed_commission_centavos,
+                        COUNT(*)::int AS paid_orders,
+                        COUNT(*) FILTER (WHERE sale_channel = 'ONLINE')::int AS paymongo_orders,
+                        COUNT(*) FILTER (WHERE sale_channel = 'PHYSICAL_STORE')::int AS store_orders,
+                        COUNT(*) FILTER (WHERE fulfillment_status = 'FULFILLED')::int AS fulfilled_orders,
+                        COUNT(*) FILTER (WHERE fulfillment_status = 'FAILED')::int AS failed_fulfillments,
+                        COALESCE(ROUND(AVG(amount_centavos)), 0)::bigint AS average_order_centavos,
+                        COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('day', now())), 0)::bigint AS today_sales_centavos,
+                        COALESCE(SUM(amount_centavos) FILTER (WHERE sale_channel = 'ONLINE' AND sale_at >= date_trunc('day', now())), 0)::bigint AS today_paymongo_sales_centavos,
+                        COALESCE(SUM(amount_centavos) FILTER (WHERE sale_channel = 'PHYSICAL_STORE' AND sale_at >= date_trunc('day', now())), 0)::bigint AS today_store_sales_centavos,
+                        COALESCE(SUM(commission_centavos) FILTER (WHERE sale_at >= date_trunc('day', now())), 0)::bigint AS today_percent_commission_centavos,
+                        COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('month', now())), 0)::bigint AS month_sales_centavos,
+                        COALESCE(SUM(amount_centavos) FILTER (WHERE sale_channel = 'ONLINE' AND sale_at >= date_trunc('month', now())), 0)::bigint AS month_paymongo_sales_centavos,
+                        COALESCE(SUM(amount_centavos) FILTER (WHERE sale_channel = 'PHYSICAL_STORE' AND sale_at >= date_trunc('month', now())), 0)::bigint AS month_store_sales_centavos,
+                        COALESCE(SUM(commission_centavos) FILTER (WHERE sale_at >= date_trunc('month', now())), 0)::bigint AS month_percent_commission_centavos,
+                        COALESCE((SELECT SUM(fixed_commission_centavos) FROM fixed_commission_rows WHERE month_start = date_trunc('month', now())), 0)::bigint AS month_fixed_commission_centavos,
+                        COALESCE((SELECT COUNT(*) FROM unremitted_store_rows), 0)::int AS unremitted_store_order_count
+                    FROM sale_rows
+                ) kpis
+            ), '{}'::jsonb) AS kpis,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(daily_summary) ORDER BY daily_summary.label)
+                FROM (
+                    SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS label,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+                           COUNT(*)::int AS order_count
+                    FROM sale_rows
+                    GROUP BY 1
+                ) daily_summary
+            ), '[]'::jsonb) AS daily_rows,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(site_summary) ORDER BY site_summary.amount_centavos DESC, site_summary.order_count DESC, site_summary.label ASC)
+                FROM (
+                    SELECT site_name AS label,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+                           COUNT(*)::int AS order_count
+                    FROM sale_rows
+                    GROUP BY 1
+                    ORDER BY amount_centavos DESC, order_count DESC, label ASC
+                    LIMIT 20
+                ) site_summary
+            ), '[]'::jsonb) AS site_rows,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(barangay_summary) ORDER BY barangay_summary.amount_centavos DESC, barangay_summary.order_count DESC, barangay_summary.label ASC)
+                FROM (
+                    SELECT barangay AS label,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+                           COUNT(*)::int AS order_count
+                    FROM sale_rows
+                    GROUP BY 1
+                    ORDER BY amount_centavos DESC, order_count DESC, label ASC
+                    LIMIT 20
+                ) barangay_summary
+            ), '[]'::jsonb) AS barangay_rows,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(store_summary) ORDER BY store_summary.amount_centavos DESC, store_summary.order_count DESC, store_summary.label ASC)
+                FROM (
+                    SELECT COALESCE(physical_store_name, 'Unknown Store') AS label,
+                           physical_store_id,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+                           COUNT(*)::int AS order_count
+                    FROM sale_rows
+                    WHERE sale_channel = 'PHYSICAL_STORE'
+                    GROUP BY 1, 2
+                    ORDER BY amount_centavos DESC, order_count DESC, label ASC
+                    LIMIT 20
+                ) store_summary
+            ), '[]'::jsonb) AS store_rows,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(site_daily) ORDER BY site_daily.date, site_daily.label)
+                FROM (
+                    SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS date,
+                           site_name AS label,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
+                    FROM sale_rows
+                    GROUP BY 1, 2
+                ) site_daily
+            ), '[]'::jsonb) AS site_daily_rows,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(store_daily) ORDER BY store_daily.date, store_daily.label)
+                FROM (
+                    SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS date,
+                           COALESCE(physical_store_name, 'Unknown Store') AS label,
+                           physical_store_id,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
+                    FROM sale_rows
+                    WHERE sale_channel = 'PHYSICAL_STORE'
+                    GROUP BY 1, 2, 3
+                ) store_daily
+            ), '[]'::jsonb) AS store_daily_rows,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(barangay_daily) ORDER BY barangay_daily.date, barangay_daily.label)
+                FROM (
+                    SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS date,
+                           barangay AS label,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
+                    FROM sale_rows
+                    GROUP BY 1, 2
+                ) barangay_daily
+            ), '[]'::jsonb) AS barangay_daily_rows
         """,
         params,
     ) or {}
-    daily_rows = fetch_all(
-        base_cte
-        + """
-        SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS label,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
-               COUNT(*)::int AS order_count
-        FROM sale_rows
-        GROUP BY 1
-        ORDER BY 1
-        """,
-        params,
-    )
-    site_rows = fetch_all(
-        base_cte
-        + """
-        SELECT site_name AS label,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
-               COUNT(*)::int AS order_count
-        FROM sale_rows
-        GROUP BY 1
-        ORDER BY amount_centavos DESC, order_count DESC, label ASC
-        LIMIT 20
-        """,
-        params,
-    )
-    barangay_rows = fetch_all(
-        base_cte
-        + """
-        SELECT barangay AS label,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
-               COUNT(*)::int AS order_count
-        FROM sale_rows
-        GROUP BY 1
-        ORDER BY amount_centavos DESC, order_count DESC, label ASC
-        LIMIT 20
-        """,
-        params,
-    )
-    store_rows = fetch_all(
-        base_cte
-        + """
-        SELECT COALESCE(physical_store_name, 'Unknown Store') AS label,
-               physical_store_id,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
-               COUNT(*)::int AS order_count
-        FROM sale_rows
-        WHERE sale_channel = 'PHYSICAL_STORE'
-        GROUP BY 1, 2
-        ORDER BY amount_centavos DESC, order_count DESC, label ASC
-        """,
-        params,
-    )
-    site_daily_rows = fetch_all(
-        base_cte
-        + """
-        SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS date,
-               site_name AS label,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
-        FROM sale_rows
-        GROUP BY 1, 2
-        ORDER BY 1, 2
-        """,
-        params,
-    )
-    store_daily_rows = fetch_all(
-        base_cte
-        + """
-        SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS date,
-               COALESCE(physical_store_name, 'Unknown Store') AS label,
-               physical_store_id,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
-        FROM sale_rows
-        WHERE sale_channel = 'PHYSICAL_STORE'
-        GROUP BY 1, 2, 3
-        ORDER BY 1, 2
-        """,
-        params,
-    )
-    barangay_daily_rows = fetch_all(
-        base_cte
-        + """
-        SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS date,
-               barangay AS label,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos
-        FROM sale_rows
-        GROUP BY 1, 2
-        ORDER BY 1, 2
-        """,
-        params,
-    )
-    order_rows = fetch_all(
-        base_cte
-        + """
-        SELECT *
-        FROM sale_rows
-        ORDER BY sale_at DESC
-        LIMIT 200
-        """,
-        params,
-    )
-    omada_name_by_mac = fetch_omada_client_name_map()
-    for row in order_rows:
-        mac = normalize_mac_if_valid(row.get("client_mac"))
-        row["device_name"] = omada_name_by_mac.get(mac) if mac else None
 
     def series_rows(rows):
         values = []
-        for row in rows:
+        for row in rows or []:
             mapped = dict(row)
             if mapped.get("physical_store_id"):
                 mapped["physical_store_id"] = str(mapped["physical_store_id"])
-            mapped["amount_centavos"] = int(row.get("amount_centavos") or 0)
-            mapped["amount_display"] = money_display_from_centavos(int(row.get("amount_centavos") or 0))
+            amount = int(mapped.get("amount_centavos") or 0)
+            mapped["amount_centavos"] = amount
+            mapped["amount_display"] = money_display_from_centavos(amount)
             values.append(mapped)
         return values
 
+    kpi_row = report_row.get("kpis") or {}
     gross = int(kpi_row.get("gross_sales_centavos") or 0)
+    paymongo_sales = int(kpi_row.get("paymongo_sales_centavos") or 0)
+    store_sales = int(kpi_row.get("store_sales_centavos") or 0)
+    unremitted_store_sales = int(kpi_row.get("unremitted_store_sales_centavos") or 0)
     percent_commission = int(kpi_row.get("percent_commission_centavos") or 0)
     fixed_commission = int(kpi_row.get("fixed_commission_centavos") or 0)
     commission = percent_commission + fixed_commission
@@ -25561,11 +26394,28 @@ def build_sales_payload(range_days: int = 30) -> dict:
     month = int(kpi_row.get("month_sales_centavos") or 0)
     month_commission = int(kpi_row.get("month_percent_commission_centavos") or 0) + int(kpi_row.get("month_fixed_commission_centavos") or 0)
     month_net = max(0, month - month_commission)
+    today_paymongo_sales = int(kpi_row.get("today_paymongo_sales_centavos") or 0)
+    today_store_sales = int(kpi_row.get("today_store_sales_centavos") or 0)
+    month_paymongo_sales = int(kpi_row.get("month_paymongo_sales_centavos") or 0)
+    month_store_sales = int(kpi_row.get("month_store_sales_centavos") or 0)
     return {
         "range_days": days,
+        "start_date": range_start.date().isoformat(),
+        "end_date": (selected_end_date or now_utc.date()).isoformat(),
+        "filters": {
+            "start_date": selected_start_date.isoformat() if selected_start_date else "",
+            "end_date": selected_end_date.isoformat() if selected_end_date else "",
+        },
         "kpis": {
             "gross_sales_centavos": gross,
             "gross_sales_display": money_display_from_centavos(gross),
+            "paymongo_sales_centavos": paymongo_sales,
+            "paymongo_sales_display": money_display_from_centavos(paymongo_sales),
+            "store_sales_centavos": store_sales,
+            "store_sales_display": money_display_from_centavos(store_sales),
+            "unremitted_store_sales_centavos": unremitted_store_sales,
+            "unremitted_store_sales_display": money_display_from_centavos(unremitted_store_sales),
+            "unremitted_store_order_count": int(kpi_row.get("unremitted_store_order_count") or 0),
             "commission_centavos": commission,
             "commission_display": money_display_from_centavos(commission),
             "percent_commission_centavos": percent_commission,
@@ -25575,37 +26425,47 @@ def build_sales_payload(range_days: int = 30) -> dict:
             "net_income_centavos": net,
             "net_income_display": money_display_from_centavos(net),
             "paid_orders": int(kpi_row.get("paid_orders") or 0),
+            "paymongo_orders": int(kpi_row.get("paymongo_orders") or 0),
+            "store_orders": int(kpi_row.get("store_orders") or 0),
             "fulfilled_orders": int(kpi_row.get("fulfilled_orders") or 0),
             "failed_fulfillments": int(kpi_row.get("failed_fulfillments") or 0),
             "average_order_centavos": average,
             "average_order_display": money_display_from_centavos(average),
             "today_sales_centavos": today,
             "today_sales_display": money_display_from_centavos(today),
+            "today_paymongo_sales_centavos": today_paymongo_sales,
+            "today_paymongo_sales_display": money_display_from_centavos(today_paymongo_sales),
+            "today_store_sales_centavos": today_store_sales,
+            "today_store_sales_display": money_display_from_centavos(today_store_sales),
             "today_commission_centavos": today_commission,
             "today_commission_display": money_display_from_centavos(today_commission),
             "today_net_income_centavos": today_net,
             "today_net_income_display": money_display_from_centavos(today_net),
             "month_sales_centavos": month,
             "month_sales_display": money_display_from_centavos(month),
+            "month_paymongo_sales_centavos": month_paymongo_sales,
+            "month_paymongo_sales_display": money_display_from_centavos(month_paymongo_sales),
+            "month_store_sales_centavos": month_store_sales,
+            "month_store_sales_display": money_display_from_centavos(month_store_sales),
             "month_commission_centavos": month_commission,
             "month_commission_display": money_display_from_centavos(month_commission),
             "month_net_income_centavos": month_net,
             "month_net_income_display": money_display_from_centavos(month_net),
         },
-        "daily_sales": series_rows(daily_rows),
-        "sales_by_site": series_rows(site_rows),
-        "sales_by_barangay": series_rows(barangay_rows),
-        "sales_by_store": series_rows(store_rows),
-        "daily_sales_by_site": series_rows(site_daily_rows),
-        "daily_sales_by_barangay": series_rows(barangay_daily_rows),
-        "daily_sales_by_store": series_rows(store_daily_rows),
-        "orders": [serialize_sales_order(row) for row in order_rows],
+        "daily_sales": series_rows(report_row.get("daily_rows")),
+        "sales_by_site": series_rows(report_row.get("site_rows")),
+        "sales_by_barangay": series_rows(report_row.get("barangay_rows")),
+        "sales_by_store": series_rows(report_row.get("store_rows")),
+        "daily_sales_by_site": series_rows(report_row.get("site_daily_rows")),
+        "daily_sales_by_barangay": series_rows(report_row.get("barangay_daily_rows")),
+        "daily_sales_by_store": series_rows(report_row.get("store_daily_rows")),
+        "orders": [],
     }
 
 
 @app.get("/api/sales")
-def get_sales(range_days: int = 30, admin=Depends(current_admin)):
-    return build_sales_payload(range_days)
+def get_sales(range_days: int = 30, start_date: str = "", end_date: str = "", admin=Depends(current_admin)):
+    return build_sales_payload(range_days, start_date=start_date, end_date=end_date)
 
 
 def build_paymongo_sales_payload(
@@ -25616,13 +26476,37 @@ def build_paymongo_sales_payload(
     fulfillment: str = "",
     payment_method: str = "",
     provider_mode: str = "",
+    start_date: str = "",
+    end_date: str = "",
 ) -> dict:
     days = max(1, min(int(range_days or 30), 365))
     selected_page = max(1, int(page or 1))
     selected_page_size = max(10, min(int(page_size or 20), 100))
     offset = (selected_page - 1) * selected_page_size
     filters = []
-    params: list = [days]
+    def parse_filter_date(value: str) -> Optional[date]:
+        text = normalize_payment_text(value, 20)
+        if not text:
+            return None
+        try:
+            return date.fromisoformat(text[:10])
+        except Exception:
+            raise HTTPException(status_code=400, detail="Date filters must use YYYY-MM-DD format.")
+
+    selected_start_date = parse_filter_date(start_date)
+    selected_end_date = parse_filter_date(end_date)
+    if selected_start_date and selected_end_date and selected_end_date < selected_start_date:
+        raise HTTPException(status_code=400, detail="End date cannot be earlier than start date.")
+    now_utc = datetime.now(timezone.utc)
+    if selected_start_date:
+        range_start = datetime.combine(selected_start_date, datetime.min.time(), tzinfo=timezone.utc)
+    else:
+        range_start = now_utc - timedelta(days=days)
+    if selected_end_date:
+        range_end = datetime.combine(selected_end_date + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+    else:
+        range_end = now_utc + timedelta(seconds=1)
+    params: list = [range_start, range_end]
     clean_search = normalize_payment_text(search, 120)
     clean_fulfillment = normalize_payment_text(fulfillment, 40).upper()
     clean_method = normalize_payment_text(payment_method, 80).lower()
@@ -25660,7 +26544,7 @@ def build_paymongo_sales_payload(
     filter_sql = (" AND " + " AND ".join(filters)) if filters else ""
     base_cte = f"""
         WITH sales_range AS (
-            SELECT %s::int AS days
+            SELECT %s::timestamptz AS start_at, %s::timestamptz AS end_at
         ),
         online_orders AS (
             SELECT
@@ -25731,99 +26615,103 @@ def build_paymongo_sales_payload(
             WHERE po.provider = 'PAYMONGO'
               AND po.physical_store_id IS NULL
               AND po.status = 'PAID'
-              AND COALESCE(po.paid_at, po.updated_at, po.created_at) >= now() - ((SELECT days FROM sales_range) * interval '1 day')
+              AND COALESCE(po.paid_at, po.updated_at, po.created_at) >= (SELECT start_at FROM sales_range)
+              AND COALESCE(po.paid_at, po.updated_at, po.created_at) < (SELECT end_at FROM sales_range)
         ),
-        filtered_orders AS (
+        filtered_orders AS MATERIALIZED (
             SELECT *
             FROM online_orders
             WHERE 1 = 1 {filter_sql}
         )
     """
-    kpi_row = fetch_one(
+    report_row = fetch_one(
         base_cte
         + """
         SELECT
-            COALESCE(SUM(amount_centavos), 0)::bigint AS gross_centavos,
-            COUNT(*)::int AS paid_orders,
-            COUNT(*) FILTER (WHERE fulfillment_status = 'FULFILLED')::int AS fulfilled_orders,
-            COUNT(*) FILTER (WHERE fulfillment_status = 'FAILED')::int AS failed_fulfillments,
-            COUNT(*) FILTER (WHERE fulfillment_status = 'PENDING')::int AS pending_fulfillments,
-            COALESCE(ROUND(AVG(amount_centavos)), 0)::bigint AS average_order_centavos,
-            COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('day', now())), 0)::bigint AS today_centavos,
-            COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('month', now())), 0)::bigint AS month_centavos,
-            COUNT(DISTINCT COALESCE(user_id::text, client_mac, public_order_id))::int AS customer_count,
-            COUNT(DISTINCT site_name)::int AS site_count,
-            COUNT(DISTINCT barangay)::int AS barangay_count
-        FROM filtered_orders
+            COALESCE((
+                SELECT to_jsonb(kpis)
+                FROM (
+                    SELECT
+                        COALESCE(SUM(amount_centavos), 0)::bigint AS gross_centavos,
+                        COUNT(*)::int AS paid_orders,
+                        COUNT(*) FILTER (WHERE fulfillment_status = 'FULFILLED')::int AS fulfilled_orders,
+                        COUNT(*) FILTER (WHERE fulfillment_status = 'FAILED')::int AS failed_fulfillments,
+                        COUNT(*) FILTER (WHERE fulfillment_status = 'PENDING')::int AS pending_fulfillments,
+                        COALESCE(ROUND(AVG(amount_centavos)), 0)::bigint AS average_order_centavos,
+                        COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('day', now())), 0)::bigint AS today_centavos,
+                        COALESCE(SUM(amount_centavos) FILTER (WHERE sale_at >= date_trunc('month', now())), 0)::bigint AS month_centavos,
+                        COUNT(DISTINCT COALESCE(user_id::text, client_mac, public_order_id))::int AS customer_count,
+                        COUNT(DISTINCT site_name)::int AS site_count,
+                        COUNT(DISTINCT barangay)::int AS barangay_count
+                    FROM filtered_orders
+                ) kpis
+            ), '{}'::jsonb) AS kpis,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(daily_summary) ORDER BY daily_summary.label)
+                FROM (
+                    SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS label,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+                           COUNT(*)::int AS order_count
+                    FROM filtered_orders
+                    GROUP BY 1
+                ) daily_summary
+            ), '[]'::jsonb) AS daily_rows,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(method_summary) ORDER BY method_summary.amount_centavos DESC, method_summary.order_count DESC, method_summary.label ASC)
+                FROM (
+                    SELECT lower(COALESCE(payment_method, 'unknown')) AS label,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+                           COUNT(*)::int AS order_count
+                    FROM filtered_orders
+                    GROUP BY 1
+                ) method_summary
+            ), '[]'::jsonb) AS method_rows,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(site_summary) ORDER BY site_summary.amount_centavos DESC, site_summary.order_count DESC, site_summary.label ASC)
+                FROM (
+                    SELECT site_name AS label,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+                           COUNT(*)::int AS order_count
+                    FROM filtered_orders
+                    GROUP BY 1
+                    ORDER BY amount_centavos DESC, order_count DESC, label ASC
+                    LIMIT 20
+                ) site_summary
+            ), '[]'::jsonb) AS site_rows,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(barangay_summary) ORDER BY barangay_summary.amount_centavos DESC, barangay_summary.order_count DESC, barangay_summary.label ASC)
+                FROM (
+                    SELECT barangay AS label,
+                           COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
+                           COUNT(*)::int AS order_count
+                    FROM filtered_orders
+                    GROUP BY 1
+                    ORDER BY amount_centavos DESC, order_count DESC, label ASC
+                    LIMIT 20
+                ) barangay_summary
+            ), '[]'::jsonb) AS barangay_rows,
+            COALESCE((
+                SELECT jsonb_agg(to_jsonb(order_page) ORDER BY order_page.sale_at DESC)
+                FROM (
+                    SELECT *, (SELECT COUNT(*) FROM filtered_orders)::int AS total_count
+                    FROM filtered_orders
+                    ORDER BY sale_at DESC
+                    LIMIT %s OFFSET %s
+                ) order_page
+            ), '[]'::jsonb) AS order_rows,
+            COALESCE((SELECT COUNT(*) FROM filtered_orders), 0)::int AS total_count
         """,
-        tuple(params),
+        tuple(params + [selected_page_size, offset]),
     ) or {}
-    daily_rows = fetch_all(
-        base_cte
-        + """
-        SELECT to_char(date_trunc('day', sale_at), 'YYYY-MM-DD') AS label,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
-               COUNT(*)::int AS order_count
-        FROM filtered_orders
-        GROUP BY 1
-        ORDER BY 1
-        """,
-        tuple(params),
-    )
-    method_rows = fetch_all(
-        base_cte
-        + """
-        SELECT lower(COALESCE(payment_method, 'unknown')) AS label,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
-               COUNT(*)::int AS order_count
-        FROM filtered_orders
-        GROUP BY 1
-        ORDER BY amount_centavos DESC, order_count DESC, label ASC
-        """,
-        tuple(params),
-    )
-    site_rows = fetch_all(
-        base_cte
-        + """
-        SELECT site_name AS label,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
-               COUNT(*)::int AS order_count
-        FROM filtered_orders
-        GROUP BY 1
-        ORDER BY amount_centavos DESC, order_count DESC, label ASC
-        LIMIT 20
-        """,
-        tuple(params),
-    )
-    barangay_rows = fetch_all(
-        base_cte
-        + """
-        SELECT barangay AS label,
-               COALESCE(SUM(amount_centavos), 0)::bigint AS amount_centavos,
-               COUNT(*)::int AS order_count
-        FROM filtered_orders
-        GROUP BY 1
-        ORDER BY amount_centavos DESC, order_count DESC, label ASC
-        LIMIT 20
-        """,
-        tuple(params),
-    )
-    order_params = tuple(params + [selected_page_size, offset])
-    order_rows = fetch_all(
-        base_cte
-        + """
-        SELECT *, COUNT(*) OVER()::int AS total_count
-        FROM filtered_orders
-        ORDER BY sale_at DESC
-        LIMIT %s OFFSET %s
-        """,
-        order_params,
-    )
-    total_count = int(order_rows[0].get("total_count") or 0) if order_rows else int(kpi_row.get("paid_orders") or 0)
-    omada_name_by_mac = fetch_omada_client_name_map()
+    kpi_row = report_row.get("kpis") or {}
+    daily_rows = report_row.get("daily_rows") or []
+    method_rows = report_row.get("method_rows") or []
+    site_rows = report_row.get("site_rows") or []
+    barangay_rows = report_row.get("barangay_rows") or []
+    order_rows = report_row.get("order_rows") or []
+    total_count = int(report_row.get("total_count") or 0)
     for row in order_rows:
-        mac = normalize_mac_if_valid(row.get("client_mac"))
-        row["device_name"] = omada_name_by_mac.get(mac) if mac else None
+        row["device_name"] = None
 
     def series_rows(rows):
         values = []
@@ -25842,11 +26730,15 @@ def build_paymongo_sales_payload(
     average = int(kpi_row.get("average_order_centavos") or 0)
     return {
         "range_days": days,
+        "start_date": range_start.date().isoformat(),
+        "end_date": (selected_end_date or now_utc.date()).isoformat(),
         "filters": {
             "search": clean_search,
             "fulfillment": clean_fulfillment,
             "payment_method": clean_method,
             "provider_mode": clean_mode,
+            "start_date": selected_start_date.isoformat() if selected_start_date else "",
+            "end_date": selected_end_date.isoformat() if selected_end_date else "",
         },
         "kpis": {
             "gross_earnings_centavos": gross,
@@ -25890,6 +26782,8 @@ def get_paymongo_sales(
     fulfillment: str = "",
     payment_method: str = "",
     provider_mode: str = "",
+    start_date: str = "",
+    end_date: str = "",
     admin=Depends(current_admin),
 ):
     return build_paymongo_sales_payload(
@@ -25900,6 +26794,8 @@ def get_paymongo_sales(
         fulfillment=fulfillment,
         payment_method=payment_method,
         provider_mode=provider_mode,
+        start_date=start_date,
+        end_date=end_date,
     )
 
 
@@ -26080,6 +26976,8 @@ def active_access_rows(omada_client_by_mac: Optional[dict] = None) -> list[dict]
                COALESCE(s.omada_ap_mac, s.ap_mac) AS ap_mac,
                s.ssid,
                COALESCE(s.omada_site_name, s.site) AS site,
+               COALESCE(s.omada_site_name, s.site) AS activated_site,
+               s.ssid AS activated_ssid,
                s.user_agent,
                s.omada_authorization_status,
                s.mikrotik_authorization_status
@@ -26133,6 +27031,8 @@ def active_access_rows(omada_client_by_mac: Optional[dict] = None) -> list[dict]
                COALESCE(s.omada_ap_mac, s.ap_mac) AS ap_mac,
                s.ssid,
                COALESCE(s.omada_site_name, s.site) AS site,
+               COALESCE(s.omada_site_name, s.site) AS activated_site,
+               s.ssid AS activated_ssid,
                s.user_agent,
                s.source AS portal_source,
                s.access_granted_at AS activated_at,
@@ -26521,13 +27421,157 @@ def fetch_portal_session_for_admin(cur, session_id: str):
     return row
 
 
+def clean_portal_ip(value: Optional[str]) -> Optional[str]:
+    text = host_ip(normalize_payment_text(value, 80))
+    if not text:
+        return None
+    try:
+        return str(ip_address(text))
+    except ValueError:
+        return None
+
+
+def find_or_create_admin_active_device_session(cur, payload: ActiveDeviceTimeAdjustRequest) -> dict:
+    client_mac = normalize_mac_if_valid(payload.client_mac)
+    client_ip = clean_portal_ip(payload.client_ip)
+    ap_mac = normalize_mac_if_valid(payload.ap_mac)
+    gateway_mac = normalize_mac_if_valid(payload.gateway_mac)
+    ssid = normalize_payment_text(payload.ssid, 160) or None
+    site_name = normalize_payment_text(payload.site, 160) or None
+    site_id = normalize_payment_text(payload.site_id, 160) or None
+    raw_source = normalize_payment_text(payload.source, 80).upper()
+    source = raw_source if raw_source in {"OMADA", "MIKROTIK", "MANUAL_TEST", "UNKNOWN"} else "UNKNOWN"
+    if source == "UNKNOWN" and client_mac and (site_id or site_name or ssid or ap_mac):
+        source = "OMADA"
+
+    if not client_mac and not client_ip:
+        raise HTTPException(status_code=400, detail="Active device row has no MAC or IP address to attach time.")
+
+    admin_access_marker = {
+        "admin_access": True,
+        "admin_access_source": "ACTIVE_DEVICES_QUICK_ADD",
+        "admin_access_marked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    site_row = find_site_deployment_by_omada(site_id, site_name) if (site_id or site_name) else None
+    omada_site_id = (site_row or {}).get("omada_site_id") or site_id or None
+    omada_site_name = (site_row or {}).get("site_name") or site_name or None
+
+    where = []
+    params = []
+    if client_mac:
+        where.append("upper(COALESCE(s.omada_client_mac, s.mikrotik_client_mac, s.client_mac, '')) = %s")
+        params.append(client_mac)
+    if client_ip:
+        where.append("s.client_ip = %s::inet")
+        params.append(client_ip)
+    cur.execute(
+        f"""
+        SELECT s.*
+        FROM portal_sessions s
+        WHERE {' OR '.join(where)}
+        ORDER BY
+            CASE WHEN s.status IN ('ACCESS_GRANTED', 'VOUCHER_REDEEMED') AND s.access_expires_at > now() THEN 0 ELSE 1 END,
+            s.updated_at DESC
+        LIMIT 1
+        FOR UPDATE
+        """,
+        tuple(params),
+    )
+    session = cur.fetchone()
+    if session:
+        cur.execute(
+            """
+            UPDATE portal_sessions
+            SET client_mac = COALESCE(%s, client_mac),
+                client_ip = COALESCE(%s::inet, client_ip),
+                ap_mac = COALESCE(%s, ap_mac),
+                ssid = COALESCE(%s, ssid),
+                site = COALESCE(%s, site),
+                source = CASE WHEN source IN ('UNKNOWN', 'MANUAL_TEST') THEN %s ELSE source END,
+                omada_site_id = COALESCE(%s, omada_site_id),
+                omada_site_name = COALESCE(%s, omada_site_name),
+                omada_client_mac = COALESCE(%s, omada_client_mac),
+                omada_ap_mac = COALESCE(%s, omada_ap_mac),
+                omada_gateway_mac = COALESCE(%s, omada_gateway_mac),
+                raw_query_params = COALESCE(raw_query_params, '{}'::jsonb) || %s,
+                omada_authorization_status = CASE
+                    WHEN %s = 'OMADA' AND omada_authorization_status IN ('NOT_REQUIRED', 'MANUAL_TEST') THEN 'PENDING'
+                    ELSE omada_authorization_status
+                END,
+                updated_at = now()
+            WHERE id = %s
+            RETURNING *
+            """,
+            (
+                client_mac,
+                client_ip,
+                ap_mac,
+                ssid,
+                omada_site_name or site_name,
+                source,
+                omada_site_id if source == "OMADA" else None,
+                omada_site_name if source == "OMADA" else None,
+                client_mac if source == "OMADA" else None,
+                ap_mac if source == "OMADA" else None,
+                gateway_mac if source == "OMADA" else None,
+                Json(admin_access_marker),
+                source,
+                session["id"],
+            ),
+        )
+        return cur.fetchone()
+
+    public_session_id = secrets.token_urlsafe(18)
+    cur.execute(
+        """
+        INSERT INTO portal_sessions(
+            public_session_id, client_mac, client_ip, ap_mac, ssid, site, user_agent, source,
+            gateway_mac, raw_query_params, omada_site_id, omada_site_name, omada_client_mac,
+            omada_ap_mac, omada_gateway_mac, omada_authorization_status, mikrotik_client_mac,
+            mikrotik_client_ip, mikrotik_authorization_status
+        )
+        VALUES (
+            %s, %s, %s::inet, %s, %s, %s, 'ADMIN_ACTIVE_DEVICE', %s,
+            %s, %s, %s, %s, %s,
+            %s, %s,
+            CASE WHEN %s = 'OMADA' THEN 'PENDING' ELSE 'NOT_REQUIRED' END,
+            %s, %s::inet,
+            CASE WHEN %s = 'MIKROTIK' THEN 'PENDING' ELSE 'NOT_REQUIRED' END
+        )
+        RETURNING *
+        """,
+        (
+            public_session_id,
+            client_mac,
+            client_ip,
+            ap_mac,
+            ssid,
+            omada_site_name or site_name,
+            source,
+            gateway_mac,
+            Json(admin_access_marker),
+            omada_site_id if source == "OMADA" else None,
+            omada_site_name if source == "OMADA" else None,
+            client_mac if source == "OMADA" else None,
+            ap_mac if source == "OMADA" else None,
+            gateway_mac if source == "OMADA" else None,
+            source,
+            client_mac if source == "MIKROTIK" else None,
+            client_ip if source == "MIKROTIK" else None,
+            source,
+        ),
+    )
+    return cur.fetchone()
+
+
 def sync_short_omada_expiry(cur, session: dict, admin, seconds: int = 1):
-    if session.get("source") != "OMADA" or not session.get("user_id"):
+    if session.get("source") != "OMADA":
         return None
     voucher = fetch_one("SELECT * FROM vouchers WHERE id = %s", (session["voucher_id"],)) if session.get("voucher_id") else None
-    if not voucher:
+    if not voucher and session.get("voucher_id"):
         voucher = {"id": session.get("voucher_id"), "code": session.get("voucher_code") or "ACCESS"}
-    user = {"id": session["user_id"], "username": session.get("username") or "portal"}
+    user = {"id": session["user_id"], "username": session.get("username") or "portal"} if session.get("user_id") else None
     duration = max(int(seconds), 1)
     expires_at = datetime.now(timezone.utc) + timedelta(seconds=duration)
     cur.execute(
@@ -26560,7 +27604,7 @@ def sync_short_omada_expiry(cur, session: dict, admin, seconds: int = 1):
         request_summary = authorization.get("omada_request_summary") if isinstance(authorization.get("omada_request_summary"), dict) else {}
         payload = PortalRedeemRequest(
             portal_session_id=session.get("public_session_id"),
-            voucher_code=voucher.get("code") or "ADMIN",
+            voucher_code=(voucher or {}).get("code") or "ADMIN-TIME",
             client_mac=authorization.get("client_mac"),
             ap_mac=authorization.get("ap_mac"),
             gateway_mac=authorization.get("gateway_mac"),
@@ -26703,6 +27747,8 @@ def adjust_portal_session_time(
     session = fetch_portal_session_for_admin(cur, session_id)
     now = datetime.now(timezone.utc)
     requested_delta = int(amount_seconds or 0)
+    current_session_expiry = aware_utc(session.get("access_expires_at"))
+    has_session_access = bool(current_session_expiry and current_session_expiry > now)
 
     target_bag_items: list[dict] = []
     if session.get("user_id"):
@@ -26753,8 +27799,8 @@ def adjust_portal_session_time(
             )
             target_bag_items = cur.fetchall()
 
-    if not target_bag_items and not session.get("voucher_id"):
-        raise HTTPException(status_code=400, detail="This device has no active voucher or product item to manage.")
+    if not target_bag_items and not session.get("voucher_id") and requested_delta <= 0 and not has_session_access:
+        raise HTTPException(status_code=400, detail="This device has no active voucher, product item, or admin-granted time to deduct.")
 
     affected_bag_item_ids = []
     iptv_line_results = []
@@ -27049,16 +28095,17 @@ def get_cash_collection(admin=Depends(current_admin)):
                 LEFT JOIN physical_store_owners so ON so.store_id = ps.id
                 LEFT JOIN LATERAL (
                     SELECT
-                      COALESCE(SUM(amount_centavos), 0)::bigint AS sales_month_centavos,
-                      COALESCE(SUM(amount_centavos) FILTER (WHERE remittance_id IS NULL), 0)::bigint AS unremitted_sales_centavos,
-                      (COUNT(*) FILTER (WHERE remittance_id IS NULL))::int AS unremitted_request_count
+                      COALESCE(SUM(spr.amount_centavos) FILTER (WHERE spr.approved_at >= date_trunc('month', now())), 0)::bigint AS sales_month_centavos,
+                      COALESCE(SUM(spr.amount_centavos) FILTER (WHERE spr.remittance_id IS NULL OR COALESCE(sr.status, '') <> ALL(%s::text[])), 0)::bigint AS unremitted_sales_centavos,
+                      (COUNT(*) FILTER (WHERE spr.remittance_id IS NULL OR COALESCE(sr.status, '') <> ALL(%s::text[])))::int AS unremitted_request_count
                     FROM store_purchase_requests spr
+                    LEFT JOIN store_remittances sr ON sr.id = spr.remittance_id
                     WHERE spr.store_id = ps.id
                       AND spr.status = 'APPROVED'
-                      AND spr.approved_at >= date_trunc('month', now())
                 ) sales ON true
                 ORDER BY COALESCE(sales.unremitted_sales_centavos, 0) DESC, ps.store_name ASC
-                """
+                """,
+                (list(STORE_REMITTANCE_SUCCESS_STATUSES), list(STORE_REMITTANCE_SUCCESS_STATUSES)),
             )
             rows = cur.fetchall()
             site_map = store_site_rows([str(row["id"]) for row in rows])
@@ -27076,7 +28123,7 @@ def get_cash_collection(admin=Depends(current_admin)):
                 unremitted = int(row.get("unremitted_sales_centavos") or 0)
                 latest = store_latest_remittance(cur, row["id"])
                 active = store_latest_active_remittance(cur, row["id"])
-                goal = store_progressive_commission_goal(sales_month)
+                goal = store_progressive_commission_goal(sales_month, commission_tiers=row.get("commission_tiers_json"))
                 if int(goal.get("tier_index") or 0) > 0:
                     totals["goal_reached_count"] += 1
                 if active:
@@ -27094,8 +28141,124 @@ def get_cash_collection(admin=Depends(current_admin)):
                     "latest_remittance": serialize_store_remittance(latest) if latest else None,
                     "active_remittance": serialize_store_remittance(active) if active else None,
                 })
+            cur.execute(
+                """
+                WITH store_item_summary AS (
+                    SELECT
+                        request_id,
+                        string_agg(
+                            CASE WHEN quantity > 1 THEN quantity::text || 'x ' || item_name ELSE item_name END,
+                            ', ' ORDER BY created_at ASC
+                        ) AS item_names
+                    FROM store_purchase_request_items
+                    GROUP BY request_id
+                )
+                SELECT
+                    spr.id,
+                    spr.public_id,
+                    spr.store_id,
+                    ps.store_name,
+                    spr.user_id,
+                    spr.customer_profile_id,
+                    spr.request_method,
+                    spr.status,
+                    CASE WHEN spr.fulfilled_bag_item_id IS NOT NULL THEN 'FULFILLED' ELSE 'PENDING' END AS fulfillment_status,
+                    spr.amount_centavos,
+                    spr.currency,
+                    spr.total_duration_seconds,
+                    spr.purchase_quantity,
+                    spr.customer_name,
+                    spr.customer_contact_number,
+                    spr.customer_device_label,
+                    COALESCE(NULLIF(store_items.item_names, ''), ps.store_name || ' Store Purchase') AS product_name,
+                    COALESCE(session_row.omada_client_mac, session_row.mikrotik_client_mac, session_row.client_mac) AS client_mac,
+                    session_row.client_ip,
+                    COALESCE(sd_store.site_name, session_row.omada_site_name, session_row.site, ps.store_name, 'Unknown Site') AS site_name,
+                    COALESCE(ps.barangay, sd_store.barangay, loc_store.barangay, 'Unknown Barangay') AS barangay,
+                    p.display_name AS profile_display_name,
+                    p.email AS profile_email,
+                    p.contact_number AS profile_contact_number,
+                    spr.remittance_id,
+                    sr.public_id AS remittance_public_id,
+                    sr.status AS remittance_status,
+                    COALESCE(spr.approved_at, spr.updated_at, spr.created_at) AS sale_at,
+                    spr.created_at,
+                    spr.approved_at
+                FROM store_purchase_requests spr
+                JOIN physical_stores ps ON ps.id = spr.store_id
+                LEFT JOIN store_item_summary store_items ON store_items.request_id = spr.id
+                LEFT JOIN portal_sessions session_row ON session_row.id = spr.portal_session_id
+                LEFT JOIN portal_customer_profiles p ON p.id = spr.customer_profile_id OR (p.user_id = spr.user_id AND spr.customer_profile_id IS NULL)
+                LEFT JOIN store_remittances sr ON sr.id = spr.remittance_id
+                LEFT JOIN LATERAL (
+                    SELECT sd.*
+                    FROM site_deployments sd
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM physical_store_sites psa
+                        WHERE psa.store_id = spr.store_id
+                          AND psa.site_deployment_id = sd.id
+                    )
+                    ORDER BY sd.updated_at DESC
+                    LIMIT 1
+                ) sd_store ON true
+                LEFT JOIN locations loc_store ON loc_store.id = sd_store.location_id
+                WHERE spr.status = 'APPROVED'
+                ORDER BY COALESCE(spr.approved_at, spr.updated_at, spr.created_at) DESC
+                LIMIT 500
+                """
+            )
+            store_sale_rows = cur.fetchall() or []
+    serialized_store_sales = []
+    for row in store_sale_rows:
+        amount = int(row.get("amount_centavos") or 0)
+        remittance_status = row.get("remittance_status") or ""
+        unremitted = not remittance_status or remittance_status not in STORE_REMITTANCE_SUCCESS_STATUSES
+        serialized_store_sales.append({
+            "id": str(row["id"]),
+            "public_order_id": row.get("public_id") or "",
+            "sale_channel": "PHYSICAL_STORE",
+            "sale_channel_label": "Physical Store",
+            "physical_store_id": str(row["store_id"]) if row.get("store_id") else None,
+            "physical_store_name": row.get("store_name") or "",
+            "buyer_user_id": str(row["user_id"]) if row.get("user_id") else None,
+            "customer_profile_id": str(row["customer_profile_id"]) if row.get("customer_profile_id") else None,
+            "profile_display_name": preferred_device_name(row.get("profile_display_name")) or "",
+            "profile_contact_number": row.get("profile_contact_number") or "",
+            "profile_email": row.get("profile_email") or "",
+            "customer_name": preferred_device_name(row.get("customer_name")) or "",
+            "customer_display_name": preferred_device_name(row.get("customer_name")) or preferred_device_name(row.get("profile_display_name")) or preferred_device_name(row.get("customer_device_label")) or "Unprofiled device",
+            "customer_contact_number": row.get("customer_contact_number") or row.get("profile_contact_number") or "",
+            "device_name": preferred_device_name(row.get("customer_device_label")) or preferred_device_name(row.get("client_mac")) or "Unprofiled device",
+            "client_mac": normalize_mac_if_valid(row.get("client_mac")) or row.get("client_mac") or "",
+            "client_ip": str(row.get("client_ip") or ""),
+            "site_name": row.get("site_name") or "Unknown Site",
+            "barangay": row.get("barangay") or "Unknown Barangay",
+            "product_name": row.get("product_name") or "Store Purchase",
+            "duration_seconds": int(row.get("total_duration_seconds") or 0),
+            "purchase_quantity": int(row.get("purchase_quantity") or 1),
+            "payment_method": row.get("request_method") or "STORE",
+            "fulfillment_status": row.get("fulfillment_status") or "PENDING",
+            "amount_centavos": amount,
+            "amount_display": money_display_from_centavos(amount, row.get("currency") or "PHP"),
+            "gross_amount_centavos": amount,
+            "gross_amount_display": money_display_from_centavos(amount, row.get("currency") or "PHP"),
+            "net_amount_centavos": amount,
+            "net_amount_display": money_display_from_centavos(amount, row.get("currency") or "PHP"),
+            "currency": row.get("currency") or "PHP",
+            "sale_at": row.get("sale_at"),
+            "created_at": row.get("created_at"),
+            "approved_at": row.get("approved_at"),
+            "status": row.get("status") or "APPROVED",
+            "remittance_id": str(row["remittance_id"]) if row.get("remittance_id") else None,
+            "remittance_public_id": row.get("remittance_public_id") or "",
+            "remittance_status": remittance_status,
+            "remittance_status_label": remittance_status.replace("_", " ").title() if remittance_status else "Unremitted",
+            "unremitted": unremitted,
+        })
     return {
         "stores": stores,
+        "store_sales": serialized_store_sales,
         "summary": {
             **totals,
             "sales_month_display": money_display_from_centavos(totals["sales_month_centavos"]),
@@ -27109,6 +28272,7 @@ def get_cash_collection(admin=Depends(current_admin)):
 
 @app.post("/api/cash-collection/stores/{store_id}/pickup")
 def schedule_cash_collection_pickup(store_id: str, payload: StoreRemittancePickupRequest, admin=Depends(current_admin)):
+    scheduled_at = aware_utc(payload.pickup_scheduled_at) if payload.pickup_scheduled_at else datetime.now(timezone.utc)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -27117,7 +28281,7 @@ def schedule_cash_collection_pickup(store_id: str, payload: StoreRemittancePicku
                 FROM physical_stores ps
                 LEFT JOIN physical_store_owners so ON so.store_id = ps.id
                 WHERE ps.id = %s
-                FOR UPDATE
+                FOR UPDATE OF ps
                 """,
                 (store_id,),
             )
@@ -27132,17 +28296,35 @@ def schedule_cash_collection_pickup(store_id: str, payload: StoreRemittancePicku
                     """
                     UPDATE store_remittances
                     SET status = 'CASH_PICKUP_SCHEDULED',
-                        pickup_scheduled_at = COALESCE(pickup_scheduled_at, now()),
+                        pickup_scheduled_at = %s,
                         scheduled_by_admin_id = %s,
                         notes = COALESCE(NULLIF(%s, ''), notes),
                         updated_at = now()
                     WHERE id = %s
                     RETURNING *
                     """,
-                    (admin["id"], normalize_payment_text(payload.notes, 1000), active["id"]),
+                    (scheduled_at, admin["id"], normalize_payment_text(payload.notes, 1000), active["id"]),
                 )
                 remittance = cur.fetchone()
             else:
+                sales_period_start = payload.sales_period_start
+                if not sales_period_start:
+                    remittance_months = store_monthly_remittance_history(cur, store["id"], limit=24)
+                    eligible_month = next(
+                        (
+                            month for month in remittance_months
+                            if int(month.get("unremitted_sales_centavos") or 0) > 0 and month.get("is_finished_month")
+                        ),
+                        None,
+                    )
+                    fallback_month = eligible_month or next(
+                        (
+                            month for month in remittance_months
+                            if int(month.get("unremitted_sales_centavos") or 0) > 0
+                        ),
+                        None,
+                    )
+                    sales_period_start = fallback_month.get("month_start") if fallback_month else None
                 remittance = create_store_remittance(
                     cur,
                     store_id=store["id"],
@@ -27151,6 +28333,8 @@ def schedule_cash_collection_pickup(store_id: str, payload: StoreRemittancePicku
                     status="CASH_PICKUP_SCHEDULED",
                     scheduled_by_admin_id=admin["id"],
                     notes=payload.notes,
+                    sales_period_start=sales_period_start,
+                    pickup_scheduled_at=scheduled_at,
                     require_goal=False,
                 )
             push_status = None
@@ -27159,7 +28343,7 @@ def schedule_cash_collection_pickup(store_id: str, payload: StoreRemittancePicku
                     cur,
                     store["owner_id"],
                     "Cash collection scheduled",
-                    f"Cash pickup was scheduled for {money_display_from_centavos(remittance.get('amount_centavos') or 0)} in {store.get('store_name') or 'your store'}.",
+                    f"Cash pickup was scheduled for {money_display_from_centavos(remittance.get('amount_centavos') or 0)} in {store.get('store_name') or 'your store'} on {scheduled_at.strftime('%b %d, %Y %I:%M %p UTC')}.",
                     tag=f"3j-store-cash-pickup-{remittance.get('public_id')}",
                     data={"remittance_id": remittance.get("public_id"), "store_id": str(store["id"])},
                 )
@@ -27183,6 +28367,74 @@ def schedule_cash_collection_pickup(store_id: str, payload: StoreRemittancePicku
     }
 
 
+@app.post("/api/cash-collection/remittances/{public_id}/collect")
+def complete_cash_collection_remittance(public_id: str, admin=Depends(current_admin)):
+    clean_public_id = normalize_store_remittance_lookup_code(public_id)
+    if not clean_public_id:
+        raise HTTPException(status_code=400, detail="Remittance QR/code is required.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT sr.*, ps.store_name, so.id AS owner_id, so.status AS owner_status
+                FROM store_remittances sr
+                JOIN physical_stores ps ON ps.id = sr.store_id
+                LEFT JOIN physical_store_owners so ON so.id = sr.owner_id
+                WHERE sr.public_id = %s
+                LIMIT 1
+                FOR UPDATE OF sr
+                """,
+                (clean_public_id,),
+            )
+            remittance = cur.fetchone()
+            if not remittance:
+                raise HTTPException(status_code=404, detail="Scheduled remittance was not found.")
+            if remittance.get("status") != "CASH_PICKUP_SCHEDULED":
+                raise HTTPException(status_code=400, detail="Only scheduled cash pickup remittances can be marked collected.")
+            if remittance.get("method") not in {"CASH_PICKUP", "MANUAL_CASH_PICKUP"}:
+                raise HTTPException(status_code=400, detail="Only cash pickup remittances can be collected with this QR.")
+            cur.execute(
+                """
+                UPDATE store_remittances
+                SET status = 'COLLECTED',
+                    pickup_completed_at = now(),
+                    completed_by_admin_id = %s,
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (admin["id"], remittance["id"]),
+            )
+            updated = cur.fetchone()
+            if remittance.get("owner_id") and remittance.get("owner_status") == "ACTIVE":
+                notify_store_owner_message_push(
+                    cur,
+                    remittance["owner_id"],
+                    "Cash collection completed",
+                    f"Cash pickup for {money_display_from_centavos(updated.get('amount_centavos') or 0)} was marked collected.",
+                    tag=f"3j-store-cash-collected-{updated.get('public_id')}",
+                    data={"remittance_id": updated.get("public_id"), "store_id": str(updated["store_id"])},
+                )
+            create_admin_notification(
+                "STORE_CASH_COLLECTION",
+                "SUCCESS",
+                "Cash pickup collected",
+                f"{remittance.get('store_name') or 'Store'} remittance {updated.get('public_id')} was marked collected.",
+                "Stores",
+                "/admin/sales/stores",
+                "store_remittances",
+                updated.get("public_id"),
+                {"store_id": str(updated["store_id"]), "amount_centavos": int(updated.get("amount_centavos") or 0)},
+            )
+    audit(admin["id"], "complete_store_cash_pickup", "store_remittances", str(updated["id"]), {"public_id": updated.get("public_id")})
+    return {
+        "status": "COLLECTED",
+        "message": "Cash pickup remittance marked collected.",
+        "remittance": serialize_store_remittance(updated),
+    }
+
+
 @app.post("/api/physical-stores")
 def create_physical_store(payload: PhysicalStorePayload, request: Request, admin=Depends(current_admin)):
     status = normalize_physical_store_status(payload.status)
@@ -27196,16 +28448,17 @@ def create_physical_store(payload: PhysicalStorePayload, request: Request, admin
         raise HTTPException(status_code=400, detail="Store name is required.")
     commission_type = normalize_physical_store_commission_type(payload.commission_type)
     commission_value = normalize_physical_store_commission_value(commission_type, payload.commission_value)
+    commission_tiers = physical_store_commission_tiers_for_db(payload.commission_tiers)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO physical_stores(
                     store_name, location_id, description, image_url, address, municipality, barangay,
-                    latitude, longitude, contact_name, contact_phone, commission_type, commission_value,
+                    latitude, longitude, contact_name, contact_phone, commission_type, commission_value, commission_tiers_json,
                     status, notes, created_by_admin_id
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
                 (
@@ -27222,6 +28475,7 @@ def create_physical_store(payload: PhysicalStorePayload, request: Request, admin
                     None,
                     commission_type,
                     commission_value,
+                    Json(commission_tiers),
                     status,
                     None,
                     admin["id"],
@@ -27255,6 +28509,7 @@ def update_physical_store(store_id: str, payload: PhysicalStorePayload, request:
         raise HTTPException(status_code=400, detail="Store name is required.")
     commission_type = normalize_physical_store_commission_type(payload.commission_type)
     commission_value = normalize_physical_store_commission_value(commission_type, payload.commission_value)
+    commission_tiers = physical_store_commission_tiers_for_db(payload.commission_tiers)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -27273,6 +28528,7 @@ def update_physical_store(store_id: str, payload: PhysicalStorePayload, request:
                     contact_phone = %s,
                     commission_type = %s,
                     commission_value = %s,
+                    commission_tiers_json = %s,
                     status = %s,
                     notes = %s,
                     updated_at = now()
@@ -27293,6 +28549,7 @@ def update_physical_store(store_id: str, payload: PhysicalStorePayload, request:
                     None,
                     commission_type,
                     commission_value,
+                    Json(commission_tiers),
                     status,
                     None,
                     store_id,
@@ -27349,7 +28606,7 @@ def get_physical_store_owner(store_id: str, admin=Depends(current_admin)):
     owner = fetch_one(
         """
         SELECT so.*, ps.store_name, ps.image_url, ps.barangay, ps.municipality, ps.status AS store_status,
-               ps.commission_type, ps.commission_value
+               ps.commission_type, ps.commission_value, ps.commission_tiers_json
         FROM physical_store_owners so
         JOIN physical_stores ps ON ps.id = so.store_id
         WHERE so.store_id = %s
@@ -28002,7 +29259,7 @@ def store_portal_login(payload: StorePortalLoginRequest, request: Request):
             cur.execute(
                 """
                 SELECT so.*, ps.store_name, ps.image_url, ps.barangay, ps.municipality, ps.status AS store_status,
-                       ps.commission_type, ps.commission_value
+                       ps.commission_type, ps.commission_value, ps.commission_tiers_json
                 FROM physical_store_owners so
                 JOIN physical_stores ps ON ps.id = so.store_id
                 WHERE so.username = %s
@@ -28028,6 +29285,8 @@ def store_portal_login(payload: StorePortalLoginRequest, request: Request):
                     (owner["id"], device_hash),
                 )
                 trusted = cur.fetchone()
+                if not trusted and store_owner_device_seen_before(cur, owner["id"], device_hash):
+                    trusted = upsert_store_owner_trusted_device(cur, owner["id"], device_hash, request, label="Recognized store device")
             if not trusted:
                 challenge = send_store_owner_challenge(cur, owner, "LOGIN", payload.device_token, request)
                 challenge["owner"] = serialize_store_owner(owner, include_store=True)
@@ -28058,25 +29317,7 @@ def store_portal_login_verify(payload: StorePortalLoginVerifyRequest, request: R
             owner = verify_store_owner_challenge(cur, payload.challenge_id, payload.verification_code, "LOGIN")
             device_hash = portal_device_token_hash(payload.device_token)
             if device_hash:
-                cur.execute(
-                    """
-                    INSERT INTO store_owner_trusted_devices(owner_id, device_token_hash, device_label, user_agent, last_ip, last_seen_at)
-                    VALUES (%s, %s, %s, %s, NULLIF(%s, '')::inet, now())
-                    ON CONFLICT (owner_id, device_token_hash) DO UPDATE
-                    SET status = 'ACTIVE',
-                        user_agent = EXCLUDED.user_agent,
-                        last_ip = EXCLUDED.last_ip,
-                        last_seen_at = now(),
-                        updated_at = now()
-                    """,
-                    (
-                        owner["owner_id"],
-                        device_hash,
-                        "Verified store device",
-                        normalize_payment_text(request.headers.get("user-agent"), 500),
-                        request.client.host if request and request.client else "",
-                    ),
-                )
+                upsert_store_owner_trusted_device(cur, owner["owner_id"], device_hash, request, label="Verified store device")
             session = create_store_owner_session(cur, {"id": owner["owner_id"]}, request, payload.device_token)
             owner["id"] = owner["owner_id"]
             recent_login = recent_store_owner_login_verification(cur, owner["owner_id"], device_token=payload.device_token)
@@ -28440,11 +29681,12 @@ def store_portal_purchase_requests(
     sales_month = int(summary.get("sales_month") or 0)
     commission_type = normalize_physical_store_commission_type(owner.get("commission_type"))
     commission_value = normalize_physical_store_commission_value(commission_type, owner.get("commission_value"))
-    commission_month = store_period_commission_centavos(sales_month, commission_type, commission_value)
-    commission_today = store_period_commission_centavos(sales_today, commission_type, commission_value) if commission_type == "PERCENT_OF_SALES" else 0
+    commission_tiers = normalize_store_progressive_commission_tiers(owner.get("commission_tiers_json"))
+    commission_month = store_period_commission_centavos(sales_month, commission_type, commission_value, commission_tiers)
+    commission_today = store_period_commission_centavos(sales_today, commission_type, commission_value, commission_tiers) if commission_type in {"PERCENT_OF_SALES", "PROGRESSIVE_PERCENT"} else 0
     net_month = max(0, sales_month - commission_month)
     net_today = max(0, sales_today - commission_today)
-    commission_goal = store_progressive_commission_goal(sales_month, goal_daily_rows)
+    commission_goal = store_progressive_commission_goal(sales_month, goal_daily_rows, commission_tiers) if commission_type == "PROGRESSIVE_PERCENT" else None
     return {
         "owner": {
             **serialize_store_owner(owner, include_store=True),
@@ -28472,10 +29714,12 @@ def store_portal_purchase_requests(
             "net_today_display": money_display_from_centavos(net_today),
             "sales_month_centavos": sales_month,
             "sales_month_display": money_display_from_centavos(sales_month),
+            "current_month_label": store_sales_month_label(store_month_start(), current=True),
             "commission_type": commission_type,
             "commission_type_label": store_commission_type_label(commission_type),
             "commission_value": float(commission_value),
             "commission_value_display": store_commission_value_display(commission_type, commission_value),
+            "commission_tiers": serialize_store_progressive_commission_tiers(commission_tiers),
             "commission_month_centavos": commission_month,
             "commission_month_display": money_display_from_centavos(commission_month),
             "net_month_centavos": net_month,
@@ -28487,7 +29731,7 @@ def store_portal_purchase_requests(
 
 
 @app.post("/api/store-portal/remittances/online")
-def store_portal_create_online_remittance(owner=Depends(current_store_owner)):
+def store_portal_create_online_remittance(payload: StoreRemittancePickupRequest, owner=Depends(current_store_owner)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             gateway = payment_gateway_store()
@@ -28505,6 +29749,7 @@ def store_portal_create_online_remittance(owner=Depends(current_store_owner)):
                 method="ONLINE",
                 status="REQUESTED",
                 requested_by_owner_id=owner["id"],
+                sales_period_start=payload.sales_period_start,
                 require_goal=True,
             )
             checkout = paymongo_create_store_remittance_checkout(gateway, credentials["secret_key"], remittance, store_row, owner)
@@ -28553,6 +29798,7 @@ def store_portal_create_online_remittance(owner=Depends(current_store_owner)):
 def store_portal_create_cash_pickup_remittance(payload: StoreRemittancePickupRequest, owner=Depends(current_store_owner)):
     with get_conn() as conn:
         with conn.cursor() as cur:
+            pin_status = verify_store_owner_approval_pin(cur, owner, payload.pin_code)
             remittance = create_store_remittance(
                 cur,
                 store_id=owner["store_id"],
@@ -28561,6 +29807,7 @@ def store_portal_create_cash_pickup_remittance(payload: StoreRemittancePickupReq
                 status="CASH_PICKUP_REQUESTED",
                 requested_by_owner_id=owner["id"],
                 notes=payload.notes,
+                sales_period_start=payload.sales_period_start,
                 require_goal=True,
             )
             create_admin_notification(
@@ -28578,6 +29825,74 @@ def store_portal_create_cash_pickup_remittance(payload: StoreRemittancePickupReq
         "status": "CASH_PICKUP_REQUESTED",
         "message": "Cash pickup request sent. Admin will schedule collection.",
         "remittance": serialize_store_remittance(remittance),
+        "pin": sanitize_summary(pin_status),
+        "owner": serialize_store_owner(owner, include_store=True),
+    }
+
+
+@app.post("/api/store-portal/remittances/{public_id}/cancel")
+def store_portal_cancel_remittance(public_id: str, owner=Depends(current_store_owner)):
+    clean_public_id = normalize_payment_text(public_id, 80).upper()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT *
+                FROM store_remittances
+                WHERE public_id = %s
+                  AND store_id = %s
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (clean_public_id, owner["store_id"]),
+            )
+            remittance = cur.fetchone()
+            if not remittance:
+                raise HTTPException(status_code=404, detail="Remittance request was not found.")
+            method = remittance.get("method")
+            status = remittance.get("status")
+            if method == "ONLINE" and status != "CHECKOUT_CREATED":
+                raise HTTPException(status_code=400, detail="Online checkout can only be cancelled while it is still open.")
+            if method == "CASH_PICKUP" and status != "CASH_PICKUP_REQUESTED":
+                raise HTTPException(status_code=400, detail="Cash pickup can only be cancelled before admin schedules collection.")
+            if method not in {"ONLINE", "CASH_PICKUP"}:
+                raise HTTPException(status_code=400, detail="This remittance cannot be cancelled from the store portal.")
+            cur.execute(
+                """
+                UPDATE store_remittances
+                SET status = 'CANCELLED',
+                    last_error = NULL,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING *
+                """,
+                (remittance["id"],),
+            )
+            updated = cur.fetchone()
+            cur.execute(
+                """
+                UPDATE store_purchase_requests
+                SET remittance_id = NULL,
+                    updated_at = now()
+                WHERE remittance_id = %s
+                """,
+                (remittance["id"],),
+            )
+            create_admin_notification(
+                "STORE_CASH_COLLECTION",
+                "INFO",
+                "Store remittance cancelled",
+                f"{owner.get('store_name') or 'Store'} cancelled {updated.get('method_label') or method} remittance {updated.get('public_id')}.",
+                "Stores",
+                "/admin/sales/stores",
+                "store_remittances",
+                updated.get("public_id"),
+                {"store_id": str(owner["store_id"]), "owner_id": str(owner["id"])},
+            )
+    return {
+        "status": "CANCELLED",
+        "message": "Remittance request cancelled.",
+        "remittance": serialize_store_remittance(updated),
     }
 
 
@@ -29527,6 +30842,7 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
                                 "ap_mac": item.get("ap_mac"),
                                 "ap_name": item.get("ap_name"),
                                 "ssid": item.get("ssid"),
+                                "site_id": current_site_id,
                                 "site": current_site_name,
                                 "active": bool(item.get("active")),
                                 "last_seen": item.get("last_seen"),
@@ -29541,6 +30857,7 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
                             "ap_mac": item.get("ap_mac"),
                             "ap_name": item.get("ap_name"),
                             "ssid": item.get("ssid"),
+                            "site_id": current_site_id,
                             "site": current_site_name,
                             "active": item.get("active"),
                             "last_seen": item.get("last_seen"),
@@ -29591,6 +30908,33 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
         """
         SELECT s.*, u.username, v.code AS voucher_code,
                GREATEST(EXTRACT(EPOCH FROM (s.access_expires_at - now()))::int, 0) AS remaining_time_seconds,
+               EXISTS (
+                   SELECT 1
+                   FROM customer_bag_items bi
+                   WHERE bi.portal_session_id = s.id
+                     AND bi.status = 'ACTIVE'
+                     AND bi.active_until IS NOT NULL
+                     AND bi.active_until > now()
+               ) AS has_active_bag_item,
+               (
+                   LOWER(COALESCE(s.raw_query_params->>'admin_access', '')) = 'true'
+                   OR s.user_agent = 'ADMIN_ACTIVE_DEVICE'
+                   OR (
+                       s.user_id IS NULL
+                       AND s.voucher_id IS NULL
+                       AND s.status = 'ACCESS_GRANTED'
+                       AND s.access_expires_at IS NOT NULL
+                       AND s.access_expires_at > now()
+                       AND NOT EXISTS (
+                           SELECT 1
+                           FROM customer_bag_items abi
+                           WHERE abi.portal_session_id = s.id
+                             AND abi.status = 'ACTIVE'
+                             AND abi.active_until IS NOT NULL
+                             AND abi.active_until > now()
+                       )
+                   )
+               ) AS admin_access,
                p.id AS customer_profile_id,
                p.display_name AS customer_name,
                p.email AS customer_email,
@@ -29632,6 +30976,8 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
             "voucher_code": row.get("voucher_code"),
             "raw_status": row.get("status"),
             "authorization_status": row.get("omada_authorization_status"),
+            "admin_access": bool(row.get("admin_access")),
+            "has_active_bag_item": bool(row.get("has_active_bag_item")),
             "portal_session_id": str(row["id"]),
             "public_session_id": row.get("public_session_id"),
             "user_id": str(row["user_id"]) if row.get("user_id") else None,
@@ -29647,11 +30993,37 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
             "welcome_gift_status": row.get("welcome_gift_status"),
         })
 
-    rows = sorted(devices.values(), key=lambda item: (bool(item.get("active")), str(item.get("last_seen") or "")), reverse=True)
-    active_rows = [row for row in rows if row.get("active")]
-    inactive_rows = [row for row in rows if not row.get("active")]
     voucher_rows_active = active_voucher_rows(omada_name_by_mac=omada_name_by_mac, omada_client_by_mac=omada_client_by_mac)
     access_rows_active = active_access_rows(omada_client_by_mac=omada_client_by_mac)
+
+    def access_match_key(row: dict) -> Optional[str]:
+        mac = normalize_mac_if_valid(row.get("client_mac"))
+        if mac:
+            return f"mac:{mac}"
+        ip_value = clean_portal_ip(row.get("client_ip"))
+        if ip_value:
+            return f"ip:{ip_value}"
+        return None
+
+    active_access_keys = {
+        key for key in (access_match_key(row) for row in access_rows_active + voucher_rows_active) if key
+    }
+    rows = sorted(devices.values(), key=lambda item: (bool(item.get("active")), str(item.get("last_seen") or "")), reverse=True)
+    admin_access_rows = [
+        row for row in rows
+        if row.get("admin_access")
+        and row.get("active")
+        and int(row.get("remaining_time_seconds") or 0) > 0
+    ]
+    admin_access_keys = {key for key in (access_match_key(row) for row in admin_access_rows) if key}
+    active_rows = [
+        row for row in rows
+        if row.get("active")
+        and not row.get("admin_access")
+        and access_match_key(row) not in active_access_keys
+        and access_match_key(row) not in admin_access_keys
+    ]
+    inactive_rows = [row for row in rows if not row.get("active") and not row.get("admin_access")]
     profile_only_rows = [
         {
             "profile_only": True,
@@ -29756,7 +31128,7 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
         LIMIT 300
         """
     )
-    grouped = customer_device_groups(rows + profile_only_rows)
+    grouped = customer_device_groups([row for row in rows if not row.get("admin_access")] + profile_only_rows)
     return {
         "summary": {
             "total": len(rows),
@@ -29764,6 +31136,7 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
             "inactive": len(inactive_rows),
             "with_vouchers": len(voucher_rows_active),
             "active_access": len(access_rows_active),
+            "admin_access": len(admin_access_rows),
             "blocked": len(blocked_rows),
             "time_adjustments": len(time_adjustment_history),
             "customers": len(grouped["customers"]),
@@ -29777,6 +31150,7 @@ def connected_devices(include_test: bool = False, admin=Depends(current_admin)):
         },
         "active": active_rows,
         "inactive": inactive_rows,
+        "admin_access": admin_access_rows,
         "active_access": access_rows_active,
         "with_vouchers": voucher_rows_active,
         "blocked": blocked_rows,
@@ -30947,6 +32321,88 @@ def adjust_connected_device_time(portal_session_id: str, payload: PortalTimeAdju
             result = adjust_portal_session_time(cur, portal_session_id, payload.amount_seconds, admin, payload.note, payload.bag_item_id)
     audit(admin["id"], "adjust_connected_device_time", "portal_session", portal_session_id, {"amount_seconds": payload.amount_seconds, "note": payload.note, "bag_item_id": payload.bag_item_id})
     return result
+
+
+@app.post("/api/customer-devices/active-device/time-adjust")
+def adjust_active_device_time(payload: ActiveDeviceTimeAdjustRequest, admin=Depends(current_admin)):
+    if int(payload.amount_seconds or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Active Devices quick action can only add time. Use Active Access to deduct existing access.")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            session = find_or_create_admin_active_device_session(cur, payload)
+            result = adjust_portal_session_time(
+                cur,
+                str(session["id"]),
+                payload.amount_seconds,
+                admin,
+                payload.note or "Time added from Active Devices by operator.",
+                payload.bag_item_id,
+            )
+            result["portal_session_id"] = str(session["id"])
+    audit(
+        admin["id"],
+        "adjust_active_device_time",
+        "portal_session",
+        result.get("portal_session_id"),
+        {
+            "amount_seconds": payload.amount_seconds,
+            "note": payload.note,
+            "client_mac": mask_mac(payload.client_mac),
+            "client_ip": clean_portal_ip(payload.client_ip),
+            "source": payload.source,
+            "site": payload.site,
+            "site_id": payload.site_id,
+        },
+    )
+    return result
+
+
+@app.delete("/api/customer-devices/admin-access")
+def clear_admin_access_devices(admin=Depends(current_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT s.id
+                FROM portal_sessions s
+                WHERE s.status = 'ACCESS_GRANTED'
+                  AND s.access_expires_at IS NOT NULL
+                  AND s.access_expires_at > now()
+                  AND (
+                      LOWER(COALESCE(s.raw_query_params->>'admin_access', '')) = 'true'
+                      OR s.user_agent = 'ADMIN_ACTIVE_DEVICE'
+                      OR (
+                          s.user_id IS NULL
+                          AND s.voucher_id IS NULL
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM customer_bag_items bi
+                              WHERE bi.portal_session_id = s.id
+                                AND bi.status = 'ACTIVE'
+                                AND bi.active_until IS NOT NULL
+                                AND bi.active_until > now()
+                          )
+                      )
+                  )
+                ORDER BY s.updated_at DESC
+                """
+            )
+            session_ids = [str(row["id"]) for row in cur.fetchall()]
+            results = []
+            for session_id in session_ids:
+                try:
+                    results.append(adjust_portal_session_time(cur, session_id, -315360000, admin, "Admin Access cleared by operator."))
+                except Exception as exc:
+                    results.append({"status": "FAILED", "session_id": session_id, "error": str(exc)})
+    audit(admin["id"], "clear_admin_access_devices", "portal_session", None, {"cleared_count": len(session_ids)})
+    failures = [item for item in results if item.get("status") == "FAILED"]
+    return {
+        "status": "PARTIAL" if failures else "ok",
+        "message": f"Cleared {len(session_ids) - len(failures)} admin access device(s).",
+        "cleared_count": len(session_ids) - len(failures),
+        "failed_count": len(failures),
+        "results": sanitize_summary(results),
+    }
 
 
 @app.delete("/api/connected-devices/{portal_session_id}")
@@ -34607,6 +36063,81 @@ def station_dedupe_csv(*values: Optional[str]) -> str:
     return ",".join(items)
 
 
+AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY = "CENTRAL_GATEWAY"
+AP_MANAGEMENT_ROLE_CORE_TRUNK = "CORE_TRUNK"
+AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH = "SUBSTATION_BRANCH"
+AP_MANAGEMENT_TOPOLOGY_ROLES = {
+    AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY,
+    AP_MANAGEMENT_ROLE_CORE_TRUNK,
+    AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH,
+}
+
+
+def normalize_ap_management_topology_role(value: Optional[str], sequence_order: int = 0) -> str:
+    normalized = str(value or "").strip().upper()
+    aliases = {
+        "ROOT": AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY,
+        "ROOT_GATEWAY": AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY,
+        "AP_MGMT_ROOT": AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY,
+        "CENTRAL": AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY,
+        "TRUNK": AP_MANAGEMENT_ROLE_CORE_TRUNK,
+        "TRUNK_HELPER": AP_MANAGEMENT_ROLE_CORE_TRUNK,
+        "CORE": AP_MANAGEMENT_ROLE_CORE_TRUNK,
+        "CORE_SWITCH": AP_MANAGEMENT_ROLE_CORE_TRUNK,
+        "BRANCH": AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH,
+        "SUBSTATION": AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH,
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized in AP_MANAGEMENT_TOPOLOGY_ROLES:
+        return normalized
+    if int(sequence_order or 0) == 0:
+        return AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY
+    if int(sequence_order or 0) == 1:
+        return AP_MANAGEMENT_ROLE_CORE_TRUNK
+    return AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH
+
+
+def ap_management_legacy_router_role(topology_role: Optional[str], sequence_order: int = 0) -> str:
+    role = normalize_ap_management_topology_role(topology_role, sequence_order)
+    return "ROOT_GATEWAY" if role == AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY else "TRUNK_HELPER"
+
+
+def ap_management_router_topology_role(router: dict, index: int = 0) -> str:
+    return normalize_ap_management_topology_role(
+        router.get("topology_role") or router.get("router_role"),
+        router.get("sequence_order", index),
+    )
+
+
+def ap_management_router_tagged_ports(router: dict) -> str:
+    return station_dedupe_csv(
+        router.get("tagged_ports"),
+        router.get("upstream_ports"),
+        router.get("ap_path_ports"),
+    )
+
+
+def ap_management_default_core_router_id(routers: list[dict]) -> Optional[str]:
+    for index, router in enumerate(routers):
+        if ap_management_router_topology_role(router, index) == AP_MANAGEMENT_ROLE_CORE_TRUNK:
+            return str(router.get("router_id") or "")
+    return None
+
+
+def ap_management_parent_router_name(router: dict, routers: list[dict], index: int) -> str:
+    lookup = {str(item.get("router_id")): item for item in routers if item.get("router_id")}
+    parent_id = str(router.get("parent_router_id") or "").strip()
+    if parent_id and parent_id in lookup:
+        return lookup[parent_id].get("router_name") or "parent router"
+    if ap_management_router_topology_role(router, index) == AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH:
+        core_id = ap_management_default_core_router_id(routers)
+        if core_id and core_id in lookup:
+            return lookup[core_id].get("router_name") or "core trunk"
+    if index > 0:
+        return routers[index - 1].get("router_name") or "previous router"
+    return "central gateway"
+
+
 STATION_TRANSPORT_MODE_BRIDGE_TRUNK = "BRIDGE_TRUNK"
 STATION_TRANSPORT_MODE_VLAN_XCONNECT = "VLAN_XCONNECT"
 STATION_GATEWAY_MODE_CENTRAL_ROOT = "CENTRAL_ROOT_GATEWAY"
@@ -34874,6 +36405,20 @@ def station_routeros_add_command(label: str, path: str, params: dict, **metadata
     if place_fields:
         command["preview"] = f"{command['preview']} place-before=[find {' '.join(f'{key}={value}' for key, value in place_fields.items())}]"
     return command
+
+
+def station_routeros_ensure_interface_list_command(interface_list: str, context_label: str = "Station") -> dict:
+    clean_list = (interface_list or "LOCAL").strip() or "LOCAL"
+    return station_routeros_add_command(
+        f"Ensure {clean_list} interface list exists",
+        "/interface/list/add",
+        {
+            "name": clean_list,
+            "comment": f"3J {context_label} - required local/LAN interface list",
+        },
+        unique_field="name",
+        unique_value=clean_list,
+    )
 
 
 def station_routeros_set_command(label: str, path: str, params: dict, **metadata) -> dict:
@@ -37179,7 +38724,14 @@ def station_interface_map_with_live_fallback(router_id: str, snapshot: dict, sel
 
 
 def station_interface_is_pppoe(interface: dict) -> bool:
-    text = " ".join(str(interface.get(key) or "").lower() for key in ("name", "type", "comment", "default-name"))
+    interface_type = str(interface.get("type") or "").strip().lower()
+    if "pppoe" in interface_type:
+        return True
+    # A bridge can legitimately be named for its purpose, for example BR_PPPOE
+    # on an access concentrator. Only block actual PPPoE interfaces/sessions.
+    if interface_type == "bridge":
+        return False
+    text = " ".join(str(interface.get(key) or "").lower() for key in ("name", "comment", "default-name"))
     return "pppoe" in text
 
 
@@ -37598,6 +39150,8 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
     ap_management_raw_return_tracking_comment = f"3J AP Management - keep VLAN {ap_management_vlan_id} AP management return traffic tracked"
     omada_controller_ip = omada_controller_discovery_ip()
     portal_host_ip = station_portal_host_ip(portal_url)
+    portal_whitelist_name = station_portal_whitelist_address_list(vlan_id)
+    portal_whitelist_entries = station_portal_whitelist_entries(portal_url)
     iptv_local_web_host_ip = station_iptv_local_web_host_ip()
     iptv_xui_host_ip = station_iptv_xui_host_ip()
     portal_office_subnet = station_portal_office_access_subnet()
@@ -37622,6 +39176,7 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
         role = "ROOT_GATEWAY" if is_root else "TRUNK_HELPER"
         commands = []
         if is_root:
+            commands.append(station_routeros_ensure_interface_list_command(local_interface_list, "Station"))
             iptv_xui_nat_return_ip = station_router_ip_for_direct_host(router.get("router_id"), iptv_xui_host_ip)
             if ap_management_enabled:
                 commands.extend([
@@ -37919,21 +39474,35 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                 ] if omada_controller_ip else []),
                 *([
                     station_routeros_add_command(
-                        "Allow VLAN clients to 3J voucher portal server",
+                        f"Add portal whitelist entry {entry}",
+                        "/ip/firewall/address-list/add",
+                        {
+                            "list": portal_whitelist_name,
+                            "address": entry,
+                            "comment": f"3J Station - VLAN {vlan_id} portal whitelist",
+                        },
+                        existing_query={"list": portal_whitelist_name, "address": entry},
+                    )
+                    for entry in portal_whitelist_entries
+                ]),
+                *([
+                    station_routeros_add_command(
+                        "Allow VLAN clients to 3J portal whitelist",
                         "/ip/firewall/filter/add",
                         {
                             "chain": "forward",
                             "src-address": network.with_prefixlen,
-                            "dst-address": portal_host_ip,
+                            "dst-address-list": portal_whitelist_name,
                             "protocol": "tcp",
                             "dst-port": portal_access_ports,
                             "action": "accept",
                             "comment": station_portal_server_filter_comment,
                         },
                         unique_comment=station_portal_server_filter_comment,
+                        replace_existing_on_mismatch=True,
                         place_before_query=omada_forward_drop_place_before_query(),
                     ),
-                ] if portal_host_ip else []),
+                ] if portal_whitelist_entries else []),
                 *([
                     station_routeros_add_command(
                         "Allow VLAN clients to local IPTV web",
@@ -38090,11 +39659,12 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                     {
                         "chain": "forward",
                         "src-address": network.with_prefixlen,
-                        "ttl": "equal:63",
+                        "ttl": "equal:62",
                         "action": "drop",
                         "comment": anti_tether_low_ttl_comment,
                     },
                     unique_comment=anti_tether_low_ttl_comment,
+                    replace_existing_on_mismatch=True,
                 ),
                 station_routeros_add_command(
                     "Block likely Windows-over-phone hotspot sharing traffic",
@@ -38102,11 +39672,12 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
                     {
                         "chain": "forward",
                         "src-address": network.with_prefixlen,
-                        "ttl": "equal:127",
+                        "ttl": "equal:126",
                         "action": "drop",
                         "comment": anti_tether_windows_ttl_comment,
                     },
                     unique_comment=anti_tether_windows_ttl_comment,
+                    replace_existing_on_mismatch=True,
                 ),
                 station_routeros_add_command(
                     "Keep client traffic tracked before global raw notrack",
@@ -38274,6 +39845,8 @@ def build_mikrotik_station_plan(station: dict, routers: list[dict]) -> dict:
         "ap_management_dns_servers": ap_management_dns_servers,
         "omada_controller_ip": omada_controller_ip,
         "portal_host_ip": portal_host_ip,
+        "portal_whitelist_address_list": portal_whitelist_name,
+        "portal_whitelist_entries": portal_whitelist_entries,
         "iptv_local_web_host_ip": iptv_local_web_host_ip,
         "iptv_xui_host_ip": iptv_xui_host_ip,
         "portal_office_subnet": portal_office_subnet,
@@ -38340,6 +39913,7 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
     iptv_xui_nat_comment = "3J IPTV web - NAT to XUI server"
     station_omada_portal_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to Omada portal"
     station_portal_server_filter_comment = f"3J Station - allow VLAN {vlan_id} clients to 3J portal server"
+    portal_whitelist_name = station_portal_whitelist_address_list(vlan_id)
     anti_tether_ttl_clamp_comment = f"3J Station - anti-tether return TTL clamp for VLAN {vlan_id}"
     anti_tether_low_ttl_comment = f"3J Station - block likely tethered low TTL for VLAN {vlan_id}"
     anti_tether_windows_ttl_comment = f"3J Station - block likely tethered Windows TTL for VLAN {vlan_id}"
@@ -38458,6 +40032,12 @@ def build_mikrotik_station_remove_plan(station: dict, routers: list[dict]) -> di
                     "/ip/firewall/filter/print",
                     "comment",
                     station_portal_server_filter_comment,
+                ),
+                station_routeros_remove_command(
+                    "Remove 3J portal whitelist entries",
+                    "/ip/firewall/address-list/print",
+                    "list",
+                    portal_whitelist_name,
                 ),
                 station_routeros_remove_command(
                     "Remove local IPTV web allow rule",
@@ -38880,7 +40460,7 @@ def combine_pending_cleanup_with_apply_plan(apply_plan: dict, pending_cleanup_pl
     router_order = []
     router_map = {}
 
-    def ensure_router_plan(source: dict) -> dict:
+    def ensure_router_plan(source: dict, prefer_metadata: bool = False) -> dict:
         router_id = str(source.get("router_id") or "")
         if router_id not in router_map:
             router_order.append(router_id)
@@ -38901,6 +40481,24 @@ def combine_pending_cleanup_with_apply_plan(apply_plan: dict, pending_cleanup_pl
                 "effective_untagged_ports": source.get("effective_untagged_ports"),
                 "commands": [],
             }
+        elif prefer_metadata:
+            for key in (
+                "router_name",
+                "host",
+                "sequence_order",
+                "role",
+                "transport_mode",
+                "bridge_name",
+                "tagged_ports",
+                "handoff_bridge_name",
+                "handoff_tagged_ports",
+                "untagged_ports",
+                "effective_tagged_ports",
+                "effective_handoff_tagged_ports",
+                "effective_untagged_ports",
+            ):
+                if source.get(key) is not None:
+                    router_map[router_id][key] = source.get(key)
         return router_map[router_id]
 
     if cleanup_plan:
@@ -38911,7 +40509,7 @@ def combine_pending_cleanup_with_apply_plan(apply_plan: dict, pending_cleanup_pl
                 sequence += 1
 
     for router_plan in apply_plan.get("router_plans") or []:
-        target = ensure_router_plan(router_plan)
+        target = ensure_router_plan(router_plan, prefer_metadata=True)
         for command in router_plan.get("commands") or []:
             target["commands"].append(command_with_push_metadata(command, "APPLY_NEW", "APPLY_NEW", sequence))
             sequence += 1
@@ -39976,10 +41574,10 @@ def normalize_ap_management_config_payload(payload: MikrotikApManagementConfigPa
 
 def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayload, normalized: dict, config_id: Optional[str] = None):
     if not payload.routers:
-        raise HTTPException(status_code=400, detail="Add at least one MikroTik router to the AP management chain.")
+        raise HTTPException(status_code=400, detail="Add at least one MikroTik router to the AP management topology.")
     router_ids = [item.router_id for item in payload.routers]
     if len(router_ids) != len(set(router_ids)):
-        raise HTTPException(status_code=400, detail="A MikroTik router can appear only once in the AP management chain.")
+        raise HTTPException(status_code=400, detail="A MikroTik router can appear only once in the AP management topology.")
     existing_routers = fetch_all("SELECT id, router_name FROM mikrotik_routers WHERE id = ANY(%s::uuid[])", (router_ids,))
     existing_ids = {str(row["id"]) for row in existing_routers}
     missing_ids = [router_id for router_id in router_ids if router_id not in existing_ids]
@@ -39988,9 +41586,27 @@ def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayloa
     errors = []
     vlan_id = normalized["vlan_id"]
     vlan_interface_name = normalized["vlan_interface_name"]
+    roles = [normalize_ap_management_topology_role(item.topology_role, index) for index, item in enumerate(payload.routers)]
+    central_count = roles.count(AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY)
+    if central_count != 1:
+        errors.append("AP management topology must have exactly one central gateway.")
+    elif roles[0] != AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY:
+        errors.append("Place the central gateway as the first AP management router.")
+    core_router_ids = {
+        item.router_id
+        for index, item in enumerate(payload.routers)
+        if roles[index] == AP_MANAGEMENT_ROLE_CORE_TRUNK
+    }
+    has_branch = any(role == AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH for role in roles)
+    if has_branch and not core_router_ids:
+        errors.append("Add a core/CRS trunk router before adding substation AP management branches.")
     for index, item in enumerate(payload.routers):
+        topology_role = roles[index]
         router = fetch_one("SELECT id, router_name FROM mikrotik_routers WHERE id = %s", (item.router_id,))
         router_label = router["router_name"] if router else f"router #{index + 1}"
+        parent_router_id = str(item.parent_router_id or "").strip()
+        if topology_role == AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH and parent_router_id and parent_router_id not in core_router_ids:
+            errors.append(f"{router_label}: substation branch parent must be a core/CRS trunk router in this AP management topology.")
         if not (item.bridge_name or "").strip():
             errors.append(f"{router_label}: bridge/interface is required.")
         scan, snapshot = station_snapshot_for_router(item.router_id)
@@ -40001,15 +41617,37 @@ def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayloa
             errors.append(f"{router_label}: latest Preflight Scan failed. Re-scan before saving AP management.")
             continue
         bridge_name = (item.bridge_name or "").strip()
-        port_names = [port.strip() for port in str(item.tagged_ports or "").split(",") if port.strip()]
-        if not port_names:
+        ap_path_bridge_name = (item.ap_path_bridge_name or "").strip()
+        uses_branch_xconnect = topology_role == AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH and ap_path_bridge_name and ap_path_bridge_name != bridge_name
+        upstream_port_names = [
+            port.strip()
+            for port in str(item.upstream_ports or (item.tagged_ports if uses_branch_xconnect else "") or "").split(",")
+            if port.strip()
+        ]
+        ap_path_port_names = [port.strip() for port in str(item.ap_path_ports or "").split(",") if port.strip()]
+        port_names = [port.strip() for port in ap_management_router_tagged_ports(item.model_dump()).split(",") if port.strip()]
+        if uses_branch_xconnect:
+            if not upstream_port_names:
+                errors.append(f"{router_label}: add at least one upstream CRS-facing tagged port for AP management VLAN {vlan_id}.")
+            if not ap_path_port_names:
+                errors.append(f"{router_label}: add at least one downstream OLT/AP tagged port for AP management VLAN {vlan_id}.")
+        elif not port_names:
             errors.append(f"{router_label}: add at least one tagged trunk port for AP management VLAN {vlan_id}.")
-        interfaces, live_interface_error, used_live_interfaces = station_interface_map_with_live_fallback(item.router_id, snapshot, [bridge_name, *port_names])
+        required_names = [bridge_name, *port_names]
+        if uses_branch_xconnect:
+            required_names = [bridge_name, ap_path_bridge_name, *upstream_port_names, *ap_path_port_names]
+        interfaces, live_interface_error, used_live_interfaces = station_interface_map_with_live_fallback(item.router_id, snapshot, required_names)
         if bridge_name and bridge_name not in interfaces:
             suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
             errors.append(f"{router_label}: selected bridge/interface '{bridge_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
         elif bridge_name and station_interface_is_pppoe(interfaces[bridge_name]):
             errors.append(f"{router_label}: '{bridge_name}' is PPPoE-related and cannot carry AP management VLAN.")
+        if uses_branch_xconnect:
+            if ap_path_bridge_name and ap_path_bridge_name not in interfaces:
+                suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
+                errors.append(f"{router_label}: selected downstream OLT/AP bridge '{ap_path_bridge_name}' was not found in the latest scan or live RouterOS interface detection.{suffix}")
+            elif ap_path_bridge_name and station_interface_is_pppoe(interfaces[ap_path_bridge_name]):
+                errors.append(f"{router_label}: downstream OLT/AP bridge '{ap_path_bridge_name}' is an actual PPPoE interface/session. Choose the bridge that contains the OLT port.")
         for port_name in port_names:
             if port_name not in interfaces:
                 suffix = f" Live Detect Ports also failed: {live_interface_error}" if live_interface_error else ""
@@ -40025,11 +41663,25 @@ def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayloa
             live_bridge = str(interface_data.get("bridge") or "").strip()
             if live_bridge:
                 bridge_port_bridge_map.setdefault(interface_name, live_bridge)
-        for port_name in port_names:
-            if port_name == bridge_name:
-                continue
-            if bridge_port_bridge_map.get(port_name) and bridge_port_bridge_map.get(port_name) != bridge_name:
-                errors.append(f"{router_label}: tagged port '{port_name}' belongs to bridge '{bridge_port_bridge_map[port_name]}', not selected bridge '{bridge_name}'. Choose a trunk port inside the selected bridge.")
+        if uses_branch_xconnect:
+            for port_name in upstream_port_names:
+                if port_name == bridge_name:
+                    continue
+                port_bridge = bridge_port_bridge_map.get(port_name)
+                if port_bridge and port_bridge != bridge_name:
+                    errors.append(f"{router_label}: upstream tagged port '{port_name}' belongs to bridge '{port_bridge}', not selected upstream bridge '{bridge_name}'.")
+            for port_name in ap_path_port_names:
+                if port_name == ap_path_bridge_name:
+                    continue
+                port_bridge = bridge_port_bridge_map.get(port_name)
+                if port_bridge and port_bridge != ap_path_bridge_name:
+                    errors.append(f"{router_label}: downstream OLT/AP tagged port '{port_name}' belongs to bridge '{port_bridge}', not selected downstream bridge '{ap_path_bridge_name}'.")
+        else:
+            for port_name in port_names:
+                if port_name == bridge_name:
+                    continue
+                if bridge_port_bridge_map.get(port_name) and bridge_port_bridge_map.get(port_name) != bridge_name:
+                    errors.append(f"{router_label}: tagged port '{port_name}' belongs to bridge '{bridge_port_bridge_map[port_name]}', not selected bridge '{bridge_name}'. Choose a trunk port inside the selected bridge.")
         existing_vlan_ids = set()
         for row in mikrotik_snapshot_items(snapshot, "interface_vlans"):
             existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-id")))
@@ -40039,7 +41691,7 @@ def validate_ap_management_router_path(payload: MikrotikApManagementConfigPayloa
             existing_vlan_ids.update(parse_routeros_vlan_ids(row.get("vlan-ids")))
         if vlan_id in existing_vlan_ids and not station_existing_vlan_is_managed(snapshot, vlan_id, vlan_interface_name, f"3j ap management - vlan {vlan_id}"):
             errors.append(f"{router_label}: AP management VLAN {vlan_id} already exists in the latest scan and is not marked as system-managed.")
-        if index == 0:
+        if topology_role == AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY:
             for row in mikrotik_snapshot_items(snapshot, "ip_addresses"):
                 existing_network = parse_routeros_ip_network(row.get("address"))
                 existing_interface = str(row.get("interface") or "")
@@ -40079,9 +41731,12 @@ def build_mikrotik_ap_management_remove_plan(config: dict, routers: list[dict]) 
     router_plans = []
     for index, router in reversed(list(enumerate(routers))):
         bridge_name = (router.get("bridge_name") or "").strip()
+        ap_path_bridge_name = (router.get("ap_path_bridge_name") or "").strip()
         untagged_ports = [port.strip() for port in str(router.get("untagged_ports") or "").split(",") if port.strip()]
-        is_root = index == 0
-        previous_name = routers[index - 1].get("router_name") if index > 0 else None
+        topology_role = ap_management_router_topology_role(router, index)
+        is_root = topology_role == AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY
+        uses_branch_xconnect = topology_role == AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH and ap_path_bridge_name and ap_path_bridge_name != bridge_name
+        previous_name = ap_management_parent_router_name(router, routers, index) if not is_root else None
         commands = []
         if is_root:
             commands.extend([
@@ -40220,32 +41875,41 @@ def build_mikrotik_ap_management_remove_plan(config: dict, routers: list[dict]) 
                     "comment",
                     f"3J AP Management - native VLAN {vlan_id} AP-facing port",
                 ),
-                station_routeros_remove_command(
-                    f"Remove old AP management bridge VLAN {vlan_id}",
-                    "/interface/bridge/vlan/print",
-                    "comment",
-                    f"3J AP Management - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
-                ),
-                station_routeros_remove_command(
-                    f"Remove old AP management native bridge VLAN {vlan_id}",
-                    "/interface/bridge/vlan/print",
-                    "comment",
-                    f"3J AP Management - VLAN {vlan_id} trunk/native from {previous_name or 'previous router'} to OLT/APs",
-                ),
-                station_routeros_remove_command(
-                    f"Remove old AP management VLAN {vlan_id} monitoring interface",
-                    "/interface/vlan/print",
-                    "name",
-                    vlan_interface_name,
-                ),
             ])
+            if uses_branch_xconnect:
+                commands.extend(station_vlan_xconnect_remove_commands(vlan_id, vlan_interface_name, "AP-MGMT"))
+            else:
+                commands.extend([
+                    station_routeros_remove_command(
+                        f"Remove old AP management bridge VLAN {vlan_id}",
+                        "/interface/bridge/vlan/print",
+                        "comment",
+                        f"3J AP Management - VLAN {vlan_id} trunk from {previous_name or 'previous router'} to OLT/APs",
+                    ),
+                    station_routeros_remove_command(
+                        f"Remove old AP management native bridge VLAN {vlan_id}",
+                        "/interface/bridge/vlan/print",
+                        "comment",
+                        f"3J AP Management - VLAN {vlan_id} trunk/native from {previous_name or 'previous router'} to OLT/APs",
+                    ),
+                    station_routeros_remove_command(
+                        f"Remove old AP management VLAN {vlan_id} monitoring interface",
+                        "/interface/vlan/print",
+                        "name",
+                        vlan_interface_name,
+                    ),
+                ])
         router_plans.append({
             "router_id": str(router["router_id"]),
             "router_name": router.get("router_name"),
             "host": router.get("host"),
             "sequence_order": router.get("sequence_order", index),
-            "role": "ROOT_GATEWAY" if is_root else "TRUNK_HELPER",
+            "role": topology_role,
+            "router_role": ap_management_legacy_router_role(topology_role, index),
+            "parent_router_id": router.get("parent_router_id"),
+            "branch_label": router.get("branch_label"),
             "bridge_name": bridge_name,
+            "ap_path_bridge_name": router.get("ap_path_bridge_name"),
             "tagged_ports": router.get("tagged_ports"),
             "untagged_ports": router.get("untagged_ports"),
             "commands": commands,
@@ -40414,12 +42078,17 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
     router_plans = []
     for index, router in enumerate(routers):
         bridge_name = (router.get("bridge_name") or "").strip()
-        tagged_ports = (router.get("tagged_ports") or "").strip()
+        ap_path_bridge_name = (router.get("ap_path_bridge_name") or "").strip()
+        tagged_ports = ap_management_router_tagged_ports(router)
+        upstream_ports = station_dedupe_csv(router.get("upstream_ports") or router.get("tagged_ports"))
+        ap_path_ports = station_dedupe_csv(router.get("ap_path_ports"))
         effective_tagged_ports = station_dedupe_csv(bridge_name, tagged_ports)
-        is_root = index == 0
-        role = "ROOT_GATEWAY" if is_root else "TRUNK_HELPER"
+        role = ap_management_router_topology_role(router, index)
+        is_root = role == AP_MANAGEMENT_ROLE_CENTRAL_GATEWAY
+        uses_branch_xconnect = role == AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH and ap_path_bridge_name and ap_path_bridge_name != bridge_name
         commands = []
         if is_root:
+            commands.append(station_routeros_ensure_interface_list_command(local_interface_list, "AP Management"))
             commands.extend([
                 station_routeros_add_command(
                     f"Create AP management VLAN {vlan_id} interface",
@@ -40598,46 +42267,71 @@ def build_mikrotik_ap_management_plan(config: dict, routers: list[dict]) -> dict
                 ),
             ])
         else:
-            previous_name = routers[index - 1].get("router_name") or "previous router"
-            commands.extend([
-                station_routeros_add_command(
-                    f"Create AP management VLAN {vlan_id} monitoring interface",
-                    "/interface/vlan/add",
-                    {
-                        "comment": f"3J AP Management - VLAN {vlan_id} monitor interface on {bridge_name}",
-                        "interface": bridge_name,
-                        "name": vlan_interface_name,
-                        "vlan-id": str(vlan_id),
-                    },
-                    unique_field="name",
-                    unique_value=vlan_interface_name,
-                ),
-                station_routeros_add_command(
-                    f"Carry AP management VLAN {vlan_id} through this router",
-                    "/interface/bridge/vlan/add",
-                    {
-                        "bridge": bridge_name,
-                        "comment": f"3J AP Management - VLAN {vlan_id} trunk from {previous_name} to OLT/APs",
-                        "tagged": effective_tagged_ports,
-                        "vlan-ids": str(vlan_id),
-                    },
-                    existing_query={"bridge": bridge_name, "vlan-ids": str(vlan_id)},
-                    merge_bridge_vlan_members=True,
-                ),
-            ])
+            previous_name = ap_management_parent_router_name(router, routers, index)
+            branch_label = (router.get("branch_label") or router.get("router_name") or "substation").strip()
+            if uses_branch_xconnect:
+                commands.extend(station_vlan_xconnect_commands(
+                    vlan_id,
+                    vlan_interface_name,
+                    bridge_name,
+                    upstream_ports,
+                    ap_path_bridge_name,
+                    ap_path_ports,
+                    previous_name,
+                    "AP-MGMT",
+                ))
+            else:
+                carry_label = (
+                    f"Carry AP management VLAN {vlan_id} into substation branch {branch_label}"
+                    if role == AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH
+                    else f"Carry AP management VLAN {vlan_id} through core trunk"
+                )
+                commands.extend([
+                    station_routeros_add_command(
+                        f"Create AP management VLAN {vlan_id} monitoring interface",
+                        "/interface/vlan/add",
+                        {
+                            "comment": f"3J AP Management - VLAN {vlan_id} monitor interface on {bridge_name}",
+                            "interface": bridge_name,
+                            "name": vlan_interface_name,
+                            "vlan-id": str(vlan_id),
+                        },
+                        unique_field="name",
+                        unique_value=vlan_interface_name,
+                    ),
+                    station_routeros_add_command(
+                        carry_label,
+                        "/interface/bridge/vlan/add",
+                        {
+                            "bridge": bridge_name,
+                            "comment": f"3J AP Management - VLAN {vlan_id} trunk from {previous_name} to OLT/APs",
+                            "tagged": effective_tagged_ports,
+                            "vlan-ids": str(vlan_id),
+                        },
+                        existing_query={"bridge": bridge_name, "vlan-ids": str(vlan_id)},
+                        merge_bridge_vlan_members=True,
+                    ),
+                ])
         router_plans.append({
             "router_id": str(router["router_id"]),
             "router_name": router.get("router_name"),
             "host": router.get("host"),
             "sequence_order": router.get("sequence_order", index),
             "role": role,
+            "router_role": ap_management_legacy_router_role(role, index),
+            "parent_router_id": router.get("parent_router_id"),
+            "branch_label": router.get("branch_label"),
+            "station_id": router.get("station_id"),
             "bridge_name": bridge_name,
+            "ap_path_bridge_name": router.get("ap_path_bridge_name"),
             "tagged_ports": tagged_ports,
+            "upstream_ports": router.get("upstream_ports"),
+            "ap_path_ports": router.get("ap_path_ports"),
             "effective_tagged_ports": effective_tagged_ports,
             "commands": commands,
         })
     plan = {
-        "summary": "Central AP management creates one AP management VLAN/subnet on the root gateway and carries that VLAN through selected downstream routers toward OLT/AP paths.",
+        "summary": "Central AP management creates one AP management VLAN/subnet on the central gateway, carries it through the core/CRS trunk, then fans it out to selected substation OLT/AP paths.",
         "vlan_id": vlan_id,
         "vlan_interface_name": vlan_interface_name,
         "network_cidr": network.with_prefixlen,
@@ -40695,8 +42389,15 @@ def public_mikrotik_ap_management_config(row: Optional[dict]) -> dict:
                 "api_status": item["api_status"],
                 "sequence_order": item["sequence_order"],
                 "router_role": item["router_role"],
+                "topology_role": ap_management_router_topology_role(item, item.get("sequence_order") or 0),
+                "parent_router_id": item.get("parent_router_id"),
+                "branch_label": item.get("branch_label"),
+                "station_id": item.get("station_id"),
                 "bridge_name": item.get("bridge_name"),
+                "ap_path_bridge_name": item.get("ap_path_bridge_name"),
                 "tagged_ports": item.get("tagged_ports"),
+                "upstream_ports": item.get("upstream_ports"),
+                "ap_path_ports": item.get("ap_path_ports"),
                 "notes": item.get("notes"),
             }
             for item in routers
@@ -40812,8 +42513,14 @@ def office_ap_path_config_signature_from_values(config: dict, routers: list[dict
         "routers": [
             {
                 "router_id": str(item.get("router_id") or ""),
+                "topology_role": ap_management_router_topology_role(item, item.get("sequence_order") or 0),
+                "parent_router_id": str(item.get("parent_router_id") or "").strip(),
+                "branch_label": str(item.get("branch_label") or "").strip(),
+                "station_id": str(item.get("station_id") or "").strip(),
                 "bridge_name": str(item.get("bridge_name") or "").strip(),
-                "tagged_ports": station_dedupe_csv(item.get("tagged_ports")),
+                "tagged_ports": ap_management_router_tagged_ports(item),
+                "upstream_ports": station_dedupe_csv(item.get("upstream_ports")),
+                "ap_path_ports": station_dedupe_csv(item.get("ap_path_ports")),
             }
             for item in sorted(routers, key=lambda row: int(row.get("sequence_order") or 0))
         ],
@@ -40826,8 +42533,14 @@ def office_ap_path_config_signature_from_payload(normalized: dict, payload: Mikr
         [
             {
                 "router_id": item.router_id,
+                "topology_role": normalize_ap_management_topology_role(item.topology_role, index),
+                "parent_router_id": item.parent_router_id,
+                "branch_label": item.branch_label,
+                "station_id": item.station_id,
                 "bridge_name": item.bridge_name,
-                "tagged_ports": item.tagged_ports,
+                "tagged_ports": station_dedupe_csv(item.tagged_ports, item.upstream_ports, item.ap_path_ports),
+                "upstream_ports": item.upstream_ports,
+                "ap_path_ports": item.ap_path_ports,
                 "sequence_order": index,
             }
             for index, item in enumerate(payload.routers)
@@ -41634,7 +43347,7 @@ def mikrotik_station_hotspot_diagnostics(station: dict, client_ip: Optional[str]
             row.get("chain") == "forward"
             and row.get("action") == "drop"
             and row.get("src-address") == station["client_network_cidr"]
-            and str(row.get("ttl") or "") in {"equal:63", "63"}
+            and str(row.get("ttl") or "") in {"equal:62", "62"}
             and not routeros_truthy(row.get("disabled"))
             for row in low_ttl_rows
         )
@@ -41642,7 +43355,7 @@ def mikrotik_station_hotspot_diagnostics(station: dict, client_ip: Optional[str]
             row.get("chain") == "forward"
             and row.get("action") == "drop"
             and row.get("src-address") == station["client_network_cidr"]
-            and str(row.get("ttl") or "") in {"equal:127", "127"}
+            and str(row.get("ttl") or "") in {"equal:126", "126"}
             and not routeros_truthy(row.get("disabled"))
             for row in windows_ttl_rows
         )
@@ -41966,8 +43679,15 @@ def ap_management_config_signature_from_values(config: dict, routers: list[dict]
         "routers": [
             {
                 "router_id": str(item.get("router_id") or ""),
+                "topology_role": ap_management_router_topology_role(item, item.get("sequence_order") or 0),
+                "parent_router_id": str(item.get("parent_router_id") or "").strip(),
+                "branch_label": str(item.get("branch_label") or "").strip(),
+                "station_id": str(item.get("station_id") or "").strip(),
                 "bridge_name": str(item.get("bridge_name") or "").strip(),
-                "tagged_ports": station_dedupe_csv(item.get("tagged_ports")),
+                "ap_path_bridge_name": str(item.get("ap_path_bridge_name") or "").strip(),
+                "tagged_ports": ap_management_router_tagged_ports(item),
+                "upstream_ports": station_dedupe_csv(item.get("upstream_ports")),
+                "ap_path_ports": station_dedupe_csv(item.get("ap_path_ports")),
             }
             for item in sorted(routers, key=lambda row: int(row.get("sequence_order") or 0))
         ],
@@ -41992,8 +43712,15 @@ def ap_management_config_signature_from_payload(normalized: dict, payload: Mikro
         [
             {
                 "router_id": item.router_id,
+                "topology_role": normalize_ap_management_topology_role(item.topology_role, index),
+                "parent_router_id": item.parent_router_id,
+                "branch_label": item.branch_label,
+                "station_id": item.station_id,
                 "bridge_name": item.bridge_name,
-                "tagged_ports": item.tagged_ports,
+                "ap_path_bridge_name": item.ap_path_bridge_name,
+                "tagged_ports": station_dedupe_csv(item.tagged_ports, item.upstream_ports, item.ap_path_ports),
+                "upstream_ports": item.upstream_ports,
+                "ap_path_ports": item.ap_path_ports,
                 "sequence_order": index,
             }
             for index, item in enumerate(payload.routers)
@@ -42093,6 +43820,7 @@ def save_mikrotik_ap_management_payload(payload: MikrotikApManagementConfigPaylo
         else:
             pending_cleanup_plan = existing.get("pending_cleanup_plan_json")
             pending_cleanup_reason = existing.get("pending_cleanup_reason")
+    pending_cleanup_plan_json = json_safe(pending_cleanup_plan) if pending_cleanup_plan else None
     with get_conn() as conn:
         with conn.cursor() as cur:
             if existing:
@@ -42133,9 +43861,9 @@ def save_mikrotik_ap_management_payload(payload: MikrotikApManagementConfigPaylo
                         normalized["dhcp_lease_time"],
                         normalized["dns_servers"],
                         normalized["local_interface_list"],
-                        Json(pending_cleanup_plan) if pending_cleanup_plan else None,
+                        Json(pending_cleanup_plan_json) if pending_cleanup_plan_json else None,
                         pending_cleanup_reason,
-                        Json(pending_cleanup_plan) if pending_cleanup_plan else None,
+                        Json(pending_cleanup_plan_json) if pending_cleanup_plan_json else None,
                         existing["id"],
                     ),
                 )
@@ -42169,21 +43897,40 @@ def save_mikrotik_ap_management_payload(payload: MikrotikApManagementConfigPaylo
                     ),
                 )
                 config = cur.fetchone()
+            payload_roles = [normalize_ap_management_topology_role(item.topology_role, index) for index, item in enumerate(payload.routers)]
+            default_core_parent_id = next(
+                (payload.routers[index].router_id for index, role in enumerate(payload_roles) if role == AP_MANAGEMENT_ROLE_CORE_TRUNK),
+                None,
+            )
             for index, item in enumerate(payload.routers):
+                topology_role = payload_roles[index]
+                parent_router_id = (item.parent_router_id or "").strip() or None
+                if topology_role == AP_MANAGEMENT_ROLE_SUBSTATION_BRANCH and not parent_router_id:
+                    parent_router_id = default_core_parent_id
+                tagged_ports = station_dedupe_csv(item.tagged_ports, item.upstream_ports, item.ap_path_ports)
                 cur.execute(
                     """
                     INSERT INTO mikrotik_ap_management_routers(
-                        config_id, router_id, sequence_order, router_role, bridge_name, tagged_ports, untagged_ports, notes
+                        config_id, router_id, sequence_order, router_role, topology_role,
+                        parent_router_id, branch_label, station_id, bridge_name, tagged_ports,
+                        upstream_ports, ap_path_bridge_name, ap_path_ports, untagged_ports, notes
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         config["id"],
                         item.router_id,
                         index,
-                        "ROOT_GATEWAY" if index == 0 else "TRUNK_HELPER",
+                        ap_management_legacy_router_role(topology_role, index),
+                        topology_role,
+                        parent_router_id,
+                        (item.branch_label or "").strip() or None,
+                        (item.station_id or "").strip() or None,
                         (item.bridge_name or "").strip(),
-                        (item.tagged_ports or "").strip(),
+                        tagged_ports,
+                        station_dedupe_csv(item.upstream_ports) or None,
+                        (item.ap_path_bridge_name or "").strip() or None,
+                        station_dedupe_csv(item.ap_path_ports) or None,
                         None,
                         (item.notes or "").strip() or None,
                     ),
@@ -44831,10 +46578,23 @@ def mikrotik_station_managed_configuration_status(station_id: str, quiet: bool =
     total_found = 0
     total_steps = 0
     pushed_steps = 0
+    cleanup_steps = 0
+    cleanup_clean_steps = 0
     apply_router_statuses = []
     for router_plan in apply_plan.get("router_plans") or []:
         commands = router_plan.get("commands") or []
-        total_steps += len(commands)
+        apply_command_indices = {
+            index
+            for index, command in enumerate(commands)
+            if command.get("operation") != "REMOVE_OLD"
+        }
+        cleanup_command_indices = {
+            index
+            for index, command in enumerate(commands)
+            if command.get("operation") == "REMOVE_OLD"
+        }
+        total_steps += len(apply_command_indices)
+        cleanup_steps += len(cleanup_command_indices)
         router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_plan["router_id"],))
         if not router:
             status = {"status": "ERROR", "message": "Router not found", "has_managed_config": False, "found_count": 0, "items": []}
@@ -44853,12 +46613,30 @@ def mikrotik_station_managed_configuration_status(station_id: str, quiet: bool =
                 )
             except Exception as exc:
                 status = {"status": "ERROR", "message": sanitize_routeros_text(str(exc)), "has_managed_config": False, "found_count": 0, "items": []}
-        pushed_steps += int(status.get("found_count") or 0)
+        items = status.get("items") or []
+        apply_found = sum(
+            1
+            for item in items
+            if item.get("status") == "FOUND"
+            and int(item.get("command_index") if item.get("command_index") is not None else -1) in apply_command_indices
+        )
+        cleanup_clean = sum(
+            1
+            for item in items
+            if item.get("status") == "FOUND"
+            and int(item.get("command_index") if item.get("command_index") is not None else -1) in cleanup_command_indices
+        )
+        pushed_steps += apply_found
+        cleanup_clean_steps += cleanup_clean
         apply_router_statuses.append({
             "router_id": router_plan["router_id"],
             "router_name": router_plan.get("router_name"),
             "host": router_plan.get("host"),
             **status,
+            "apply_found_count": apply_found,
+            "apply_total_steps": len(apply_command_indices),
+            "cleanup_clean_count": cleanup_clean,
+            "cleanup_total_steps": len(cleanup_command_indices),
         })
     for router_plan in remove_plan.get("router_plans") or []:
         router = fetch_one("SELECT * FROM mikrotik_routers WHERE id = %s", (router_plan["router_id"],))
@@ -44899,8 +46677,34 @@ def mikrotik_station_managed_configuration_status(station_id: str, quiet: bool =
             "pushed_steps": pushed_steps,
             "total_steps": total_steps,
             "routers": apply_router_statuses,
+            "cleanup_clean_steps": cleanup_clean_steps,
+            "cleanup_total_steps": cleanup_steps,
+            "message": f"{pushed_steps}/{total_steps} active station config step(s) detected."
+                       + (f" Cleanup: {cleanup_clean_steps}/{cleanup_steps} old step(s) already clean." if cleanup_steps else ""),
         },
     }
+    if (
+        station.get("pending_cleanup_plan_json")
+        and summary_status == "SUCCESS"
+        and total_steps > 0
+        and pushed_steps >= total_steps
+        and cleanup_clean_steps >= cleanup_steps
+    ):
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE mikrotik_stations
+                    SET status = 'ACTIVE',
+                        pending_cleanup_plan_json = NULL,
+                        pending_cleanup_reason = NULL,
+                        pending_cleanup_resolved_at = now(),
+                        updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (station_id,),
+                )
+        result["pending_cleanup_resolved"] = True
     if not quiet:
         record_station_command_log(station_id, None, "CHECK", None, {"label": "Check existing station config", "preview": "Detect station-created RouterOS objects"}, summary_status, f"Found {total_found} station-managed object(s).", result, admin["id"])
         audit(admin["id"], "check_mikrotik_station_managed_configuration", "mikrotik_stations", station_id, {"found_count": total_found, "status": summary_status})
@@ -49505,6 +51309,67 @@ def test_omada_web(payload: OmadaWebTestRequest, admin=Depends(current_admin)):
     return result
 
 
+@app.get("/api/omada/health")
+def get_omada_health(admin=Depends(current_admin)):
+    result = process_omada_health_once()
+    return {
+        "monitor": omada_health_monitor_store(),
+        "health": result,
+        "settings": public_omada_settings(ensure_omada_settings()),
+    }
+
+
+@app.post("/api/omada/clean-disk")
+def omada_clean_disk(admin=Depends(current_admin)):
+    settings = ensure_omada_settings()
+    if not settings.get("ssh_username"):
+        raise HTTPException(status_code=400, detail="Omada SSH username is not configured.")
+    before = omada_controller_health_probe(settings, include_ssh=True)
+    try:
+        cleanup = run_omada_safe_disk_cleanup(settings)
+    except Exception as exc:
+        create_omada_health_notification(
+            "DANGER",
+            "Manual Omada disk cleanup failed",
+            f"Manual safe disk cleanup failed: {exc}",
+            related_id="OMADA_MANUAL_DISK_CLEANUP_FAILED",
+            metadata={"before": before, "error": str(exc)},
+            dedupe_minutes=30,
+        )
+        audit(admin["id"], "omada_clean_disk_failed", "omada_controller", str(settings["id"]), {"error": str(exc)})
+        raise HTTPException(status_code=400, detail=f"Safe disk cleanup failed: {exc}") from exc
+    if not cleanup.get("success"):
+        create_omada_health_notification(
+            "DANGER",
+            "Manual Omada disk cleanup failed",
+            f"Manual safe disk cleanup exited with code {cleanup.get('exit_code')}.",
+            related_id="OMADA_MANUAL_DISK_CLEANUP_FAILED",
+            metadata={"before": before, "cleanup": sanitize_summary(cleanup)},
+            dedupe_minutes=30,
+        )
+        audit(admin["id"], "omada_clean_disk_failed", "omada_controller", str(settings["id"]), {"cleanup": sanitize_summary(cleanup)})
+        raise HTTPException(status_code=400, detail="Safe disk cleanup failed. Check Omada logs for output.")
+    after = omada_controller_health_probe(settings, include_ssh=True)
+    create_omada_health_notification(
+        "SUCCESS",
+        "Manual Omada disk cleanup completed",
+        f"Safe disk cleanup completed. Disk usage is now {after.get('checks', {}).get('disk_used_percent', 'unknown')}%.",
+        related_id="OMADA_MANUAL_DISK_CLEANUP_SUCCESS",
+        metadata={"before": before, "after": after, "cleanup": sanitize_summary(cleanup)},
+        dedupe_minutes=10,
+    )
+    audit(admin["id"], "omada_clean_disk", "omada_controller", str(settings["id"]), {"before": before, "after": after})
+    return {
+        "status": "SUCCESS",
+        "message": "Safe Omada disk cleanup completed.",
+        "before": before,
+        "after": after,
+        "cleanup": cleanup,
+        "monitor": omada_health_monitor_store(),
+        "settings": public_omada_settings(ensure_omada_settings()),
+    }
+
+
 @app.post("/api/omada/test-ssh")
 def test_omada_ssh(admin=Depends(current_admin)):
     settings = ensure_omada_settings()
@@ -50753,7 +52618,7 @@ def paymongo_remote_webhooks_summary(store: dict) -> dict:
             summaries.append({"mode": mode, "configured": False, "status": "MISSING_SECRET_KEY", "webhooks": []})
             continue
         try:
-            data = paymongo_request(store, credentials["secret_key"], "GET", "/webhooks")
+            data = paymongo_request(store, credentials["secret_key"], "GET", "/webhooks", timeout=8)
             rows = []
             for item in data.get("data", []) if isinstance(data, dict) else []:
                 attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
@@ -50800,7 +52665,7 @@ def inspect_paymongo_remote_webhooks(reason: str = "ADMIN_CHECK") -> list[dict]:
             credentials = payment_gateway_active_credentials(store, mode)
             if not credentials.get("secret_key"):
                 continue
-            data = paymongo_request(store, credentials["secret_key"], "GET", "/webhooks")
+            data = paymongo_request(store, credentials["secret_key"], "GET", "/webhooks", timeout=8)
             for item in data.get("data", []) if isinstance(data, dict) else []:
                 attrs = item.get("attributes") if isinstance(item.get("attributes"), dict) else {}
                 hook_id = normalize_payment_text(item.get("id"), 120)
@@ -50839,11 +52704,24 @@ def inspect_paymongo_remote_webhooks(reason: str = "ADMIN_CHECK") -> list[dict]:
     return results
 
 
+def paymongo_remote_webhooks_placeholder(store: dict) -> dict:
+    modes = []
+    for mode in PAYMENT_MODE_OPTIONS:
+        credentials = payment_gateway_active_credentials(store, mode)
+        modes.append({
+            "mode": mode,
+            "configured": bool(credentials.get("secret_key")),
+            "status": "NOT_LOADED" if credentials.get("secret_key") else "MISSING_SECRET_KEY",
+            "webhooks": [],
+        })
+    return {"modes": modes, "errors": [], "loaded": False}
+
+
 @app.get("/api/paymongo/overview")
-def get_paymongo_overview(admin=Depends(current_admin)):
+def get_paymongo_overview(include_remote: bool = False, admin=Depends(current_admin)):
     store = payment_gateway_store()
     settings = public_payment_gateway_settings()
-    remote_webhooks = paymongo_remote_webhooks_summary(store)
+    remote_webhooks = paymongo_remote_webhooks_summary(store) if include_remote else paymongo_remote_webhooks_placeholder(store)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -50903,6 +52781,15 @@ def get_paymongo_overview(admin=Depends(current_admin)):
         "webhook_stats": webhook_stats,
         "recent_failed_orders": recent_failed_orders,
         "recent_webhook_errors": recent_webhook_errors,
+    }
+
+
+@app.get("/api/paymongo/remote-webhooks")
+def get_paymongo_remote_webhooks(admin=Depends(current_admin)):
+    store = payment_gateway_store()
+    return {
+        "remote_webhooks": paymongo_remote_webhooks_summary(store),
+        "checked_at": datetime.now(timezone.utc).isoformat(),
     }
 
 

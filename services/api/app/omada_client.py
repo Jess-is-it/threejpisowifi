@@ -820,8 +820,8 @@ class OmadaApiClient:
             "password": security_password if security_mode != "OPEN" else None,
             "wpaMode": 3 if security_mode != "OPEN" else 0,
             "encryption": 3 if security_mode != "OPEN" else 0,
-            "guestNetEnable": False,
-            "portalEnable": False,
+            "guestNetEnable": True,
+            "portalEnable": True,
             "accessEnable": False,
             "vlanEnable": vlan_tag is not None,
             "vlanId": vlan_tag,
@@ -852,7 +852,7 @@ class OmadaApiClient:
                 f"/{self.controller_id}/api/v2/sites/{site_id}/setting/ssids/{existing['ssid_id']}",
             ]
             try:
-                response, summary = self._put_json_candidates(update_paths, payload, timeout=30)
+                response, summary = self._patch_json_candidates(update_paths, payload, timeout=30)
                 data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
                 return {"ssid": ssid_name, "wlan_id": wlan_id, "ssid_id": existing.get("ssid_id"), "band": band, "created": False, "updated": True, "response_summary": summary, "result": data.get("result") if isinstance(data, dict) else data}
             except OmadaApiError as exc:
@@ -1458,6 +1458,34 @@ class OmadaApiClient:
                 if name and ssid_id:
                     ssid_name_to_id[str(name)] = str(ssid_id)
 
+        ssid_name_to_guest_enabled = {}
+        ssid_name_to_vlan_id = {}
+        try:
+            wlans_path = f"/{self.controller_id}/api/v2/sites/{site_id}/setting/wlans"
+            wlans_body, _ = self._get_json_candidates([wlans_path], timeout=25)
+            wlans_result = wlans_body.get("result") if isinstance(wlans_body, dict) else {}
+            wlan_rows = wlans_result.get("data") if isinstance(wlans_result, dict) else wlans_result
+            for wlan in wlan_rows or []:
+                if not isinstance(wlan, dict):
+                    continue
+                wlan_id = wlan.get("id") or wlan.get("wlanId")
+                if not wlan_id:
+                    continue
+                ssids_path = f"/{self.controller_id}/api/v2/sites/{site_id}/setting/wlans/{wlan_id}/ssids"
+                ssids_body, _ = self._get_json_candidates([ssids_path], timeout=25)
+                ssids_result = ssids_body.get("result") if isinstance(ssids_body, dict) else {}
+                ssid_rows = ssids_result.get("data") if isinstance(ssids_result, dict) else ssids_result
+                for ssid in ssid_rows or []:
+                    if not isinstance(ssid, dict):
+                        continue
+                    name = ssid.get("name") or ssid.get("ssidName")
+                    if not name:
+                        continue
+                    ssid_name_to_guest_enabled[str(name)] = bool(ssid.get("guestNetEnable"))
+                    ssid_name_to_vlan_id[str(name)] = ssid.get("vlanId")
+        except Exception:
+            pass
+
         portals_path = f"/{self.controller_id}/api/v2/sites/{site_id}/setting/portals"
         portals_body, portals_summary = self._get_json_candidates([portals_path], timeout=25)
         portals = portals_body.get("result") if isinstance(portals_body, dict) else []
@@ -1507,6 +1535,8 @@ class OmadaApiClient:
                 "ssid_id": ssid_id,
                 "exists": bool(ssid_id),
                 "portal_enabled": bool(ssid_id and ssid_id in portal_ids),
+                "guest_enabled": ssid_name_to_guest_enabled.get(name),
+                "vlan_id": ssid_name_to_vlan_id.get(name),
             })
         return {
             "site_id": site_id,
@@ -1514,6 +1544,7 @@ class OmadaApiClient:
             "ssids": ssids,
             "all_present": all(item["exists"] for item in ssids) if ssids else False,
             "all_portal_enabled": all(item["portal_enabled"] for item in ssids) if ssids else False,
+            "all_guest_enabled": all(item["guest_enabled"] is True for item in ssids) if ssids else False,
             "all_https_redirect_enabled": all(bool(item.get("httpsRedirectEnable")) for item in active_portals) if active_portals else False,
             "any_https_portal_url": any(str(item.get("serverUrlScheme") or "").lower() == "https" for item in active_portals),
             "active_portals": active_portals,

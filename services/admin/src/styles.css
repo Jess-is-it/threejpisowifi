@@ -230,6 +230,182 @@
   position: relative;
 }
 
+.ap-management-topology {
+  background: #f8fafc;
+  border: 1px solid rgba(4, 32, 69, 0.08);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.9rem;
+  padding: 0.9rem;
+}
+
+.ap-management-topology-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.ap-management-topology-header {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.ap-management-canvas-controls {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.35rem;
+}
+
+.ap-management-canvas-zoom {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 6px;
+  color: #334155;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 700;
+  justify-content: center;
+  min-width: 3rem;
+  padding: 0.2rem 0.45rem;
+}
+
+.ap-management-fanout-shell {
+  background:
+    linear-gradient(rgba(248, 250, 252, 0.88), rgba(238, 244, 251, 0.88)),
+    linear-gradient(rgba(37, 99, 235, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(37, 99, 235, 0.06) 1px, transparent 1px),
+    linear-gradient(180deg, #f8fafc 0%, #eef4fb 100%);
+  background-size: auto, 32px 32px, 32px 32px, auto;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 10px;
+  min-height: 15rem;
+  overflow: auto hidden;
+  position: relative;
+}
+
+.ap-management-fanout-viewport {
+  position: relative;
+}
+
+.ap-management-fanout-canvas {
+  min-width: 100%;
+  position: relative;
+  transform-origin: left top;
+}
+
+.ap-management-fanout-lines {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.ap-management-fanout-edge-shadow,
+.ap-management-fanout-edge-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ap-management-fanout-edge-shadow {
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-width: 9;
+}
+
+.ap-management-fanout-edge-line {
+  filter: drop-shadow(0 2px 5px rgba(32, 107, 196, 0.18));
+  stroke: #206bc4;
+  stroke-width: 3.5;
+}
+
+.ap-management-fanout-edge.branch .ap-management-fanout-edge-line {
+  stroke: #7952b3;
+}
+
+.ap-management-fanout-edge-dot {
+  fill: #fff;
+  stroke: #206bc4;
+  stroke-width: 2.5;
+}
+
+.ap-management-fanout-edge.branch .ap-management-fanout-edge-dot {
+  stroke: #7952b3;
+}
+
+.ap-management-fanout-edge-label {
+  fill: #334155;
+  font-size: 11px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: rgba(248, 250, 252, 0.96);
+  stroke-width: 4px;
+}
+
+.ap-management-fanout-node {
+  align-items: center;
+  background: #fff;
+  border: 1px solid rgba(4, 32, 69, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+  display: flex;
+  gap: 0.65rem;
+  padding: 0.65rem 0.75rem;
+  position: absolute;
+  z-index: 2;
+}
+
+.ap-management-fanout-node.central {
+  background: #f1fbf3;
+  border-color: rgba(47, 179, 68, 0.22);
+}
+
+.ap-management-fanout-node.core {
+  background: #eef6ff;
+  border-color: rgba(32, 107, 196, 0.22);
+}
+
+.ap-management-fanout-node.branch {
+  background: #f7f2ff;
+  border-color: rgba(121, 82, 179, 0.2);
+}
+
+.ap-management-fanout-empty {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px dashed rgba(100, 116, 139, 0.3);
+  border-radius: 10px;
+  color: #64748b;
+  display: flex;
+  font-size: 0.8rem;
+  font-weight: 700;
+  justify-content: center;
+  min-height: 62px;
+  padding: 0.75rem;
+  position: absolute;
+  text-align: center;
+}
+
+.ap-management-fanout-shell::-webkit-scrollbar {
+  height: 8px;
+}
+
+.ap-management-fanout-shell::-webkit-scrollbar-track {
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+}
+
+.ap-management-fanout-shell::-webkit-scrollbar-thumb {
+  background: rgba(32, 107, 196, 0.42);
+  border-radius: 999px;
+}
+
+.ap-management-fanout-shell::-webkit-scrollbar-thumb:hover {
+  background: rgba(32, 107, 196, 0.62);
+}
+
 .station-table-chain {
   align-items: center;
   display: flex;
@@ -1039,6 +1215,15 @@
     min-height: 0;
   }
 
+  .ap-management-topology-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .ap-management-canvas-controls {
+    justify-content: flex-start;
+  }
+
   .station-process-steps {
     grid-template-columns: 1fr;
   }
@@ -1837,7 +2022,7 @@ pre code {
 
 .page {
   --tblr-navbar-width: 17.5rem;
-  overflow-x: hidden;
+  overflow-x: clip;
   transition: --tblr-navbar-width 0.18s ease;
 }
 
@@ -1986,7 +2171,7 @@ button.nav-link {
 
 .page-wrapper {
   min-width: 0;
-  overflow-x: hidden;
+  overflow-x: clip;
 }
 
 .sidebar-user {
@@ -2010,6 +2195,12 @@ button.nav-link {
   color: #fff;
   padding: 0.65rem 0.75rem;
   text-align: left;
+}
+
+.sidebar-user-trigger.is-active,
+.sidebar-user-trigger:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
 }
 
 .sidebar-user-text {
@@ -2065,6 +2256,9 @@ button.nav-link {
   border-bottom: 1px solid var(--admin-border);
   background: rgba(255, 255, 255, 0.94);
   backdrop-filter: blur(10px);
+  position: sticky;
+  top: 0;
+  z-index: 1030;
 }
 
 .navbar-light.sticky-top .container-xl,
@@ -2164,54 +2358,61 @@ button.nav-link {
   background: #0891b2;
 }
 
-.admin-notification-overlay {
+.admin-notification-drawer {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
   z-index: 1080;
   display: flex;
-  justify-content: flex-end;
-  background: rgba(15, 23, 42, 0.24);
-}
-
-.admin-notification-drawer {
-  display: flex;
   width: min(460px, 100vw);
-  height: 100vh;
   flex-direction: column;
   background: #fff;
-  box-shadow: -18px 0 40px rgba(15, 23, 42, 0.18);
+  border-left: 1px solid var(--admin-border);
 }
 
 .admin-notification-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 1rem;
   border-bottom: 1px solid var(--admin-border);
   padding: 1rem;
 }
 
-.admin-notification-kpis {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
+.admin-notification-heading {
+  display: inline-flex;
+  align-items: center;
   gap: 0.75rem;
-  border-bottom: 1px solid var(--admin-border);
-  padding: 0.9rem 1rem;
+  min-width: 0;
 }
 
-.admin-notification-kpi {
-  display: grid;
-  gap: 0.2rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 0.65rem;
-  background: #f8fafc;
-  padding: 0.7rem;
-  color: #64748b;
+.admin-notification-heading-icon {
+  position: relative;
+  display: inline-flex;
+  width: 2.4rem;
+  height: 2.4rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.7rem;
+  background: #eff6ff;
+  color: var(--tblr-primary);
 }
 
-.admin-notification-kpi strong {
-  color: #0f172a;
-  font-size: 1.15rem;
+.admin-notification-heading-count {
+  position: absolute;
+  top: -0.45rem;
+  right: -0.45rem;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: #d63939;
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.05rem;
+  text-align: center;
 }
 
 .admin-page-kpi-icon {
@@ -2294,12 +2495,6 @@ button.nav-link {
   justify-content: center;
   border-radius: 0.75rem;
   padding: 0;
-}
-
-@media (max-width: 575.98px) {
-  .admin-notification-kpis {
-    grid-template-columns: repeat(2, 1fr);
-  }
 }
 
 .header-icon-badge svg {
@@ -6020,6 +6215,36 @@ button.product-category-assignment-action:focus-visible,
   padding: 0.65rem 0.75rem;
 }
 
+.paymongo-sales-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.paymongo-sales-toolbar-control {
+  width: 150px;
+}
+
+.paymongo-sales-date-input {
+  width: 145px;
+}
+
+.sales-overview-kpi-button {
+  appearance: none;
+  background: var(--tblr-card-bg);
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  color: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.sales-overview-kpi-button:hover {
+  border-color: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.45);
+  box-shadow: 0 0.25rem 1rem rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
 .sales-trend-toolbar {
   align-items: center;
   display: flex;
@@ -6109,6 +6334,19 @@ button.product-category-assignment-action:focus-visible,
   }
 
   .sales-chart-tools .btn {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .paymongo-sales-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .paymongo-sales-toolbar .btn,
+  .paymongo-sales-toolbar-control,
+  .paymongo-sales-date-input {
     justify-content: center;
     width: 100%;
   }
@@ -6276,9 +6514,58 @@ button.product-category-assignment-action:focus-visible,
 }
 
 @media (max-width: 991.98px) {
+  .page,
+  .page.sidebar-collapsed {
+    --tblr-navbar-width: 100%;
+  }
+
   .navbar-vertical {
     height: auto;
     overflow: visible;
+    width: 100%;
+  }
+
+  .navbar-vertical.navbar-expand-lg,
+  .sidebar-collapsed .navbar-vertical.navbar-expand-lg {
+    width: 100%;
+  }
+
+  .navbar-expand-lg.navbar-vertical ~ .page-wrapper,
+  .sidebar-collapsed .navbar-expand-lg.navbar-vertical ~ .page-wrapper {
+    margin-left: 0;
+  }
+
+  .navbar-vertical.navbar-expand-lg > .container-fluid,
+  .sidebar-collapsed .navbar-vertical.navbar-expand-lg > .container-fluid {
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding-inline: 1rem;
+  }
+
+  .navbar-vertical .navbar-brand,
+  .sidebar-collapsed .navbar-vertical .navbar-brand {
+    flex: 1 1 auto;
+    justify-content: flex-start;
+    margin: 0;
+    min-height: 4.25rem;
+    order: 1;
+    padding-inline: 0;
+  }
+
+  .navbar-vertical .navbar-toggler {
+    flex: 0 0 auto;
+    margin-left: auto;
+    order: 2;
+  }
+
+  .navbar-vertical .brand-button {
+    justify-content: flex-start;
+    width: auto;
+  }
+
+  .navbar-brand-logo {
+    max-width: min(13rem, 56vw);
   }
 
   .navbar-vertical .container-fluid,
@@ -6286,6 +6573,45 @@ button.product-category-assignment-action:focus-visible,
     height: auto;
     min-height: auto;
     overflow: visible;
+  }
+
+  .navbar-vertical .navbar-collapse {
+    flex: 0 0 100%;
+    order: 3;
+    width: 100%;
+  }
+
+  .navbar-vertical .navbar-nav {
+    width: 100%;
+  }
+
+  .sidebar-collapsed .navbar-vertical .nav-link,
+  .navbar-vertical .nav-link {
+    justify-content: flex-start;
+    margin-inline: 0;
+    padding-inline: 0.75rem;
+    width: 100%;
+  }
+
+  .sidebar-collapsed .navbar-vertical .nav-link-title,
+  .sidebar-collapsed .nav-group-chevron,
+  .sidebar-collapsed .sidebar-user-chevron {
+    display: initial;
+  }
+
+  .sidebar-collapsed .sidebar-user-text {
+    display: grid;
+  }
+
+  .sidebar-collapsed .sidebar-user {
+    padding-inline: 0.75rem;
+  }
+
+  .sidebar-collapsed .sidebar-user-trigger {
+    justify-content: flex-start;
+    margin-inline: 0;
+    padding-inline: 0.75rem;
+    width: 100%;
   }
 
   .navbar-light.sticky-top .container-xl,
@@ -12631,6 +12957,13 @@ button.portal-bag-control-card {
   padding: 1rem;
 }
 
+.physical-store-commission-tier-panel {
+  background: #f8fafc;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 12px;
+  padding: 1rem;
+}
+
 .physical-store-more-info-panel textarea:disabled {
   background: #eef2f7;
   color: #94a3b8;
@@ -13798,6 +14131,22 @@ button.portal-bag-control-card {
 
 .store-owner-profile-tag {
   max-width: min(68vw, 280px);
+  position: relative;
+}
+
+.store-owner-profile-remit-badge {
+  background: #d63939;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+  padding: 0.22rem 0.42rem;
+  position: absolute;
+  right: -0.18rem;
+  top: -0.55rem;
+  white-space: nowrap;
 }
 
 .store-owner-alert-enable-panel {
@@ -14006,7 +14355,7 @@ button.portal-bag-control-card {
 .store-owner-hero {
   border-radius: 1rem;
   box-shadow: 0 18px 46px rgba(15, 23, 42, 0.13);
-  min-height: 180px;
+  min-height: 236px;
   overflow: hidden;
   position: relative;
 }
@@ -14016,7 +14365,7 @@ button.portal-bag-control-card {
     radial-gradient(circle at 20% 18%, rgba(255, 255, 255, 0.22), transparent 30%),
     linear-gradient(135deg, rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.86), rgba(15, 23, 42, 0.9));
   display: flex;
-  height: 180px;
+  height: 236px;
   object-fit: cover;
   width: 100%;
 }
@@ -14161,6 +14510,40 @@ button.portal-bag-control-card {
   background: rgba(var(--tblr-primary-rgb, 32, 107, 196), 0.04);
 }
 
+.store-owner-hero-sales-card {
+  backdrop-filter: blur(14px);
+  background: rgba(15, 23, 42, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  border-radius: 0.95rem;
+  bottom: 1rem;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.26);
+  color: #ffffff;
+  left: 1rem;
+  min-height: 4rem;
+  position: absolute;
+  right: 1rem;
+  width: auto;
+  z-index: 4;
+}
+
+.store-owner-hero-sales-card:hover {
+  background: rgba(15, 23, 42, 0.74);
+}
+
+.store-owner-hero-sales-card .store-owner-goal-summary-main small {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.store-owner-hero-sales-card .store-owner-goal-summary-main strong {
+  color: #ffffff;
+  text-shadow: 0 2px 12px rgba(15, 23, 42, 0.45);
+}
+
+.store-owner-hero-sales-card .store-owner-goal-collapse-icon {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
 .store-owner-goal-summary-icon {
   align-items: center;
   animation: store-goal-rate-pulse 2.8s ease-in-out infinite;
@@ -14217,6 +14600,10 @@ button.portal-bag-control-card {
   display: grid;
   gap: 0.75rem;
   padding: 0.85rem;
+}
+
+.store-owner-goal-details-panel .store-owner-goal-body {
+  border-top: 0;
 }
 
 .store-owner-goal-copy {
@@ -14611,6 +14998,284 @@ button.portal-bag-control-card {
 .store-owner-profile-modal {
   display: grid;
   gap: 0.75rem;
+}
+
+.store-owner-remittance-page {
+  background: #f6f8fb;
+  color: #182433;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: calc(100dvh - 4.25rem);
+}
+
+.store-owner-profile-page-header {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.94);
+  border-bottom: 1px solid rgba(98, 105, 118, 0.16);
+  display: flex;
+  gap: 1rem;
+  padding: 0.85rem clamp(1rem, 3vw, 2rem);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.store-owner-profile-page-header h2 {
+  font-size: clamp(1.15rem, 2vw, 1.55rem);
+  margin: 0;
+}
+
+.store-owner-profile-back-button {
+  align-self: flex-start;
+  flex: 0 0 auto;
+  white-space: nowrap;
+  width: fit-content;
+}
+
+.store-owner-profile-page-body {
+  overflow: auto;
+  padding: 1rem clamp(1rem, 3vw, 2rem) 2rem;
+}
+
+.store-owner-profile-page-body .store-owner-profile-modal {
+  margin: 0 auto;
+  max-width: 1120px;
+}
+
+.store-owner-remittance-tools {
+  align-items: center;
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+}
+
+.store-owner-remittance-profile {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.store-owner-remittance-profile-head {
+  align-items: flex-start;
+  background: #f8fafc;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 0.75rem;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.9rem;
+}
+
+.store-owner-remittance-month-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.store-owner-remittance-month-card {
+  background: #fff;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 0.85rem;
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.9rem;
+}
+
+.store-owner-remittance-month-card.is-ready {
+  border-color: rgba(47, 179, 68, 0.34);
+  box-shadow: 0 10px 24px rgba(47, 179, 68, 0.08);
+}
+
+.store-owner-remittance-month-main,
+.store-owner-remittance-month-actions {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.store-owner-remittance-month-amount {
+  text-align: right;
+}
+
+.store-owner-remittance-month-amount span,
+.store-owner-remittance-month-grid small {
+  color: #64748b;
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.store-owner-remittance-month-amount strong,
+.store-owner-remittance-month-grid strong {
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.store-owner-remittance-month-grid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.store-owner-remittance-month-grid > span {
+  background: #f8fafc;
+  border: 1px solid rgba(98, 105, 118, 0.12);
+  border-radius: 0.65rem;
+  padding: 0.6rem;
+}
+
+.store-owner-remittance-history-list {
+  border-top: 1px solid rgba(98, 105, 118, 0.16);
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.65rem;
+}
+
+.store-owner-remittance-history-list > div {
+  align-items: center;
+  display: grid;
+  gap: 0.35rem;
+  grid-template-columns: 1fr auto;
+}
+
+.store-owner-remittance-history-list span {
+  font-weight: 750;
+}
+
+.store-owner-remittance-history-list em {
+  color: #64748b;
+  font-size: 0.75rem;
+  font-style: normal;
+  grid-column: 1 / -1;
+}
+
+.store-owner-remittance-checkout-panel {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(32, 107, 196, 0.2);
+  border-radius: 0.75rem;
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.75rem;
+}
+
+.store-owner-remittance-checkout-head {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.store-owner-remittance-checkout-head > div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.store-owner-remittance-checkout-head strong {
+  color: #182433;
+  font-weight: 800;
+}
+
+.store-owner-remittance-checkout-head span {
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.store-owner-remittance-checkout-progress {
+  background: rgba(32, 107, 196, 0.1);
+  border-radius: 999px;
+  height: 0.35rem;
+  overflow: hidden;
+}
+
+.store-owner-remittance-checkout-progress span {
+  background: linear-gradient(90deg, #206bc4, #2fb344);
+  border-radius: inherit;
+  display: block;
+  height: 100%;
+  transition: width 0.35s ease;
+}
+
+.store-owner-remittance-qr-panel {
+  align-items: center;
+  background: #fff;
+  border: 1px solid rgba(47, 179, 68, 0.22);
+  border-radius: 0.8rem;
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 0.85rem;
+}
+
+.store-owner-remittance-qr-panel > div {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.store-owner-remittance-qr-panel strong {
+  color: #182433;
+  font-weight: 800;
+}
+
+.store-owner-remittance-qr-panel span,
+.store-owner-remittance-qr-panel small {
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+.store-owner-remittance-qr-panel img,
+.store-owner-remittance-qr-placeholder {
+  background: #fff;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 0.75rem;
+  height: 104px;
+  width: 104px;
+}
+
+.store-owner-remittance-qr-panel img {
+  object-fit: contain;
+  padding: 0.35rem;
+}
+
+.store-owner-remittance-qr-button {
+  background: transparent;
+  border: 0;
+  border-radius: 0.85rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.store-owner-remittance-qr-button:focus-visible {
+  outline: 3px solid rgba(32, 107, 196, 0.35);
+  outline-offset: 3px;
+}
+
+.store-owner-remittance-qr-placeholder {
+  align-items: center;
+  color: #64748b;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.store-owner-remittance-qr-preview-body {
+  padding: 1.25rem;
+}
+
+.store-owner-remittance-qr-preview {
+  align-items: center;
+  display: grid;
+  gap: 1rem;
+  text-align: center;
+}
+
+.store-owner-remittance-qr-preview img {
+  background: #fff;
+  border: 1px solid rgba(98, 105, 118, 0.16);
+  border-radius: 1rem;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.12);
+  height: min(76vw, 420px);
+  margin: 0 auto;
+  object-fit: contain;
+  padding: 0.75rem;
+  width: min(76vw, 420px);
 }
 
 .store-owner-support-modal {
@@ -15083,6 +15748,52 @@ button.portal-bag-control-card {
     grid-template-columns: 1fr;
   }
 
+  .store-owner-profile-page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .store-owner-profile-page-header .btn {
+    width: 100%;
+  }
+
+  .store-owner-profile-page-header .store-owner-profile-back-button {
+    width: fit-content;
+  }
+
+  .store-owner-remittance-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .store-owner-profile-modal .nav-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  .store-owner-remittance-profile-head,
+  .store-owner-remittance-month-main,
+  .store-owner-remittance-month-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .store-owner-remittance-month-amount {
+    text-align: left;
+  }
+
+  .store-owner-remittance-month-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .store-owner-remittance-checkout-head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .store-owner-remittance-qr-panel {
+    grid-template-columns: 1fr;
+  }
+
   .store-owner-grid {
     grid-template-columns: 1fr;
   }
@@ -15546,6 +16257,38 @@ button.portal-bag-control-card {
   color: rgba(255, 255, 255, 0.78);
 }
 
+.customer-devices-tab-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.customer-devices-page-size {
+  min-width: 5rem;
+}
+
+.customer-devices-filter-panel {
+  align-items: end;
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(150px, 1fr)) minmax(180px, auto);
+}
+
+.customer-devices-filter-summary {
+  align-self: center;
+}
+
+.customer-devices-pagination {
+  align-items: center;
+  border-top: 1px solid var(--tblr-border-color, #dadfe5);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .portal-speed-takeoff::before,
   .portal-speed-beam,
@@ -15585,6 +16328,20 @@ button.portal-bag-control-card {
 }
 
 @media (max-width: 575.98px) {
+  .customer-devices-tab-toolbar,
+  .customer-devices-filter-panel,
+  .customer-devices-pagination {
+    align-items: stretch;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .customer-devices-tab-toolbar .btn,
+  .customer-devices-search,
+  .customer-devices-page-size {
+    width: 100%;
+  }
+
   .portal-store-card {
     grid-template-columns: 80px minmax(0, 1fr);
   }
